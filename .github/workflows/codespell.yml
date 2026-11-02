@@ -20,7 +20,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Annotate locations with typos
-        uses: codespell-project/codespell-problem-matcher@b80729f885d32f78a716c2f107b4db1025001c42 # v1.1.0
+        uses: codespell-project/codespell-problem-matcher@9ba2c57125d4908eade4308f32c4ff814c184633 # v1.2.0
       # codespell-project/actions-codespell is a Docker action whose image
       # pulls python:3.13-alpine from Docker Hub anonymously, which hits the
       # unauthenticated pull rate limit on shared runners. Run the same
