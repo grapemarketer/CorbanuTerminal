@@ -633,6 +633,10 @@ fn length(raw: &str) -> bool {
 /// option (`--upload`, `--templ`, `--op`).
 /// `subcommand`: a dashed helper's (`git-clone`). Read once per command,
 /// from its first git word to its end.
+/// #1528: a subcommand git does not know may be an alias from existing
+/// config (`git g -Osh x` with `alias.g=grep`) or a typo `help.autocorrect`
+/// runs (`git gerp -Osh x`), so it may be `grep` or `clone`: its `-O`, `-u`
+/// and `--open-files-in-pager` ask too.
 pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> bool {
     // A later dashed helper (`git-clone`) names its subcommand too.
     let has = |word: &str| {
@@ -642,6 +646,8 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
                 arg == word || git_helpers::git_name(arg).flatten().as_deref() == Some(word)
             })
     };
+    // A dashed helper's words start with its own options, not a subcommand.
+    let unknown = subcommand.is_none() && unknown_git_subcommand(args);
     let clone = has("clone");
     let creates = clone || has("init");
     let exec = has("push") || has("archive") || has("send-pack") || has("fetch-pack");
@@ -658,14 +664,228 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
                 || (exec && long(word, "--exec", "--ex".len()))
                 || (creates && long(word, "--template", "--te".len()))
                 || (clone && long(word, "--config", "--con".len()))
-                || (grep && long(word, "--open-files-in-pager", "--op".len()))
+                || ((grep || unknown) && long(word, "--open-files-in-pager", "--op".len()))
         } else {
             // A group of short options (`-qc k=v`, `-u./x`, `-nOsh`).
             word.strip_prefix('-').is_some_and(|cluster| {
-                (clone && cluster.contains(['c', 'u'])) || (grep && cluster.contains('O'))
+                (clone && cluster.contains(['c', 'u']))
+                    || (grep && cluster.contains('O'))
+                    || (unknown && cluster.contains(['O', 'u']))
             })
         }
     })
+}
+
+/// #1528: git's own commands (`git --list-cmds=builtins,main`). An alias
+/// cannot hide one of them, and autocorrect runs only what matches none.
+const GIT_COMMANDS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archive",
+    "backfill",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout--worker",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "citool",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "credential-cache",
+    "credential-cache--daemon",
+    "credential-store",
+    "daemon",
+    "describe",
+    "diagnose",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-pairs",
+    "diff-tree",
+    "difftool",
+    "difftool--helper",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "fetch-pack",
+    "filter-branch",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "fsck-objects",
+    "fsmonitor--daemon",
+    "gc",
+    "get-tar-commit-id",
+    "gitk",
+    "grep",
+    "gui",
+    "gui--askpass",
+    "hash-object",
+    "help",
+    "hook",
+    "http-backend",
+    "http-fetch",
+    "http-push",
+    "imap-send",
+    "index-pack",
+    "init",
+    "init-db",
+    "instaweb",
+    "interpret-trailers",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-octopus",
+    "merge-one-file",
+    "merge-ours",
+    "merge-recursive",
+    "merge-recursive-ours",
+    "merge-recursive-theirs",
+    "merge-resolve",
+    "merge-subtree",
+    "merge-tree",
+    "mergetool",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "pack-redundant",
+    "pack-refs",
+    "patch-id",
+    "pickaxe",
+    "prune",
+    "prune-packed",
+    "pull",
+    "push",
+    "quiltimport",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "receive-pack",
+    "reflog",
+    "refs",
+    "remote",
+    "remote-ext",
+    "remote-fd",
+    "remote-ftp",
+    "remote-ftps",
+    "remote-http",
+    "remote-https",
+    "repack",
+    "replace",
+    "replay",
+    "request-pull",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "send-email",
+    "send-pack",
+    "sh-i18n--envsubst",
+    "shell",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-index",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule",
+    "submodule--helper",
+    "subtree",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-file",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "update-server-info",
+    "upload-archive",
+    "upload-archive--writer",
+    "upload-pack",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "web--browse",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+];
+
+/// #1528: whether a subcommand in git's words after `git` (`args`) is not
+/// one of git's own commands. Global options and their values are skipped
+/// (`-C x`, `-c k=v`); a later git word (`git.exe`, `=git`) starts another.
+fn unknown_git_subcommand(args: &[String]) -> bool {
+    let mut scanning = true;
+    let mut value_next = false;
+    for word in args {
+        work::step();
+        if basename(word).eq_ignore_ascii_case("git")
+            || indirect::equals_git(word)
+            || git_helpers::git_name(word) == Some(None)
+        {
+            scanning = true;
+            value_next = false;
+            continue;
+        }
+        if !scanning {
+            continue;
+        }
+        if std::mem::replace(&mut value_next, false) {
+            continue;
+        }
+        if word.starts_with('-') {
+            value_next = super::code_variables::GIT_VALUE_OPTIONS.contains(&word.as_str())
+                || matches!(word.as_str(), "-c" | "--config-env");
+            continue;
+        }
+        if !GIT_COMMANDS.contains(&word.as_str()) {
+            return true;
+        }
+        scanning = false;
+    }
+    false
 }
 
 /// #1064: the names a nameref declaration makes (`declare -n r=v`, `local
