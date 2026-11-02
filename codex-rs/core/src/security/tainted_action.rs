@@ -2692,6 +2692,12 @@ impl Classifier {
         {
             self.note(ProtectedActionKind::Persistence);
         }
+        // #1309: a wrapper before the command moved it (`sudo -D ~ git log
+        // --output=f`); git's own `-C` comes after and is followed above.
+        let moved = command.as_ref().is_some_and(|(index, _)| {
+            unknown_folder::elsewhere_at(words, self.sudo_unsure())
+                .is_some_and(|from| from < *index)
+        });
         for file in outputs
             .iter()
             .flatten()
@@ -2710,7 +2716,7 @@ impl Classifier {
                 // ~`, `--output-directory ~/`) may be the home's.
                 if self.homes.is_persistence(&resolved)
                     || (file.ends_with('/') && self.homes.holds_a_home(&resolved))
-                    || self.unknown_place(folders, file)
+                    || self.unknown_folder_file(folders, moved, file)
                 {
                     self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(file));
                 }
@@ -3015,6 +3021,20 @@ impl Classifier {
             || folders.unseen
             || folders.unseen_in_substitution)
             && self.relative_place(word)
+    }
+
+    /// #1309: the rule the git-config check (`git config -f FILE`) and the
+    /// output-file check (`--output=FILE`) share, in both readings: a file
+    /// named relative to its folder may be any file when that folder is
+    /// unknown: after a change the reading cannot follow (see
+    /// [`Self::unknown_place`]), or as the caller found (`unknown`): under
+    /// a wrapper's folder option in any spelling (`sudo -D`, `env -C"$D"`,
+    /// `nsenter --wd=`, `docker exec -w`, `systemd-run
+    /// --working-directory`), or, in the quote-aware reading, after a `cd`
+    /// it cannot resolve (`cd "$X"`, `CDPATH=~ cd .`, `eval 'cd ~'`, a
+    /// function's `cd`).
+    fn unknown_folder_file(&self, folders: &Folders, unknown: bool, file: &str) -> bool {
+        (unknown && self.relative_place(file)) || self.unknown_place(folders, file)
     }
 
     /// #1410: whether a word (with the variables this reading knows, the
