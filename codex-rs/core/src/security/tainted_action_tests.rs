@@ -7832,6 +7832,39 @@ fn d194_zsh_append_redirections_keep_a_change_certain() {
     }
 }
 
+/// #1573 (1): zsh rewrites a word that starts with `=` to the full path of
+/// that program on `PATH`, redirection targets included: `echo x >>
+/// =mytool` appends to the installed `mytool`, which runs later. It asks;
+/// an ordinary file name, or one with an `=` inside it, stays quiet.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "#1462: stricter on Windows (an extra or different prompt), pending an owner decision"
+)]
+fn issue1573_zsh_equals_redirect_target_is_a_program() {
+    use ProtectedActionKind::Persistence;
+    let line = |script: &str| kind(&["zsh", "-lc", script]);
+    for script in [
+        "echo x >> =mytool",
+        "echo x > =mytool",
+        "echo x >| =mytool",
+        "echo x >>=mytool",
+        "echo x 2>> =mytool",
+        "echo x &>> =mytool",
+        "make >> log; echo x >> =mytool",
+    ] {
+        assert_eq!(line(script), Some(Persistence), "{script:?}");
+    }
+    for script in [
+        "echo x >> mytool",
+        "echo x >> a=mytool",
+        "echo x >> log=1",
+        "echo x > out.txt",
+    ] {
+        assert_eq!(line(script), None, "{script:?}");
+    }
+}
+
 /// D194: following certain changes stays linear.
 #[test]
 fn d194_certain_changes_are_linear() {

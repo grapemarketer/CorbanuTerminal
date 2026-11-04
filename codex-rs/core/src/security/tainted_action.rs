@@ -2622,6 +2622,15 @@ impl Classifier {
             {
                 self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(word));
             }
+            // #1573 (1): zsh writes a redirection to `=mytool` into the
+            // program `mytool` on `PATH` (not a file `=mytool` here), which
+            // runs later. Skipped where the line provably never reaches zsh.
+            if simple.writes_to.contains(&position)
+                && !(depth == 0 && self.avoids_zsh)
+                && outputs::zsh_program_path(word)
+            {
+                self.note(ProtectedActionKind::Persistence);
+            }
             // Attached, assigned and volume forms (`-o/path`, `f=@/path`,
             // `~/.aws:/c`) are paths too.
             let pieces = std::iter::once(word.as_str()).chain(
