@@ -22,6 +22,19 @@ pub(crate) trait EventProcessor {
     /// Handle a single typed app-server notification emitted by the agent.
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus;
 
+    /// Observe accounting from other threads without rendering their content
+    /// or letting their completion terminate the selected turn.
+    fn observe_unselected_notification(
+        &mut self,
+        _notification: &ServerNotification,
+        _selected_thread_id: &str,
+    ) {
+    }
+
+    fn register_usage_thread(&mut self, _thread_id: &str, _parent_thread_id: &str) {}
+
+    fn invalidate_usage(&mut self) {}
+
     /// Handle a local exec warning that is not represented as an app-server notification.
     fn process_warning(&mut self, message: String) -> CodexStatus;
 

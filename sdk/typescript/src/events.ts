@@ -35,8 +35,8 @@ export type Usage = {
 export type TurnCompletedEvent = {
   type: "turn.completed";
   /**
-   * The thread's latest reported token totals, or `null` when exec received no usage report.
-   * A resumed thread can carry its earlier totals even when this turn reported none.
+   * Selected-thread totals plus observed descendant usage, excluding inherited child counters.
+   * `null` when a participant has no usage report. Running children can incur later usage.
    */
   usage: Usage | null;
 };

@@ -7,12 +7,16 @@ For information about non-interactive mode, see [this documentation](https://dev
 Do not use `turn.completed.usage` from `corbanu exec --json` as a complete
 billing or run-cost record:
 
-- It copies the latest matching usage report's thread totals for the selected
-  thread and turn. It does not add usage from spawned subagents or calculate a
-  difference from the start of this invocation.
-- If exec receives no matching usage report, `usage` is `null`. Unknown
+- It includes the selected thread's latest matching cumulative report plus
+  provider usage observed from its descendants during this execution. Repeated
+  cumulative reports are counted once, and counters inherited by forked children
+  are excluded. The selected thread's totals are not an invocation-start delta.
+- If the selected thread or an observed descendant has no usage report, `usage`
+  is `null`. Unknown
   usage is never reported as zero counters, so consumers must handle the
   null case instead of reading token counts from it.
+- Usage is a snapshot at the selected turn's completion. Detached children still
+  running can incur later usage; this is not a final bill for their future work.
 
 The remaining limits of the JSON output are tracked in
 [#290](https://github.com/CorbanuCore/CorbanuTerminal/issues/290).

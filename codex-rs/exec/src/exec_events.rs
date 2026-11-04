@@ -48,11 +48,10 @@ pub struct TurnStartedEvent {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnCompletedEvent {
-    /// Provider-reported token usage for the completing thread, copied from
-    /// that thread's latest usage update. `None` when the provider reported
-    /// no usage for the thread: unknown usage is never reported as zero
-    /// tokens. Totals are kept per thread as defence in depth, so a usage
-    /// update is only ever reported for the thread it belongs to.
+    /// Provider-reported totals for the selected thread plus usage observed
+    /// from its descendants during this execution. Inherited counters in
+    /// forked children are excluded. `None` when any participant has no usage
+    /// report: unknown usage is never presented as free work.
     pub usage: Option<Usage>,
 }
 

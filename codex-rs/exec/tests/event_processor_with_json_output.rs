@@ -1797,6 +1797,31 @@ fn issue290_turn_completion_without_usage_update_reports_no_usage() {
 }
 
 #[test]
+fn issue290_context_estimate_is_not_a_zero_usage_report() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let mut estimate = usage_update("thread-1", "turn-1", /*input_tokens*/ 0);
+    let ServerNotification::ThreadTokenUsageUpdated(update) = &mut estimate else {
+        unreachable!();
+    };
+    update.token_usage.last.total_tokens = 4096;
+    let _ = processor.collect_thread_events(estimate.clone());
+    let completed = processor.collect_thread_events(completed_turn("thread-1", "turn-1"));
+    assert_eq!(
+        serde_json::to_value(&completed.events[0]).expect("serialize event")["usage"],
+        serde_json::Value::Null
+    );
+    let _ = processor.collect_thread_events(usage_update(
+        "thread-1", "turn-1", /*input_tokens*/ 500,
+    ));
+    let _ = processor.collect_thread_events(estimate);
+    let completed = processor.collect_thread_events(completed_turn("thread-1", "turn-1"));
+    assert_eq!(
+        serde_json::to_value(&completed.events[0]).expect("serialize event")["usage"]["input_tokens"],
+        500
+    );
+}
+
+#[test]
 fn issue290_usage_update_for_another_thread_is_not_reported_for_this_thread() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
