@@ -356,15 +356,17 @@ impl Classifier {
                     || !command.input.is_empty()
                     || !command.other_text.is_empty(),
             );
-            // #1573 (1): zsh writes a redirection to an unquoted `=mytool`
-            // into the program `mytool` on `PATH`, which runs later. A quoted
-            // target stays a file (`'=x'`), and so does the `=10` of `awk
-            // 'NR>=10'` where quoted text is read as code (`level` > 0).
-            // Nested shells' scripts are walked at level 0 of their own.
+            // #1573 (1): zsh writes a redirection to `=mytool` (also
+            // `="mytool"`) into the program `mytool` on `PATH`, which runs
+            // later. Only at this reading's own level: quoted words read
+            // again as code (`level` > 0) would turn the `>=` of `awk
+            // 'NR>=10'` into one; nested shells' scripts get a level 0 of
+            // their own. Not in other languages' files (`if n>=2:`).
             if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
                 && command.writes_to.iter().any(|word| {
                     work::step();
-                    !word.quoted && outputs::zsh_program_path(&word.text)
+                    outputs::zsh_program_path(&word.text)
                 })
             {
                 note_git(found, ProtectedActionKind::Persistence);

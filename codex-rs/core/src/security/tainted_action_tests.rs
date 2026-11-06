@@ -7852,6 +7852,9 @@ fn issue1573_zsh_equals_redirect_target_is_a_program() {
         "f() { echo x >> =mytool; }; f",
         "(echo x >> =mytool)",
         "echo $(echo x >> =mytool)",
+        "echo x >> =\"mytool\"",
+        "echo x >> =mytool\"\"",
+        "echo x >> =my'tool'",
     ] {
         assert_eq!(line(script), Some(Persistence), "{script:?}");
     }
@@ -7860,19 +7863,24 @@ fn issue1573_zsh_equals_redirect_target_is_a_program() {
         kind(&["bash", "-lc", "echo x >> =mytool"]),
         Some(Persistence)
     );
-    // A quoted target is a file, and a `>=` inside quotes is no redirection.
+    // A `>=` inside quotes is no redirection.
     for script in [
         "echo x >> mytool",
         "echo x >> a=mytool",
         "echo x >> log=1",
         "echo x > out.txt",
-        "echo x >> '=mytool'",
         "awk 'NR>=10' f",
         "rg -n 'x>=0' src",
         "jq 'select(.n>=3)' f",
     ] {
         assert_eq!(line(script), None, "{script:?}");
     }
+    // Nor is one in another language's file the line runs.
+    #[cfg(unix)]
+    assert_eq!(
+        in_workspace(&[("t.py", "n = 3\nif n>=2:\n    pass\n")], "python3 t.py"),
+        None
+    );
 }
 
 /// D194: following certain changes stays linear.
