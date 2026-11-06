@@ -913,23 +913,29 @@ impl Classifier {
         let mut git_programs_read = false;
         let mut local_config = git_config::Writes::new(texts);
         let command_at = indirect::command_word(texts);
-        // D156: whether a word from here on may be a brace expansion, which
-        // the shell may expand into options (`{--upload-pack=./x,}`): in a
-        // line with quoted text the lexer may have cut git's command before
-        // it, and this reading keeps it as written. Only a `,` or `..`
-        // between braces expands (not `{x}`).
+        // D156/D258: the other lexer may cut this command at quoted text
+        // before a brace-generated option. In a line of plain words
+        // (`brace_plain`) quote history is command-local and only unquoted
+        // brace groups count: a quote in a later command or literal `{a,b}`
+        // cannot cause this. In any other line, D156's reading: the line's
+        // quotes and any `,` or `..` between braces.
         let mut braced_from = vec![false; texts.len() + 1];
         for at in (0..texts.len()).rev() {
             work::step();
-            let text = &texts[at];
-            let expands = text.find('{').is_some_and(|open| {
-                work::rfind(text, "}").is_some_and(|close| {
-                    open < close && {
-                        let inside = &text[open..close];
-                        inside.contains(',') || inside.contains("..")
-                    }
+            let expands = if self.brace_unsure {
+                // As D156 reads it: a `,` or `..` between braces.
+                let text = &texts[at];
+                text.find('{').is_some_and(|open| {
+                    work::rfind(text, "}").is_some_and(|close| {
+                        open < close && {
+                            let inside = &text[open..close];
+                            inside.contains(',') || inside.contains("..")
+                        }
+                    })
                 })
-            });
+            } else {
+                words[at].quoted_before && words[at].brace_expansion
+            };
             braced_from[at] = braced_from[at + 1] || expands;
         }
         for (index, word) in lower.iter().enumerate() {

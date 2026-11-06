@@ -19,6 +19,12 @@ pub(super) struct Word {
     pub(super) text: String,
     /// Some of it was quoted or escaped, so the word lexer may split it.
     pub(super) quoted: bool,
+    /// D258: quoted/escaped text at or before this word in this command,
+    /// including redirection targets and text inside expansions.
+    pub(super) quoted_before: bool,
+    /// A comma or `..` inside matching, unquoted braces may expand into
+    /// arguments. Quoted/escaped braces and separate `{0}..{1}` do not.
+    pub(super) brace_expansion: bool,
     /// It holds an expansion whose value the classifier does not know.
     pub(super) dynamic: bool,
     /// An expansion outside double quotes: it may split into several words.
@@ -192,6 +198,10 @@ struct List {
     command: usize,
     word: Word,
     has_word: bool,
+    /// D258: quote history belongs to this command, not the whole line.
+    quoted_before: bool,
+    /// The current word's unquoted brace groups and their separators.
+    braces: Vec<bool>,
     redirect: Redirect,
     /// Here-documents whose bodies start after the next newline.
     pending: Vec<HereDocument>,
@@ -237,7 +247,10 @@ impl Reader<'_> {
         if !std::mem::take(&mut list.has_word) {
             return;
         }
-        let word = std::mem::take(&mut list.word);
+        let mut word = std::mem::take(&mut list.word);
+        word.quoted_before |= list.quoted_before || word.quoted;
+        list.quoted_before = word.quoted_before;
+        list.braces.clear();
         let command = &mut self.out[list.command];
         let redirect = std::mem::replace(&mut list.redirect, Redirect::None);
         if redirect == Redirect::None && !word.quoted {
@@ -347,6 +360,8 @@ impl Reader<'_> {
 
     fn finish_command(&mut self, list: &mut List) {
         self.finish_word(list);
+        list.quoted_before = false;
+        list.word.quoted_before = false;
         list.keyword = true;
         // `case WORD in`; in a substitution, another form (zsh's
         // `case x { ... }`) is not read.
@@ -391,6 +406,8 @@ impl Reader<'_> {
             command: self.new_command(),
             word: Word::default(),
             has_word: false,
+            quoted_before: false,
+            braces: Vec::new(),
             redirect: Redirect::None,
             pending: Vec::new(),
             cases: 0,
@@ -527,6 +544,7 @@ impl Reader<'_> {
                     continue;
                 }
                 '\\' => {
+                    list.word.quoted_before = true;
                     match next {
                         // A line continuation.
                         Some('\n') => {}
@@ -586,6 +604,36 @@ impl Reader<'_> {
                 }
                 ch => {
                     list.has_word = true;
+                    match ch {
+                        '{' => list.braces.push(false),
+                        '}' => {
+                            if let Some(expands) = list.braces.pop() {
+                                list.word.brace_expansion |= expands;
+                            }
+                        }
+                        ',' => {
+                            if let Some(expands) = list.braces.last_mut() {
+                                *expands = true;
+                            }
+                        }
+                        '.' if !list.braces.is_empty() => {
+                            // Continuations disappear before brace expansion:
+                            // `{u.\\\n.u}` is the range `{u..u}`.
+                            let mut after = index + 1;
+                            while chars.get(after) == Some(&'\\')
+                                && chars.get(after + 1) == Some(&'\n')
+                            {
+                                work::step();
+                                after += 2;
+                            }
+                            if chars.get(after) == Some(&'.')
+                                && let Some(expands) = list.braces.last_mut()
+                            {
+                                *expands = true;
+                            }
+                        }
+                        _ => {}
+                    }
                     list.word.text.push(ch);
                 }
             }
@@ -643,6 +691,20 @@ impl Reader<'_> {
     /// `$name`, `${...}`, `$(...)`, `$((...))` or a backtick substitution
     /// at `index`; returns the index after it.
     fn expansion(&mut self, index: usize, word: &mut Word, in_double: bool) -> usize {
+        let end = self.read_expansion(index, word, in_double);
+        // D258: substitutions can replace their source text in `word`.
+        // Retain any quote that may have split the other lexer before it
+        // disappears, without changing `quoted`'s existing meaning.
+        word.quoted_before |= self.chars[index..end.min(self.chars.len())]
+            .iter()
+            .any(|ch| {
+                work::step();
+                matches!(ch, '\'' | '"' | '\\')
+            });
+        end
+    }
+
+    fn read_expansion(&mut self, index: usize, word: &mut Word, in_double: bool) -> usize {
         let chars = self.chars;
         let next = chars.get(index + 1).copied();
         let dynamic = |word: &mut Word| {
@@ -1010,6 +1072,55 @@ mod tests {
                 .map(|word| (word.dynamic, word.splits))
                 .collect::<Vec<_>>(),
             vec![(false, false), (true, false), (false, false), (true, true)]
+        );
+    }
+
+    #[test]
+    fn d258_brace_and_quote_metadata_follows_words_and_commands() {
+        let read = all("git >'a; b' clone {\"--upload-pack=./x\",} URL; git add src/{a,b}.rs");
+        let words = read
+            .iter()
+            .map(|command| {
+                command
+                    .words
+                    .iter()
+                    .map(|word| (word.text.as_str(), word.quoted_before, word.brace_expansion))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words,
+            vec![
+                vec![
+                    ("git", false, false),
+                    ("clone", true, false),
+                    ("{--upload-pack=./x,}", true, true),
+                    ("URL", true, false),
+                ],
+                vec![
+                    ("git", false, false),
+                    ("add", false, false),
+                    ("src/{a,b}.rs", false, true),
+                ],
+            ]
+        );
+        let read = all(
+            r#"echo "x{a,b}" {1..3} "{1..3}" {a,"b,c"} {a\,b} {a,b\} x{a,b}{c,d} stash@{0}..stash@{1}"#,
+        );
+        assert_eq!(
+            read[0]
+                .words
+                .iter()
+                .skip(1)
+                .map(|word| word.brace_expansion)
+                .collect::<Vec<_>>(),
+            vec![false, true, false, true, false, false, true, false]
+        );
+        let read = all("git clone --{u.\\\n.u}pload-pack=./x URL");
+        let word = &read[0].words[2];
+        assert_eq!(
+            (word.text.as_str(), word.quoted_before, word.brace_expansion,),
+            ("--{u..u}pload-pack=./x", true, true)
         );
     }
 

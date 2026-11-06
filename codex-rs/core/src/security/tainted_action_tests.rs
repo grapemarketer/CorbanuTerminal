@@ -4658,6 +4658,157 @@ fn d156_git_settings_after_a_split_value_ask() {
     }
 }
 
+/// D258: unrelated commands and literal braces cannot make git's brace
+/// safeguard ask; the quote and expansion must belong to this command. (In a
+/// line that is not plain words, D156's reading stays: `printf '%s\n'`, a
+/// backslash, a comment or a redirection anywhere in the line keeps these
+/// asking.)
+#[test]
+fn d258_unrelated_or_literal_quotes_do_not_promote_brace_words() {
+    for command in [
+        "git add src/{a,b}.rs && git commit -m \"msg\"",
+        "git add src/{a,b}.rs && git commit -m 'msg'",
+        "git add {src,tests}/{a,b}.rs && git commit -m 'fix: a, b; c'",
+        "git add src/{a,b}.rs && git commit -m \"\"",
+        "git add src/{a,b}.rs && git commit -m \"handle {a,b}\"",
+        "git add src/{a,b}.rs\ngit commit -m \"msg\"",
+        "git add src/{a,b}.rs || git commit -m \"msg\"",
+        "git commit -m \"msg\" && git add src/{a,b}.rs",
+        "git commit -m \"handle {a,b}\"",
+        "git -c 'user.name=msg' diff stash@{0}..stash@{1}",
+        "git diff stash@{0}..stash@{1} && printf '%s' \"msg\"",
+        "git show 'HEAD^{commit}'",
+        "git diff 'HEAD~1' HEAD",
+    ] {
+        assert_eq!(script(command), None, "{command}");
+    }
+    assert_eq!(kind(&["git", "add", "src/{a,b}.rs"]), None);
+    assert_eq!(kind(&["git", "commit", "-m", "handle {a,b}"]), None);
+}
+
+/// D258: an earlier quote can hide a brace-generated option, including a
+/// quote before git in a wrapper or inside the expanding word itself.
+#[test]
+fn d258_quotes_before_expanding_git_words_still_ask() {
+    for command in [
+        "git clone -b 'a; b' {--upload-pack=./x,} URL",
+        "git clone -b 'a; b' {\"--upload-pack=./x\",} URL",
+        "git clone -b 'a; b' --upload-pack{=./x,} URL",
+        "git clone {--upload-pack='./x',} URL",
+        "env 'A=;' git clone {--upload-pack=./x,} URL",
+        "env 'A=|' git clone {--upload-pack=./x,} URL",
+        "git >'a; b' clone {--upload-pack=./x,} URL",
+        "git clone >'a; b' {--upload-pack=./x,} URL",
+        "env >'a; b' git clone {--upload-pack=./x,} URL",
+        "git -c user.name=${N:-'a; b'} clone {--upload-pack=./x,} URL",
+        "git -c user.name=$(printf 'a; b') clone {--upload-pack=./x,} URL",
+        "git -c user.name=a\\\nb clone {--upload-pack=./x,} URL",
+        "git clone --{u.\\\n.u}pload-pack=./x URL",
+        "git clone -b 'a; b' --{u.\\\n.u}pload-pack=./x URL",
+        "git -c 'user.name=a; b' {--no-pager,-c} 'alias.x=!./x' x",
+        "git clone -b 'a; b' {--upload-pack=./x,{--quiet,}} URL",
+        "git clone -b 'a; b' {1..3} URL",
+        "git add src/{a,b}.rs && git clone -b 'a; b' {--upload-pack=./x,} URL",
+        "git clone -b 'a; b' {--upload-pack=./x,} URL && git add src/{a,b}.rs",
+        "git add src/{a,b}.rs && git commit -m \"$(./unseen)\"",
+        // The word lexer reads `$'` as an ANSI-C string whatever the
+        // quoting around it, on into a later command (#1580 review).
+        "grep -n 'TODO$' notes.txt; git clone {--upload-pack=./x,} ./r d; echo 'done'",
+        "echo \"$'\"; git clone {--upload-pack=./x,} ./r d; echo \"'\"",
+        // So is a substitution it opens in a quote, an escape, a comment or
+        // a here-document, closed in git's command (#1580 review 2).
+        "grep -n '`' notes.txt; git clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo '`'; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo \\`; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo '$('; git clone -b $( (echo x) ) r {--upload-pack=./x,} d",
+        "cat <<'EOF'\na ` tick\nEOF\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo 'a' # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        // The word lexer also ends the command at a `}` starting a word,
+        // `&>`, `<&`, `>|` and an operator in `${...}`, and never expands a
+        // range (#1580 review 3).
+        "echo \"x\"; git clone -b }x r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-x;y} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r &>/dev/null {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r <&0 {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r >|log {--upload-pack=./x,} d",
+        "echo \"x\"; git clone --{u..u}pload-pack=./x r d",
+        // Commas, brace alternatives, `$IFS`, here-documents and comments
+        // the word lexer misreads (#1580 review 4).
+        "echo \"x\"; git clone -b x,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x,{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {a,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {{,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x${IFS}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x$IFS{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:- } r {--upload-pack=./x,} d",
+        "cat <<E\n'\nE\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo a;# it's\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo \"x\"; git clone ${N}{--upload-pack=./x,} r d",
+        // The word lexer expands braces before it finds commands, so an
+        // operator joined to a group cuts its alternatives (review 5).
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}|cat",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&&echo ok",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x};x",
+        "echo \"x\"; git clone ./r d {-q,-u./x}|cat",
+        "echo \"x\"; git fetch origin {-q,--upload-pack=./x}|cat",
+        "git clone ./r d {-q,--upload-pack=./x}|grep -v \"warn\"",
+        "echo \"x\"; git clone ./r d x|{-q,--upload-pack=./x}",
+        // zsh brace-expands a `${...}` operand.
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
+    ] {
+        assert_eq!(
+            script(command),
+            Some(ProtectedActionKind::UnseenCode),
+            "{command}"
+        );
+    }
+}
+
+/// D258: the lines where git's brace check reads quotes per command.
+#[test]
+fn d258_plain_lines_for_the_brace_check() {
+    for text in [
+        "git add src/{a,b}.rs && git commit -m \"msg\"",
+        "git diff stash@{0}..stash@{1}",
+        "git commit -m 'fix: a, b; c' | tee -a log",
+        "git add {src,tests}/{a,b}.rs\ngit status",
+    ] {
+        assert!(super::brace_plain(text), "{text}");
+    }
+    for text in [
+        "git add {a,}",
+        "x {} y",
+        "x }y",
+        "x { y",
+        "x {a..b}",
+        "x {a",
+        "x {a,{b,c}}",
+        "x {a,'b'}",
+        "x $'a'",
+        "x `y`",
+        "x $(y)",
+        "x <(y)",
+        "x >f",
+        "x &>f",
+        "x # c",
+        "cat <<E",
+        "x \\{a,b\\}",
+        "x ${y}",
+        "x (y)",
+        "x *",
+        "x {a,b}|cat",
+        "x a;{a,b}",
+        "x {a,b}&&y",
+    ] {
+        assert!(!super::brace_plain(text), "{text}");
+    }
+}
+
 /// D156: reading git's options with quoted values whole stays linear.
 #[test]
 fn d156_checks_are_linear() {
@@ -4669,6 +4820,18 @@ fn d156_checks_are_linear() {
         ("=git words", "=git -c user.name=x "),
         ("hidden gits", "$g -c 'user.name=a; b' "),
         ("brace words", "git 'a; b' {--x,} "),
+        (
+            "command-local brace quotes",
+            "git add src/{a,b}.rs && git commit -m \"msg\"; ",
+        ),
+        ("nested brace words", "git 'a; b' x{a,{b,c}} "),
+        ("parameter brace words", "git 'a; b' ${x:-${y:-{a,b}}} "),
+        ("ANSI-C lines", "grep 'a$' f; git add {a,b}; "),
+        ("substitution lines", "echo '`'; git add {a,b}; "),
+        (
+            "continued brace ranges",
+            "git clone --{u.\\\n.u}pload-pack=./x URL; ",
+        ),
     ] {
         work::assert_linear(label, |scale| {
             let line = format!("git {} status", unit.repeat(100 * scale));
