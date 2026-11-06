@@ -161,7 +161,8 @@ commit; newer releases wait for the cadence.
   jobs for PRs whose base is `sync/**` until the workspace compiles (otherwise ~40 red jobs per push), and adds a
   package-scoped dispatch (Windows clippy and tests for `codex-core` and its dependencies, plus the security lanes)
   for S2 and S3b, since `rust-ci` covers the whole workspace and can't pass while tui has markers. S4 reverts all
-  of it, and the sync-branch CODEOWNERS entry is reverted too; both are S5 entry criteria, so neither reaches `main`.
+  of it (an S5 entry criterion). The sync-branch CODEOWNERS entry stays until main merge #3 is done and is reverted as
+  the last sync-branch commit before the final PR opens, so neither reaches `main`.
 - **Main merges** happen at tier exits (end of S1, end of S2) and in S5. The integrator merges `origin/main` into the
   sync branch. For a path that still carries skeleton markers, the integrator keeps the sync side and adds a ledger
   row "re-apply `git diff <old-main>..<new-main> -- <path>`" for the path's owner; this avoids nested markers and keeps
@@ -214,11 +215,11 @@ layers:
   The owning slice resolves them; the security owner must approve.
 - **Footprint:** S0 extends the list from the fork-patch footprint, i.e. the files changed by Corbanu's security
   commits (PF-23 to PF-41 sprints, security-plan PRs), not from path names alone. A keyword match over `main`'s
-  commit subjects touches 492 of the 899 conflicted files, so S0 curates by commit. Each footprint file gets a ledger
+  commit messages touches 492 of the 899 conflicted files, so S0 curates by commit. Each footprint file gets a ledger
   flag, and its owner asks the security owner to review the hunks that come from those commits.
 
-The 458 (418) security-path files that upstream changed and that merge cleanly get ledger rows for a diff-level
-security review in S3b.
+The 458 (418) named-path files that upstream changed and that merge cleanly get ledger rows for a diff-level security
+review in S3b; the count grows when S0 adds the footprint files, which get the same rows.
 
 Shared hot files (`core/src/session/turn.rs`, `core/src/client.rs`) belong to S2a; the security owner reviews every hunk
 there that touches classifier, approval or sandbox call sites.
@@ -332,8 +333,8 @@ reels, code-blind functional runs).
 
 ### S5 Qualification and merge
 
-- **Entry:** SG2 signed and S3b merged; S4 exit; `blocking-ci` fully green; CI mode change and sync-branch CODEOWNERS
-  reverted; every ledger row resolved, including re-apply and migration rows; repository-wide marker scan clean.
+- **Entry:** SG2 signed and S3b merged; S4 exit; `blocking-ci` fully green; CI mode change reverted (the sync-branch
+  CODEOWNERS entry goes after main merge #3, before the final PR opens); every ledger row resolved, including re-apply and migration rows; repository-wide marker scan clean.
 - **Scope:** main merge #3 (≤48 hours before the final merge, with a soft freeze on hotspot files); full run:
   `blocking-ci` (incl. Windows clippy `-D warnings --tests` and Windows native tests), `rust-ci-full` (Linux full
   suite, dispatch), `windows-security-probes`, `bazel`, cargo-deny, codespell, nightly lanes (dispatch); `just test` on
