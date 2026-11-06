@@ -1937,7 +1937,8 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
                 codex_home.path(),
                 argv,
                 root.path(),
-                HashMap::new(),
+                // Core passes its environment on; PowerShell needs it.
+                std::env::vars().collect(),
                 /*proxy_enforced*/ false,
                 /*network_proxy_restricting_sid*/ None,
                 Some(60_000),
