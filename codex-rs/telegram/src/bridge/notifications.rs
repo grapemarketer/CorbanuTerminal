@@ -133,7 +133,11 @@ impl BridgeRuntime {
                     let previous = self.last_token_usage.remove(&conversation);
                     self.last_token_usage.insert(
                         conversation,
-                        StatusTokenUsage::apply(previous, notification.token_usage),
+                        StatusTokenUsage::apply(
+                            previous,
+                            &notification.thread_id,
+                            notification.token_usage,
+                        ),
                     );
                 }
                 Ok(())

@@ -50,9 +50,17 @@ impl BridgeRuntime {
 /// What `/status` knows about a thread's token usage.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct StatusTokenUsage {
-    /// Tokens in the context window: the last report, or core's estimate.
+    /// The thread these numbers belong to. A total is only ever carried forward
+    /// within the same thread, never into a new one (`/new`, a resumed thread).
+    thread_id: String,
+    /// Tokens in the context window: the last report, core's estimate, or the
+    /// window itself when core filled it.
     context_tokens: i64,
     model_context_window: Option<i64>,
+    /// The last update exactly as core sent it: core re-sends unchanged usage
+    /// (`update_rate_limits`), and a fill adds exactly `last` to the previous
+    /// `total.total_tokens` while a recompute leaves it untouched.
+    update: ThreadTokenUsage,
     /// The thread's provider-reported total; `None` until a provider reports.
     thread_total: Option<TokenUsageBreakdown>,
 }
@@ -60,44 +68,91 @@ pub(super) struct StatusTokenUsage {
 impl StatusTokenUsage {
     /// Folds a thread usage update into what `/status` shows.
     ///
-    /// Core also sends updates that carry no provider usage:
-    /// `recompute_token_usage` after compaction or rollback (zero counters, the
-    /// history estimate in `last.total_tokens`) and `fill_to_context_window` when
-    /// the window is exceeded (zero counters, the window size in
-    /// `total.total_tokens`). Both still say how full the context is, so they
-    /// update `Context`, but they are not a cost: the thread total stays at the
-    /// last real report, or unknown (#1570).
-    pub(super) fn apply(previous: Option<Self>, update: ThreadTokenUsage) -> Self {
-        if reports_usage(&update) {
-            return Self {
-                context_tokens: update.last.total_tokens,
-                model_context_window: update.model_context_window,
-                thread_total: Some(update.total),
-            };
+    /// Besides provider reports, core sends two synthetic updates (#1570):
+    /// - `recompute_token_usage` after compaction or rollback leaves `total`
+    ///   untouched and puts the history estimate in `last.total_tokens` with zero
+    ///   counters. On a thread with no reports that means zero counters
+    ///   everywhere; on a reported thread the real counters stay in `total`.
+    /// - `fill_to_context_window` when the window is exceeded sets
+    ///   `total.total_tokens` to the window and keeps the provider counters
+    ///   (#1583); `last` gets zero counters and the remainder.
+    ///
+    /// `Context` follows the latest update: the window only for a fill (the total
+    /// set to the window and `last` holding exactly what that added), otherwise
+    /// `last` (a report, or the estimate after compaction, which is what core
+    /// measures occupancy from).
+    /// The thread total comes from the provider counters, never from
+    /// `total.total_tokens`, which after a fill holds the window plus later
+    /// reports. Without counters it stays at the last real report of the same
+    /// thread, or unknown.
+    pub(super) fn apply(previous: Option<Self>, thread_id: &str, update: ThreadTokenUsage) -> Self {
+        let previous = previous.filter(|usage| usage.thread_id == thread_id);
+        if let Some(usage) = previous.as_ref().filter(|usage| usage.update == update) {
+            return usage.clone(); // re-sent unchanged (e.g. with new rate limits): nothing moved
         }
+        // `fill_to_context_window` sets the total to the window and `last` to exactly what
+        // it added (the window minus the previous total, 0 when the window was already
+        // full). A recompute leaves the total untouched and puts its estimate in `last`,
+        // so the two only look alike without the previous update; then `last` is shown,
+        // which is also what core measures occupancy from (and the whole window for a
+        // fill on a thread that had no total yet).
+        let filled = counters_are_zero(&update.last)
+            && Some(update.total.total_tokens) == update.model_context_window
+            && previous.as_ref().is_some_and(|usage| {
+                // the same arithmetic as `fill_to_context_window`
+                (update.total.total_tokens - usage.update.total.total_tokens).max(0)
+                    == update.last.total_tokens
+            });
+        let context_tokens = if filled {
+            update.total.total_tokens
+        } else {
+            update.last.total_tokens
+        };
+        let thread_total = if !counters_are_zero(&update.total) {
+            Some(TokenUsageBreakdown {
+                total_tokens: update
+                    .total
+                    .input_tokens
+                    .max(0)
+                    .saturating_add(update.total.output_tokens.max(0)),
+                ..update.total
+            })
+        } else if reports_usage(&update) {
+            Some(update.total.clone())
+        } else {
+            previous.and_then(|usage| usage.thread_total)
+        };
         Self {
-            context_tokens: update.last.total_tokens.max(update.total.total_tokens),
+            thread_id: thread_id.to_string(),
+            context_tokens,
             model_context_window: update.model_context_window,
-            thread_total: previous.and_then(|usage| usage.thread_total),
+            thread_total,
+            update,
         }
     }
 }
 
-/// Same rule as exec's JSON output: an update whose counters are all zero but
-/// which carries a token total is an estimate, not a provider report. A
-/// provider's measured zero has no total either and is kept as reported.
-fn reports_usage(usage: &ThreadTokenUsage) -> bool {
-    let total = &usage.total;
-    let counters_are_zero = [
-        total.input_tokens,
-        total.cached_input_tokens,
-        total.cache_write_input_tokens,
-        total.output_tokens,
-        total.reasoning_output_tokens,
+fn counters_are_zero(usage: &TokenUsageBreakdown) -> bool {
+    [
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.cache_write_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens,
     ]
     .iter()
-    .all(|count| *count == 0);
-    !counters_are_zero || (total.total_tokens == 0 && usage.last.total_tokens == 0)
+    .all(|count| *count == 0)
+}
+
+/// Same rule as exec's JSON output (#1576): an update whose total counters are
+/// all zero but which carries a token total is an estimate, not a provider
+/// report. Two corner cases follow from it, as in exec: a provider's measured
+/// zero after a fill (the total then holds the window) cannot be told from an
+/// estimate and is not shown as a report, and a provider that sends only
+/// `total_tokens` without counters is treated as reporting nothing.
+fn reports_usage(usage: &ThreadTokenUsage) -> bool {
+    !counters_are_zero(&usage.total)
+        || (usage.total.total_tokens == 0 && usage.last.total_tokens == 0)
 }
 
 /// Renders the two numbers a Telegram operator cannot otherwise see.

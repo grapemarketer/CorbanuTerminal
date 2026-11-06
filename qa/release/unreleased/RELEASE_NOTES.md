@@ -280,7 +280,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   said `Thread total: 0 tokens (0 in, 0 out)`. It now says
   `Thread total: not reported by the provider`, and `Context` shows the token
   estimate (#1570).
-- **A full context window no longer erases the thread total.** When the window
-  is exceeded, core's update carries only the window size, and `/status`
-  showed it as the thread's cost with `0 in, 0 out`. `Context` now shows the
-  full window and `Thread total` keeps the last real report.
+- **A full context window is shown as context, not as the thread's cost.**
+  When the window is exceeded, `Context` shows the full window and
+  `Thread total` stays the provider-reported usage, computed from the
+  provider's counters, which the fill now keeps (#1583). After compaction,
+  `Context` shows the new, smaller estimate rather than a full window, and
+  `/new` starts the new thread without the previous thread's total.

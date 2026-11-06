@@ -722,6 +722,9 @@ impl BridgeRuntime {
         self.sessions
             .set_thread(conversation, thread_id.clone())
             .await?;
+        // The previous thread's usage is not this thread's: `/status` shows
+        // nothing for it until the new thread reports or is estimated.
+        self.last_token_usage.remove(&conversation);
         Ok(thread_id)
     }
 
