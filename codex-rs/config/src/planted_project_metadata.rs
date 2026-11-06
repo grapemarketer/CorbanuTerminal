@@ -1,6 +1,8 @@
 //! #1506 item 2 (D262): `.codex` and `.agents` folders at the top of a
 //! writable root that were absent when a non-admin (legacy) Windows sandbox
-//! session started and existed when it ended (or while it still runs). A
+//! session started and existed when it ended (or while it still runs), and
+//! (D283, #1541) those deeper in a writable root that weren't there, as the
+//! same folder, when the session started. A
 //! sandboxed command may have planted them, so Corbanu Terminal doesn't load
 //! them (project config, hooks, skills) until the user confirms them. The
 //! records live with the sandbox's integrity-label records, where sandboxed
@@ -28,13 +30,17 @@ impl PlantedProjectMetadata {
     /// compared with its parent canonicalized but the folder itself not
     /// followed, as the sandbox records it (a planted junction stays
     /// planted), and, on Windows, ignoring case.
+    ///
+    /// D283 (#1541): on Windows, also one deeper in the writable root of a
+    /// non-admin sandbox session that still runs, unless it was there, as
+    /// the same folder, when that session started.
     pub fn contains(&self, folder: &Path) -> bool {
         match self {
             Self::Unreadable(_) => true,
-            Self::Known(planted) if planted.is_empty() => false,
             Self::Known(planted) => {
                 let folder = without_following(folder);
                 planted.iter().any(|entry| same_path(entry, &folder))
+                    || appeared_in_live_session(&folder)
             }
         }
     }
@@ -69,6 +75,24 @@ pub fn planted_project_metadata() -> PlantedProjectMetadata {
     #[cfg(not(target_os = "windows"))]
     {
         PlantedProjectMetadata::Known(Vec::new())
+    }
+}
+
+/// D283: see [`PlantedProjectMetadata::contains`]. Records that can't be
+/// read count as planted.
+fn appeared_in_live_session(folder: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        codex_windows_sandbox::nested_project_metadata_appeared_in_live_session(folder)
+            .unwrap_or_else(|err| {
+                tracing::warn!("could not read the live sandbox sessions' records: {err:#}");
+                true
+            })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = folder;
+        false
     }
 }
 

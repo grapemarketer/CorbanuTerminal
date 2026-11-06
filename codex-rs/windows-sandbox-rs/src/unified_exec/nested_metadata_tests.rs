@@ -1,0 +1,220 @@
+//! D283 (#1541): `.codex`/`.agents` below the top of a legacy session's
+//! writable roots. New ones (or replaced ones) count as planted, and the
+//! existing ones are protected like the top-level ones.
+
+use super::*;
+
+fn canonical(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).expect("canonical")
+}
+
+fn appeared_live(folder: &Path) -> bool {
+    crate::nested_project_metadata_appeared_in_live_session(folder).expect("live records")
+}
+
+fn planted(folder: &Path) -> bool {
+    crate::planted_project_metadata()
+        .expect("planted records")
+        .contains(&folder.to_path_buf())
+}
+
+/// A nested folder that appears, or is replaced (here by moving its parent
+/// away and recreating it), while a session runs counts as planted at once
+/// and after the session; one left alone doesn't, and neither does one
+/// inside `.git`. A confirmed one counts again once replaced.
+#[test]
+fn legacy_nested_project_metadata_is_watched() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = test_root.path().join("root");
+    for dir in ["kept\\.agents", "replaced\\.codex", ".git\\x", "deep\\a"] {
+        fs::create_dir_all(root.join(dir)).expect("create test directory");
+    }
+    let root = canonical(&root);
+    let new = root.join("deep\\a\\.codex");
+    let replaced = root.join("replaced\\.codex");
+    let moved = root.join("replaced-old\\.codex");
+    let kept = root.join("kept\\.agents");
+    let in_git = root.join(".git\\x\\.codex");
+
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    fs::create_dir(&new).expect("plant");
+    fs::rename(root.join("replaced"), root.join("replaced-old")).expect("move the parent");
+    fs::create_dir_all(&replaced).expect("recreate");
+    fs::create_dir(&in_git).expect("inside .git");
+    let live = (
+        appeared_live(&new),
+        appeared_live(&replaced),
+        appeared_live(&kept),
+        appeared_live(&root.join("absent\\.codex")),
+        crate::confirm_planted_project_metadata(&new).is_err(),
+    );
+    drop(lease);
+    let ended = (
+        planted(&new),
+        planted(&replaced),
+        planted(&moved),
+        planted(&kept),
+        planted(&in_git),
+        appeared_live(&new),
+    );
+    let confirmed = crate::confirm_planted_project_metadata(&new).expect("confirm");
+    drop(
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("unchanged session"),
+    );
+    let after_unchanged = planted(&new);
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("replacing session");
+    fs::remove_dir(&new).expect("remove");
+    fs::create_dir(&new).expect("replace");
+    drop(lease);
+    let after_replacing = planted(&new);
+
+    assert_eq!(
+        (live, ended, confirmed, after_unchanged, after_replacing),
+        (
+            (true, true, false, false, true),
+            (true, true, true, false, false, false),
+            true,
+            false,
+            true,
+        )
+    );
+}
+
+/// A nested folder that appeared while a session ran stays planted after
+/// that session crashes (the sweep records it).
+#[test]
+fn legacy_nested_project_metadata_survives_a_crash() {
+    use std::io::BufRead as _;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = test_root.path().join("root");
+    fs::create_dir_all(root.join("sub")).expect("create root");
+    let dot_agents = canonical(&root).join("sub\\.agents");
+
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
+        .args([
+            "--exact",
+            CRASH_CHILD_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CRASH_ROOTS_ENV, &root)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the crash child");
+    let stdout = child.stdout.take().expect("child stdout");
+    let ready = std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.trim() == CRASH_CHILD_READY);
+    fs::create_dir(&dot_agents).expect("plant .agents");
+    let live = (appeared_live(&dot_agents), planted(&dot_agents));
+    child.kill().expect("kill the crash child");
+    child.wait().expect("wait for the crash child");
+    crate::repair_stale_integrity_labels().expect("repair");
+    let crashed = (appeared_live(&dot_agents), planted(&dot_agents));
+
+    assert_eq!((ready, live, crashed), (true, (true, false), (false, true)));
+}
+
+/// A legacy command can't change, delete, move or add to a `.codex` folder
+/// deeper in its workspace, while it can write next to it; a `.agents`
+/// folder it creates deeper in the workspace counts as planted.
+#[test]
+fn legacy_workspace_write_cannot_change_nested_project_metadata() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let sub = workspace.join("sub");
+    let dot_codex = sub.join(".codex");
+    fs::create_dir_all(&dot_codex).expect("create nested .codex");
+    let config = dot_codex.join("config.toml");
+    fs::write(&config, "original").expect("seed config");
+    let other = sub.join("other.txt");
+    fs::write(&other, "before").expect("seed other file");
+    let script = concat!(
+        "echo after> \"%SUB%\\other.txt\"\r\n",
+        "echo planted>> \"%SUB%\\.codex\\config.toml\"\r\n",
+        "echo planted> \"%SUB%\\.codex\\hooks.json\"\r\n",
+        "mkdir \"%SUB%\\.codex\\skills\"\r\n",
+        "del /f /q \"%SUB%\\.codex\\config.toml\"\r\n",
+        "ren \"%SUB%\\.codex\" codex-renamed\r\n",
+        "move \"%SUB%\\.codex\" \"%SUB%\\codex-moved\"\r\n",
+        "rd /s /q \"%SUB%\\.codex\"\r\n",
+        "mkdir \"%WORKSPACE%\\new\\.agents\"\r\n",
+    );
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-nested-metadata");
+        let script_path = codex_home.path().join("nested-metadata.cmd");
+        fs::write(&script_path, format!("@echo off\r\n{script}exit /b 0\r\n"))
+            .expect("write script");
+        let env_map = HashMap::from([
+            ("SUB".to_string(), sub.to_string_lossy().into_owned()),
+            (
+                "WORKSPACE".to_string(),
+                workspace.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script_path.display().to_string(),
+            ],
+            &workspace,
+            env_map,
+            /*timeout_ms*/ Some(10_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        let (_stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
+                .await;
+        exit_code
+    });
+    let new_agents = canonical(&workspace).join("new\\.agents");
+
+    assert_eq!(
+        (
+            exit_code,
+            fs::read_to_string(&other)
+                .expect("other")
+                .trim()
+                .to_string(),
+            fs::read_to_string(&config).expect("config"),
+            dot_codex.join("hooks.json").exists(),
+            dot_codex.join("skills").exists(),
+            sub.join("codex-renamed").exists() || sub.join("codex-moved").exists(),
+            new_agents.is_dir(),
+            planted(&new_agents),
+            planted(&canonical(&dot_codex)),
+        ),
+        (
+            0,
+            "after".to_string(),
+            "original".to_string(),
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+        )
+    );
+}

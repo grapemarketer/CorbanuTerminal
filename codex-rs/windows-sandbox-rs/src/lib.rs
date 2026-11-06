@@ -82,6 +82,8 @@ mod logging;
 #[cfg(target_os = "windows")]
 mod logon_launch;
 #[cfg(target_os = "windows")]
+mod nested_metadata;
+#[cfg(target_os = "windows")]
 mod path_normalization;
 #[cfg(target_os = "windows")]
 mod process;
@@ -244,6 +246,8 @@ pub use identity::require_logon_sandbox_creds;
 pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::confirm_planted_project_metadata;
+#[cfg(target_os = "windows")]
+pub use integrity_leases::nested_project_metadata_appeared_in_live_session;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::planted_project_metadata;
 #[cfg(target_os = "windows")]

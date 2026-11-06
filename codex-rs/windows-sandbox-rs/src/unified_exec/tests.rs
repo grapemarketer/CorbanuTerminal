@@ -2751,3 +2751,7 @@ mod command_identity;
 /// D285: what the per-command ACL work costs on a large workspace.
 #[path = "acl_cost_tests.rs"]
 mod acl_cost;
+
+/// D283 (#1541): nested `.codex`/`.agents` folders.
+#[path = "nested_metadata_tests.rs"]
+mod nested_metadata;

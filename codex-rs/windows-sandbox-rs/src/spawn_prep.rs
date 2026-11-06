@@ -1,5 +1,6 @@
 use crate::acl::add_allow_ace;
 use crate::acl::add_deny_write_ace;
+use crate::acl::add_required_deny_write_ace;
 use crate::acl::allow_null_device;
 use crate::acl::ensure_allow_write_aces;
 use crate::allow::AllowDenyPaths;
@@ -365,6 +366,19 @@ pub(crate) fn apply_legacy_session_acl_rules(
         None
     };
     let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
+    // D283 (#1541): `.codex`/`.agents` deeper in a writable root get the
+    // top-level ones' protection; the command doesn't start without it.
+    let nested_metadata: HashSet<PathBuf> = match &lease {
+        Some(lease) => lease.nested_metadata_to_protect(),
+        None if allow.is_empty() => Vec::new(),
+        None => {
+            let roots: Vec<PathBuf> = allow.iter().cloned().collect();
+            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&roots))
+        }
+    }
+    .into_iter()
+    .collect();
+    deny.extend(nested_metadata.iter().cloned());
     // The label records must not be writable from a session whose root
     // holds them: protect them like `.git`.
     if let Some(registry) = crate::integrity_leases::registry_parent_dir()
@@ -433,7 +447,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 }
             }
             for root_sid in deny_root_capabilities_for_path(p, acl_sids.write_root_sids) {
-                let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
+                if nested_metadata.contains(p) {
+                    add_required_deny_write_ace(p, root_sid.sid.as_ptr()).with_context(|| {
+                        format!(
+                            "the Windows sandbox could not protect project folder {}",
+                            p.display()
+                        )
+                    })?;
+                } else {
+                    let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
+                }
             }
             // The capability-SID deny above does not stop a delete or move
             // through the parent's FILE_DELETE_CHILD (#158).

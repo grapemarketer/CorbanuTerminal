@@ -673,6 +673,29 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
     add_deny_ace(path, psid, DenyAceKind::Write)
 }
 
+/// As [`add_deny_write_ace`], but an error if the entry isn't there
+/// afterwards (the DACL couldn't be written), for a protection a command
+/// must not start without (D283).
+///
+/// # Safety
+/// Caller must ensure `psid` points to a valid SID and `path` exists.
+pub unsafe fn add_required_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
+    let added = add_deny_ace(path, psid, DenyAceKind::Write)?;
+    // `add_deny_ace` reports a failed write as "not added"; confirm instead.
+    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let present = DenyAceKind::Write.already_present(p_dacl, psid, path.is_dir());
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    if !present {
+        return Err(anyhow!(
+            "could not deny the sandbox writes to {}",
+            path.display()
+        ));
+    }
+    Ok(added)
+}
+
 /// Denies `FILE_DELETE_CHILD` to `psid` on a directory, and on its future and
 /// existing subdirectories when `inherit_to_subdirs` is set.
 ///
@@ -1080,7 +1103,7 @@ impl Drop for ExactHandle {
 
 /// The volume serial number and 128-bit file ID of the file `handle` is open
 /// to (`FileIdInfo`; the 64-bit index is not unique on ReFS).
-unsafe fn file_identity(handle: HANDLE) -> std::io::Result<(u64, [u8; 16])> {
+pub(crate) unsafe fn file_identity(handle: HANDLE) -> std::io::Result<(u64, [u8; 16])> {
     let mut info: FILE_ID_INFO = std::mem::zeroed();
     if GetFileInformationByHandleEx(
         handle,
