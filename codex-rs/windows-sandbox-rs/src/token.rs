@@ -43,7 +43,10 @@ const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
+const GENERIC_EXECUTE: u32 = 0x2000_0000;
+const GENERIC_READ: u32 = 0x8000_0000;
 const WIN_WORLD_SID: i32 = 1;
+const WIN_LOCAL_SYSTEM_SID: i32 = 22;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
 
 #[repr(C)]
@@ -54,13 +57,19 @@ struct TokenDefaultDaclInfo {
 /// Sets a permissive default DACL so sandboxed processes can create pipes/IPC objects
 /// without hitting ACCESS_DENIED when PowerShell builds pipelines.
 unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> {
-    if sids.is_empty() {
+    let grants: Vec<(*mut c_void, u32)> = sids.iter().map(|sid| (*sid, GENERIC_ALL)).collect();
+    set_default_dacl_grants(h_token, &grants)
+}
+
+/// Sets the token's default DACL to exactly `grants` (SID, access mask).
+unsafe fn set_default_dacl_grants(h_token: HANDLE, grants: &[(*mut c_void, u32)]) -> Result<()> {
+    if grants.is_empty() {
         return Ok(());
     }
-    let entries: Vec<EXPLICIT_ACCESS_W> = sids
+    let entries: Vec<EXPLICIT_ACCESS_W> = grants
         .iter()
-        .map(|sid| EXPLICIT_ACCESS_W {
-            grfAccessPermissions: GENERIC_ALL,
+        .map(|(sid, access)| EXPLICIT_ACCESS_W {
+            grfAccessPermissions: *access,
             grfAccessMode: GRANT_ACCESS,
             grfInheritance: 0,
             Trustee: TRUSTEE_W {
@@ -107,16 +116,15 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
 }
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_WORLD_SID)
+}
+
+unsafe fn well_known_sid(kind: i32) -> Result<Vec<u8>> {
     let mut size: u32 = 0;
-    CreateWellKnownSid(
-        WIN_WORLD_SID,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        &mut size,
-    );
+    CreateWellKnownSid(kind, std::ptr::null_mut(), std::ptr::null_mut(), &mut size);
     let mut buf: Vec<u8> = vec![0u8; size as usize];
     let ok = CreateWellKnownSid(
-        WIN_WORLD_SID,
+        kind,
         std::ptr::null_mut(),
         buf.as_mut_ptr() as *mut c_void,
         &mut size,
@@ -347,19 +355,11 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// # Safety
-/// Caller must close the returned token handle.
-pub unsafe fn create_readonly_token_with_cap(
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let base = get_current_token_for_restriction()?;
-    let res = create_readonly_token_with_cap_from(base, psid_capability);
-    CloseHandle(base);
-    res
-}
-
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
+/// A read-only restricted token with the pre-D259 default DACL (no
+/// per-command identity): legacy commands use
+/// [`create_legacy_token_with_caps_from`] instead. Kept for tests that probe
+/// Core's or the broker's objects from a restricted token.
+///
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
 pub unsafe fn create_readonly_token_with_cap_from(
@@ -379,6 +379,35 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
     create_token_with_caps_from(base_token, psid_capabilities, &[])
+}
+
+/// D259 (#1507): a legacy (non-elevated) command's token: the capability
+/// SIDs plus `psid_command`, a SID unique to this command, as restricting
+/// SIDs. Its default DACL, which the objects its processes create without
+/// explicit security get (their processes, threads, tokens, pipes, events,
+/// sections), grants full access only to the user, SYSTEM and
+/// `psid_command`; Everyone, the logon SID and the capability SIDs get read
+/// and execute. A write-restricted token needs a restricting SID granted
+/// each write right, so one legacy command can still write to its own
+/// objects, but not to another command's: it can't open them with
+/// `PROCESS_CREATE_PROCESS` (to start a child in that command's job),
+/// `WRITE_DAC`, `PROCESS_DUP_HANDLE` or memory writes. Before D259 the default
+/// DACL granted Everyone and the logon SID, both restricting SIDs of every
+/// legacy token, `GENERIC_ALL`. Not closed: `TOKEN_DUPLICATE` isn't a write
+/// right, so another legacy command can still impersonate this command's
+/// token, and with it (it carries `psid_command`) write to this command's
+/// processes and writable roots (#1560). Read/execute still includes
+/// `PROCESS_TERMINATE`.
+///
+/// # Safety
+/// Caller must close the returned token handle; base_token must be a valid primary token,
+/// and every SID pointer must be valid.
+pub(crate) unsafe fn create_legacy_token_with_caps_from(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    psid_command: *mut c_void,
+) -> Result<HANDLE> {
+    create_token(base_token, psid_capabilities, &[], Some(psid_command))
 }
 
 /// Create a restricted token that includes all provided capability SIDs, the token user SID, and
@@ -450,6 +479,20 @@ unsafe fn create_token_with_caps_from(
     psid_capabilities: &[*mut c_void],
     extra_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
+    create_token(
+        base_token,
+        psid_capabilities,
+        extra_restricting_sids,
+        /*command_identity*/ None,
+    )
+}
+
+unsafe fn create_token(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    extra_restricting_sids: &[*mut c_void],
+    command_identity: Option<*mut c_void>,
+) -> Result<HANDLE> {
     if psid_capabilities.is_empty() {
         return Err(anyhow!("no capability SIDs provided"));
     }
@@ -457,6 +500,9 @@ unsafe fn create_token_with_caps_from(
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+
+    let mut extra_restricting_sids = extra_restricting_sids.to_vec();
+    extra_restricting_sids.extend(command_identity);
 
     // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
@@ -501,16 +547,60 @@ unsafe fn create_token_with_caps_from(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    // Additional restricting SIDs are identity markers, not capabilities. Deliberately exclude
-    // them from the default DACL so possessing a route identity cannot grant object access.
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-    dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
-    dacl_sids.extend_from_slice(psid_capabilities);
-    set_default_dacl(new_token, &dacl_sids)?;
+    let dacl = if let Some(psid_command) = command_identity {
+        set_legacy_default_dacl(
+            new_token,
+            base_token,
+            psid_command,
+            psid_logon,
+            psid_everyone,
+            psid_capabilities,
+        )
+    } else {
+        // Additional restricting SIDs are identity markers, not capabilities. Deliberately
+        // exclude them from the default DACL so possessing a route identity cannot grant
+        // object access.
+        let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
+        dacl_sids.push(psid_logon);
+        dacl_sids.push(psid_everyone);
+        dacl_sids.extend_from_slice(psid_capabilities);
+        set_default_dacl(new_token, &dacl_sids)
+    };
+    if let Err(err) = dacl {
+        CloseHandle(new_token);
+        return Err(err);
+    }
 
-    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
+    if let Err(err) = enable_single_privilege(new_token, "SeChangeNotifyPrivilege") {
+        CloseHandle(new_token);
+        return Err(err);
+    }
     Ok(new_token)
+}
+
+/// D259: sets a legacy command's default DACL (see
+/// [`create_legacy_token_with_caps_from`]) on `token`; the user SID comes
+/// from `base_token`.
+unsafe fn set_legacy_default_dacl(
+    token: HANDLE,
+    base_token: HANDLE,
+    psid_command: *mut c_void,
+    psid_logon: *mut c_void,
+    psid_everyone: *mut c_void,
+    psid_capabilities: &[*mut c_void],
+) -> Result<()> {
+    let mut user = get_user_sid_bytes(base_token)?;
+    let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+    let read_execute = GENERIC_READ | GENERIC_EXECUTE;
+    let mut grants = vec![
+        (user.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+        (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+        (psid_command, GENERIC_ALL),
+        (psid_logon, read_execute),
+        (psid_everyone, read_execute),
+    ];
+    grants.extend(psid_capabilities.iter().map(|sid| (*sid, read_execute)));
+    set_default_dacl_grants(token, &grants)
 }
 
 #[cfg(test)]

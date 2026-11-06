@@ -4741,9 +4741,13 @@ impl Config {
         // the provider does, and the pair correction above acts on exactly that.
         // Only "nothing was stated at all" should stop forcing.
         let provider_selection_was_stated = model_provider_was_explicit || provider_was_corrected;
+        // #1563: the Corbanu Plan route shares Ambient's normalization, but it
+        // is set up through its wallet row, not a pasted key, so forcing the
+        // API-key prompt for it left onboarding with no way to set it up.
         let forced_login_method = cfg.forced_login_method.or_else(|| {
             (provider_selection_was_stated
-                && (ambient_provider_selected
+                && ((ambient_provider_selected
+                    && model_provider_id != PFTERMINAL_PLAN_PROVIDER_ID)
                     || kimi_code_provider_selected
                     || anthropic_provider_selected
                     || meta_provider_selected

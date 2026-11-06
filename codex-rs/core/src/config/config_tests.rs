@@ -12900,6 +12900,26 @@ async fn default_provider_does_not_force_the_api_only_login_path() -> std::io::R
     );
     assert_eq!(stale_gpu.forced_login_method, None);
 
+    // #1563: the Corbanu Plan route is set up through its wallet row, so a
+    // chosen Plan keeps the provider picker instead of a pasted-key prompt.
+    let plan = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            model_provider: Some(
+                codex_model_provider_info::PFTERMINAL_PLAN_PROVIDER_ID.to_string(),
+            ),
+            model: Some("z-ai/glm-5.2".to_string()),
+            ..ConfigToml::default()
+        },
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+    assert_eq!(
+        plan.model_provider_id,
+        codex_model_provider_info::PFTERMINAL_PLAN_PROVIDER_ID
+    );
+    assert_eq!(plan.forced_login_method, None);
+
     // A model that implies an API-key-only provider still forces the API path,
     // because naming that model is a choice of provider by another route. Here
     // no provider is set and the pair correction resolves it.

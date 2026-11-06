@@ -282,13 +282,17 @@ struct ChatFunctionDelta {
     arguments: Option<String>,
 }
 
+/// Display counters. A counter stated as null reads as zero here, as a
+/// missing one does: `chat_accounting::decode` accepts null as "stated but
+/// unknown", and failing this parse would drop the whole chunk, including its
+/// text delta and finish reason.
 #[derive(Debug, Deserialize)]
 struct ChatUsage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     prompt_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     completion_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     total_tokens: i64,
     #[serde(default)]
     prompt_tokens_details: Option<ChatPromptTokensDetails>,
@@ -298,13 +302,13 @@ struct ChatUsage {
 
 #[derive(Debug, Deserialize)]
 struct ChatPromptTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     cached_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     reasoning_tokens: i64,
 }
 
@@ -811,7 +815,8 @@ impl ChatStreamState {
         }
 
         if !self.message_text.is_empty() {
-            match parse_serialized_function_call_text(&self.message_text) {
+            let held_back = self.emitted_text_len == 0;
+            match parse_serialized_function_call_text(&self.message_text, held_back) {
                 Ok(Some(item)) => {
                     if tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(item)))
@@ -1051,13 +1056,38 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
     probe.len() < SERIALIZED_TOOL_TEXT_PROBE_CHARS
 }
 
-fn parse_serialized_function_call_text(text: &str) -> Result<Option<ResponseItem>, String> {
+/// `text` is the whole assistant text; `held_back` says none of it was streamed yet.
+/// Only a JSON object whose top-level `type` is a tool-call type is a serialized call.
+/// Other text that merely names "function_call" (a JSON answer about function calling)
+/// stays an ordinary message, and so does text already streamed that is not JSON.
+fn parse_serialized_function_call_text(
+    text: &str,
+    held_back: bool,
+) -> Result<Option<ResponseItem>, String> {
     if !looks_like_serialized_tool_call(text) {
         return Ok(None);
     }
 
     let trimmed = text.trim();
-    let parsed: TextFunctionCall = serde_json::from_str(trimmed).map_err(|err| {
+    let value: Value = match serde_json::from_str(trimmed) {
+        Ok(value) => value,
+        Err(_) if !held_back => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "chat completions stream emitted malformed function-call JSON as assistant \
+                 text: {err}; raw excerpt: {}",
+                diagnostic_excerpt(trimmed)
+            ));
+        }
+    };
+    if !value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind, "function_call" | "custom_tool_call"))
+    {
+        return Ok(None);
+    }
+    let parsed: TextFunctionCall = serde_json::from_value(value).map_err(|err| {
         format!(
             "chat completions stream emitted malformed function-call JSON as assistant text: \
              {err}; raw excerpt: {}",
@@ -1584,6 +1614,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn null_usage_counter_keeps_the_rest_of_the_chunk() {
+        // A counter stated as null is a wire form the accounting decoder
+        // accepts (`ChatTokenPresence::Null`). It must not make the display
+        // parser drop the chunk, and with it the last text delta, the finish
+        // reason and the usage.
+        let events = collect_events(&[
+            br#"data: {"id":"chatcmpl-null","choices":[{"delta":{"content":"partial"}}]}"#,
+            b"\n\n",
+            br#"data: {"id":"chatcmpl-null","choices":[{"delta":{"content":" answer"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":null},"completion_tokens_details":{"reasoning_tokens":null}}}"#,
+            b"\n\n",
+            b"data: [DONE]\n\n",
+        ])
+        .await;
+
+        assert_matches!(
+            &events[events.len() - 2],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }))
+                if content == &vec![ContentItem::OutputText {
+                    text: "partial answer".to_string(),
+                }]
+        );
+        assert_matches!(
+            events.last(),
+            Some(Ok(ResponseEvent::Completed {
+                token_usage: Some(TokenUsage {
+                    input_tokens: 3,
+                    cached_input_tokens: 0,
+                    output_tokens: 2,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 5,
+                    ..
+                }),
+                end_turn: Some(false),
+                finish_reason: Some(CompletionFinishReason::Length),
+                ..
+            }))
+        );
+    }
+
+    #[tokio::test]
     async fn parses_sglang_text_deltas_with_null_optional_collections() {
         let events = collect_events(&[
             br#"data: {"id":"chatcmpl-sglang","model":"deepseek-ai/DeepSeek-V4-Flash","choices":[{"index":0,"delta":{"reasoning_content":null,"reasoning_details":null,"role":"assistant","content":""},"finish_reason":null}]}"#,
@@ -1837,6 +1907,68 @@ mod tests {
             Ok(ResponseEvent::Completed { response_id, .. }) if response_id == "chatcmpl-json-text"
         );
         assert_eq!(events.len(), 4);
+    }
+
+    /// The events of one assistant message whose whole text is `content`.
+    fn assert_single_text_message(
+        events: &[Result<ResponseEvent, ApiError>],
+        content: &str,
+        response_id: &str,
+    ) {
+        assert_matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }))
+        );
+        assert_matches!(&events[1], Ok(ResponseEvent::OutputTextDelta { delta, .. }) if delta == content);
+        assert_matches!(
+            &events[2],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { content: final_content, .. }))
+                if final_content == &vec![ContentItem::OutputText { text: content.to_string() }]
+        );
+        assert_matches!(
+            &events[3],
+            Ok(ResponseEvent::Completed { response_id: id, .. }) if id == response_id
+        );
+        assert_eq!(events.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_streamed_json_that_mentions_function_call_stays_a_message() {
+        // A JSON answer (the body of a legacy function-calling request) whose first 96
+        // characters look ordinary, so it streams as text, and which names
+        // "function_call" further on.
+        let content = r#"{"model":"gpt-3.5-turbo-0613","messages":[{"role":"user","content":"What is the weather like in Boston today?"}],"functions":[{"name":"get_current_weather","parameters":{"type":"object"}}],"function_call":"auto"}"#;
+        let event = content_event("chatcmpl-json-mentions-call", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-json-mentions-call");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_streamed_json_and_prose_that_mention_function_call_stay_a_message()
+     {
+        let content = concat!(
+            r#"{"model":"gpt-3.5-turbo-0613","messages":[{"role":"user","content":"What is the weather like in Boston today?"}],"function_call":"auto"}"#,
+            "\n\nSetting \"function_call\" to \"auto\" lets the model decide.",
+        );
+        let event = content_event("chatcmpl-json-and-prose", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-json-and-prose");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_held_back_json_without_a_tool_call_type_stays_a_message() {
+        // "function_call" in the first 96 characters holds the text back; it is still an
+        // ordinary JSON object with no tool-call `type`.
+        let content = r#"{"function_call":"auto","functions":[{"name":"get_current_weather"}]}"#;
+        let event = content_event("chatcmpl-held-json", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-held-json");
     }
 
     #[tokio::test]

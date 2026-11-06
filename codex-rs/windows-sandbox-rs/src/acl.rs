@@ -689,7 +689,9 @@ pub unsafe fn add_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    add_deny_ace(path, psid, DenyAceKind::DeleteChild { inherit_to_subdirs })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ true)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 /// Whether `path`'s DACL itself (not an inherited copy) denies `psid`
@@ -729,9 +731,9 @@ pub unsafe fn remove_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    remove_matching_aces(path, |_, ace| {
-        is_exact_delete_child_deny(ace, psid, inherit_to_subdirs)
-    })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ false)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 unsafe fn is_exact_delete_child_deny(
@@ -751,12 +753,27 @@ unsafe fn is_exact_delete_child_deny(
 
 /// Denies `psid` `DELETE` on `path` itself (not inherited), so a sandbox
 /// whose token carries `psid` can't delete, rename or move it through its own
-/// `DELETE` right (#1506 item 3).
+/// `DELETE` right (#1506 item 3). Returns whether it added the entry; fails
+/// if the entry isn't there afterwards (the DACL couldn't be written, #1542
+/// item 3), since D263 must not start a command without it.
 ///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` exists.
 pub unsafe fn add_deny_delete_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
-    add_deny_ace(path, psid, DenyAceKind::Delete)
+    let added = add_deny_ace(path, psid, DenyAceKind::Delete)?;
+    // `add_deny_ace` reports a failed write as "not added"; confirm instead.
+    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let present = DenyAceKind::Delete.already_present(p_dacl, psid, path.is_dir());
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    if !present {
+        return Err(anyhow!(
+            "could not deny the sandbox DELETE on {}",
+            path.display()
+        ));
+    }
+    Ok(added)
 }
 
 /// PF-27-S06: denies `psid` reads of every file created directly in `path`
@@ -1654,6 +1671,9 @@ const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
     GenericExecute: FILE_GENERIC_EXECUTE,
     GenericAll: FILE_ALL_ACCESS,
 };
+
+#[path = "acl_delete_child.rs"]
+mod delete_child;
 
 #[cfg(test)]
 #[path = "acl_tests.rs"]

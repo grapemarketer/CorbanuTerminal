@@ -824,6 +824,9 @@ fn status_account_value(
         }
         // Other providers report their own stored key here (#462).
         StatusAccountDisplay::ApiKey { .. } => format!("{} API key configured", provider.name),
+        StatusAccountDisplay::NotConfigured { provider } => {
+            format!("{provider} not configured (set it up in /providers)")
+        }
     })
 }
 
