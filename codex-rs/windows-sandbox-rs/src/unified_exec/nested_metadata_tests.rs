@@ -198,7 +198,7 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
                 .expect("other")
                 .trim()
                 .to_string(),
-            fs::read_to_string(&config).expect("config"),
+            fs::read_to_string(&config).ok(),
             dot_codex.join("hooks.json").exists(),
             dot_codex.join("skills").exists(),
             sub.join("codex-renamed").exists() || sub.join("codex-moved").exists(),
@@ -209,7 +209,7 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
         (
             0,
             "after".to_string(),
-            "original".to_string(),
+            Some("original".to_string()),
             false,
             false,
             false,
