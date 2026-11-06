@@ -1919,7 +1919,7 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
         ),
         (
             "git init",
-            vec![git.clone(), "init".to_string(), "-q".to_string()],
+            vec![git, "init".to_string(), "-q".to_string()],
             &[],
             false,
         ),
