@@ -84,17 +84,13 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     Ok(())
 }
 
-/// The job a process under `h_token` runs in. #733: a process at Low
-/// integrity (the legacy backend, whose writable roots stay labelled Low
-/// only while its integrity lease is held) can't break away from it, so
-/// none of its descendants outlives the job the lease release waits on.
-/// A token whose level can't be read gets that stricter job too.
-pub(crate) fn sandbox_job_for_token(h_token: HANDLE) -> std::io::Result<JobObject> {
-    if crate::integrity::token_is_above_low_integrity(h_token) {
-        JobObject::create()
-    } else {
-        JobObject::create_without_breakaway()
-    }
+/// The job a sandboxed command runs in. Its members can't break away
+/// (#733 for the legacy backend, whose writable roots stay labelled Low only
+/// while its integrity lease is held; D256/#1507 for the elevated backend's
+/// runner), so none of a command's descendants outlives the job that
+/// cancellation, timeouts and the lease release act on.
+pub(crate) fn sandbox_job() -> std::io::Result<JobObject> {
+    JobObject::create_without_breakaway()
 }
 
 /// # Safety
@@ -120,7 +116,7 @@ pub unsafe fn create_process_as_user(
         crate::integrity::token_is_low_integrity(h_token),
         logs_base_dir,
     )?;
-    let job = Arc::new(sandbox_job_for_token(h_token).context("create process job")?);
+    let job = Arc::new(sandbox_job().context("create process job")?);
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();

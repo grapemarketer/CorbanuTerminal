@@ -153,8 +153,9 @@ A legacy command's job doesn't allow breaking away (#733; not covered by that
 sign-off): a child started with `CREATE_BREAKAWAY_FROM_JOB` fails with access
 denied, so its descendants stay in its job, where cancelling ends them and the
 lease waits for them. A program that asks to break away gets that error unless
-it retries without the flag. The elevated backend and unsandboxed commands
-still allow breaking away.
+it retries without the flag. The elevated backend's commands can't break
+away either (D256, #1507), so cancelling or a timeout ends everything they
+started. Unsandboxed commands still allow breaking away.
 
 Other ways to start a process (#1507), measured on the hosted Windows runner
 (no Explorer running; not yet measured on a desktop): WMI's

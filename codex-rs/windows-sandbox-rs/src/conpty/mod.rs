@@ -128,8 +128,7 @@ pub fn spawn_conpty_process_as_user(
         logs_base_dir,
     )?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-    let job =
-        Arc::new(crate::process::sandbox_job_for_token(h_token).context("create process job")?);
+    let job = Arc::new(crate::process::sandbox_job().context("create process job")?);
 
     let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
     let (pseudoconsole, input_write, output_read) = raw.into_handles();
