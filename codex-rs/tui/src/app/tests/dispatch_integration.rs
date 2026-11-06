@@ -1,5 +1,6 @@
 use super::*;
 
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -919,6 +920,124 @@ fn cold_restored_orc_task_is_readmitted_through_core_mailbox() -> Result<()> {
     })
 }
 
+fn fifo_delivery_complete(
+    app: &App,
+    target: ThreadId,
+    responses: &ResponseMock,
+    tasks: &[&str],
+) -> bool {
+    let presented = responses
+        .requests()
+        .iter()
+        .map(pending_agent_message_text)
+        .collect::<Vec<_>>();
+    // Idle can be observed between coalesced turns. Delivery is complete only
+    // when every expected task has also crossed a provider boundary.
+    !presented.is_empty()
+        && tasks
+            .iter()
+            .all(|task| presented.iter().any(|body| body.contains(task)))
+        && app
+            .agent_navigation
+            .get(&target)
+            .is_some_and(|entry| !entry.is_running)
+}
+
+#[test]
+#[allow(
+    clippy::print_stdout,
+    reason = "Capture controlled task-loss and recovery evidence in the test output"
+)]
+fn fifo_completion_rejects_a_dropped_task_and_waits_for_late_delivery() -> Result<()> {
+    run_dispatch_integration(|| async {
+        let mock = MockServer::start().await;
+        let responses = mount_sse_repeating(&mock, sse_completed("fifo-regression-response")).await;
+        let mut fixture = RealDispatchFixture::start(&mock, /*max_threads*/ 4).await?;
+        let target = fixture.spawn_target("FIFO regression target").await?;
+        let tasks = ["first controlled FIFO task", "second controlled FIFO task"];
+        fixture
+            .app
+            .app_event_tx
+            .send(AppEvent::SubmitSpawnAgentTask {
+                thread_id: target,
+                task: tasks[0].to_string(),
+                sent_while_kill_switch_on: false,
+            });
+        fixture
+            .route_until(std::time::Duration::from_secs(20), |app| {
+                fifo_delivery_complete(app, target, &responses, &tasks[..1])
+            })
+            .await?;
+
+        // Deliberately lose one queued assignment before mailbox admission.
+        // The first turn is idle, but the expected work is still incomplete.
+        fixture
+            .app
+            .app_event_tx
+            .send(AppEvent::SubmitSpawnAgentTask {
+                thread_id: target,
+                task: tasks[1].to_string(),
+                sent_while_kill_switch_on: false,
+            });
+        let mut dropped = 0;
+        while let Ok(event) = fixture.app_events.try_recv() {
+            match event {
+                AppEvent::SubmitSpawnAgentTask {
+                    thread_id, task, ..
+                } if thread_id == target && task == tasks[1] => {
+                    dropped += 1;
+                }
+                event => {
+                    fixture
+                        .app
+                        .handle_event(&mut fixture.tui, &mut fixture.server, event)
+                        .await?;
+                }
+            }
+        }
+        pretty_assertions::assert_eq!(dropped, 1);
+        pretty_assertions::assert_eq!(responses.requests().len(), 1);
+        let missing = fixture
+            .route_until(std::time::Duration::from_millis(100), |app| {
+                fifo_delivery_complete(app, target, &responses, &tasks)
+            })
+            .await;
+        pretty_assertions::assert_eq!(
+            missing
+                .expect_err("a lost mailbox task must not be accepted as completed")
+                .to_string(),
+            "real dispatch event path timed out"
+        );
+        println!("FIFO lost-task control: one task dropped; incomplete delivery timed out");
+
+        // A late delivery must still be routed, not mistaken for the earlier
+        // turn's idle state. Re-send the deliberately dropped task.
+        fixture
+            .app
+            .app_event_tx
+            .send(AppEvent::SubmitSpawnAgentTask {
+                thread_id: target,
+                task: tasks[1].to_string(),
+                sent_while_kill_switch_on: false,
+            });
+        fixture
+            .route_until(std::time::Duration::from_secs(20), |app| {
+                fifo_delivery_complete(app, target, &responses, &tasks)
+            })
+            .await?;
+        let presented = responses
+            .requests()
+            .iter()
+            .map(pending_agent_message_text)
+            .collect::<Vec<_>>();
+        let boundaries = tasks.map(|task| presented.iter().position(|body| body.contains(task)));
+        pretty_assertions::assert_eq!(boundaries, [Some(0), Some(1)]);
+        println!("FIFO late-delivery control: provider boundaries {boundaries:?}");
+        fixture.server.shutdown().await?;
+        Ok(())
+    })
+}
+
 #[test]
 fn real_event_path_preserves_fifo_when_mailbox_coalesces_turns() -> Result<()> {
     run_dispatch_integration(|| async {
@@ -944,11 +1063,7 @@ fn real_event_path_preserves_fifo_when_mailbox_coalesces_turns() -> Result<()> {
 
         fixture
             .route_until(std::time::Duration::from_secs(20), |app| {
-                !responses.requests().is_empty()
-                    && app
-                        .agent_navigation
-                        .get(&target)
-                        .is_some_and(|entry| !entry.is_running)
+                fifo_delivery_complete(app, target, &responses, &tasks)
             })
             .await?;
 
