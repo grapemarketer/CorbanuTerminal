@@ -24,6 +24,9 @@ pub(super) struct Word {
     /// A comma or `..` inside matching, unquoted braces may expand into
     /// arguments. Quoted/escaped braces and separate `{0}..{1}` do not.
     pub(super) brace_expansion: bool,
+    /// A `..` between unquoted braces: the word lexer never expands a range
+    /// (`--{u..u}pload-pack`), so git's checks there do not see the option.
+    pub(super) brace_range: bool,
     /// It holds an expansion whose value the classifier does not know.
     pub(super) dynamic: bool,
     /// An expansion outside double quotes: it may split into several words.
@@ -187,6 +190,9 @@ struct List {
     quoted_before: bool,
     /// The current word's unquoted brace groups and their separators.
     braces: Vec<bool>,
+    /// Bytes of the current word that are unquoted `{` or `}`: while they
+    /// are all of it, the word lexer ends the command at a `}` (`}x`, `{}`).
+    brace_chars: usize,
     redirect: Redirect,
     /// Here-documents whose bodies start after the next newline.
     pending: Vec<HereDocument>,
@@ -236,6 +242,7 @@ impl Reader<'_> {
         word.quoted_before |= list.quoted_before || word.quoted;
         list.quoted_before = word.quoted_before;
         list.braces.clear();
+        list.brace_chars = 0;
         let command = &mut self.out[list.command];
         let redirect = std::mem::replace(&mut list.redirect, Redirect::None);
         if redirect == Redirect::None && !word.quoted {
@@ -331,6 +338,7 @@ impl Reader<'_> {
             has_word: false,
             quoted_before: false,
             braces: Vec::new(),
+            brace_chars: 0,
             redirect: Redirect::None,
             pending: Vec::new(),
             cases: 0,
@@ -379,6 +387,8 @@ impl Reader<'_> {
                 }
                 '&' if next == Some('>') => {
                     self.finish_word(&mut list);
+                    // D258: the word lexer ends the command at the `&`.
+                    list.quoted_before = true;
                     list.redirect = Redirect::Stdout;
                     list.keyword = false;
                     index += if chars.get(index + 2) == Some(&'>') {
@@ -505,6 +515,11 @@ impl Reader<'_> {
                     }
                     self.finish_word(&mut list);
                     list.keyword = false;
+                    // D258: the word lexer ends the command at `<&`'s `&`
+                    // and `>|`'s `|`.
+                    if matches!(chars.get(index..index + 2), Some(['<', '&'] | ['>', '|'])) {
+                        list.quoted_before = true;
+                    }
                     let (redirect, used) = redirection(&chars[index..]);
                     if redirect == Redirect::Descriptor {
                         self.out[list.command].writes_descriptor = true;
@@ -518,8 +533,18 @@ impl Reader<'_> {
                 ch => {
                     list.has_word = true;
                     match ch {
-                        '{' => list.braces.push(false),
+                        '{' => {
+                            list.braces.push(false);
+                            list.brace_chars += 1;
+                        }
                         '}' => {
+                            // D258: the word lexer drops braces, so it
+                            // reads this `}` at a word's start and ends
+                            // the command there.
+                            if list.word.text.len() == list.brace_chars {
+                                list.word.quoted_before = true;
+                            }
+                            list.brace_chars += 1;
                             if let Some(expands) = list.braces.pop() {
                                 list.word.brace_expansion |= expands;
                             }
@@ -543,6 +568,7 @@ impl Reader<'_> {
                                 && let Some(expands) = list.braces.last_mut()
                             {
                                 *expands = true;
+                                list.word.brace_range = true;
                             }
                         }
                         _ => {}
@@ -617,6 +643,12 @@ impl Reader<'_> {
         // `--opt=./x`); its text is not read for braces, so a `,` or `..`
         // between braces in it counts, quoted or not.
         if source.starts_with(&['$', '{']) {
+            // D258: the word lexer drops the braces and ends the command at
+            // an operator in them (`${N:-x;y}`).
+            word.quoted_before |= source.iter().any(|ch| {
+                work::step();
+                matches!(ch, ';' | '&' | '|' | '(' | ')' | '\n')
+            });
             let inner = &source[2..];
             let open = inner.iter().position(|ch| *ch == '{');
             let close = inner.iter().rposition(|ch| *ch == '}');
@@ -624,8 +656,9 @@ impl Reader<'_> {
                 && open < close
             {
                 let between = &inner[open..close];
-                word.brace_expansion |=
-                    between.contains(&',') || between.windows(2).any(|pair| pair == ['.', '.']);
+                let range = between.windows(2).any(|pair| pair == ['.', '.']);
+                word.brace_range |= range;
+                word.brace_expansion |= range || between.contains(&',');
             }
         }
         end

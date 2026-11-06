@@ -4723,6 +4723,16 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
         "echo '$('; git clone -b $( (echo x) ) r {--upload-pack=./x,} d",
         "cat <<'EOF'\na ` tick\nEOF\ngit clone -b `echo main` r {--upload-pack=./x,} d",
         "echo 'a' # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        // The word lexer also ends the command at a `}` starting a word,
+        // `&>`, `<&`, `>|` and an operator in `${...}`, and never expands a
+        // range (#1580 review 3).
+        "echo \"x\"; git clone -b }x r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-x;y} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r &>/dev/null {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r <&0 {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r >|log {--upload-pack=./x,} d",
+        "echo \"x\"; git clone --{u..u}pload-pack=./x r d",
         // zsh brace-expands a `${...}` operand.
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
