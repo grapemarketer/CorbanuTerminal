@@ -1,4 +1,7 @@
 use super::*;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
@@ -289,6 +292,47 @@ fn runtime_warnings_are_filtered_to_the_primary_thread() {
     });
 
     assert_eq!(outcomes, [true, true, false]);
+}
+
+#[test]
+fn usage_notifications_are_filtered_to_the_selected_thread_and_turn() {
+    let outcomes = [
+        ("thread-1", "turn-1"),
+        ("thread-1", "previous-turn"),
+        ("child-thread", "turn-1"),
+        ("child-thread", "child-turn"),
+    ]
+    .map(|(thread_id, turn_id)| {
+        let notification =
+            ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                token_usage: ThreadTokenUsage {
+                    total: TokenUsageBreakdown {
+                        total_tokens: 15,
+                        input_tokens: 10,
+                        cached_input_tokens: 2,
+                        cache_write_input_tokens: 1,
+                        output_tokens: 5,
+                        reasoning_output_tokens: 3,
+                    },
+                    last: TokenUsageBreakdown {
+                        total_tokens: 15,
+                        input_tokens: 10,
+                        cached_input_tokens: 2,
+                        cache_write_input_tokens: 1,
+                        output_tokens: 5,
+                        reasoning_output_tokens: 3,
+                    },
+                    model_context_window: None,
+                },
+                account_usage: None,
+            });
+        should_process_notification(&notification, "thread-1", "turn-1")
+    });
+
+    // Existing exec output describes the selected thread, not an aggregate.
+    assert_eq!(outcomes, [true, false, false, false]);
 }
 
 #[tokio::test]
