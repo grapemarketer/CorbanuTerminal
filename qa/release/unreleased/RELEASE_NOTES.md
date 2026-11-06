@@ -232,6 +232,15 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
 
+## Chat Completions and Anthropic: earlier MCP calls keep their own name
+
+- **An MCP tool's earlier calls no longer replay as a built-in's** (#688). On
+  providers without tool namespaces, a call recorded for an MCP tool that the
+  request no longer offers (its server was removed, or the 128-tool limit left
+  it out) used to replay under its bare name, such as `shell`, which a
+  built-in tool can share. It now replays under the MCP tool's flat name
+  (`mcp__server__tool`), or a hashed form if another tool has that name.
+
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
 - **WebSocket connections now honour IP-range entries in `NO_PROXY`** (#722,

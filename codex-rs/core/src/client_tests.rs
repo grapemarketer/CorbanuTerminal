@@ -4090,7 +4090,23 @@ fn issue688_v1_history_does_not_alias_unrelated_namespace() {
             "mcp__synthetic",
             "spawn_agent",
             &["spawn_agent", "spawn_agent_v1"],
-            "spawn_agent",
+            // Not offered: never the built-in's bare name either (#688).
+            "mcp__synthetic__spawn_agent",
+        );
+    }
+}
+/// #688: an MCP call recorded for a tool this request does not offer (its
+/// server was removed, or the tool limit dropped it) must not replay as a call
+/// of the built-in that shares its bare name.
+#[test]
+fn issue688_unoffered_mcp_history_does_not_take_a_builtin_name() {
+    for anthropic in [false, true] {
+        issue688_v1_history_wire_case(
+            anthropic,
+            "mcp__orders",
+            "shell",
+            &["shell"],
+            "mcp__orders__shell",
         );
     }
 }
