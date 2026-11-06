@@ -2975,6 +2975,70 @@ async fn record_token_usage_info_notifies_extension_contributors() {
 }
 
 #[tokio::test]
+async fn issue1577_context_window_fill_keeps_thread_usage_counters() {
+    let (session, turn_context) = make_session_and_context().await;
+    let context_window = turn_context
+        .model_context_window()
+        .expect("the test model has a context window");
+    let first_usage = TokenUsage {
+        input_tokens: 4_000,
+        cached_input_tokens: 1_000,
+        cache_write_input_tokens: 0,
+        output_tokens: 200,
+        reasoning_output_tokens: 50,
+        total_tokens: 4_200,
+    };
+    let second_usage = TokenUsage {
+        input_tokens: 300,
+        cached_input_tokens: 100,
+        cache_write_input_tokens: 0,
+        output_tokens: 40,
+        reasoning_output_tokens: 10,
+        total_tokens: 340,
+    };
+
+    session
+        .record_token_usage_info(&turn_context, Some(&first_usage))
+        .await
+        .expect("first usage should be recorded");
+    session.set_total_tokens_full(&turn_context).await;
+
+    assert_eq!(
+        session.token_usage_info().await,
+        Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: context_window,
+                ..first_usage.clone()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: context_window - first_usage.total_tokens,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(context_window),
+        }),
+        "the fill keeps the provider's counters and still marks the window full"
+    );
+
+    session
+        .record_token_usage_info(&turn_context, Some(&second_usage))
+        .await
+        .expect("second usage should be recorded");
+
+    assert_eq!(
+        session.total_token_usage().await,
+        Some(TokenUsage {
+            input_tokens: 4_300,
+            cached_input_tokens: 1_100,
+            cache_write_input_tokens: 0,
+            output_tokens: 240,
+            reasoning_output_tokens: 60,
+            total_tokens: context_window + second_usage.total_tokens,
+        }),
+        "the report after the fill is added to the earlier counters, not to zeros"
+    );
+}
+
+#[tokio::test]
 async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
     struct SessionTurnStartMarker;
     struct ThreadTurnStartMarker;
