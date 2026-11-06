@@ -954,7 +954,7 @@ fn sec_win_345_sandboxed_commands_dont_get_the_runners_access() {
 
 /// Copies the elevated sandbox's helpers (`CARGO_BIN_EXE_*`, else the
 /// build's own) next to this test binary, where the sandbox looks for them.
-fn stage_sandbox_helpers() {
+pub(crate) fn stage_sandbox_helpers() {
     let exe = std::env::current_exe().expect("test binary");
     let deps = exe.parent().expect("test dir");
     let resources = deps.join("codex-resources");
