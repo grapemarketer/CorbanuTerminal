@@ -896,11 +896,13 @@ impl Classifier {
         // D156/D258: the other lexer may cut this command at quoted text
         // before a brace-generated option. Quote history is command-local
         // (redirections included), and only unquoted brace groups count.
-        // A quote in a later command or literal `{a,b}` cannot cause this.
+        // A quote in a later command or literal `{a,b}` cannot cause this,
+        // unless the line holds `$'` (see `ansi_c_text`).
         let mut braced_from = vec![false; texts.len() + 1];
         for at in (0..texts.len()).rev() {
             work::step();
-            let expands = words[at].quoted_before && words[at].brace_expansion;
+            let expands =
+                (words[at].quoted_before || self.ansi_c_text) && words[at].brace_expansion;
             braced_from[at] = braced_from[at + 1] || expands;
         }
         for (index, word) in lower.iter().enumerate() {

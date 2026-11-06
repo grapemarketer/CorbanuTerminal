@@ -4711,6 +4711,13 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
         "git add src/{a,b}.rs && git clone -b 'a; b' {--upload-pack=./x,} URL",
         "git clone -b 'a; b' {--upload-pack=./x,} URL && git add src/{a,b}.rs",
         "git add src/{a,b}.rs && git commit -m \"$(./unseen)\"",
+        // The word lexer reads `$'` as an ANSI-C string whatever the
+        // quoting around it, on into a later command (#1580 review).
+        "grep -n 'TODO$' notes.txt; git clone {--upload-pack=./x,} ./r d; echo 'done'",
+        "echo \"$'\"; git clone {--upload-pack=./x,} ./r d; echo \"'\"",
+        // zsh brace-expands a `${...}` operand.
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
     ] {
         assert_eq!(
             script(command),
@@ -4736,6 +4743,8 @@ fn d156_checks_are_linear() {
             "git add src/{a,b}.rs && git commit -m \"msg\"; ",
         ),
         ("nested brace words", "git 'a; b' x{a,{b,c}} "),
+        ("parameter brace words", "git 'a; b' ${x:-${y:-{a,b}}} "),
+        ("ANSI-C lines", "grep 'a$' f; git add {a,b}; "),
         (
             "continued brace ranges",
             "git clone --{u.\\\n.u}pload-pack=./x URL; ",

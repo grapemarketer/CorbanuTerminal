@@ -608,12 +608,26 @@ impl Reader<'_> {
         // D258: substitutions can replace their source text in `word`.
         // Retain any quote that may have split the other lexer before it
         // disappears, without changing `quoted`'s existing meaning.
-        word.quoted_before |= self.chars[index..end.min(self.chars.len())]
-            .iter()
-            .any(|ch| {
-                work::step();
-                matches!(ch, '\'' | '"' | '\\')
-            });
+        let source = &self.chars[index..end.min(self.chars.len())];
+        word.quoted_before |= source.iter().any(|ch| {
+            work::step();
+            matches!(ch, '\'' | '"' | '\\')
+        });
+        // zsh brace-expands a `${...}` operand (`${x:-{--opt=./x,}}` gives
+        // `--opt=./x`); its text is not read for braces, so a `,` or `..`
+        // between braces in it counts, quoted or not.
+        if source.starts_with(&['$', '{']) {
+            let inner = &source[2..];
+            let open = inner.iter().position(|ch| *ch == '{');
+            let close = inner.iter().rposition(|ch| *ch == '}');
+            if let (Some(open), Some(close)) = (open, close)
+                && open < close
+            {
+                let between = &inner[open..close];
+                word.brace_expansion |=
+                    between.contains(&',') || between.windows(2).any(|pair| pair == ['.', '.']);
+            }
+        }
         end
     }
 

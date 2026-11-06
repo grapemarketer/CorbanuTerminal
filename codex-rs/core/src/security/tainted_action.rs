@@ -581,6 +581,7 @@ impl Classifier {
             unseen_folder: false,
             sudo_redefined: false,
             quoted_text: false,
+            ansi_c_text: false,
             launched: launched_git::Launch::default(),
             substitution_budget: Budget {
                 left: MAX_SUBSTITUTED_BYTES,
@@ -1318,6 +1319,11 @@ struct Classifier {
     /// which the word lexer ignores: it may end a command early there
     /// (`'a; b'`, `'a ( b'`, `a\;b`).
     quoted_text: bool,
+    /// D258: the line (or one that runs it) holds `$'`, where the word
+    /// lexer starts an ANSI-C string whatever the quoting around it, so it
+    /// may read on into later commands (`grep 'a$' f; git …; echo 'b'`):
+    /// git's brace check then uses the line's quotes, not its command's.
+    ansi_c_text: bool,
     /// #1065: bytes of command text, and command lines, lexed so far.
     classified_bytes: usize,
     classified_lines: usize,
@@ -1636,6 +1642,8 @@ impl Classifier {
         let outer_sudo_redefined = self.sudo_redefined;
         let outer_quoted_text = self.quoted_text;
         self.quoted_text |= command.iter().any(|part| part.contains(['\'', '"', '\\']));
+        let outer_ansi_c_text = self.ansi_c_text;
+        self.ansi_c_text |= command.iter().any(|part| part.contains("$'"));
         self.sudo_redefined |= command
             .iter()
             .any(|part| unknown_folder::may_redefine_sudo(part));
@@ -2095,6 +2103,7 @@ impl Classifier {
         self.sed_scope = outer_scope;
         self.sudo_redefined = outer_sudo_redefined;
         self.quoted_text = outer_quoted_text;
+        self.ansi_c_text = outer_ansi_c_text;
         self.visited = outer_visited;
         self.visited_all = outer_visited_all;
     }
