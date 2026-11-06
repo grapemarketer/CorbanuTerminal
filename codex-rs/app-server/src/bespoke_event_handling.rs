@@ -6,6 +6,7 @@ use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
+use crate::server_request_error::is_withdrawn_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -726,6 +727,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 )
                 .await;
             });
+        }
+        EventMsg::ExecApprovalRequestWithdrawn(withdrawn) => {
+            outgoing
+                .withdraw_command_execution_approval(
+                    &withdrawn.turn_id,
+                    &withdrawn.effective_approval_id(),
+                )
+                .await;
         }
         EventMsg::RequestUserInput(request) => {
             let user_input_guard = thread_watch_manager
@@ -1996,6 +2005,7 @@ async fn on_command_execution_request_approval_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
+    let mut withdrawn = false;
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             match serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value) {
@@ -2047,6 +2057,14 @@ async fn on_command_execution_request_approval_response(
             }
         }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+        // #722 (D279): core stopped waiting and already refused the action.
+        Ok(Err(err)) if is_withdrawn_server_request_error(&err) => {
+            withdrawn = true;
+            (
+                ReviewDecision::Abort,
+                Some(CommandExecutionStatus::Declined),
+            )
+        }
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             (
@@ -2096,6 +2114,9 @@ async fn on_command_execution_request_approval_response(
         .await;
     }
 
+    if withdrawn {
+        return;
+    }
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: approval_id.unwrap_or_else(|| item_id.clone()),
