@@ -15,13 +15,27 @@ fn body_contains(request: &wiremock::Request, text: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> anyhow::Result<()> {
+    streamed_usage("none", Some(200)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue290_forked_child_without_authoritative_baseline_is_unknown() -> anyhow::Result<()> {
+    streamed_usage("all", Some(200)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue290_missing_child_usage_makes_the_aggregate_unknown() -> anyhow::Result<()> {
+    streamed_usage("none", /*child_tokens*/ None).await
+}
+
+async fn streamed_usage(fork_turns: &str, child_tokens: Option<i64>) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let spawn_args = json!({
         "message": CHILD_PROMPT,
         "task_name": "worker",
-        "fork_turns": "none",
+        "fork_turns": fork_turns,
     })
     .to_string();
     let _parent_turn = responses::mount_sse_once_match(
@@ -35,7 +49,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
                 "spawn_agent",
                 &spawn_args,
             ),
-            responses::ev_completed("resp-parent-1"),
+            responses::ev_completed_with_tokens("resp-parent-1", /*total_tokens*/ 100),
         ]),
     )
     .await;
@@ -47,7 +61,13 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
         responses::sse(vec![
             responses::ev_response_created("resp-child"),
             responses::ev_assistant_message("msg-child", "child done"),
-            responses::ev_completed("resp-child"),
+            match child_tokens {
+                Some(tokens) => responses::ev_completed_with_tokens("resp-child", tokens),
+                None => json!({
+                    "type": "response.completed",
+                    "response": {"id": "resp-child"},
+                }),
+            },
         ]),
     )
     .await;
@@ -64,7 +84,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
                 "wait_agent",
                 "{}",
             ),
-            responses::ev_completed("resp-parent-2"),
+            responses::ev_completed_with_tokens("resp-parent-2", /*total_tokens*/ 300),
         ]),
     )
     .await;
@@ -74,7 +94,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
         responses::sse(vec![
             responses::ev_response_created("resp-parent-3"),
             responses::ev_assistant_message("msg-parent", "parent done"),
-            responses::ev_completed("resp-parent-3"),
+            responses::ev_completed_with_tokens("resp-parent-3", /*total_tokens*/ 400),
         ]),
     )
     .await;
@@ -109,9 +129,38 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
     assert!(output.status.success(), "exec run failed: {output:?}");
 
     let stdout = String::from_utf8(output.stdout)?;
+    if fork_turns == "all" {
+        assert!(
+            !stdout.contains("Usage is unknown: could not resolve"),
+            "fork usage must be unknown because of fork detection, not a failed ancestry read: {stdout}"
+        );
+    }
     assert!(
         stdout.contains("parent done"),
         "primary completion was not processed: {stdout}"
+    );
+    let events = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let completions = events
+        .iter()
+        .filter(|event| event["type"] == "turn.completed")
+        .collect::<Vec<_>>();
+    assert_eq!(completions.len(), 1, "child completion must not end exec");
+    assert_eq!(
+        completions[0]["usage"],
+        child_tokens
+            .filter(|_| fork_turns == "none")
+            .map(|tokens| json!({
+                "input_tokens": 800 + tokens,
+                "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_output_tokens": 0,
+            }))
+            .unwrap_or(serde_json::Value::Null),
+        "root 100 + 300 + 400 and child 200 must each be counted once"
     );
     let stderr = String::from_utf8(output.stderr)?;
     let lines = stderr.lines().collect::<Vec<_>>();
@@ -154,8 +203,8 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
             .iter()
             .filter(|line| line.contains("app-server typed request"))
             .count(),
-        5,
-        "only the primary completion should issue an extra request: {stderr}"
+        6,
+        "one metadata read resolves child ancestry; only the primary completion backfills items: {stderr}"
     );
 
     Ok(())

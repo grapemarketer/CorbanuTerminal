@@ -13,9 +13,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   resumed thread, if this turn's response reports no usage, `usage` still
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
-- **The usage is still the completing thread's own total.** It does not add
-  usage from spawned subagents and is not a difference from the start of the
-  invocation.
+- **Usage includes observed descendant work** (#290). Repeated cumulative
+  reports are counted once. Every history-forked descendant makes the total
+  `null`, as do a descendant with no report,
+  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
+  thread's own totals are not a difference from the start of the invocation.
+  Detached children can incur further usage after this snapshot.
+- **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
+  defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
+  report `usage: null`. A non-null total can be larger than in earlier versions
+  because it includes descendant work rather than only the root's own total.
+- **Context estimates are not provider reports.** Compaction, rollback and
+  full-window estimates keep the last measured report, or `null` if none exists.
 
 ### Compatibility
 
@@ -272,6 +281,16 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   to open an OpenAI-worded key prompt that ended in
   `Provider API-key selection is no longer available`. The list now starts on
   **Corbanu API**, whose wallet and API-key setup runs after **Done**.
+
+## A force-stopped turn still reports its file changes
+
+- **The turn's file-change summary is sent when an interrupt force-stops a
+  turn** (#1604, D282). When a turn misses the interrupt grace period and is
+  stopped, it now sends the summary of the files it changed, as a turn that
+  ends normally does, so the status line stays current.
+- **A turn stopped while recording a search result still marks the
+  conversation as using outside content** (#1536). The check now runs before
+  the result is recorded instead of after it.
 
 ## Telegram `/status`: token estimates are not a thread total
 

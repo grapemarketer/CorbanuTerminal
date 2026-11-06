@@ -62,6 +62,12 @@ const MAX_COLLECTED: usize = 4096;
 /// the pipeline writes a file the classifier cannot name.
 const MAX_PIPELINE_STAGES: usize = 64;
 
+/// Targets retained for one collected `sed`. Each target costs a vector slot
+/// plus its known name, and every collected `Sed` clones the list. Keeping
+/// both bounded makes those copies constant-size.
+const MAX_SAVED_TARGETS: usize = 64;
+const MAX_SAVED_TARGET_BYTES: usize = 4 * 1024;
+
 /// Pipeline stages that save their input to the files they are given.
 const PIPE_WRITERS: &[&str] = &["tee", "dd", "sponge", "cp", "install"];
 
@@ -365,6 +371,21 @@ impl Classifier {
                     || !command.input.is_empty()
                     || !command.other_text.is_empty(),
             );
+            // #1573 (1): zsh writes a redirection to `=mytool` (also
+            // `="mytool"`) into the program `mytool` on `PATH`, which runs
+            // later. Only at this reading's own level: quoted words read
+            // again as code (`level` > 0) would turn the `>=` of `awk
+            // 'NR>=10'` into one; nested shells' scripts get a level 0 of
+            // their own. Not in other languages' files (`if n>=2:`).
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && command.writes_to.iter().any(|word| {
+                    work::step();
+                    outputs::zsh_program_path(&word.text)
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a later iteration of a loop starts where the one
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
@@ -462,6 +483,11 @@ impl Classifier {
             found.unreadable |= git_helpers::setting_holds_git_name(&command.words);
             loops.read(&texts);
             self.judge_git(&texts, &command.words, &loops, found);
+            // #1515: one this reading cut at a bracket the shell reads as
+            // text (`git -C { config core.pager sh`) may go on past it.
+            if command.cut && cut_matters(&command.words) {
+                note_git(found, ProtectedActionKind::UnseenCode);
+            }
             // #1268: where a launcher's input reaches the words, and the
             // scripts of shells it puts input into, wherever the command
             // word is read to be (`xargs --replace sh -c '... {}'`).
@@ -1273,6 +1299,7 @@ fn collect_seds(
         saved_to.push(None);
     }
     saved_to.extend(pipeline_targets(commands, command));
+    let saved_to = byte_bounded_targets(saved_to);
     for at in sed::positions(texts) {
         work::step();
         found.sed_commands += 1;
@@ -1360,6 +1387,33 @@ fn pipeline_targets(commands: &[Command], command: &Command) -> Vec<Option<Strin
         stage = consumer.pipe_to;
     }
     targets
+}
+
+/// Keep output targets only while their count and aggregate allocation stay
+/// bounded. An unnamed target is conservative for every target this drops, so
+/// it also avoids retaining an almost-full list after either budget is spent.
+fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
+    let mut bounded = Vec::new();
+    let mut bytes: usize = 0;
+    for target in targets {
+        work::step();
+        let target_bytes = target
+            .as_ref()
+            .map_or(0, String::len)
+            .checked_add(std::mem::size_of::<Option<String>>());
+        let Some(target_bytes) = target_bytes else {
+            return vec![None];
+        };
+        let Some(next) = bytes.checked_add(target_bytes) else {
+            return vec![None];
+        };
+        if bounded.len() == MAX_SAVED_TARGETS || next > MAX_SAVED_TARGET_BYTES {
+            return vec![None];
+        }
+        bytes = next;
+        bounded.push(target);
+    }
+    bounded
 }
 
 /// Whether a pure filter's arguments may save its output to a file:
@@ -1583,6 +1637,46 @@ fn fish_codes(texts: &[String], at: usize, cut: &mut bool) -> Vec<String> {
     codes
 }
 
+/// #1515: whether a cut command's later words may count: git under any
+/// name, a shell, interpreter or `source` (its script), a program the
+/// classifier judges by its later words (sed, the Corbanu CLI, credential
+/// tools, schedulers), or a word it cannot see. Also as a finder's exec
+/// option holds it (`--exec=git`, `-xgit`, #1276), or as one part of a word
+/// `eval` splits (`eval 'git -C' { …`).
+fn cut_matters(words: &[Word]) -> bool {
+    let judged = |text: &str| {
+        let name = basename(text);
+        name == "git"
+            || indirect::equals_git(name)
+            || git_helpers::git_name(name).is_some()
+            || invocation::parse(name, &[]).is_some()
+            || sed::NAMES.contains(&name)
+            || super::CLI_NAMES.contains(&name)
+            || matches!(name, "crontab" | "launchctl" | "systemctl")
+            || super::CREDENTIAL_COMMANDS
+                .iter()
+                .any(|(command, _)| *command == name)
+    };
+    words.iter().any(|word| {
+        work::step();
+        let lower = word.text.to_lowercase();
+        let attached = lower.strip_prefix('-').and_then(|option| {
+            option.split_once('=').map(|(_, value)| value).or_else(|| {
+                option
+                    .find('x')
+                    .map(|at| option[at + 1..].trim_start_matches('='))
+            })
+        });
+        word.dynamic
+            || judged(&lower)
+            || attached.is_some_and(judged)
+            || lower.split_whitespace().any(|part| {
+                work::step();
+                judged(part)
+            })
+    })
+}
+
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).
 fn note_git(found: &mut Found, kind: ProtectedActionKind) {
     if !found.git.contains(&kind) {
@@ -1771,5 +1865,17 @@ mod pipeline_tests {
             .map(|command| pipeline_targets(&reading.commands, command).len())
             .max();
         assert_eq!(longest, Some(MAX_PIPELINE_STAGES + 1));
+    }
+
+    #[test]
+    fn issue_1132_saved_target_limits_keep_one_unknown_target() {
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".to_string()); MAX_SAVED_TARGETS + 1]),
+            vec![None]
+        );
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".repeat(MAX_SAVED_TARGET_BYTES))]),
+            vec![None]
+        );
     }
 }
