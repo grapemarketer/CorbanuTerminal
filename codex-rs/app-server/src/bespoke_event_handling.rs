@@ -2005,7 +2005,6 @@ async fn on_command_execution_request_approval_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
-    let mut withdrawn = false;
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             match serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value) {
@@ -2056,14 +2055,14 @@ async fn on_command_execution_request_approval_response(
                 }
             }
         }
-        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
-        // #722 (D279): core stopped waiting and already refused the action.
-        Ok(Err(err)) if is_withdrawn_server_request_error(&err) => {
-            withdrawn = true;
-            (
-                ReviewDecision::Abort,
-                Some(CommandExecutionStatus::Declined),
-            )
+        // #722 (D279): a withdrawn request is handled like a turn transition:
+        // core stopped waiting (the action was already refused), so nothing is
+        // submitted and the item is left to the turn's end.
+        Ok(Err(err))
+            if is_turn_transition_server_request_error(&err)
+                || is_withdrawn_server_request_error(&err) =>
+        {
+            return;
         }
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
@@ -2114,9 +2113,6 @@ async fn on_command_execution_request_approval_response(
         .await;
     }
 
-    if withdrawn {
-        return;
-    }
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: approval_id.unwrap_or_else(|| item_id.clone()),
