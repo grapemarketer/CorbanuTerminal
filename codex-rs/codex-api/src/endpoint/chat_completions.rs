@@ -811,7 +811,8 @@ impl ChatStreamState {
         }
 
         if !self.message_text.is_empty() {
-            match parse_serialized_function_call_text(&self.message_text) {
+            let held_back = self.emitted_text_len == 0;
+            match parse_serialized_function_call_text(&self.message_text, held_back) {
                 Ok(Some(item)) => {
                     if tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(item)))
@@ -1051,13 +1052,38 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
     probe.len() < SERIALIZED_TOOL_TEXT_PROBE_CHARS
 }
 
-fn parse_serialized_function_call_text(text: &str) -> Result<Option<ResponseItem>, String> {
+/// `text` is the whole assistant text; `held_back` says none of it was streamed yet.
+/// Only a JSON object whose top-level `type` is a tool-call type is a serialized call.
+/// Other text that merely names "function_call" (a JSON answer about function calling)
+/// stays an ordinary message, and so does text already streamed that is not JSON.
+fn parse_serialized_function_call_text(
+    text: &str,
+    held_back: bool,
+) -> Result<Option<ResponseItem>, String> {
     if !looks_like_serialized_tool_call(text) {
         return Ok(None);
     }
 
     let trimmed = text.trim();
-    let parsed: TextFunctionCall = serde_json::from_str(trimmed).map_err(|err| {
+    let value: Value = match serde_json::from_str(trimmed) {
+        Ok(value) => value,
+        Err(_) if !held_back => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "chat completions stream emitted malformed function-call JSON as assistant \
+                 text: {err}; raw excerpt: {}",
+                diagnostic_excerpt(trimmed)
+            ));
+        }
+    };
+    if !value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind, "function_call" | "custom_tool_call"))
+    {
+        return Ok(None);
+    }
+    let parsed: TextFunctionCall = serde_json::from_value(value).map_err(|err| {
         format!(
             "chat completions stream emitted malformed function-call JSON as assistant text: \
              {err}; raw excerpt: {}",
@@ -1837,6 +1863,68 @@ mod tests {
             Ok(ResponseEvent::Completed { response_id, .. }) if response_id == "chatcmpl-json-text"
         );
         assert_eq!(events.len(), 4);
+    }
+
+    /// The events of one assistant message whose whole text is `content`.
+    fn assert_single_text_message(
+        events: &[Result<ResponseEvent, ApiError>],
+        content: &str,
+        response_id: &str,
+    ) {
+        assert_matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message { .. }))
+        );
+        assert_matches!(&events[1], Ok(ResponseEvent::OutputTextDelta { delta, .. }) if delta == content);
+        assert_matches!(
+            &events[2],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { content: final_content, .. }))
+                if final_content == &vec![ContentItem::OutputText { text: content.to_string() }]
+        );
+        assert_matches!(
+            &events[3],
+            Ok(ResponseEvent::Completed { response_id: id, .. }) if id == response_id
+        );
+        assert_eq!(events.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_streamed_json_that_mentions_function_call_stays_a_message() {
+        // A JSON answer (the body of a legacy function-calling request) whose first 96
+        // characters look ordinary, so it streams as text, and which names
+        // "function_call" further on.
+        let content = r#"{"model":"gpt-3.5-turbo-0613","messages":[{"role":"user","content":"What is the weather like in Boston today?"}],"functions":[{"name":"get_current_weather","parameters":{"type":"object"}}],"function_call":"auto"}"#;
+        let event = content_event("chatcmpl-json-mentions-call", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-json-mentions-call");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_streamed_json_and_prose_that_mention_function_call_stay_a_message()
+     {
+        let content = concat!(
+            r#"{"model":"gpt-3.5-turbo-0613","messages":[{"role":"user","content":"What is the weather like in Boston today?"}],"function_call":"auto"}"#,
+            "\n\nSetting \"function_call\" to \"auto\" lets the model decide.",
+        );
+        let event = content_event("chatcmpl-json-and-prose", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-json-and-prose");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_held_back_json_without_a_tool_call_type_stays_a_message() {
+        // "function_call" in the first 96 characters holds the text back; it is still an
+        // ordinary JSON object with no tool-call `type`.
+        let content = r#"{"function_call":"auto","functions":[{"name":"get_current_weather"}]}"#;
+        let event = content_event("chatcmpl-held-json", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-held-json");
     }
 
     #[tokio::test]
