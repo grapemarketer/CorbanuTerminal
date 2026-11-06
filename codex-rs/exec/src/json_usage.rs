@@ -21,10 +21,19 @@ pub(crate) struct JsonUsage {
     reports: HashMap<String, ThreadTokenUsage>,
     baselines: HashMap<String, TokenUsageBreakdown>,
     children: HashMap<String, HashSet<String>>,
+    forked_threads: HashSet<String>,
     incomplete: bool,
 }
 
 impl JsonUsage {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.incomplete
+    }
+
+    pub(crate) fn mark_forked(&mut self, thread_id: &str) {
+        self.forked_threads.insert(thread_id.to_string());
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.incomplete = true;
     }
@@ -44,22 +53,14 @@ impl JsonUsage {
             {
                 return;
             }
-            // Forked children can inherit the parent's counters. Their first
-            // live report contains one new request in `last`; subtract the
-            // inherited prefix, then use cumulative deltas for later reports.
-            self.baselines
-                .entry(notification.thread_id.clone())
-                .or_insert_with(|| TokenUsageBreakdown {
-                    input_tokens: usage.total.input_tokens - usage.last.input_tokens,
-                    cached_input_tokens: usage.total.cached_input_tokens
-                        - usage.last.cached_input_tokens,
-                    cache_write_input_tokens: usage.total.cache_write_input_tokens
-                        - usage.last.cache_write_input_tokens,
-                    output_tokens: usage.total.output_tokens - usage.last.output_tokens,
-                    reasoning_output_tokens: usage.total.reasoning_output_tokens
-                        - usage.last.reasoning_output_tokens,
-                    total_tokens: usage.total.total_tokens - usage.last.total_tokens,
-                });
+            if !self.baselines.contains_key(&notification.thread_id) {
+                let Some(baseline) = inherited_prefix(usage) else {
+                    self.invalidate();
+                    return;
+                };
+                self.baselines
+                    .insert(notification.thread_id.clone(), baseline);
+            }
             self.reports.insert(
                 notification.thread_id.clone(),
                 notification.token_usage.clone(),
@@ -85,6 +86,11 @@ impl JsonUsage {
         while let Some(thread_id) = pending.pop() {
             if !visited.insert(thread_id) {
                 continue;
+            }
+            // A fork's first update may just replay its parent's seeded state.
+            // Metadata proves it is a fork, but not the inherited counters.
+            if thread_id != root && self.forked_threads.contains(thread_id) {
+                return None;
             }
             // A missing report from any participant makes the total unknown,
             // rather than silently claiming its work was free.
@@ -141,6 +147,9 @@ pub(crate) async fn observe_subagent(
     request_ids: &mut RequestIdSequencer,
     processor: &mut dyn EventProcessor,
 ) {
+    if !processor.usage_is_valid() {
+        return;
+    }
     let thread_id = match notification {
         ServerNotification::TurnStarted(notification) => &notification.thread_id,
         ServerNotification::TurnCompleted(notification) => &notification.thread_id,
@@ -152,30 +161,41 @@ pub(crate) async fn observe_subagent(
     }
     let mut ancestor = thread_id.clone();
     while ancestor != selected_thread_id && !resolved_threads.contains(&ancestor) {
-        let response = send_request_with_response::<ThreadReadResponse>(
-            client,
-            ClientRequest::ThreadRead {
-                request_id: request_ids.next(),
-                params: ThreadReadParams {
-                    thread_id: ancestor.clone(),
-                    include_turns: false,
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(/*secs*/ 2),
+            send_request_with_response::<ThreadReadResponse>(
+                client,
+                ClientRequest::ThreadRead {
+                    request_id: request_ids.next(),
+                    params: ThreadReadParams {
+                        thread_id: ancestor.clone(),
+                        include_turns: false,
+                    },
                 },
-            },
-            "thread/read",
+                "thread/read",
+            ),
         )
         .await;
         let response = match response {
-            Ok(response) => response,
-            Err(error) => {
+            Ok(Ok(response)) => response,
+            failure => {
+                let error = match failure {
+                    Ok(Err(error)) => error,
+                    Err(_) => "thread/read timed out after 2 seconds".to_string(),
+                    Ok(Ok(_)) => unreachable!(),
+                };
                 tracing::warn!("could not resolve usage thread {ancestor}: {error}");
                 processor.invalidate_usage();
                 processor.process_warning(format!(
                     "Usage is unknown: could not resolve subagent ancestry: {error}"
                 ));
-                break;
+                return;
             }
         };
         resolved_threads.insert(ancestor.clone());
+        if response.thread.forked_from_id.is_some() {
+            processor.mark_forked_usage_thread(&ancestor);
+        }
         let Some(parent) = response.thread.parent_thread_id else {
             break;
         };
@@ -183,6 +203,35 @@ pub(crate) async fn observe_subagent(
         ancestor = parent;
     }
     processor.observe_unselected_notification(notification, selected_thread_id);
+}
+
+fn inherited_prefix(usage: &ThreadTokenUsage) -> Option<TokenUsageBreakdown> {
+    Some(TokenUsageBreakdown {
+        input_tokens: usage
+            .total
+            .input_tokens
+            .checked_sub(usage.last.input_tokens)?,
+        cached_input_tokens: usage
+            .total
+            .cached_input_tokens
+            .checked_sub(usage.last.cached_input_tokens)?,
+        cache_write_input_tokens: usage
+            .total
+            .cache_write_input_tokens
+            .checked_sub(usage.last.cache_write_input_tokens)?,
+        output_tokens: usage
+            .total
+            .output_tokens
+            .checked_sub(usage.last.output_tokens)?,
+        reasoning_output_tokens: usage
+            .total
+            .reasoning_output_tokens
+            .checked_sub(usage.last.reasoning_output_tokens)?,
+        total_tokens: usage
+            .total
+            .total_tokens
+            .checked_sub(usage.last.total_tokens)?,
+    })
 }
 
 #[cfg(test)]

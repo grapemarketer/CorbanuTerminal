@@ -35,8 +35,9 @@ export type Usage = {
 export type TurnCompletedEvent = {
   type: "turn.completed";
   /**
-   * Selected-thread totals plus observed descendant usage, excluding inherited child counters.
-   * `null` when a participant has no usage report. Running children can incur later usage.
+   * Selected-thread totals plus observed descendant usage. `null` for history-forked
+   * descendants without a reliable baseline, missing reports, unresolved ancestry or dropped events.
+   * Running children can incur later usage.
    */
   usage: Usage | null;
 };

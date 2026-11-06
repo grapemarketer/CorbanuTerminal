@@ -13,9 +13,14 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   resumed thread, if this turn's response reports no usage, `usage` still
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
-- **The usage is still the completing thread's own total.** It does not add
-  usage from spawned subagents and is not a difference from the start of the
-  invocation.
+- **Usage includes observed descendant work** (#290). Repeated cumulative
+  reports are counted once. A history-forked descendant without an authoritative
+  inherited baseline makes the total `null`, as do a descendant with no report,
+  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
+  thread's own totals are not a difference from the start of the invocation.
+  Detached children can incur further usage after this snapshot.
+- **Context estimates are not provider reports.** Compaction, rollback and
+  full-window estimates keep the last measured report, or `null` if none exists.
 
 ### Compatibility
 

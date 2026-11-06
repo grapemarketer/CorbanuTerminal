@@ -35,6 +35,12 @@ pub(crate) trait EventProcessor {
 
     fn invalidate_usage(&mut self) {}
 
+    fn usage_is_valid(&self) -> bool {
+        true
+    }
+
+    fn mark_forked_usage_thread(&mut self, _thread_id: &str) {}
+
     /// Handle a local exec warning that is not represented as an app-server notification.
     fn process_warning(&mut self, message: String) -> CodexStatus;
 

@@ -49,9 +49,9 @@ pub struct TurnStartedEvent {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnCompletedEvent {
     /// Provider-reported totals for the selected thread plus usage observed
-    /// from its descendants during this execution. Inherited counters in
-    /// forked children are excluded. `None` when any participant has no usage
-    /// report: unknown usage is never presented as free work.
+    /// from its descendants during this execution. `None` for history-forked
+    /// descendants without an authoritative usage baseline, missing reports,
+    /// unresolved ancestry or dropped events. Unknown usage is never free work.
     pub usage: Option<Usage>,
 }
 

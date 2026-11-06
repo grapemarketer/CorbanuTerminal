@@ -19,7 +19,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn issue290_forked_child_does_not_count_inherited_usage_twice() -> anyhow::Result<()> {
+async fn issue290_forked_child_without_authoritative_baseline_is_unknown() -> anyhow::Result<()> {
     streamed_usage("all", Some(200)).await
 }
 
@@ -133,7 +133,6 @@ async fn streamed_usage(fork_turns: &str, child_tokens: Option<i64>) -> anyhow::
         stdout.contains("parent done"),
         "primary completion was not processed: {stdout}"
     );
-    println!("issue290 streamed parent/child JSONL:\n{stdout}");
     let events = stdout
         .lines()
         .map(serde_json::from_str::<serde_json::Value>)
@@ -146,6 +145,7 @@ async fn streamed_usage(fork_turns: &str, child_tokens: Option<i64>) -> anyhow::
     assert_eq!(
         completions[0]["usage"],
         child_tokens
+            .filter(|_| fork_turns == "none")
             .map(|tokens| json!({
                 "input_tokens": 800 + tokens,
                 "cached_input_tokens": 0,
