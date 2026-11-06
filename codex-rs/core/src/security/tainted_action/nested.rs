@@ -356,6 +356,19 @@ impl Classifier {
                     || !command.input.is_empty()
                     || !command.other_text.is_empty(),
             );
+            // #1573 (1): zsh writes a redirection to an unquoted `=mytool`
+            // into the program `mytool` on `PATH`, which runs later. A quoted
+            // target stays a file (`'=x'`), and so does the `=10` of `awk
+            // 'NR>=10'` where quoted text is read as code (`level` > 0).
+            // Nested shells' scripts are walked at level 0 of their own.
+            if level == 0
+                && command.writes_to.iter().any(|word| {
+                    work::step();
+                    !word.quoted && outputs::zsh_program_path(&word.text)
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a later iteration of a loop starts where the one
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
