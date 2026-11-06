@@ -1766,6 +1766,11 @@ fn sec_win_1507_elevated_command_cannot_break_away_from_its_job() {
         return;
     }
     if !crate::setup::is_elevated().expect("elevation") {
+        // The elevated Windows gates set this, so a skip there fails.
+        assert!(
+            std::env::var_os("CODEX_SEC_WIN_341_REQUIRE").is_none(),
+            "sec-win-1507 needs an elevated run"
+        );
         eprintln!("sec-win-1507: the sandbox's setup needs an elevated run; skipped");
         return;
     }
@@ -1855,6 +1860,11 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
         return;
     }
     if !crate::setup::is_elevated().expect("elevation") {
+        // The elevated Windows gates set this, so a skip there fails.
+        assert!(
+            std::env::var_os("CODEX_SEC_WIN_341_REQUIRE").is_none(),
+            "sec-win-1507 needs an elevated run"
+        );
         eprintln!("sec-win-1507: the sandbox's setup needs an elevated run; skipped");
         return;
     }
