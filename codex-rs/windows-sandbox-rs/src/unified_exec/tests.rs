@@ -1930,9 +1930,10 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
             false,
         ),
     ];
+    // One home, as in a real session: each new one runs the sandbox's setup.
+    let codex_home = sandbox_home("elevated-tools");
     let mut failures = Vec::new();
     for (name, argv, expected, tty) in cases {
-        let codex_home = sandbox_home("elevated-tools");
         let (stdout, exit_code) = runtime.block_on(async {
             let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
                 &PermissionProfile::workspace_write(),
