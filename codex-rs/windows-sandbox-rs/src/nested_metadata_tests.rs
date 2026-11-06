@@ -26,6 +26,7 @@ fn find_reports_nested_entries_only() {
         "a\\b\\.AGENTS",
         ".git\\x\\.codex",
         "target\\.codex",
+        "j",
     ] {
         std::fs::create_dir_all(root.join(path)).expect("create");
     }
