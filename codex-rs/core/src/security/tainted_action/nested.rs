@@ -1329,6 +1329,7 @@ fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
     let mut bounded = Vec::new();
     let mut bytes: usize = 0;
     for target in targets {
+        work::step();
         let target_bytes = target.as_ref().map_or(0, String::len);
         let Some(next) = bytes.checked_add(target_bytes) else {
             bounded.push(None);
