@@ -8243,6 +8243,33 @@ fn issue_1132_shared_targets_are_not_copied_per_sed() {
     });
 }
 
+/// #1132: downstream pipeline destinations are retained by every `sed`
+/// collected from the same command.  Grow their total bytes and the number
+/// of `sed` calls together; the pipeline has a fixed number of stages, and
+/// each command stays below the grammar's per-command byte limit.
+#[test]
+fn issue_1132_saved_pipeline_targets_are_byte_bounded() {
+    work::assert_linear("saved sed pipeline targets", |scale| {
+        let target = "y".repeat(900 * scale);
+        let calls = " -- sed p".repeat(15 * scale);
+        let pipeline = format!("|tee {target}").repeat(64);
+        let line = format!("echo{calls}{pipeline}");
+        assert_eq!(script(&line), None);
+    });
+}
+
+/// #1132: slot allocation must be bounded too: one `tee` can name many
+/// short targets, and each collected `sed` otherwise clones every entry.
+#[test]
+fn issue_1132_many_short_saved_targets_are_linear() {
+    work::assert_linear("many short tee operands", |scale| {
+        let calls = " -- sed p".repeat(15 * scale);
+        let names = "a ".repeat(8_000 * scale);
+        let line = format!("echo{calls} | tee {names}");
+        assert_eq!(script(&line), None);
+    });
+}
+
 /// Sharing target judgement must keep both known and unknown destinations
 /// conservative, while ordinary sed output without an executed script stays
 /// unprotected. These are classified strings; no shell command is executed.

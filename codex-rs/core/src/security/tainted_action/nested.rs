@@ -62,6 +62,12 @@ const MAX_COLLECTED: usize = 4096;
 /// the pipeline writes a file the classifier cannot name.
 const MAX_PIPELINE_STAGES: usize = 64;
 
+/// Targets retained for one collected `sed`. Each target costs a vector slot
+/// plus its known name, and every collected `Sed` clones the list. Keeping
+/// both bounded makes those copies constant-size.
+const MAX_SAVED_TARGETS: usize = 64;
+const MAX_SAVED_TARGET_BYTES: usize = 4 * 1024;
+
 /// Pipeline stages that save their input to the files they are given.
 const PIPE_WRITERS: &[&str] = &["tee", "dd", "sponge", "cp", "install"];
 
@@ -1273,6 +1279,7 @@ fn collect_seds(
         saved_to.push(None);
     }
     saved_to.extend(pipeline_targets(commands, command));
+    let saved_to = byte_bounded_targets(saved_to);
     for at in sed::positions(texts) {
         work::step();
         found.sed_commands += 1;
@@ -1360,6 +1367,33 @@ fn pipeline_targets(commands: &[Command], command: &Command) -> Vec<Option<Strin
         stage = consumer.pipe_to;
     }
     targets
+}
+
+/// Keep output targets only while their count and aggregate allocation stay
+/// bounded. An unnamed target is conservative for every target this drops, so
+/// it also avoids retaining an almost-full list after either budget is spent.
+fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
+    let mut bounded = Vec::new();
+    let mut bytes: usize = 0;
+    for target in targets {
+        work::step();
+        let target_bytes = target
+            .as_ref()
+            .map_or(0, String::len)
+            .checked_add(std::mem::size_of::<Option<String>>());
+        let Some(target_bytes) = target_bytes else {
+            return vec![None];
+        };
+        let Some(next) = bytes.checked_add(target_bytes) else {
+            return vec![None];
+        };
+        if bounded.len() == MAX_SAVED_TARGETS || next > MAX_SAVED_TARGET_BYTES {
+            return vec![None];
+        }
+        bytes = next;
+        bounded.push(target);
+    }
+    bounded
 }
 
 /// Whether a pure filter's arguments may save its output to a file:
@@ -1771,5 +1805,17 @@ mod pipeline_tests {
             .map(|command| pipeline_targets(&reading.commands, command).len())
             .max();
         assert_eq!(longest, Some(MAX_PIPELINE_STAGES + 1));
+    }
+
+    #[test]
+    fn issue_1132_saved_target_limits_keep_one_unknown_target() {
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".to_string()); MAX_SAVED_TARGETS + 1]),
+            vec![None]
+        );
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".repeat(MAX_SAVED_TARGET_BYTES))]),
+            vec![None]
+        );
     }
 }
