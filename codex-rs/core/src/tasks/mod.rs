@@ -57,6 +57,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
@@ -1215,6 +1216,18 @@ impl Session {
                         self,
                         task.turn_context.as_ref(),
                         output,
+                    )
+                    .await;
+                }
+            }
+            // D282: the turn did not reach its end, which sends the turn's
+            // file-change summary; send it here.
+            if let Some(tracker) = task.turn_context.pending_tool_calls.turn_diff_tracker() {
+                let unified_diff = tracker.lock().await.get_unified_diff();
+                if let Some(unified_diff) = unified_diff {
+                    self.send_event(
+                        task.turn_context.as_ref(),
+                        EventMsg::TurnDiff(TurnDiffEvent { unified_diff }),
                     )
                     .await;
                 }
