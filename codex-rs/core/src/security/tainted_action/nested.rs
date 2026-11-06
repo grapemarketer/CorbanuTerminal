@@ -371,6 +371,21 @@ impl Classifier {
                     || !command.input.is_empty()
                     || !command.other_text.is_empty(),
             );
+            // #1573 (1): zsh writes a redirection to `=mytool` (also
+            // `="mytool"`) into the program `mytool` on `PATH`, which runs
+            // later. Only at this reading's own level: quoted words read
+            // again as code (`level` > 0) would turn the `>=` of `awk
+            // 'NR>=10'` into one; nested shells' scripts get a level 0 of
+            // their own. Not in other languages' files (`if n>=2:`).
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && command.writes_to.iter().any(|word| {
+                    work::step();
+                    outputs::zsh_program_path(&word.text)
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a later iteration of a loop starts where the one
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
@@ -468,6 +483,11 @@ impl Classifier {
             found.unreadable |= git_helpers::setting_holds_git_name(&command.words);
             loops.read(&texts);
             self.judge_git(&texts, &command.words, &loops, found);
+            // #1515: one this reading cut at a bracket the shell reads as
+            // text (`git -C { config core.pager sh`) may go on past it.
+            if command.cut && cut_matters(&command.words) {
+                note_git(found, ProtectedActionKind::UnseenCode);
+            }
             // #1268: where a launcher's input reaches the words, and the
             // scripts of shells it puts input into, wherever the command
             // word is read to be (`xargs --replace sh -c '... {}'`).
@@ -1615,6 +1635,46 @@ fn fish_codes(texts: &[String], at: usize, cut: &mut bool) -> Vec<String> {
         }
     }
     codes
+}
+
+/// #1515: whether a cut command's later words may count: git under any
+/// name, a shell, interpreter or `source` (its script), a program the
+/// classifier judges by its later words (sed, the Corbanu CLI, credential
+/// tools, schedulers), or a word it cannot see. Also as a finder's exec
+/// option holds it (`--exec=git`, `-xgit`, #1276), or as one part of a word
+/// `eval` splits (`eval 'git -C' { …`).
+fn cut_matters(words: &[Word]) -> bool {
+    let judged = |text: &str| {
+        let name = basename(text);
+        name == "git"
+            || indirect::equals_git(name)
+            || git_helpers::git_name(name).is_some()
+            || invocation::parse(name, &[]).is_some()
+            || sed::NAMES.contains(&name)
+            || super::CLI_NAMES.contains(&name)
+            || matches!(name, "crontab" | "launchctl" | "systemctl")
+            || super::CREDENTIAL_COMMANDS
+                .iter()
+                .any(|(command, _)| *command == name)
+    };
+    words.iter().any(|word| {
+        work::step();
+        let lower = word.text.to_lowercase();
+        let attached = lower.strip_prefix('-').and_then(|option| {
+            option.split_once('=').map(|(_, value)| value).or_else(|| {
+                option
+                    .find('x')
+                    .map(|at| option[at + 1..].trim_start_matches('='))
+            })
+        });
+        word.dynamic
+            || judged(&lower)
+            || attached.is_some_and(judged)
+            || lower.split_whitespace().any(|part| {
+                work::step();
+                judged(part)
+            })
+    })
 }
 
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).

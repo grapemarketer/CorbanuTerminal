@@ -296,6 +296,14 @@ pub(super) fn unseen_place(word: &str) -> bool {
             .contains(super::shell::UNSEEN_OUTPUT)
 }
 
+/// #1573 (1): whether zsh reads a written word as the full path of a
+/// program on `PATH` (`=mytool`, the `EQUALS` option, on by default; also
+/// for redirection targets: `echo x >> =mytool` appends to the installed
+/// `mytool`). A bare `=` stays a file name.
+pub(super) fn zsh_program_path(word: &str) -> bool {
+    word.strip_prefix('=').is_some_and(|name| !name.is_empty())
+}
+
 /// #1159: whether git (`name`, with the words after it, `args`) runs a
 /// subcommand that writes files of the working tree (`git checkout`, `git
 /// pull`): in a folder that is or holds a home, it may write the home's own
