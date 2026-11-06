@@ -62,6 +62,12 @@ const MAX_COLLECTED: usize = 4096;
 /// the pipeline writes a file the classifier cannot name.
 const MAX_PIPELINE_STAGES: usize = 64;
 
+/// Targets retained for one collected `sed`. Each target costs a vector slot
+/// plus its known name, and every collected `Sed` clones the list. Keeping
+/// both bounded makes those copies constant-size.
+const MAX_SAVED_TARGETS: usize = 64;
+const MAX_SAVED_TARGET_BYTES: usize = 4 * 1024;
+
 /// Pipeline stages that save their input to the files they are given.
 const PIPE_WRITERS: &[&str] = &["tee", "dd", "sponge", "cp", "install"];
 
@@ -110,6 +116,10 @@ struct Found {
     deferred: bool,
     /// #1309: scripts collected before the last folder change.
     before_change: usize,
+    /// #1309: output files named relative to the folder found so far, and
+    /// how many were found before the last folder change.
+    relative_outputs: usize,
+    outputs_before_change: usize,
 }
 
 /// One reading of a sed invocation and where it runs.
@@ -274,6 +284,11 @@ impl Classifier {
             self.note(kind);
         }
         self.written.extend(found.written.iter().cloned());
+        // #1309: so may an output file named relative to the folder
+        // (`f() { git log --output=.zshenv; }; cd ~; f`, `trap '…' EXIT`).
+        if found.deferred && found.outputs_before_change > 0 {
+            self.note(ProtectedActionKind::Persistence);
+        }
         // #1309: a script collected before a later folder change, in text
         // that may run it later (`f() { sh -c '...'; }; cd ~; f`), may run
         // in that folder.
@@ -371,6 +386,7 @@ impl Classifier {
             {
                 folders.unchecked = true;
                 found.before_change = found.scripts.len();
+                found.outputs_before_change = found.relative_outputs;
             }
             // A substitution's `cd` does not move this line.
             if !command.substituted
@@ -427,6 +443,7 @@ impl Classifier {
             folders.unchecked |= searched || carried || odd || (changes && found.deferred);
             if searched || carried || changes {
                 found.before_change = found.scripts.len();
+                found.outputs_before_change = found.relative_outputs;
             }
             let first = texts.first().map(|word| name(word));
             let compound = first
@@ -475,7 +492,8 @@ impl Classifier {
             // (after `cd "$d"`, or a wrapper's: `env -C "$d" sh -c`).
             // #1309: in any of a wrapper's spellings (`env -C"$d"`, `sudo
             // -D`, `nsenter --wd=`, `find -execdir`).
-            let elsewhere = unknown_folder::runs_elsewhere(&texts, self.sudo_unsure());
+            let elsewhere_from = unknown_folder::elsewhere_at(&texts, self.sudo_unsure());
+            let elsewhere = elsewhere_from.is_some();
             let unknown = folders.unchecked || elsewhere;
             for (word, script) in replaced_shell_scripts(&texts, &launches, &mut found.unreadable) {
                 work::step();
@@ -507,6 +525,30 @@ impl Classifier {
                         /*unknown*/ true,
                     );
                 }
+            }
+            // #1309: so may the git it runs, and its output files (`docker
+            // exec -w ~ c git log --output=f`, `env -iC ~ git config -f f`):
+            // read from the first git, when it is after the folder option
+            // (git's own `-C` is followed by `judge_outputs`).
+            if let Some(from) = elsewhere_from
+                && let Some(at) = (0..texts.len()).find(|at| {
+                    work::step();
+                    let program = name(&texts[*at]);
+                    program == "git" || git_helpers::git_name(&program).is_some()
+                })
+                && at > from
+                && outputs::output_files(
+                    &name(&texts[at]),
+                    &texts[at + 1..],
+                    /*unchecked*/ false,
+                )
+                .is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|file| self.unknown_folder_file(folders, /*unknown*/ true, file))
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
             }
             let (starts, overflow) = sed::command_starts(&texts);
             found.unreadable |= overflow;
@@ -591,8 +633,18 @@ impl Classifier {
                             work::step();
                             self.judge_outputs(&texts, files, cwd, found);
                         }
-                        if folders.lost && files.iter().any(|file| self.relative_place(file)) {
+                        // #1309: the word reading's rule (see
+                        // `unknown_folder_file`), with this reading's
+                        // folder; a wrapper before the command moved it
+                        // (`sudo -D ~ git config -f .zshenv …`).
+                        let moved = elsewhere_from.is_some_and(|from| from < at);
+                        if files.iter().any(|file| {
+                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                        }) {
                             note_git(found, ProtectedActionKind::Persistence);
+                        }
+                        if files.iter().any(|file| self.relative_place(file)) {
+                            found.relative_outputs += 1;
                         }
                     }
                     if WRITERS.contains(&resolved_name.as_str())
@@ -1218,6 +1270,7 @@ fn collect_seds(
         saved_to.push(None);
     }
     saved_to.extend(pipeline_targets(commands, command));
+    let saved_to = byte_bounded_targets(saved_to);
     for at in sed::positions(texts) {
         work::step();
         found.sed_commands += 1;
@@ -1305,6 +1358,33 @@ fn pipeline_targets(commands: &[Command], command: &Command) -> Vec<Option<Strin
         stage = consumer.pipe_to;
     }
     targets
+}
+
+/// Keep output targets only while their count and aggregate allocation stay
+/// bounded. An unnamed target is conservative for every target this drops, so
+/// it also avoids retaining an almost-full list after either budget is spent.
+fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
+    let mut bounded = Vec::new();
+    let mut bytes: usize = 0;
+    for target in targets {
+        work::step();
+        let target_bytes = target
+            .as_ref()
+            .map_or(0, String::len)
+            .checked_add(std::mem::size_of::<Option<String>>());
+        let Some(target_bytes) = target_bytes else {
+            return vec![None];
+        };
+        let Some(next) = bytes.checked_add(target_bytes) else {
+            return vec![None];
+        };
+        if bounded.len() == MAX_SAVED_TARGETS || next > MAX_SAVED_TARGET_BYTES {
+            return vec![None];
+        }
+        bytes = next;
+        bounded.push(target);
+    }
+    bounded
 }
 
 /// Whether a pure filter's arguments may save its output to a file:
@@ -1716,5 +1796,17 @@ mod pipeline_tests {
             .map(|command| pipeline_targets(&reading.commands, command).len())
             .max();
         assert_eq!(longest, Some(MAX_PIPELINE_STAGES + 1));
+    }
+
+    #[test]
+    fn issue_1132_saved_target_limits_keep_one_unknown_target() {
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".to_string()); MAX_SAVED_TARGETS + 1]),
+            vec![None]
+        );
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".repeat(MAX_SAVED_TARGET_BYTES))]),
+            vec![None]
+        );
     }
 }

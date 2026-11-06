@@ -7,6 +7,9 @@ use std::path::PathBuf;
 #[path = "git_config_round6_tests.rs"]
 mod issue_1161_round6;
 
+#[path = "issue_1309_line_writes_tests.rs"]
+mod issue_1309_line_writes;
+
 const HOME: &str = "/home/fixture/.corbanu";
 const USER_HOME: &str = "/home/fixture";
 
@@ -8311,6 +8314,33 @@ fn issue_1132_shared_targets_are_not_copied_per_sed() {
     });
 }
 
+/// #1132: downstream pipeline destinations are retained by every `sed`
+/// collected from the same command.  Grow their total bytes and the number
+/// of `sed` calls together; the pipeline has a fixed number of stages, and
+/// each command stays below the grammar's per-command byte limit.
+#[test]
+fn issue_1132_saved_pipeline_targets_are_byte_bounded() {
+    work::assert_linear("saved sed pipeline targets", |scale| {
+        let target = "y".repeat(900 * scale);
+        let calls = " -- sed p".repeat(15 * scale);
+        let pipeline = format!("|tee {target}").repeat(64);
+        let line = format!("echo{calls}{pipeline}");
+        assert_eq!(script(&line), None);
+    });
+}
+
+/// #1132: slot allocation must be bounded too: one `tee` can name many
+/// short targets, and each collected `sed` otherwise clones every entry.
+#[test]
+fn issue_1132_many_short_saved_targets_are_linear() {
+    work::assert_linear("many short tee operands", |scale| {
+        let calls = " -- sed p".repeat(15 * scale);
+        let names = "a ".repeat(8_000 * scale);
+        let line = format!("echo{calls} | tee {names}");
+        assert_eq!(script(&line), None);
+    });
+}
+
 /// Sharing target judgement must keep both known and unknown destinations
 /// conservative, while ordinary sed output without an executed script stays
 /// unprotected. These are classified strings; no shell command is executed.
@@ -9848,6 +9878,47 @@ fn issue_1449_runner_values_are_bounded() {
     assert!(values.len() <= super::outbound::MAX_JUDGED_POSITIONS + 1);
     let line = format!("{}tar -x {}", "tar -x -- ".repeat(63), "-Ia ".repeat(2000));
     assert!(script(&line).is_some());
+}
+
+/// #1573 item 2: `rg --hostname-bin PROG` (ripgrep 14) runs PROG to learn
+/// the host name, as `rg --pre PROG` runs its program: a program the
+/// classifier cannot read asks, in either spelling of the value.
+#[cfg(unix)]
+#[test]
+fn issue_1573_rg_hostname_bin_asks() {
+    use ProtectedActionKind::*;
+    let files = [("x.sh", "corbanu vault get k\n")];
+    // All quiet on main.
+    let cases: &[(&str, ProtectedActionKind)] = &[
+        ("rg --hostname-bin ./x.sh foo", Vault),
+        ("rg --hostname-bin=./x.sh foo", Vault),
+        ("rg --hostname-bin \"$v\" foo", UnseenCode),
+        ("rg --hostname-bin=\"$v\" foo", UnseenCode),
+        ("rg --hostname-bin sh foo", UnseenCode),
+        ("rg --hostname-bin=bash foo .", UnseenCode),
+        ("rg -l --hostname-bin=./x.sh foo src", Vault),
+        ("rg -e -- --hostname-bin=./x.sh .", Vault),
+        ("sh -c 'rg --hostname-bin=./x.sh foo'", Vault),
+    ];
+    let mut wrong = Vec::new();
+    for (line, expected) in cases {
+        let found = in_workspace(&files, line);
+        if found != Some(*expected) {
+            wrong.push(format!("{line}: {found:?}"));
+        }
+    }
+    // Ordinary lines stay as they were.
+    for line in [
+        "rg --hostname-bin hostname foo",
+        "rg --hostname-bin=/bin/hostname -l foo",
+        "rg --pre pdftotext foo",
+        "rg -- --hostname-bin=./x.sh foo",
+    ] {
+        if in_workspace(&files, line).is_some() {
+            wrong.push(format!("quiet: {line}"));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
 }
 
 /// #1449: the runner and alias checks stay linear.
