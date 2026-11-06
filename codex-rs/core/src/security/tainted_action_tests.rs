@@ -8039,6 +8039,57 @@ fn d194_zsh_append_redirections_keep_a_change_certain() {
     }
 }
 
+/// #1573 (1): zsh rewrites a word that starts with `=` to the full path of
+/// that program on `PATH`, redirection targets included: `echo x >>
+/// =mytool` appends to the installed `mytool`, which runs later. It asks;
+/// an ordinary file name, or one with an `=` inside it, stays quiet.
+#[test]
+fn issue1573_zsh_equals_redirect_target_is_a_program() {
+    use ProtectedActionKind::Persistence;
+    let line = |script: &str| kind(&["zsh", "-lc", script]);
+    for script in [
+        "echo x >> =mytool",
+        "echo x > =mytool",
+        "echo x >| =mytool",
+        "echo x >>=mytool",
+        "echo x 2>> =mytool",
+        "echo x &>> =mytool",
+        "make >> log; echo x >> =mytool",
+        "sh -c \"echo x >> =mytool\"",
+        "f() { echo x >> =mytool; }; f",
+        "(echo x >> =mytool)",
+        "echo $(echo x >> =mytool)",
+        "echo x >> =\"mytool\"",
+        "echo x >> =mytool\"\"",
+        "echo x >> =my'tool'",
+    ] {
+        assert_eq!(line(script), Some(Persistence), "{script:?}");
+    }
+    // Stricter than needed: bash writes a file `=mytool` here.
+    assert_eq!(
+        kind(&["bash", "-lc", "echo x >> =mytool"]),
+        Some(Persistence)
+    );
+    // A `>=` inside quotes is no redirection.
+    for script in [
+        "echo x >> mytool",
+        "echo x >> a=mytool",
+        "echo x >> log=1",
+        "echo x > out.txt",
+        "awk 'NR>=10' f",
+        "rg -n 'x>=0' src",
+        "jq 'select(.n>=3)' f",
+    ] {
+        assert_eq!(line(script), None, "{script:?}");
+    }
+    // Nor is one in another language's file the line runs.
+    #[cfg(unix)]
+    assert_eq!(
+        in_workspace(&[("t.py", "n = 3\nif n>=2:\n    pass\n")], "python3 t.py"),
+        None
+    );
+}
+
 /// D194: following certain changes stays linear.
 #[test]
 fn d194_certain_changes_are_linear() {
