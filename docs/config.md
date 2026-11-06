@@ -167,7 +167,8 @@ App-server clients that start a thread only for realtime voice (`thread/start`, 
 the new-conversation warm-up too, on the thread's text model, which realtime uses only for handoffs (and the
 optional end-of-session transcript turn). Such a client should pass `config: {"skip_startup_warmup": true}` on
 `thread/start` so no warm-up is sent; see "Realtime-only threads" in `codex-rs/app-server/README.md` (#1045).
-`skip_startup_warmup = true` in `config.toml` skips every warm-up, new or reopened, for all conversations.
+`skip_startup_warmup = true` in `config.toml` skips every warm-up, new or reopened, for all conversations, including
+sub-agents and the auto-reviewer (whose session then starts at the first review).
 
 ## Vault And Secrets
 

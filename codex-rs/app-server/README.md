@@ -968,10 +968,10 @@ Clients that start a thread only for realtime should skip the warm-up with
 no warm-up request, and a later text turn's first reply may be slower. A client
 that also wants cheaper handoffs can pass a small, cheap text `model` on
 `thread/start`; without `skip_startup_warmup` the warm-up is then priced for
-that model. Handoffs
-also run on it, so this trades away handoff quality. Keep the thread's provider:
-realtime connects through it, so moving the thread to a provider without a
-WebSocket connection (which would skip the warm-up) also moves realtime there.
+that model. Handoffs also run on it, so this trades away handoff quality. Keep
+the thread's provider: realtime connects through it, so moving the thread to a
+provider without a WebSocket connection (which would skip the warm-up) also
+moves realtime there.
 The `model` on `thread/realtime/start` selects the realtime model only; it
 doesn't change the warm-up (#1045).
 
