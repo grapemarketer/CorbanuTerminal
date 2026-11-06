@@ -173,11 +173,6 @@ pub(super) unsafe fn set_delete_child_deny(
         }
     };
     let direct = (|| -> Result<()> {
-        // #1549's add, without the protection flag, may change a protected
-        // DACL's inheritance; leave that to it.
-        if add && current.control & SE_DACL_PROTECTED != 0 {
-            bail!("the DACL is protected");
-        }
         if !same_aces_except(current.dacl, new_dacl.as_ptr(), is_entry)? {
             bail!("the new DACL changes more than the delete-child entry");
         }

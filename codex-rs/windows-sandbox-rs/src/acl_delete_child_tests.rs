@@ -262,20 +262,22 @@ fn d285_stale_target_is_repaired_as_by_the_tree_walk() {
     assert_eq!(written, vec![Written::Walked, Written::Direct]);
 }
 
-/// A protected `.git`: #1549's add, which doesn't pass the protection flag,
-/// is left to do it.
+/// A protected `.git` (and root, as the cost probes' is): #1549's add keeps
+/// the protection (measured), and so does the direct write.
 #[test]
-fn d285_protected_git_is_left_to_the_tree_walk() {
+fn d285_protected_targets_match_the_tree_walk() {
     let base = tempfile::tempdir().expect("base dir");
     let walked = base.path().join("walked");
     let direct = base.path().join("direct");
     for root in [&walked, &direct] {
         build_tree(root);
         protect(&root.join(".git"));
+        protect(root);
     }
     assert_eq!(snapshot(&walked), snapshot(&direct));
     let written = run_session(&walked, &direct, &SESSION);
-    assert_eq!(written[1], Written::Walked);
+    assert_eq!(written, vec![Written::Direct; SESSION.len()]);
+    assert!(dacl_sddl(&direct.join(".git")).starts_with("D:P"));
 }
 
 /// Runs `steps` with #1549's calls on `walked` and directly on `direct`,
