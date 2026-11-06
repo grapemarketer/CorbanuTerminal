@@ -75,6 +75,7 @@ const IO: u32 = 0x8;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_EXECUTE: u32 = 0x2000_0000;
+const INHERITED_ACE: u32 = 0x10;
 
 /// One step of a session's denies: (folder below the tree, inherited by
 /// subfolders, add).
@@ -159,19 +160,70 @@ fn d285_link_under_git_falls_back_to_the_tree_walk() {
     );
 }
 
-/// A subfolder whose inherited entries don't match its parent's (stale): a
-/// recompute would change more than the delete-child copies, so the
-/// direct write gives up and the #1549 walk does it all. (Only `.git`'s
-/// step: the root's walk would also refresh the stale entry, which the
-/// direct root write leaves alone, as it isn't one of these entries.)
+/// A subfolder whose inherited entries don't match its parent's (stale): the
+/// walk repairs it, so the direct write gives up at the first step and the
+/// #1549 walk does it all; the later steps find nothing stale.
 #[test]
-fn d285_stale_subfolder_falls_back_to_the_tree_walk() {
+fn d285_stale_subfolder_is_repaired_as_by_the_tree_walk() {
     let base = tempfile::tempdir().expect("base dir");
     let walked = base.path().join("walked");
     let direct = base.path().join("direct");
     for root in [&walked, &direct] {
         build_tree(root);
         add_stale_inherited_entry(&root.join(".git\\objects\\ab"));
+    }
+    assert_eq!(snapshot(&walked), snapshot(&direct));
+    let written = run_session(&walked, &direct, &SESSION);
+    assert_eq!(
+        written,
+        vec![
+            Written::Walked,
+            Written::Direct,
+            Written::Direct,
+            Written::Direct
+        ]
+    );
+}
+
+/// #1612 review: a file the user moves into `.git` keeps the DACL it had
+/// (renames keep it), without `.git`'s capability write deny. The #1549 walk
+/// gives it that deny at the next command start; so must the direct write,
+/// by giving up to the walk.
+#[test]
+fn d285_moved_in_file_is_repaired_as_by_the_tree_walk() {
+    let base = tempfile::tempdir().expect("base dir");
+    let walked = base.path().join("walked");
+    let direct = base.path().join("direct");
+    let moved = ".git\\objects\\ab\\moved";
+    for root in [&walked, &direct] {
+        build_tree(root);
+        std::fs::rename(root.join("src\\m\\f.rs"), root.join(moved)).expect("move in");
+    }
+    assert!(!dacl_sddl(&direct.join(moved)).contains(CAPABILITY));
+    assert_eq!(snapshot(&walked), snapshot(&direct));
+    let written = run_session(&walked, &direct, &SESSION);
+    assert_eq!(
+        written,
+        vec![
+            Written::Walked,
+            Written::Direct,
+            Written::Direct,
+            Written::Direct
+        ]
+    );
+    assert!(dacl_sddl(&direct.join(moved)).contains(CAPABILITY));
+}
+
+/// The same for `.git`'s own step (the root's deny already there): its
+/// check covers the files below it too.
+#[test]
+fn d285_stale_file_under_git_is_repaired_as_by_the_tree_walk() {
+    let base = tempfile::tempdir().expect("base dir");
+    let walked = base.path().join("walked");
+    let direct = base.path().join("direct");
+    for root in [&walked, &direct] {
+        build_tree(root);
+        add_stale_inherited_entry(&root.join(".git\\objects\\ab\\cdef"));
     }
     assert_eq!(snapshot(&walked), snapshot(&direct));
     let written = run_session(&walked, &direct, &SESSION[1..3]);
@@ -327,8 +379,8 @@ fn add_entry(path: &Path, sid: &str, mode: i32, mask: u32, inheritance: u32) {
     }
 }
 
-/// Appends an inherited-looking entry its parent doesn't give, written to
-/// the folder alone.
+/// Appends an inherited-looking entry its parent doesn't give (Users may
+/// write), written to the object alone.
 fn add_stale_inherited_entry(path: &Path) {
     let sid = LocalSid::from_string(USERS).expect("Users");
     let sd = SecurityInfo::read(path);
@@ -359,8 +411,8 @@ fn add_stale_inherited_entry(path: &Path) {
             AddAccessAllowedAceEx(
                 acl,
                 2,
-                0x10, /*INHERITED_ACE*/
-                FILE_GENERIC_READ,
+                /*aceflags*/ INHERITED_ACE,
+                FILE_GENERIC_WRITE,
                 sid.as_ptr()
             ),
             0,

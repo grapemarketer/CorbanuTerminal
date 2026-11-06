@@ -1,30 +1,38 @@
 //! D285 (#1542 item 6): writes D261's Everyone `FILE_DELETE_CHILD` denies
-//! without letting Windows walk the whole tree below the folder.
+//! without `SetNamedSecurityInfoW`'s tree walk, with the same result.
 //!
-//! `SetNamedSecurityInfoW` re-propagates inheritance through every file and
-//! folder below the one it changes, whatever changed: about 5.6 s each way
-//! for the workspace root and 2.85 s for `.git` on a 101,000-file workspace.
-//! These entries need much less:
-//! - The root's entry has no inheritance flags, so no child inherits it and
-//!   writing the root's own DACL is all that changes.
-//! - `.git`'s entry is `CONTAINER_INHERIT` only, so only its subfolders carry
-//!   copies; files inherit nothing from it. Each subfolder's DACL is
-//!   recomputed from its parent's by Windows (`CreatePrivateObjectSecurityEx`)
-//!   and written; files are never opened.
+//! `SetNamedSecurityInfoW` rewrites the DACL of every file and folder below
+//! the one it changes, recomputing each from its parent's: about 6 s each way
+//! for the workspace root and 3 s for `.git` on a 101,000-file workspace. For
+//! these entries the walk changes nothing below except, for `.git`'s
+//! (`CONTAINER_INHERIT` only), the copies its subfolders inherit, plus any
+//! object whose inherited entries had gone stale (a file the user moved in
+//! from elsewhere keeps its old DACL), which the walk repairs.
 //!
-//! Each write must change nothing but these Everyone delete-child entries,
-//! checked before writing and read back after. Anything else (an unexpected
-//! DACL, a link among the subfolders, any failure) falls back to
-//! `SetNamedSecurityInfoW` with the same DACL, the #1549 behaviour.
+//! So this writes the folder's own DACL, then reads every object below and
+//! has Windows compute its DACL from its parent's
+//! (`CreatePrivateObjectSecurityEx`, auto-inherit), as the walk would:
+//! - equal: nothing to write;
+//! - a subfolder that differs only in the Everyone delete-child copies:
+//!   written (only those copies change);
+//! - anything else (a stale object, a link that would change, any failure):
+//!   the whole call falls back to `SetNamedSecurityInfoW`, the #1549 call,
+//!   which walks, repairs and undoes any partial direct write.
+//!
+//! Reading is about three times cheaper than the walk's rewrite. Links are
+//! checked but not followed, as the walk does.
 
 use super::DenyAceKind;
 use super::FILE_MAPPING;
 use super::INHERITED_ACE;
+use super::comparable_path;
+use super::final_path;
 use super::is_exact_delete_child_deny;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
@@ -41,6 +49,7 @@ use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
 use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::AddAce;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
+use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
@@ -54,8 +63,11 @@ use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::GetSecurityDescriptorControl;
 use windows_sys::Win32::Security::GetSecurityDescriptorDacl;
+use windows_sys::Win32::Security::GetSecurityDescriptorGroup;
+use windows_sys::Win32::Security::GetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::InitializeAcl;
 use windows_sys::Win32::Security::InitializeSecurityDescriptor;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
@@ -121,7 +133,7 @@ pub(super) unsafe fn set_delete_child_deny(
     let is_entry = |ace: *const c_void| is_exact_delete_child_deny(ace, psid, inherit_to_subdirs);
     // Follows a link at `path` itself, as `SetNamedSecurityInfoW` does;
     // callers never pass one.
-    let opened = Handle::open(path, /*open_link*/ false)
+    let opened = Handle::open_with(path, READ_CONTROL | WRITE_DAC, FILE_FLAG_BACKUP_SEMANTICS)
         .and_then(|handle| Descriptor::read(handle.0).map(|current| (handle, current)));
     let Ok((handle, current)) = opened else {
         // Nothing written yet: the #1549 calls as they were.
@@ -162,33 +174,81 @@ pub(super) unsafe fn set_delete_child_deny(
             bail!("the new DACL changes more than the delete-child entry");
         }
         write_and_check(handle.0, &current, new_dacl.as_ptr())?;
-        if inherit_to_subdirs {
-            update_subfolders(path, psid)?;
-        }
-        Ok(())
+        sync_below(path, psid)
     })();
+    drop(handle);
     if direct.is_ok() {
         return Ok(Written::Direct);
     }
-    // The #1549 call, with the same DACL: Windows writes it and recomputes
-    // every inherited entry below, undoing any partial direct write.
+    walk(path, psid, inherit_to_subdirs, add)
+}
+
+/// The #1549 call, on the DACL as it is now (another writer may have changed
+/// it since it was read): Windows writes it and recomputes every inherited
+/// entry below, repairing stale ones and undoing any partial direct write.
+/// If it fails, what was already written stays, as after a failed #1549
+/// walk: adding reports `Nothing`, removing an error (the record stays).
+unsafe fn walk(
+    path: &Path,
+    psid: *mut c_void,
+    inherit_to_subdirs: bool,
+    add: bool,
+) -> Result<Written> {
+    let kind = DenyAceKind::DeleteChild { inherit_to_subdirs };
+    let mut sd: *mut c_void = std::ptr::null_mut();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let code = GetNamedSecurityInfoW(
+        to_wide(path).as_ptr(),
+        1, // SE_FILE_OBJECT
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut dacl,
+        std::ptr::null_mut(),
+        &mut sd,
+    );
+    if code != ERROR_SUCCESS {
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
+    }
+    let sd = LocalSd(sd);
+    let rebuilt = if add {
+        if kind.already_present(dacl, psid, /*is_dir*/ true) {
+            None
+        } else {
+            match Acl::with_deny(dacl, psid, kind) {
+                Ok(acl) => Some(acl),
+                Err(_) => return Ok(Written::Nothing),
+            }
+        }
+    } else {
+        Acl::without(dacl, |ace| {
+            is_exact_delete_child_deny(ace, psid, inherit_to_subdirs)
+        })?
+    };
     let info = if add {
         DACL_SECURITY_INFORMATION
-    } else if current.control & SE_DACL_PROTECTED != 0 {
-        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
     } else {
-        DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION
+        let mut control: u16 = 0;
+        let mut revision: u32 = 0;
+        if GetSecurityDescriptorControl(sd.0, &mut control, &mut revision) == 0 {
+            bail!("GetSecurityDescriptorControl failed: {}", GetLastError());
+        }
+        if control & SE_DACL_PROTECTED != 0 {
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION
+        }
     };
-    drop(handle);
     let code = SetNamedSecurityInfoW(
         to_wide(path).as_ptr() as *mut u16,
         1, // SE_FILE_OBJECT
         info,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
-        new_dacl.as_ptr(),
+        rebuilt.as_ref().map_or(dacl, |acl| acl.as_ptr()),
         std::ptr::null_mut(),
     );
+    drop(sd);
     match code {
         ERROR_SUCCESS => Ok(Written::Walked),
         _ if add => Ok(Written::Nothing),
@@ -196,52 +256,136 @@ pub(super) unsafe fn set_delete_child_deny(
     }
 }
 
-/// Recomputes the DACL of every folder below `root` from its parent's, as
-/// the tree walk would, depth first. Files are skipped: only
-/// `CONTAINER_INHERIT` changed, which files never inherit. Fails on a link
-/// or anything but the Everyone delete-child copies changing.
-unsafe fn update_subfolders(root: &Path, psid: *mut c_void) -> Result<()> {
+/// Checks every object below `root` (whose DACL was just written) against
+/// the DACL Windows computes from its parent's, depth first, as the tree walk
+/// would rewrite it. Writes the subfolders that differ only in the Everyone
+/// delete-child copies; fails on any other difference, on a link that would
+/// change and on any error, so the caller walks instead. Links are not
+/// followed.
+unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
     let is_copy = |ace: *const c_void| is_inherited_delete_child_copy(ace, psid);
+    let without_copies = |aces: &[Vec<u8>]| -> Vec<Vec<u8>> {
+        aces.iter()
+            .filter(|ace| !is_copy(ace.as_ptr() as *const c_void))
+            .cloned()
+            .collect()
+    };
+    let flags = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
+    let kind_bits = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
     let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
-    while let Some(parent) = pending.pop() {
-        let parent_handle = Handle::open(&parent, /*open_link*/ true)?;
-        if !parent_handle.is_plain_dir()? {
-            bail!("{} is not a plain folder", parent.display());
+    while let Some(dir) = pending.pop() {
+        let dir_handle = Handle::open(&dir, READ_CONTROL)?;
+        if dir_handle.attributes()? & kind_bits != FILE_ATTRIBUTE_DIRECTORY {
+            bail!("{} is not a plain folder", dir.display());
         }
-        let parent_sd = Descriptor::read(parent_handle.0)?;
-        drop(parent_handle);
-        for entry in std::fs::read_dir(&parent)? {
+        let parent = Descriptor::read(dir_handle.0)?;
+        // What Windows computes depends only on the parent's descriptor and
+        // the object's kind, owner, group, flags and explicit entries; most
+        // objects in a folder share those.
+        let mut computed_for: HashMap<Vec<u8>, (Vec<Vec<u8>>, u16)> = HashMap::new();
+        let mut dir_final: Option<String> = None;
+        for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
+            let path = entry.path();
             use std::os::windows::fs::MetadataExt;
-            // Not followed: the entry's own attributes.
-            let attributes = entry.metadata()?.file_attributes();
-            if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            // The entry's own attributes; links are not followed.
+            let listed = entry.metadata()?.file_attributes();
+            let is_dir = listed & FILE_ATTRIBUTE_DIRECTORY != 0;
+            let is_plain_dir = listed & kind_bits == FILE_ATTRIBUTE_DIRECTORY;
+            // Only a plain folder may need writing.
+            let handle = if is_plain_dir {
+                let handle = Handle::open(&path, READ_CONTROL | WRITE_DAC)?;
+                if handle.attributes()? & kind_bits != FILE_ATTRIBUTE_DIRECTORY {
+                    bail!("{} changed while being checked", path.display());
+                }
+                handle
+            } else {
+                // Checked only; were it a folder after all, the descriptor
+                // computed for a file would differ and stop the check.
+                Handle::open(&path, READ_CONTROL)?
+            };
+            let child = Descriptor::read(handle.0)?;
+            let aces = ace_bytes(child.dacl, &|_| false)?;
+            let key = computation_key(&child, &aces, is_dir)?;
+            let (computed, control) = match computed_for.get(&key) {
+                Some(found) => found,
+                None => {
+                    let computed = Computed::new(parent.sd, child.sd, is_dir)?;
+                    let value = (
+                        ace_bytes(computed.dacl()?, &|_| false)?,
+                        computed.control()?,
+                    );
+                    computed_for.entry(key).or_insert(value)
+                }
+            };
+            if control & flags != child.control & flags {
+                bail!("{} would change protection or inheritance", path.display());
+            }
+            if aces == *computed {
+                if is_plain_dir {
+                    pending.push(path);
+                }
                 continue;
             }
-            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                bail!("{} is a link", entry.path().display());
-            }
-            let path = entry.path();
-            let handle = Handle::open(&path, /*open_link*/ true)?;
-            if !handle.is_plain_dir()? {
-                bail!("{} is not a plain folder", path.display());
-            }
-            let child = Descriptor::read(handle.0)?;
-            let computed = Computed::new(parent_sd.sd, child.sd)?;
-            let new_dacl = computed.dacl()?;
-            if !same_aces_except(child.dacl, new_dacl, is_copy)? {
+            if !is_plain_dir || without_copies(&aces) != without_copies(computed) {
                 bail!(
                     "{} would change more than the delete-child copies",
                     path.display()
                 );
             }
-            if !same_aces_except(child.dacl, new_dacl, |_| false)? {
-                write_and_check(handle.0, &child, new_dacl)?;
+            // Writes only inside the folder whose DACL was read: a folder
+            // swapped for a link meanwhile would resolve elsewhere.
+            let dir_final = match &dir_final {
+                Some(path) => path,
+                None => dir_final.insert(comparable_path(&final_path(dir_handle.0)?)),
+            };
+            let expected = format!(r"{dir_final}\{}", entry.file_name().to_string_lossy());
+            if comparable_path(&final_path(handle.0)?) != comparable_path(&expected) {
+                bail!("{} is not where it was listed", path.display());
             }
+            let computed = Computed::new(parent.sd, child.sd, is_dir)?;
+            write_and_check(handle.0, &child, computed.dacl()?)?;
             pending.push(path);
         }
     }
     Ok(())
+}
+
+/// The inputs besides the parent's descriptor that decide what
+/// `CreatePrivateObjectSecurityEx` computes for `child`: its kind, flags,
+/// owner, group and explicit (not inherited) entries, or all its entries if
+/// its DACL is protected.
+unsafe fn computation_key(child: &Descriptor, aces: &[Vec<u8>], is_dir: bool) -> Result<Vec<u8>> {
+    let mut key = vec![u8::from(is_dir)];
+    key.extend_from_slice(&child.control.to_le_bytes());
+    for owner in [true, false] {
+        let mut sid: *mut c_void = std::ptr::null_mut();
+        let mut defaulted = 0;
+        let ok = if owner {
+            GetSecurityDescriptorOwner(child.sd, &mut sid, &mut defaulted)
+        } else {
+            GetSecurityDescriptorGroup(child.sd, &mut sid, &mut defaulted)
+        };
+        if ok == 0 {
+            bail!("reading the owner or group failed: {}", GetLastError());
+        }
+        if sid.is_null() {
+            key.extend_from_slice(&0_u32.to_le_bytes());
+        } else {
+            let len = GetLengthSid(sid) as usize;
+            key.extend_from_slice(&(len as u32).to_le_bytes());
+            key.extend_from_slice(std::slice::from_raw_parts(sid as *const u8, len));
+        }
+    }
+    // A protected DACL inherits nothing; it is kept whole.
+    let protected = child.control & SE_DACL_PROTECTED != 0;
+    for ace in aces {
+        if protected || ace[1] & INHERITED_ACE == 0 {
+            key.extend_from_slice(&(ace.len() as u32).to_le_bytes());
+            key.extend_from_slice(ace);
+        }
+    }
+    Ok(key)
 }
 
 /// The copy of a `CONTAINER_INHERIT` Everyone delete-child deny that a
@@ -341,18 +485,23 @@ unsafe fn ace_count(acl: *const ACL) -> Result<u32> {
     Ok(info.AceCount)
 }
 
-/// A handle opened for reading and writing the DACL.
+/// A handle to a file or folder.
 struct Handle(HANDLE);
 
 impl Handle {
-    unsafe fn open(path: &Path, open_link: bool) -> Result<Self> {
-        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
-        if open_link {
-            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
-        }
+    /// Opens `path` with `access`, the link itself if it is one.
+    unsafe fn open(path: &Path, access: u32) -> Result<Self> {
+        Self::open_with(
+            path,
+            access,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+    }
+
+    unsafe fn open_with(path: &Path, access: u32, flags: u32) -> Result<Self> {
         let handle = CreateFileW(
             to_wide(path).as_ptr(),
-            READ_CONTROL | WRITE_DAC,
+            access,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null_mut(),
             OPEN_EXISTING,
@@ -366,13 +515,12 @@ impl Handle {
         Ok(Self(handle))
     }
 
-    unsafe fn is_plain_dir(&self) -> Result<bool> {
+    unsafe fn attributes(&self) -> Result<u32> {
         let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
         if GetFileInformationByHandle(self.0, &mut info) == 0 {
             bail!("GetFileInformationByHandle failed: {}", GetLastError());
         }
-        Ok(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
-            && info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+        Ok(info.dwFileAttributes)
     }
 }
 
@@ -436,19 +584,33 @@ impl Drop for Descriptor {
     }
 }
 
-/// A folder's descriptor as Windows computes it from its parent's
+/// A descriptor `LocalFree` releases.
+struct LocalSd(*mut c_void);
+
+impl Drop for LocalSd {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: allocated by `GetNamedSecurityInfoW`.
+            unsafe {
+                LocalFree(self.0 as HLOCAL);
+            }
+        }
+    }
+}
+
+/// An object's descriptor as Windows computes it from its parent's
 /// (inherited entries) and its own (explicit entries, owner and group).
 struct Computed(*mut c_void);
 
 impl Computed {
-    unsafe fn new(parent: *mut c_void, current: *mut c_void) -> Result<Self> {
+    unsafe fn new(parent: *mut c_void, current: *mut c_void, is_dir: bool) -> Result<Self> {
         let mut sd: *mut c_void = std::ptr::null_mut();
         if CreatePrivateObjectSecurityEx(
             parent,
             current,
             &mut sd,
             std::ptr::null(),
-            /*iscontainerobject*/ 1,
+            i32::from(is_dir),
             SEF_DACL_AUTO_INHERIT | SEF_AVOID_OWNER_CHECK | SEF_AVOID_PRIVILEGE_CHECK,
             0,
             &FILE_MAPPING,
@@ -457,6 +619,15 @@ impl Computed {
             bail!("CreatePrivateObjectSecurityEx failed: {}", GetLastError());
         }
         Ok(Self(sd))
+    }
+
+    unsafe fn control(&self) -> Result<u16> {
+        let mut control: u16 = 0;
+        let mut revision: u32 = 0;
+        if GetSecurityDescriptorControl(self.0, &mut control, &mut revision) == 0 {
+            bail!("GetSecurityDescriptorControl failed: {}", GetLastError());
+        }
+        Ok(control)
     }
 
     unsafe fn dacl(&self) -> Result<*const ACL> {
