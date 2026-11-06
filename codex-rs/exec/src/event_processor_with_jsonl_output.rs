@@ -586,6 +586,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
     fn mark_forked_usage_thread(&mut self, thread_id: &str) {
         self.token_usage.mark_forked(thread_id);
     }
+
     fn invalidate_usage(&mut self) {
         self.token_usage.invalidate();
     }

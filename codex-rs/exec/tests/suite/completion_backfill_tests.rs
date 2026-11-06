@@ -129,6 +129,12 @@ async fn streamed_usage(fork_turns: &str, child_tokens: Option<i64>) -> anyhow::
     assert!(output.status.success(), "exec run failed: {output:?}");
 
     let stdout = String::from_utf8(output.stdout)?;
+    if fork_turns == "all" {
+        assert!(
+            !stdout.contains("Usage is unknown: could not resolve"),
+            "fork usage must be unknown because of fork detection, not a failed ancestry read: {stdout}"
+        );
+    }
     assert!(
         stdout.contains("parent done"),
         "primary completion was not processed: {stdout}"

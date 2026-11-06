@@ -36,7 +36,8 @@ export type TurnCompletedEvent = {
   type: "turn.completed";
   /**
    * Selected-thread totals plus observed descendant usage. `null` for history-forked
-   * descendants without a reliable baseline, missing reports, unresolved ancestry or dropped events.
+   * descendants (including default MultiAgentV2 spawns), missing reports,
+   * unresolved ancestry or dropped events. Non-null totals include descendant work.
    * Running children can incur later usage.
    */
   usage: Usage | null;

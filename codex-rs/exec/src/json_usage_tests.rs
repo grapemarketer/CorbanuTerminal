@@ -103,3 +103,27 @@ fn baseline_overflow_is_unknown_instead_of_panicking() {
     assert_eq!(usage.for_thread("root"), None);
     assert!(!usage.is_valid());
 }
+
+#[test]
+fn child_counter_below_baseline_makes_usage_unknown() {
+    let counters: [fn(&mut TokenUsageBreakdown) -> &mut i64; 5] = [
+        |usage| &mut usage.input_tokens,
+        |usage| &mut usage.cached_input_tokens,
+        |usage| &mut usage.cache_write_input_tokens,
+        |usage| &mut usage.output_tokens,
+        |usage| &mut usage.reasoning_output_tokens,
+    ];
+    for counter in counters {
+        let mut usage = JsonUsage::default();
+        usage.register_thread("child", "root");
+        usage.observe(&report("root", /*total*/ 1000, /*last*/ 200));
+        usage.observe(&report("child", /*total*/ 200, /*last*/ 40));
+        let mut lower = report("child", /*total*/ 400, /*last*/ 200);
+        let ServerNotification::ThreadTokenUsageUpdated(update) = &mut lower else {
+            unreachable!()
+        };
+        *counter(&mut update.token_usage.total) = 0;
+        usage.observe(&lower);
+        assert_eq!(usage.for_thread("root"), None);
+    }
+}

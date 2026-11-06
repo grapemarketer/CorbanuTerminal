@@ -143,6 +143,7 @@ pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -1127,7 +1128,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         let mut interrupt_channel_open = true;
         let mut interrupted = false;
         let primary_thread_id_for_requests = primary_thread_id.to_string();
-        let mut usage_threads = std::collections::HashSet::new();
+        let mut usage_threads = HashSet::new();
         loop {
             let server_event = tokio::select! {
                 () = panic_stall.stalled() => {

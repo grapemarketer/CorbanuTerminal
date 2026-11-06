@@ -14,6 +14,8 @@ use crate::event_processor::EventProcessor;
 use crate::exec_events::Usage;
 use crate::send_request_with_response;
 
+const ANCESTRY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(/*secs*/ 2);
+
 /// Keeps cumulative reports separate until completion so interleaved streams
 /// cannot overwrite each other or count the same request more than once.
 #[derive(Default)]
@@ -108,27 +110,35 @@ impl JsonUsage {
             } else {
                 self.baselines.get(thread_id)?
             };
-            result.input_tokens = result
-                .input_tokens
-                .checked_add(usage.input_tokens.checked_sub(baseline.input_tokens)?)?;
-            result.cached_input_tokens = result.cached_input_tokens.checked_add(
-                usage
+            result.input_tokens = result.input_tokens.checked_add(nonnegative_difference(
+                usage.input_tokens,
+                baseline.input_tokens,
+            )?)?;
+            result.cached_input_tokens =
+                result
                     .cached_input_tokens
-                    .checked_sub(baseline.cached_input_tokens)?,
-            )?;
-            result.cache_write_input_tokens = result.cache_write_input_tokens.checked_add(
-                usage
+                    .checked_add(nonnegative_difference(
+                        usage.cached_input_tokens,
+                        baseline.cached_input_tokens,
+                    )?)?;
+            result.cache_write_input_tokens =
+                result
                     .cache_write_input_tokens
-                    .checked_sub(baseline.cache_write_input_tokens)?,
-            )?;
-            result.output_tokens = result
-                .output_tokens
-                .checked_add(usage.output_tokens.checked_sub(baseline.output_tokens)?)?;
-            result.reasoning_output_tokens = result.reasoning_output_tokens.checked_add(
-                usage
+                    .checked_add(nonnegative_difference(
+                        usage.cache_write_input_tokens,
+                        baseline.cache_write_input_tokens,
+                    )?)?;
+            result.output_tokens = result.output_tokens.checked_add(nonnegative_difference(
+                usage.output_tokens,
+                baseline.output_tokens,
+            )?)?;
+            result.reasoning_output_tokens =
+                result
                     .reasoning_output_tokens
-                    .checked_sub(baseline.reasoning_output_tokens)?,
-            )?;
+                    .checked_add(nonnegative_difference(
+                        usage.reasoning_output_tokens,
+                        baseline.reasoning_output_tokens,
+                    )?)?;
             if let Some(children) = self.children.get(thread_id) {
                 pending.extend(children.iter().map(String::as_str));
             }
@@ -162,7 +172,7 @@ pub(crate) async fn observe_subagent(
     let mut ancestor = thread_id.clone();
     while ancestor != selected_thread_id && !resolved_threads.contains(&ancestor) {
         let response = tokio::time::timeout(
-            std::time::Duration::from_secs(/*secs*/ 2),
+            ANCESTRY_READ_TIMEOUT,
             send_request_with_response::<ThreadReadResponse>(
                 client,
                 ClientRequest::ThreadRead {
@@ -177,13 +187,16 @@ pub(crate) async fn observe_subagent(
         )
         .await;
         let response = match response {
-            Ok(Ok(response)) => response,
-            failure => {
-                let error = match failure {
-                    Ok(Err(error)) => error,
-                    Err(_) => "thread/read timed out after 2 seconds".to_string(),
-                    Ok(Ok(_)) => unreachable!(),
-                };
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(format!(
+                "thread/read timed out after {} seconds",
+                ANCESTRY_READ_TIMEOUT.as_secs()
+            )),
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
                 tracing::warn!("could not resolve usage thread {ancestor}: {error}");
                 processor.invalidate_usage();
                 processor.process_warning(format!(
@@ -207,31 +220,28 @@ pub(crate) async fn observe_subagent(
 
 fn inherited_prefix(usage: &ThreadTokenUsage) -> Option<TokenUsageBreakdown> {
     Some(TokenUsageBreakdown {
-        input_tokens: usage
-            .total
-            .input_tokens
-            .checked_sub(usage.last.input_tokens)?,
-        cached_input_tokens: usage
-            .total
-            .cached_input_tokens
-            .checked_sub(usage.last.cached_input_tokens)?,
-        cache_write_input_tokens: usage
-            .total
-            .cache_write_input_tokens
-            .checked_sub(usage.last.cache_write_input_tokens)?,
-        output_tokens: usage
-            .total
-            .output_tokens
-            .checked_sub(usage.last.output_tokens)?,
-        reasoning_output_tokens: usage
-            .total
-            .reasoning_output_tokens
-            .checked_sub(usage.last.reasoning_output_tokens)?,
-        total_tokens: usage
-            .total
-            .total_tokens
-            .checked_sub(usage.last.total_tokens)?,
+        input_tokens: nonnegative_difference(usage.total.input_tokens, usage.last.input_tokens)?,
+        cached_input_tokens: nonnegative_difference(
+            usage.total.cached_input_tokens,
+            usage.last.cached_input_tokens,
+        )?,
+        cache_write_input_tokens: nonnegative_difference(
+            usage.total.cache_write_input_tokens,
+            usage.last.cache_write_input_tokens,
+        )?,
+        output_tokens: nonnegative_difference(usage.total.output_tokens, usage.last.output_tokens)?,
+        reasoning_output_tokens: nonnegative_difference(
+            usage.total.reasoning_output_tokens,
+            usage.last.reasoning_output_tokens,
+        )?,
+        total_tokens: nonnegative_difference(usage.total.total_tokens, usage.last.total_tokens)?,
     })
+}
+
+fn nonnegative_difference(value: i64, baseline: i64) -> Option<i64> {
+    value
+        .checked_sub(baseline)
+        .filter(|difference| *difference >= 0)
 }
 
 #[cfg(test)]

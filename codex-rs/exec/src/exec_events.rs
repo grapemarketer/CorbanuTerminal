@@ -50,7 +50,7 @@ pub struct TurnStartedEvent {}
 pub struct TurnCompletedEvent {
     /// Provider-reported totals for the selected thread plus usage observed
     /// from its descendants during this execution. `None` for history-forked
-    /// descendants without an authoritative usage baseline, missing reports,
+    /// descendants (including default MultiAgentV2 spawns), missing reports,
     /// unresolved ancestry or dropped events. Unknown usage is never free work.
     pub usage: Option<Usage>,
 }
