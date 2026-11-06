@@ -469,15 +469,25 @@ fn classified(
 /// `_./:@%+=~-`, blanks, `,;&|`, quotes, and braces around one or more
 /// non-empty plain alternatives (`src/{a,b}.rs`, `stash@{0}`; not `{a,}`,
 /// `{}`, `}x` or a range `{a..b}`, which the word lexer does not expand).
+/// The word lexer expands braces in each blank-separated piece before it
+/// finds commands, so a piece with both a group and `;`, `&` or `|`
+/// (`{-q,--upload-pack=./x}|cat`) is not plain either.
 fn brace_plain(text: &str) -> bool {
     let plain = |ch: char| ch.is_ascii_alphanumeric() || "_./:@%+=~-".contains(ch);
     // In a group: the current alternative so far.
     let mut group: Option<&str> = None;
+    // This piece's groups and operators.
+    let (mut grouped, mut operator) = (false, false);
     for (at, ch) in text.char_indices() {
         work::step();
         match (group, ch) {
-            (None, '{') => group = Some(&text[at + 1..at + 1]),
-            (None, ch) if plain(ch) || " \t\n,;&|'\"".contains(ch) => {}
+            (None, '{') => {
+                group = Some(&text[at + 1..at + 1]);
+                grouped = true;
+            }
+            (None, ' ' | '\t' | '\n') => (grouped, operator) = (false, false),
+            (None, ';' | '&' | '|') => operator = true,
+            (None, ch) if plain(ch) || ",'\"".contains(ch) => {}
             (Some(alternative), '.') if alternative.ends_with('.') => return false,
             (Some(alternative), ch) if plain(ch) => {
                 group = Some(&text[at - alternative.len()..at + ch.len_utf8()]);
@@ -487,6 +497,9 @@ fn brace_plain(text: &str) -> bool {
             }
             (Some(alternative), '}') if !alternative.is_empty() => group = None,
             _ => return false,
+        }
+        if grouped && operator {
+            return false;
         }
     }
     group.is_none()

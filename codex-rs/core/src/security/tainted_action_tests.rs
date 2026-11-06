@@ -4747,6 +4747,16 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
         "cat <<E\n'\nE\ngit clone --{quiet,upload-pack=./x}>'log' r d",
         "echo a;# it's\ngit clone --{quiet,upload-pack=./x}>'log' r d",
         "echo \"x\"; git clone ${N}{--upload-pack=./x,} r d",
+        // The word lexer expands braces before it finds commands, so an
+        // operator joined to a group cuts its alternatives (review 5).
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}|cat",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&&echo ok",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x};x",
+        "echo \"x\"; git clone ./r d {-q,-u./x}|cat",
+        "echo \"x\"; git fetch origin {-q,--upload-pack=./x}|cat",
+        "git clone ./r d {-q,--upload-pack=./x}|grep -v \"warn\"",
+        "echo \"x\"; git clone ./r d x|{-q,--upload-pack=./x}",
         // zsh brace-expands a `${...}` operand.
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
@@ -4791,6 +4801,9 @@ fn d258_plain_lines_for_the_brace_check() {
         "x ${y}",
         "x (y)",
         "x *",
+        "x {a,b}|cat",
+        "x a;{a,b}",
+        "x {a,b}&&y",
     ] {
         assert!(!super::brace_plain(text), "{text}");
     }
