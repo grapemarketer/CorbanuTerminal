@@ -1933,6 +1933,43 @@ fn bundled_zai_anthropic_models_have_output_limits() {
     assert_eq!(missing, Vec::<&str>::new());
 }
 
+/// #1567: every GLM 5.3 row (native Z.AI, OpenRouter and Vercel) carries
+/// Z.AI's documented 128K maximum output (https://docs.z.ai/guides/llm/glm-5.3,
+/// https://docs.z.ai/guides/vlm/glm-5.3-flash), the #189 rule, not the
+/// context window or a gateway figure.
+#[test]
+fn bundled_glm_5_3_rows_use_zai_documented_output_cap() {
+    let response = crate::bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let mut caps = response
+        .models
+        .iter()
+        .filter(|model| {
+            matches!(
+                model.slug.as_str(),
+                "glm-5.3"
+                    | "glm-5.3-flash"
+                    | "z-ai/glm-5.3-flash"
+                    | "zai/glm-5.3"
+                    | "zai/glm-5.3-flash"
+            )
+        })
+        .map(|model| (model.slug.as_str(), model.max_output_tokens))
+        .collect::<Vec<_>>();
+    caps.sort();
+
+    assert_eq!(
+        caps,
+        vec![
+            ("glm-5.3", Some(128_000)),
+            ("glm-5.3-flash", Some(128_000)),
+            ("z-ai/glm-5.3-flash", Some(128_000)),
+            ("zai/glm-5.3", Some(128_000)),
+            ("zai/glm-5.3-flash", Some(128_000)),
+        ]
+    );
+}
+
 /// The Anthropic Messages wire requires `max_tokens`, so every model a built-in
 /// Anthropic-wire provider can run must resolve to an output limit (#181).
 #[test]
@@ -3245,9 +3282,9 @@ fn bundled_models_json_contains_openrouter_models() {
             "zai/glm-5.3-flash",
             "Vercel GLM 5.3 Flash",
             1_000_000,
-            131_000,
+            128_000,
         ),
-        ("zai/glm-5.3", "Vercel GLM 5.3", 1_000_000, 1_000_000),
+        ("zai/glm-5.3", "Vercel GLM 5.3", 1_000_000, 128_000),
         (
             "vercel/moonshotai/kimi-k3",
             "Vercel Kimi K3",
