@@ -38,7 +38,7 @@ between `<<<<<<<` and `>>>>>>>` without separators, so they read a little lower 
 | Lines in conflict | 127.6k | 135.9k |
 | Test files (of which insta snapshots) | 328 (135) | 332 (136) |
 | New workspace members vs `main` / members only `main` has | 38 / 24 | 42 / 24 |
-| Upstream-changed files on security paths (§5, manifests excluded) that merge **without** conflict | 418 | 458 |
+| Upstream-changed files on named security paths (§5, manifests excluded; grows with the S0 footprint) that merge **without** conflict | 418 | 458 |
 
 Between 0.165.0 and 0.167.0: 387 upstream commits, 2,181 files changed (+122k/−29k). `rust-v0.165.0` sits on a release
 branch; its 4 release-only commits (GPT-6.1 Terra catalog entry, parent tool declarations in prediction forks,
@@ -162,7 +162,9 @@ commit; newer releases wait for the cadence.
   package-scoped dispatch (Windows clippy and tests for `codex-core` and its dependencies, plus the security lanes)
   for S2 and S3b, since `rust-ci` covers the whole workspace and can't pass while tui has markers. S4 reverts all
   of it (an S5 entry criterion). The sync-branch CODEOWNERS entry stays until main merge #3 is done and is reverted as
-  the last sync-branch commit before the final PR opens, so neither reaches `main`.
+  the last sync-branch commit before the final PR opens, and before the S5 full run and the SG3 diff, so neither
+  reaches `main` and the full run tests the final head. `.github/CODEOWNERS` isn't in `security_paths.txt`, so the
+  revert doesn't change the SG3 diff.
 - **Main merges** happen at tier exits (end of S1, end of S2) and in S5. The integrator merges `origin/main` into the
   sync branch. For a path that still carries skeleton markers, the integrator keeps the sync side and adds a ledger
   row "re-apply `git diff <old-main>..<new-main> -- <path>`" for the path's owner; this avoids nested markers and keeps
@@ -219,7 +221,9 @@ layers:
   flag, and its owner asks the security owner to review the hunks that come from those commits.
 
 The 458 (418) named-path files that upstream changed and that merge cleanly get ledger rows for a diff-level security
-review in S3b; the count grows when S0 adds the footprint files, which get the same rows.
+review in S3b. The count grows when S0 adds the footprint files: those that upstream changed and that merge cleanly get
+the same rows (conflicted footprint files already have a row and carry a footprint flag). With the footprint, the S0
+ledger previews at `main` `23be0b38` have 564 (525) such rows.
 
 Shared hot files (`core/src/session/turn.rs`, `core/src/client.rs`) belong to S2a; the security owner reviews every hunk
 there that touches classifier, approval or sandbox call sites.
@@ -244,7 +248,7 @@ reels, code-blind functional runs).
 
 ### S0 Setup and skeleton (can start now)
 
-- **Scope:** governed records (§7); promote the trial-merge scripts (`stats.py`, `slices.py`) and `security_paths.txt`
+- **Scope:** governed records (§7); promote the trial-merge scripts (now `conflict_stats.py`, `slices.py`) and `security_paths.txt`
   to `scripts/upstream_sync/`; record the baseline on the `main` SHA the skeleton is cut from (test lists and pass
   status per CI lane, so "no regression" is measurable); build the acceptance list (§9) and the fork-patch footprint
   (retain/adapt/remove per `upstream-integration.md`); verify the `rusty-v8-v152.2.0` archives on macOS, Linux and
@@ -334,7 +338,8 @@ reels, code-blind functional runs).
 ### S5 Qualification and merge
 
 - **Entry:** SG2 signed and S3b merged; S4 exit; `blocking-ci` fully green; CI mode change reverted (the sync-branch
-  CODEOWNERS entry goes after main merge #3, before the final PR opens); every ledger row resolved, including re-apply and migration rows; repository-wide marker scan clean.
+  CODEOWNERS entry goes after main merge #3, before the full run and the final PR); every ledger row resolved,
+  including re-apply and migration rows; repository-wide marker scan clean.
 - **Scope:** main merge #3 (≤48 hours before the final merge, with a soft freeze on hotspot files); full run:
   `blocking-ci` (incl. Windows clippy `-D warnings --tests` and Windows native tests), `rust-ci-full` (Linux full
   suite, dispatch), `windows-security-probes`, `bazel`, cargo-deny, codespell, nightly lanes (dispatch); `just test` on
@@ -399,7 +404,7 @@ credential brokers · browser isolation · branding, `corbanu` binary names, Cor
 |---|---|
 | `main` keeps moving (~180 commits since 10-29; 0.165.0 conflicts went 873 → 878) | main merges at tier exits with re-apply rows; 48-hour soft freeze on hotspot files before the final merge; merge hold during the 48-hour canary |
 | Security regression in the unified-exec port | S3b as its own sign-off PR; parity matrix; fail-before/pass-after per boundary; security CI lanes; Windows PC; SG3 diff check |
-| Security changes that merge cleanly go unreviewed (458 files at 0.167.0) | ledger rows and diff-level review in S3b; CODEOWNERS on the sync branch |
+| Security changes that merge cleanly go unreviewed (458 named-path files at 0.167.0; more with the footprint) | ledger rows and diff-level review in S3b; CODEOWNERS on the sync branch |
 | P1 security hardening changes the same area on `main` meanwhile | its changes arrive through main merges as security-owner rows; P1 PRs that touch files upstream deleted are flagged to the integrator |
 | Migration numbers collide silently | renumbering task in S1c, upgrade test from the latest release, DB backup before canary |
 | 136 snapshots hide regressions | owner reads every snapshot diff; no blanket accept |
