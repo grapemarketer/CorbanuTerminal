@@ -634,6 +634,9 @@ impl AuthModeWidget {
             options.push(SignInOption::Done);
             return options;
         }
+        if self.forced_api_uses_corbanu_route() {
+            return vec![SignInOption::CorbanuPlan, SignInOption::Done];
+        }
 
         if self.is_chatgpt_login_allowed() {
             let mut options = vec![SignInOption::ChatGpt];
@@ -651,6 +654,9 @@ impl AuthModeWidget {
 
     fn selectable_sign_in_options(&self) -> Vec<SignInOption> {
         if self.provider_picker_enabled() {
+            return self.displayed_sign_in_options();
+        }
+        if self.forced_api_uses_corbanu_route() {
             return self.displayed_sign_in_options();
         }
 
@@ -772,13 +778,45 @@ impl AuthModeWidget {
 
     /// Begins provider setup when onboarding opens straight on API-key entry
     /// (config already names the provider), as choosing the row would.
-    pub(crate) fn begin_initial_api_key_entry(&self) {
-        if matches!(
+    pub(crate) fn begin_initial_api_key_entry(&mut self) {
+        if !matches!(
             &*self.sign_in_state.read().unwrap(),
             SignInState::ApiKeyEntry(_)
         ) {
-            self.begin_provider(&self.api_key_entry_provider_id());
+            return;
         }
+        if self.forced_api_uses_corbanu_route() {
+            // #1571: there is no key to paste for this provider; open on its
+            // Corbanu API row instead of a prompt that cannot save.
+            self.highlighted_mode = SignInOption::CorbanuPlan;
+            *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+            return;
+        }
+        self.begin_provider(&self.api_key_entry_provider_id());
+    }
+
+    /// #1571: API-key sign-in is forced (`forced_login_method = "api"`) and the
+    /// configured provider has no pasted-key option, but is set up through the
+    /// Corbanu API wallet row (Corbanu Plan). That row is its API-key setup.
+    fn forced_api_uses_corbanu_route(&self) -> bool {
+        matches!(self.forced_login_method, Some(ForcedLoginMethod::Api))
+            && self.selected_api_key_option.is_none()
+            && self
+                .provider_status_host
+                .catalog()
+                .entries()
+                .iter()
+                .any(|entry| {
+                    (entry.id.as_str() == self.api_key_provider_id
+                        || entry
+                            .runtime_provider_ids
+                            .iter()
+                            .any(|runtime_id| runtime_id.as_str() == self.api_key_provider_id))
+                        && entry
+                            .setup_capabilities
+                            .iter()
+                            .any(|capability| *capability == ProviderSetupCapability::CorbanuPlan)
+                })
     }
 
     fn begin_provider(&self, provider_id: &str) {
@@ -2863,6 +2901,105 @@ pub(crate) mod tests {
             &*widget.sign_in_state.read().unwrap(),
             SignInState::ApiKeyEntry(_)
         ));
+    }
+
+    /// #1571: `forced_login_method = "api"` with `model_provider =
+    /// "pfterminal-plan"`. No pasted-key option names the Plan, so onboarding
+    /// must not open the generic key prompt (OpenAI wording, and saving fails
+    /// with "Provider API-key selection is no longer available"). It offers the
+    /// Plan's Corbanu API wallet row, which is API-key setup, and Done.
+    #[tokio::test]
+    async fn issue1571_forced_api_with_corbanu_plan_offers_the_wallet_row() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        // As OnboardingScreen::new builds the widget for that config.
+        widget.forced_login_method = Some(ForcedLoginMethod::Api);
+        widget.api_key_provider_id =
+            codex_model_provider_info::PFTERMINAL_PLAN_PROVIDER_ID.to_string();
+        widget.api_key_provider_name = "Corbanu Plan".to_string();
+        widget.api_key_env_var =
+            Some(codex_model_provider_info::PFTERMINAL_PLAN_API_KEY_ENV_VAR.to_string());
+        widget.api_key_provider_options = vec![api_key_option("zai", "Z.AI", "ZAI_API_KEY")];
+        widget.selected_api_key_option = None;
+        widget.highlighted_mode = SignInOption::ApiKey;
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ApiKeyEntry(ApiKeyInputState::from_env(/*provider_env_key*/ None));
+
+        widget.begin_initial_api_key_entry();
+
+        let area = Rect::new(0, 0, 88, 12);
+        let mut buf = Buffer::empty(area);
+        widget.render_ref(area, &mut buf);
+        let visible = buffer_text(&buf, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible.contains("OpenAI"), "rendered:\n{visible}");
+        insta::assert_snapshot!(visible, @r###"
+  Connect a Corbanu Plan API key to use Corbanu Terminal
+
+> 1. Corbanu API
+     Queue protected wallet and API-key setup; it runs after Done
+
+  2. Done
+     Configure a usable provider or queue Corbanu API first
+
+
+
+
+  Use ↑/↓ to choose · Press enter to continue
+"###);
+        assert_eq!(
+            widget.displayed_sign_in_options(),
+            vec![SignInOption::CorbanuPlan, SignInOption::Done]
+        );
+        assert_eq!(
+            widget.selectable_sign_in_options(),
+            vec![SignInOption::CorbanuPlan, SignInOption::Done]
+        );
+
+        // The row queues the wallet setup and Done finishes onboarding with it.
+        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            widget
+                .provider_setup_session
+                .read()
+                .unwrap()
+                .snapshot()
+                .queued_corbanu
+        );
+        widget.handle_sign_in_option(SignInOption::Done);
+        assert_eq!(widget.get_step_state(), StepState::Complete);
+        assert!(widget.deferred_provider_setup().is_some());
+        assert_eq!(widget.error_message(), None);
+    }
+
+    /// #1571 guard: forced API-key sign-in for a provider that has a pasted-key
+    /// option still opens that provider's key prompt.
+    #[tokio::test]
+    async fn issue1571_forced_api_with_a_key_provider_keeps_the_key_prompt() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        widget.forced_login_method = Some(ForcedLoginMethod::Api);
+        let option = api_key_option("zai", "Z.AI", "ZAI_API_KEY");
+        widget.api_key_provider_id = "zai".to_string();
+        widget.api_key_provider_name = "Z.AI".to_string();
+        widget.api_key_env_var = Some("ZAI_API_KEY".to_string());
+        widget.api_key_provider_options = vec![option.clone()];
+        widget.selected_api_key_option = Some(option);
+        widget.highlighted_mode = SignInOption::ApiKey;
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ApiKeyEntry(ApiKeyInputState::from_env(/*provider_env_key*/ None));
+
+        widget.begin_initial_api_key_entry();
+
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::ApiKeyEntry(_)
+        ));
+        assert_eq!(
+            widget.displayed_sign_in_options(),
+            vec![SignInOption::ApiKey]
+        );
     }
 
     #[tokio::test]
