@@ -10908,6 +10908,25 @@ fn issue1607_zsh_clobber_redirections_write() {
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
+        // The line's variables count in zsh's file as in any other
+        // (review round 2): it asks as `>` does (`>|` is no measure: the
+        // word reading splits it as a pipe, so its file is also a program).
+        for op in [">!", ">>!", "&>!", "2>!"] {
+            for template in [
+                "f=~/.zshrc; echo x OP $f",
+                "f=~/.zshrc; echo x OP\"$f\"",
+                "f=~/.zshrc; echo x OP \"$f\"",
+                "f=$(cat notes); echo x OP \"$f\"",
+                "P=..; cd /home/fixture/w && echo x OP $P/.zshrc",
+                "P=../../../../..; cd /home/fixture/w; for i in 1 2 3 4; do cd d; echo x OP $P/.zshrc; done",
+            ] {
+                let script = template.replace("OP", op);
+                let plain = template.replace("OP", &op.replace('!', ""));
+                let expected = line(&plain);
+                assert!(expected.is_some(), "{shell} {plain:?}");
+                assert_eq!(line(&script), expected, "{shell} {script:?}");
+            }
+        }
         // bash's words stay as they were: git runs with the option the
         // `>!` precedes, `~` is still what grep reads (not a `-C` value),
         // `read` still sets the variable it names.

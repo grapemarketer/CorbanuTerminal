@@ -60,11 +60,11 @@ pub(super) struct SimpleCommand {
     pub(super) here_string: Option<usize>,
     /// Indexes of the words its output is redirected to (`> file`, `>> file`).
     pub(super) writes_to: Vec<usize>,
-    /// #1607: files zsh writes where bash reads the line otherwise: the
-    /// word after `>!` (`>! f`, which bash passes on as an argument) or
-    /// the rest of the `!` word (`>!f`, bash's file `!f`). Judged only as
-    /// files written, never as words.
-    pub(super) zsh_writes: Vec<String>,
+    /// #1607: files zsh writes where bash reads the line otherwise, by
+    /// word index: the word after `>!` (`>! f`, which bash passes on as an
+    /// argument; `false`) or the rest of the `!` word (`>!f`, bash's file
+    /// `!f`; `true`: drop the `!`). Judged only as files written.
+    pub(super) zsh_writes: Vec<(usize, bool)>,
     /// Indexes of the words holding what a lookup printed (`$(readlink x)`
     /// stands for `x`, but prints whatever the link holds).
     pub(super) looked_up: Vec<usize>,
@@ -638,12 +638,13 @@ impl Lexer {
             }
             // #1607: the words stay bash's; zsh's file after the `!` is
             // the rest of this word (`>!f`) or the next word (`>! f`).
+            let at = self.current.words.len();
             if std::mem::take(&mut self.zsh_writes_next) {
-                self.current.zsh_writes.push(word.clone());
+                self.current.zsh_writes.push((at, false));
             }
             match word.strip_prefix('!').filter(|_| clobber) {
                 Some("") => self.zsh_writes_next = true,
-                Some(rest) => self.current.zsh_writes.push(rest.to_owned()),
+                Some(_) => self.current.zsh_writes.push((at, true)),
                 None => {}
             }
             self.current.words.push(word);
