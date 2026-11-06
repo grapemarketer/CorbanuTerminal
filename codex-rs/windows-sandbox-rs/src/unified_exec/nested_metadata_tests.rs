@@ -3,6 +3,7 @@
 //! existing ones are protected like the top-level ones.
 
 use super::*;
+use pretty_assertions::assert_eq;
 
 fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).expect("canonical")
