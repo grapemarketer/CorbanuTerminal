@@ -952,7 +952,7 @@ Use `thread/inject_items` to append prebuilt Responses API items to a loaded thr
 { "id": 36, "result": {} }
 ```
 
-### Realtime-only threads: pass `model` on `thread/start`
+### Realtime-only threads: skip the warm-up on `thread/start`
 
 `thread/start` warms up the thread's text model when its provider uses a
 WebSocket connection, as the built-in OpenAI provider does: one paid request
@@ -963,14 +963,17 @@ to Codex) and, where it's enabled, the end-of-session transcript turn. When a
 session makes few or no handoffs, the warm-up on the default model can cost
 several times the realtime session itself (#1045).
 
-Clients that start a thread only for realtime should pass a small, cheap text
-`model` on `thread/start`. The warm-up is then priced for that model. Handoffs
+Clients that start a thread only for realtime should skip the warm-up with
+`config: {"skip_startup_warmup": true}` on `thread/start`: the thread then sends
+no warm-up request, and a later text turn's first reply may be slower. A client
+that also wants cheaper handoffs can pass a small, cheap text `model` on
+`thread/start`; without `skip_startup_warmup` the warm-up is then priced for
+that model. Handoffs
 also run on it, so this trades away handoff quality. Keep the thread's provider:
 realtime connects through it, so moving the thread to a provider without a
 WebSocket connection (which would skip the warm-up) also moves realtime there.
 The `model` on `thread/realtime/start` selects the realtime model only; it
-doesn't change the warm-up. Skipping the warm-up for realtime-only threads is a
-possible later change (#1045).
+doesn't change the warm-up (#1045).
 
 ### Example: Start realtime with WebRTC
 

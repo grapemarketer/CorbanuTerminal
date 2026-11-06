@@ -514,6 +514,12 @@ pub struct ConfigToml {
     /// to `false`.
     pub skip_reopen_warmup: Option<bool>,
 
+    /// When `true`, no conversation sends the startup warm-up request, new or
+    /// reopened; the first reply may be slower. For clients that start a thread
+    /// only for realtime voice, which never uses the warm-up (#1045). Defaults
+    /// to `false`.
+    pub skip_startup_warmup: Option<bool>,
+
     /// Compatibility-only settings retained so legacy `ghost_snapshot`
     /// config still loads.
     #[serde(default)]

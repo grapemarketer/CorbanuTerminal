@@ -1261,6 +1261,10 @@ pub struct Config {
     /// (#403). A new conversation still does.
     pub skip_reopen_warmup: bool,
 
+    /// When `true`, no conversation sends the startup warm-up request, new or
+    /// reopened (#1045).
+    pub skip_startup_warmup: bool,
+
     /// #1038: this new conversation continues a saved one whose first
     /// message the person edited. Its warm-up is a reopen warm-up (#403),
     /// as when a later message is edited. Set per thread, never from TOML;
@@ -5192,6 +5196,7 @@ impl Config {
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
             skip_reopen_warmup: cfg.skip_reopen_warmup.unwrap_or(false),
+            skip_startup_warmup: cfg.skip_startup_warmup.unwrap_or(false),
             reopened_by_prompt_edit,
             active_project,
             notices,
