@@ -578,6 +578,10 @@ struct Lexer {
     /// Open groups and the pipe that feeds every command inside them.
     groups: Vec<(Group, Option<usize>)>,
     redirect: Redirect,
+    /// #1607: a `!` follows the output redirection just read (`>!`, `>>!`,
+    /// `&>!`, `>&!`, `2>!`), which zsh reads as `>|`: the file is the word
+    /// after the `!`, where bash writes a file `!` (or `!f`).
+    clobber: bool,
     /// A substitution opened past `MAX_SUBSTITUTION_DEPTH`.
     too_deep: bool,
     /// Open substitutions that are not past `MAX_SUBSTITUTION_DEPTH`.
@@ -600,7 +604,9 @@ impl Lexer {
     fn flush(&mut self) {
         if !self.word.is_empty() {
             let index = Some(self.current.words.len());
-            match std::mem::take(&mut self.redirect) {
+            let redirect = std::mem::take(&mut self.redirect);
+            let clobber = std::mem::take(&mut self.clobber) && redirect == Redirect::Stdout;
+            match redirect {
                 Redirect::Stdin => self.current.stdin_from = index,
                 Redirect::HereString => self.current.here_string = index,
                 Redirect::Stdout => self.current.writes_to.extend(index),
@@ -620,7 +626,19 @@ impl Lexer {
             if self.current.words.is_empty() {
                 self.current.after = joint.unwrap_or_default();
             }
+            // #1607: both readings write. zsh writes the word after the
+            // `!`: the rest of this one (`>!f`) or the next one (`>! f`,
+            // which bash passes on as an argument).
+            let rest = clobber.then(|| word.strip_prefix('!').map(str::to_owned));
             self.current.words.push(word);
+            match rest.flatten() {
+                Some(rest) if rest.is_empty() => self.redirect = Redirect::Stdout,
+                Some(rest) => {
+                    self.current.writes_to.push(self.current.words.len());
+                    self.current.words.push(rest);
+                }
+                None => {}
+            }
         }
     }
 
@@ -916,6 +934,7 @@ impl Lexer {
                         .is_some_and(|after| after.is_ascii_digit() || *after == '-');
                     if !descriptor {
                         self.redirect = Redirect::Stdout;
+                        self.clobber = chars.get(index + 2) == Some(&'!');
                     }
                     index += 2;
                     continue;
@@ -923,6 +942,7 @@ impl Lexer {
                 '>' => {
                     self.flush();
                     self.redirect = Redirect::Stdout;
+                    self.clobber = next == Some('!');
                 }
                 '(' => {
                     if next == Some('(')
