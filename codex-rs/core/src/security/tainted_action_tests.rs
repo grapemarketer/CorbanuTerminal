@@ -8255,6 +8255,18 @@ fn issue_1132_saved_pipeline_targets_are_byte_bounded() {
     });
 }
 
+/// #1132: slot allocation must be bounded too: one `tee` can name many
+/// short targets, and each collected `sed` otherwise clones every entry.
+#[test]
+fn issue_1132_many_short_saved_targets_are_linear() {
+    work::assert_linear("many short tee operands", |scale| {
+        let calls = " -- sed p".repeat(15 * scale);
+        let names = "a ".repeat(8_000 * scale);
+        let line = format!("echo{calls} | tee {names}");
+        assert_eq!(script(&line), None);
+    });
+}
+
 /// Sharing target judgement must keep both known and unknown destinations
 /// conservative, while ordinary sed output without an executed script stays
 /// unprotected. These are classified strings; no shell command is executed.

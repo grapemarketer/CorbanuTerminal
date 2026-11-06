@@ -62,10 +62,11 @@ const MAX_COLLECTED: usize = 4096;
 /// the pipeline writes a file the classifier cannot name.
 const MAX_PIPELINE_STAGES: usize = 64;
 
-/// Bytes of known target names retained for one collected `sed`. This keeps
-/// repeated `Sed` records linear in the command input even when few target
-/// names are individually very long.
-const MAX_SAVED_TARGET_BYTES: usize = 64 * 1024;
+/// Targets retained for one collected `sed`. Each target costs a vector slot
+/// plus its known name, and every collected `Sed` clones the list. Keeping
+/// both bounded makes those copies constant-size.
+const MAX_SAVED_TARGETS: usize = 64;
+const MAX_SAVED_TARGET_BYTES: usize = 4 * 1024;
 
 /// Pipeline stages that save their input to the files they are given.
 const PIPE_WRITERS: &[&str] = &["tee", "dd", "sponge", "cp", "install"];
@@ -1322,22 +1323,26 @@ fn pipeline_targets(commands: &[Command], command: &Command) -> Vec<Option<Strin
     targets
 }
 
-/// Keep known output names only while their aggregate size remains bounded.
-/// Once the budget is spent, an unnamed target preserves the conservative
-/// result without copying more names into every collected `sed`.
+/// Keep output targets only while their count and aggregate allocation stay
+/// bounded. An unnamed target is conservative for every target this drops, so
+/// it also avoids retaining an almost-full list after either budget is spent.
 fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
     let mut bounded = Vec::new();
     let mut bytes: usize = 0;
     for target in targets {
         work::step();
-        let target_bytes = target.as_ref().map_or(0, String::len);
-        let Some(next) = bytes.checked_add(target_bytes) else {
-            bounded.push(None);
-            break;
+        let target_bytes = target
+            .as_ref()
+            .map_or(0, String::len)
+            .checked_add(std::mem::size_of::<Option<String>>());
+        let Some(target_bytes) = target_bytes else {
+            return vec![None];
         };
-        if next > MAX_SAVED_TARGET_BYTES {
-            bounded.push(None);
-            break;
+        let Some(next) = bytes.checked_add(target_bytes) else {
+            return vec![None];
+        };
+        if bounded.len() == MAX_SAVED_TARGETS || next > MAX_SAVED_TARGET_BYTES {
+            return vec![None];
         }
         bytes = next;
         bounded.push(target);
@@ -1754,5 +1759,17 @@ mod pipeline_tests {
             .map(|command| pipeline_targets(&reading.commands, command).len())
             .max();
         assert_eq!(longest, Some(MAX_PIPELINE_STAGES + 1));
+    }
+
+    #[test]
+    fn issue_1132_saved_target_limits_keep_one_unknown_target() {
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".to_string()); MAX_SAVED_TARGETS + 1]),
+            vec![None]
+        );
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".repeat(MAX_SAVED_TARGET_BYTES))]),
+            vec![None]
+        );
     }
 }
