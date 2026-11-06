@@ -9,8 +9,9 @@
 //! object whose inherited entries had gone stale (a file the user moved in
 //! from elsewhere keeps its old DACL), which the walk repairs.
 //!
-//! So this writes the folder's own DACL, then reads every object below and
-//! has Windows compute its DACL from its parent's
+//! So this writes the folder's own DACL (once Windows computes the same for
+//! it from its own parent's), then reads every object below and has Windows
+//! compute its DACL from its parent's
 //! (`CreatePrivateObjectSecurityEx`, auto-inherit), as the walk would:
 //! - equal: nothing to write;
 //! - a subfolder that differs only in the Everyone delete-child copies:
@@ -82,6 +83,8 @@ use windows_sys::Win32::Security::SEF_DACL_AUTO_INHERIT;
 use windows_sys::Win32::Security::SetKernelObjectSecurity;
 use windows_sys::Win32::Security::SetSecurityDescriptorControl;
 use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
+use windows_sys::Win32::Security::SetSecurityDescriptorGroup;
+use windows_sys::Win32::Security::SetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
@@ -170,9 +173,15 @@ pub(super) unsafe fn set_delete_child_deny(
         }
     };
     let direct = (|| -> Result<()> {
+        // #1549's add, without the protection flag, may change a protected
+        // DACL's inheritance; leave that to it.
+        if add && current.control & SE_DACL_PROTECTED != 0 {
+            bail!("the DACL is protected");
+        }
         if !same_aces_except(current.dacl, new_dacl.as_ptr(), is_entry)? {
             bail!("the new DACL changes more than the delete-child entry");
         }
+        check_against_parent(path, &current, new_dacl.as_ptr())?;
         write_and_check(handle.0, &current, new_dacl.as_ptr())?;
         sync_below(path, psid)
     })();
@@ -300,9 +309,12 @@ unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
                 }
                 handle
             } else {
-                // Checked only; were it a folder after all, the descriptor
-                // computed for a file would differ and stop the check.
-                Handle::open(&path, READ_CONTROL)?
+                // Checked only.
+                let handle = Handle::open(&path, READ_CONTROL)?;
+                if handle.attributes()? & kind_bits != listed & kind_bits {
+                    bail!("{} changed while being checked", path.display());
+                }
+                handle
             };
             let child = Descriptor::read(handle.0)?;
             let aces = ace_bytes(child.dacl, &|_| false)?;
@@ -401,6 +413,48 @@ unsafe fn is_inherited_delete_child_copy(ace: *const c_void, psid: *mut c_void) 
     let sid = (ace as usize + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
         as *mut c_void;
     mask == FILE_DELETE_CHILD && EqualSid(sid, psid) != 0
+}
+
+/// #1612 review r2: `SetNamedSecurityInfoW` also recomputes `path`'s own
+/// inherited entries from its parent's. Fails unless Windows computes
+/// exactly `dacl` (and the same flags) for `path` from its parent, as for
+/// the objects below.
+unsafe fn check_against_parent(path: &Path, current: &Descriptor, dacl: *const ACL) -> Result<()> {
+    let Some(parent_path) = path.parent() else {
+        bail!("{} has no parent", path.display());
+    };
+    // By name, as `SetNamedSecurityInfoW` finds the parent.
+    let parent_handle = Handle::open_with(parent_path, READ_CONTROL, FILE_FLAG_BACKUP_SEMANTICS)?;
+    let parent = Descriptor::read(parent_handle.0)?;
+    let flags = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
+    let mut sd: SECURITY_DESCRIPTOR = std::mem::zeroed();
+    let psd = &mut sd as *mut SECURITY_DESCRIPTOR as *mut c_void;
+    let (mut owner, mut group): (*mut c_void, *mut c_void) =
+        (std::ptr::null_mut(), std::ptr::null_mut());
+    let mut defaulted = 0;
+    if InitializeSecurityDescriptor(psd, SECURITY_DESCRIPTOR_REVISION) == 0
+        || GetSecurityDescriptorOwner(current.sd, &mut owner, &mut defaulted) == 0
+        || GetSecurityDescriptorGroup(current.sd, &mut group, &mut defaulted) == 0
+        || SetSecurityDescriptorOwner(psd, owner, 0) == 0
+        || SetSecurityDescriptorGroup(psd, group, 0) == 0
+        || SetSecurityDescriptorDacl(psd, 1, dacl, 0) == 0
+        || SetSecurityDescriptorControl(psd, flags, current.control & flags) == 0
+    {
+        bail!(
+            "building the security descriptor failed: {}",
+            GetLastError()
+        );
+    }
+    let computed = Computed::new(parent.sd, psd, /*is_dir*/ true)?;
+    if computed.control()? & flags != current.control & flags
+        || !same_aces_except(computed.dacl()?, dacl, |_| false)?
+    {
+        bail!(
+            "{} would change more than the delete-child entry",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Writes `dacl` to the object alone (no propagation), keeping its

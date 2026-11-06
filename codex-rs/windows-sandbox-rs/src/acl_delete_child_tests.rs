@@ -230,6 +230,54 @@ fn d285_stale_file_under_git_is_repaired_as_by_the_tree_walk() {
     assert_eq!(written, vec![Written::Walked, Written::Direct]);
 }
 
+/// #1612 review r2: the root and `.git` themselves stale against their
+/// parents (moved in from elsewhere, say). #1549's call recomputes their own
+/// inherited entries too, so the direct write gives up.
+#[test]
+fn d285_stale_target_is_repaired_as_by_the_tree_walk() {
+    let base = tempfile::tempdir().expect("base dir");
+    let walked = base.path().join("walked");
+    let direct = base.path().join("direct");
+    for root in [&walked, &direct] {
+        build_tree(root);
+        add_stale_inherited_entry(root);
+    }
+    assert_eq!(snapshot(&walked), snapshot(&direct));
+    let written = run_session(&walked, &direct, &SESSION);
+    assert_eq!(
+        written,
+        vec![
+            Written::Walked,
+            Written::Direct,
+            Written::Direct,
+            Written::Direct
+        ]
+    );
+    // `.git` alone (the root's deny already there).
+    for root in [&walked, &direct] {
+        add_stale_inherited_entry(&root.join(".git"));
+    }
+    assert_eq!(snapshot(&walked), snapshot(&direct));
+    let written = run_session(&walked, &direct, &SESSION[1..3]);
+    assert_eq!(written, vec![Written::Walked, Written::Direct]);
+}
+
+/// A protected `.git`: #1549's add, which doesn't pass the protection flag,
+/// is left to do it.
+#[test]
+fn d285_protected_git_is_left_to_the_tree_walk() {
+    let base = tempfile::tempdir().expect("base dir");
+    let walked = base.path().join("walked");
+    let direct = base.path().join("direct");
+    for root in [&walked, &direct] {
+        build_tree(root);
+        protect(&root.join(".git"));
+    }
+    assert_eq!(snapshot(&walked), snapshot(&direct));
+    let written = run_session(&walked, &direct, &SESSION);
+    assert_eq!(written[1], Written::Walked);
+}
+
 /// Runs `steps` with #1549's calls on `walked` and directly on `direct`,
 /// comparing both trees after each; returns how each direct step wrote.
 fn run_session(walked: &Path, direct: &Path, steps: &[Step]) -> Vec<Written> {
@@ -325,13 +373,17 @@ fn build_tree(root: &Path) {
         FILE_DELETE_CHILD,
         CI | NP,
     );
-    // Inherited entries become explicit; nothing above reaches below.
-    let protected = git.join("protected");
-    let sd = SecurityInfo::read(&protected);
+    protect(&git.join("protected"));
+}
+
+/// Makes `path`'s DACL protected: inherited entries become explicit and
+/// nothing above reaches below.
+fn protect(protected: &Path) {
+    let sd = SecurityInfo::read(protected);
     // SAFETY: a valid path and DACL.
     let code = unsafe {
         SetNamedSecurityInfoW(
-            to_wide(&protected).as_ptr() as *mut u16,
+            to_wide(protected).as_ptr() as *mut u16,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
