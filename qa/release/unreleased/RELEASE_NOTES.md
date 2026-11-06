@@ -13,9 +13,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   resumed thread, if this turn's response reports no usage, `usage` still
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
-- **The usage is still the completing thread's own total.** It does not add
-  usage from spawned subagents and is not a difference from the start of the
-  invocation.
+- **Usage includes observed descendant work** (#290). Repeated cumulative
+  reports are counted once. Every history-forked descendant makes the total
+  `null`, as do a descendant with no report,
+  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
+  thread's own totals are not a difference from the start of the invocation.
+  Detached children can incur further usage after this snapshot.
+- **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
+  defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
+  report `usage: null`. A non-null total can be larger than in earlier versions
+  because it includes descendant work rather than only the root's own total.
+- **Context estimates are not provider reports.** Compaction, rollback and
+  full-window estimates keep the last measured report, or `null` if none exists.
 
 ### Compatibility
 
