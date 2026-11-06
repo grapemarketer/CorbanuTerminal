@@ -113,6 +113,10 @@ env:
     launch_paths::legacy_launch_through_wmi_stays_in_session
     launch_paths::legacy_launch_through_task_scheduler_stays_in_session
     launch_paths::legacy_launch_through_com_shell_windows_stays_in_session
+    launch_paths::legacy_launch_under_another_session_process_stays_in_session
+    command_identity::legacy_command_cannot_write_to_another_commands_process
+    command_identity::legacy_command_keeps_write_access_to_its_own_processes
+    command_identity::legacy_command_tools_work_with_command_identity
 
 jobs:
   probes:
