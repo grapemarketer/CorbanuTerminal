@@ -7,6 +7,9 @@ use std::path::PathBuf;
 #[path = "git_config_round6_tests.rs"]
 mod issue_1161_round6;
 
+#[path = "issue_1309_line_writes_tests.rs"]
+mod issue_1309_line_writes;
+
 const HOME: &str = "/home/fixture/.corbanu";
 const USER_HOME: &str = "/home/fixture";
 
