@@ -69,8 +69,9 @@ pub(super) enum Runs {
 }
 
 /// #1449: commands with options whose value is a command they run (`su -c
-/// CMD`, `su -s SHELL`, `rsync -e CMD`, `rg --pre CMD`, `tar -I CMD`, `tar
-/// --to-command=CMD`, `sort --compress-program=CMD`): their names, then
+/// CMD`, `su -s SHELL`, `rsync -e CMD`, `rg --pre CMD`, `rg --hostname-bin
+/// CMD` (#1573), `tar -I CMD`, `tar --to-command=CMD`, `sort
+/// --compress-program=CMD`): their names, then
 /// each option, the shortest prefix of it the program takes (a long one;
 /// getopt takes any unique one) and how it runs the value. A short option
 /// may be in a group (`su -lc`, `rsync -ave`), its value the rest of the
@@ -100,7 +101,13 @@ const OPERAND_RUNNERS: &[(&[&str], RunnerOptions)] = &[
         &["rsync"],
         &[("-e", 2, Runs::Program), ("--rsh", 5, Runs::Program)],
     ),
-    (&["rg"], &[("--pre", 5, Runs::Program)]),
+    (
+        &["rg"],
+        &[
+            ("--pre", 5, Runs::Program),
+            ("--hostname-bin", 14, Runs::Program),
+        ],
+    ),
     (
         &["sort", "gsort"],
         &[("--compress-program", 4, Runs::Filter)],
