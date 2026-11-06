@@ -4659,21 +4659,21 @@ fn d156_git_settings_after_a_split_value_ask() {
 }
 
 /// D258: unrelated commands and literal braces cannot make git's brace
-/// safeguard ask; the quote and expansion must belong to this command.
+/// safeguard ask; the quote and expansion must belong to this command. (In a
+/// line that is not plain words, D156's reading stays: `printf '%s\n'`, a
+/// backslash, a comment or a redirection anywhere in the line keeps these
+/// asking.)
 #[test]
 fn d258_unrelated_or_literal_quotes_do_not_promote_brace_words() {
     for command in [
         "git add src/{a,b}.rs && git commit -m \"msg\"",
         "git add src/{a,b}.rs && git commit -m 'msg'",
+        "git add {src,tests}/{a,b}.rs && git commit -m 'fix: a, b; c'",
         "git add src/{a,b}.rs && git commit -m \"\"",
         "git add src/{a,b}.rs && git commit -m \"handle {a,b}\"",
         "git add src/{a,b}.rs\ngit commit -m \"msg\"",
         "git add src/{a,b}.rs || git commit -m \"msg\"",
         "git commit -m \"msg\" && git add src/{a,b}.rs",
-        "git add src/{a,b}.rs && printf '%s\\n' \"msg\"",
-        "git add src/{a,b}.rs # \"msg\"",
-        "git add src/{a,b}.rs >'a; b'",
-        "git add src/\\{a,b\\}.rs",
         "git commit -m \"handle {a,b}\"",
         "git -c 'user.name=msg' diff stash@{0}..stash@{1}",
         "git diff stash@{0}..stash@{1} && printf '%s' \"msg\"",
@@ -4733,6 +4733,20 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
         "echo \"x\"; git clone r <&0 {--upload-pack=./x,} d",
         "echo \"x\"; git clone r >|log {--upload-pack=./x,} d",
         "echo \"x\"; git clone --{u..u}pload-pack=./x r d",
+        // Commas, brace alternatives, `$IFS`, here-documents and comments
+        // the word lexer misreads (#1580 review 4).
+        "echo \"x\"; git clone -b x,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x,{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {a,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {{,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x${IFS}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x$IFS{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:- } r {--upload-pack=./x,} d",
+        "cat <<E\n'\nE\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo a;# it's\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo \"x\"; git clone ${N}{--upload-pack=./x,} r d",
         // zsh brace-expands a `${...}` operand.
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
@@ -4742,6 +4756,43 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
             Some(ProtectedActionKind::UnseenCode),
             "{command}"
         );
+    }
+}
+
+/// D258: the lines where git's brace check reads quotes per command.
+#[test]
+fn d258_plain_lines_for_the_brace_check() {
+    for text in [
+        "git add src/{a,b}.rs && git commit -m \"msg\"",
+        "git diff stash@{0}..stash@{1}",
+        "git commit -m 'fix: a, b; c' | tee -a log",
+        "git add {src,tests}/{a,b}.rs\ngit status",
+    ] {
+        assert!(super::brace_plain(text), "{text}");
+    }
+    for text in [
+        "git add {a,}",
+        "x {} y",
+        "x }y",
+        "x { y",
+        "x {a..b}",
+        "x {a",
+        "x {a,{b,c}}",
+        "x {a,'b'}",
+        "x $'a'",
+        "x `y`",
+        "x $(y)",
+        "x <(y)",
+        "x >f",
+        "x &>f",
+        "x # c",
+        "cat <<E",
+        "x \\{a,b\\}",
+        "x ${y}",
+        "x (y)",
+        "x *",
+    ] {
+        assert!(!super::brace_plain(text), "{text}");
     }
 }
 

@@ -894,18 +894,28 @@ impl Classifier {
         let mut local_config = git_config::Writes::new(texts);
         let command_at = indirect::command_word(texts);
         // D156/D258: the other lexer may cut this command at quoted text
-        // (or `&>`, `<&`, `>|`, a `}` starting a word, an operator in
-        // `${...}`) before a brace-generated option, and never expands a
-        // range. Quote history is command-local
-        // (redirections included), and only unquoted brace groups count.
-        // A quote in a later command or literal `{a,b}` cannot cause this,
-        // unless the line holds a span the word lexer opens whatever the
-        // quoting (see `lexer_spans`).
+        // before a brace-generated option. In a line of plain words
+        // (`brace_plain`) quote history is command-local and only unquoted
+        // brace groups count: a quote in a later command or literal `{a,b}`
+        // cannot cause this. In any other line, D156's reading: the line's
+        // quotes and any `,` or `..` between braces.
         let mut braced_from = vec![false; texts.len() + 1];
         for at in (0..texts.len()).rev() {
             work::step();
-            let expands = (words[at].quoted_before || self.lexer_spans || words[at].brace_range)
-                && words[at].brace_expansion;
+            let expands = if self.brace_unsure {
+                // As D156 reads it: a `,` or `..` between braces.
+                let text = &texts[at];
+                text.find('{').is_some_and(|open| {
+                    work::rfind(text, "}").is_some_and(|close| {
+                        open < close && {
+                            let inside = &text[open..close];
+                            inside.contains(',') || inside.contains("..")
+                        }
+                    })
+                })
+            } else {
+                words[at].quoted_before && words[at].brace_expansion
+            };
             braced_from[at] = braced_from[at + 1] || expands;
         }
         for (index, word) in lower.iter().enumerate() {

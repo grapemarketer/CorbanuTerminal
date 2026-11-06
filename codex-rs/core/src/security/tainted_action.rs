@@ -464,6 +464,34 @@ fn classified(
     classifier
 }
 
+/// D258: whether the word lexer reads `text`'s commands where the quote-aware
+/// reading does, but for where quoted text cuts them: only letters, digits,
+/// `_./:@%+=~-`, blanks, `,;&|`, quotes, and braces around one or more
+/// non-empty plain alternatives (`src/{a,b}.rs`, `stash@{0}`; not `{a,}`,
+/// `{}`, `}x` or a range `{a..b}`, which the word lexer does not expand).
+fn brace_plain(text: &str) -> bool {
+    let plain = |ch: char| ch.is_ascii_alphanumeric() || "_./:@%+=~-".contains(ch);
+    // In a group: the current alternative so far.
+    let mut group: Option<&str> = None;
+    for (at, ch) in text.char_indices() {
+        work::step();
+        match (group, ch) {
+            (None, '{') => group = Some(&text[at + 1..at + 1]),
+            (None, ch) if plain(ch) || " \t\n,;&|'\"".contains(ch) => {}
+            (Some(alternative), '.') if alternative.ends_with('.') => return false,
+            (Some(alternative), ch) if plain(ch) => {
+                group = Some(&text[at - alternative.len()..at + ch.len_utf8()]);
+            }
+            (Some(alternative), ',') if !alternative.is_empty() => {
+                group = Some(&text[at + 1..at + 1]);
+            }
+            (Some(alternative), '}') if !alternative.is_empty() => group = None,
+            _ => return false,
+        }
+    }
+    group.is_none()
+}
+
 /// #1240: [`classify_with`] of a command run in `cwd` as on Windows, on any
 /// platform (an action cannot hold a Windows folder elsewhere). Filesystem
 /// lookups under Windows rules happen only on Windows (#1261: the first
@@ -581,7 +609,7 @@ impl Classifier {
             unseen_folder: false,
             sudo_redefined: false,
             quoted_text: false,
-            lexer_spans: false,
+            brace_unsure: false,
             launched: launched_git::Launch::default(),
             substitution_budget: Budget {
                 left: MAX_SUBSTITUTED_BYTES,
@@ -1319,13 +1347,13 @@ struct Classifier {
     /// which the word lexer ignores: it may end a command early there
     /// (`'a; b'`, `'a ( b'`, `a\;b`).
     quoted_text: bool,
-    /// D258: the line (or one that runs it) holds text where the word lexer
-    /// opens a span whatever the quoting around it: an ANSI-C string at
-    /// `$'`, a substitution at a backtick, `$(`, `<(` or `>(`. Opened in a
-    /// quote, comment or here-document, it may read on into a later command
-    /// (`grep 'a$' f; git …; echo 'b'`, ``echo '`'; git … `x` …``): git's
-    /// brace check then uses the line's quotes, not its command's.
-    lexer_spans: bool,
+    /// D258: the line (or one that runs it) holds more than plain words,
+    /// operators, quotes and well-formed brace groups ([`brace_plain`]). The
+    /// word lexer may then cut or misread a command where the quote-aware
+    /// reading does not (`$'`, substitutions, comments, here-documents,
+    /// redirections, stray braces), so git's brace check uses the line's
+    /// quotes, not its command's.
+    brace_unsure: bool,
     /// #1065: bytes of command text, and command lines, lexed so far.
     classified_bytes: usize,
     classified_lines: usize,
@@ -1644,13 +1672,8 @@ impl Classifier {
         let outer_sudo_redefined = self.sudo_redefined;
         let outer_quoted_text = self.quoted_text;
         self.quoted_text |= command.iter().any(|part| part.contains(['\'', '"', '\\']));
-        let outer_lexer_spans = self.lexer_spans;
-        self.lexer_spans |= command.iter().any(|part| {
-            work::step();
-            ["$'", "`", "$(", "<(", ">("]
-                .iter()
-                .any(|opener| part.contains(opener))
-        });
+        let outer_brace_unsure = self.brace_unsure;
+        self.brace_unsure |= command.iter().any(|part| !brace_plain(part));
         self.sudo_redefined |= command
             .iter()
             .any(|part| unknown_folder::may_redefine_sudo(part));
@@ -2110,7 +2133,7 @@ impl Classifier {
         self.sed_scope = outer_scope;
         self.sudo_redefined = outer_sudo_redefined;
         self.quoted_text = outer_quoted_text;
-        self.lexer_spans = outer_lexer_spans;
+        self.brace_unsure = outer_brace_unsure;
         self.visited = outer_visited;
         self.visited_all = outer_visited_all;
     }
