@@ -360,6 +360,9 @@ pub(crate) async fn run_turn(
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
         TurnDiffTracker::with_environment_display_roots(display_roots),
     ));
+    turn_context
+        .pending_tool_calls
+        .set_turn_diff_tracker(&turn_diff_tracker);
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -2739,17 +2742,20 @@ async fn drain_in_flight(
                     ResponseInputItem::Message { .. } => None,
                 };
                 let response_item = response_input.into();
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
-                    .await;
-                if let Some(call_id) = call_id {
-                    turn_context.pending_tool_calls.complete(&call_id);
-                }
+                // Check before recording (#1536): a turn killed after recording
+                // the output would skip it, and the abort path skips outputs
+                // already in history.
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     &response_item,
                 )
                 .await;
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
+                    .await;
+                if let Some(call_id) = call_id {
+                    turn_context.pending_tool_calls.complete(&call_id);
+                }
             }
             Ok(Err(err)) if matches!(err.details(), CodexErrorDetails::Fatal(_)) => {
                 fatal.get_or_insert(err);
