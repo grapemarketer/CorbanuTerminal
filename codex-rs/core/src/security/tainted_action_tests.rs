@@ -7037,6 +7037,23 @@ fn issue_1528_dashed_helpers_and_unknown_subcommands_ask() {
         "git.exe g -Osh x",
         "nice git g -Osh x",
         "sh -c 'git g -Osh x'",
+        // A later word that is a git command name does not make the
+        // subcommand known (#1597 review).
+        "git g -Osh log",
+        "git g -Osh -- status",
+        "git -C log g -Osh x",
+        "git cl -u ./x status",
+        // An alias or typo for clone, init or push (from #1597).
+        "git cl --config core.fsmonitor=./x u",
+        "git cl --config=core.hooksPath=./h u",
+        "git cl --template=./t u",
+        "git clnoe --template=./x u",
+        "git cl -qc core.fsmonitor=./x u",
+        "git p --exec=./x u",
+        // Optional porcelain may not be installed, so its name may be an alias.
+        "git gui -Osh x",
+        // A dashed helper's later git starts another subcommand.
+        "git-bisect run git g -Osh x",
     ] {
         if script(command) != Some(UnseenCode) {
             wrong.push(command.to_string());
@@ -7097,6 +7114,8 @@ fn issue_1528_dashed_helpers_and_unknown_subcommands_ask() {
         "git -C /r status -uno",
         "git -c color.ui=never add -u",
         "git-status -uno",
+        "git log -c",
+        "git commit -c HEAD",
     ] {
         if script(command).is_some() {
             wrong.push(format!("quiet: {command}"));
