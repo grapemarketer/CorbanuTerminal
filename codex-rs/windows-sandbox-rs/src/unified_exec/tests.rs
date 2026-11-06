@@ -1914,48 +1914,18 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
             false,
         ),
         (
-            "write a file",
+            "git commit",
             vec![
                 cmd,
                 "/d".to_string(),
                 "/c".to_string(),
-                "echo d256> d256.txt".to_string(),
+                // Git for Windows' `cmd` folder is on PATH (CI, and its
+                // installer's default).
+                "(echo d256> d256.txt && git add d256.txt && git -c user.name=d256 \
+                 -c user.email=d256@example.com -c commit.gpgsign=false commit -q -m d256 \
+                 && git log --format=d256-%s) 2>&1"
+                    .to_string(),
             ],
-            &[],
-            false,
-        ),
-        (
-            "git add",
-            vec![git.clone(), "add".to_string(), "d256.txt".to_string()],
-            &[],
-            false,
-        ),
-        (
-            "git commit",
-            [
-                "-c",
-                "user.name=d256",
-                "-c",
-                "user.email=d256@example.com",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-q",
-                "-m",
-                "d256",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .fold(vec![git.clone()], |mut argv, arg| {
-                argv.push(arg);
-                argv
-            }),
-            &[],
-            false,
-        ),
-        (
-            "git log",
-            vec![git, "log".to_string(), "--format=d256-%s".to_string()],
             &["d256-d256"],
             false,
         ),
