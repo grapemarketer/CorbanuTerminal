@@ -7008,6 +7008,135 @@ fn issue_1516_git_grep_open_files_in_pager_asks() {
     assert_eq!(wrong, Vec::<String>::new());
 }
 
+/// #1528: a dashed helper named by its Windows path (`git-grep.exe`) is read
+/// with its subcommand there, and a subcommand git does not know (an alias
+/// from existing config, a typo `help.autocorrect` runs) asks on `-O`, `-u`
+/// and `--open-files-in-pager`, as `grep` or `clone` would. Only adds
+/// prompts: git's own commands read as before.
+#[test]
+fn issue_1528_dashed_helpers_and_unknown_subcommands_ask() {
+    use ProtectedActionKind::UnseenCode;
+    let mut wrong = Vec::new();
+    // Aliases and autocorrected typos, in the POSIX reading.
+    for command in [
+        "git g -Osh x",
+        "git g -O sh x",
+        "git g -nOsh x",
+        "git g x -Osh",
+        "git g --open-files-in-pager=sh x",
+        "git g --op=sh x",
+        "git gerp -Osh x",
+        "git GREP -Osh x",
+        "git cl -u ./x u",
+        "git cl -u./x u",
+        "git cl -qu ./x u",
+        "git -C /r g -Osh x",
+        "git -c color.ui=never g -Osh x",
+        "git --git-dir /r/.git g -Osh x",
+        "git --no-pager gerp -Osh x",
+        "git.exe g -Osh x",
+        "nice git g -Osh x",
+        "sh -c 'git g -Osh x'",
+        // A later word that is a git command name does not make the
+        // subcommand known (#1597 review).
+        "git g -Osh log",
+        "git g -Osh -- status",
+        "git -C log g -Osh x",
+        "git cl -u ./x status",
+        // An alias or typo for clone, init or push (from #1597).
+        "git cl --config core.fsmonitor=./x u",
+        "git cl --config=core.hooksPath=./h u",
+        "git cl --template=./t u",
+        "git clnoe --template=./x u",
+        "git cl -qc core.fsmonitor=./x u",
+        "git p --exec=./x u",
+        // Optional porcelain may not be installed, so its name may be an alias.
+        "git gui -Osh x",
+        // A dashed helper's later git starts another subcommand.
+        "git-bisect run git g -Osh x",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(command.to_string());
+        }
+        if kind(&["/bin/zsh", "-lc", command]) != Some(UnseenCode) {
+            wrong.push(format!("zsh: {command}"));
+        }
+    }
+    // The Windows reading: dashed helpers by name and by path, and aliases.
+    for line in [
+        "git-grep.exe -Osh x",
+        "git-grep -Osh x",
+        r"C:\Git\mingw64\libexec\git-core\git-grep.exe -Osh x",
+        r"C:\Git\mingw64\libexec\git-core\git-grep.exe --open-files-in-pager=sh x",
+        "git-clone.exe -u ./x u",
+        r"C:\Git\mingw64\libexec\git-core\git-clone.exe -u ./x u",
+        r"C:\Git\mingw64\libexec\git-core\git-clone.exe --upload-pack=./x u",
+        "git g -Osh x",
+        "git gerp -Osh x",
+        "git cl -u ./x u",
+        r"C:\Git\cmd\git.exe g -Osh x",
+        r"C:\Git\cmd\git.exe -C C:\r gerp -Osh x",
+    ] {
+        if cmd(line) != Some(UnseenCode) {
+            wrong.push(format!("cmd: {line}"));
+        }
+        if powershell(line) != Some(UnseenCode) {
+            wrong.push(format!("powershell: {line}"));
+        }
+    }
+    // The prompts before this change stay.
+    for command in [
+        "git grep -Osh x",
+        "git clone -u ./x u",
+        "git clone --upload-pack=./x u",
+        "git-grep -Osh x",
+        "git-clone -u ./x u",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(format!("kept: {command}"));
+        }
+    }
+    for line in [
+        "git grep -Osh x",
+        r"C:\Git\cmd\git.exe clone --upload-pack=./x u",
+    ] {
+        if cmd(line) != Some(UnseenCode) || powershell(line) != Some(UnseenCode) {
+            wrong.push(format!("kept windows: {line}"));
+        }
+    }
+    // git's own commands with the same letters read as before.
+    for command in [
+        "git add -u",
+        "git status -uno",
+        "git status -u",
+        "git log -Oorder.txt",
+        "git branch -u origin/main",
+        "git -C /r status -uno",
+        "git -c color.ui=never add -u",
+        "git-status -uno",
+        "git log -c",
+        "git commit -c HEAD",
+    ] {
+        if script(command).is_some() {
+            wrong.push(format!("quiet: {command}"));
+        }
+    }
+    for line in [
+        "git status -uno",
+        "git log -Oorder.txt",
+        "git-status.exe -uno",
+        "git-log.exe -Oorder.txt",
+    ] {
+        if cmd(line).is_some() {
+            wrong.push(format!("quiet cmd: {line}"));
+        }
+        if powershell(line).is_some() {
+            wrong.push(format!("quiet powershell: {line}"));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+}
+
 /// #1515 (audit): both readers end a command at an unquoted `{`, `}` or `(`
 /// used as an argument, which the shell reads as text (bash `}` too) or as
 /// a glob (zsh `x(N)`, extglob `@(a)`, zsh `=(…)`). The words after it are
