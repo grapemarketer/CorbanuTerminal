@@ -4715,6 +4715,14 @@ fn d258_quotes_before_expanding_git_words_still_ask() {
         // quoting around it, on into a later command (#1580 review).
         "grep -n 'TODO$' notes.txt; git clone {--upload-pack=./x,} ./r d; echo 'done'",
         "echo \"$'\"; git clone {--upload-pack=./x,} ./r d; echo \"'\"",
+        // So is a substitution it opens in a quote, an escape, a comment or
+        // a here-document, closed in git's command (#1580 review 2).
+        "grep -n '`' notes.txt; git clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo '`'; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo \\`; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo '$('; git clone -b $( (echo x) ) r {--upload-pack=./x,} d",
+        "cat <<'EOF'\na ` tick\nEOF\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo 'a' # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
         // zsh brace-expands a `${...}` operand.
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
         "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
@@ -4745,6 +4753,7 @@ fn d156_checks_are_linear() {
         ("nested brace words", "git 'a; b' x{a,{b,c}} "),
         ("parameter brace words", "git 'a; b' ${x:-${y:-{a,b}}} "),
         ("ANSI-C lines", "grep 'a$' f; git add {a,b}; "),
+        ("substitution lines", "echo '`'; git add {a,b}; "),
         (
             "continued brace ranges",
             "git clone --{u.\\\n.u}pload-pack=./x URL; ",
