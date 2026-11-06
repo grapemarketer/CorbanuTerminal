@@ -2,21 +2,20 @@ use super::*;
 use codex_protocol::protocol::AgentMessageKind;
 use codex_state::AgentMailboxAdmission;
 use codex_state::AgentMailboxPhase;
-use std::sync::LazyLock;
 
-/// #1545: every delivery attempt this process reserves starts with this prefix, so recovery can
-/// tell a `Submitted` row a live sender in this process handed over (the recipient moves it on)
-/// from one an earlier process left behind (which must be sent again).
-static THIS_PROCESS_ATTEMPT_PREFIX: LazyLock<String> =
-    LazyLock::new(|| format!("{}/", uuid::Uuid::now_v7()));
-
-fn new_attempt_id() -> String {
-    format!("{}{}", *THIS_PROCESS_ATTEMPT_PREFIX, uuid::Uuid::now_v7())
+/// #1545: a delivery attempt id starts with the mailbox incarnation of the recipient session it
+/// was reserved for. Recovery can then tell a `Submitted` row handed to the recipient's current
+/// session (which moves the row on when it applies it) from one handed to a session that has
+/// since been replaced (an in-process reload or root resume, or an earlier process), whose
+/// in-memory queue was dropped.
+fn new_attempt_id(recipient_incarnation: &str) -> String {
+    format!("{recipient_incarnation}/{}", uuid::Uuid::now_v7())
 }
 
-fn reserved_by_this_process(attempt_id: Option<&str>) -> bool {
+fn reserved_for_incarnation(attempt_id: Option<&str>, recipient_incarnation: &str) -> bool {
     attempt_id
-        .is_some_and(|attempt_id| attempt_id.starts_with(THIS_PROCESS_ATTEMPT_PREFIX.as_str()))
+        .and_then(|attempt_id| attempt_id.split_once('/'))
+        .is_some_and(|(incarnation, _)| incarnation == recipient_incarnation)
 }
 
 impl AgentControl {
@@ -60,9 +59,11 @@ impl AgentControl {
                         })?;
                 }
                 // #1058's order writes Submitted before the hand-off, so a Submitting row is an
-                // attempt that was reserved but never handed over. It is requeued like an unapplied
-                // Submitted row, unless the recipient's rollout already applied it (a row written
-                // by an older build that marked Submitted only after the hand-off).
+                // attempt that was reserved but never handed over, and is requeued. An unapplied
+                // Submitted row is requeued too, unless its attempt names the recipient's current
+                // session (#1545, below). Either is quarantined instead when the recipient's
+                // rollout already applied it (a row written by an older build that marked
+                // Submitted only after the hand-off).
                 AgentMailboxPhase::Submitting | AgentMailboxPhase::Submitted => {
                     let phase = if message.phase == AgentMailboxPhase::Submitting {
                         "submitting"
@@ -96,19 +97,23 @@ impl AgentControl {
                         );
                         continue;
                     }
-                    // #1545: a Submitted row whose attempt this process reserved was handed over by
-                    // a live sender here (it writes Submitted before the hand-off), and the
-                    // recipient moves it on when it applies it. Requeueing it would deliver it
-                    // twice under the same message id. Rows left by an earlier process are
-                    // requeued below; Submitting rows were never handed over and are requeued too.
+                    // #1545: a Submitted row whose attempt names the recipient's current session
+                    // was handed to that session by a live sender (it writes Submitted before the
+                    // hand-off), and the session moves it on when it applies it. Requeueing it
+                    // would deliver it twice under the same message id. A row handed to a session
+                    // that has since been replaced is requeued below, as is a Submitting row,
+                    // which was never handed over.
                     if message.phase == AgentMailboxPhase::Submitted
-                        && reserved_by_this_process(message.attempt_id.as_deref())
+                        && reserved_for_incarnation(
+                            message.attempt_id.as_deref(),
+                            &thread.session.mailbox_incarnation,
+                        )
                     {
                         tracing::debug!(
                             %message_id,
                             %agent_id,
-                            "agent mailbox message was handed over by a live sender in this \
-                             process; recovery leaves it to the recipient"
+                            "agent mailbox message was handed to the recipient's current session; \
+                             recovery leaves it to that session"
                         );
                         continue;
                     }
@@ -229,12 +234,9 @@ impl AgentControl {
         }
         let last_task_message = last_task_message_from_communication(&communication);
         let state = self.upgrade()?;
-        let state_db = state
-            .get_thread(agent_id)
-            .await
-            .ok()
-            .and_then(|thread| thread.state_db());
-        if let Some(state_db) = state_db.as_ref() {
+        let thread = state.get_thread(agent_id).await.ok();
+        let state_db = thread.as_ref().and_then(|thread| thread.state_db());
+        if let Some((thread, state_db)) = thread.as_ref().zip(state_db.as_ref()) {
             let admission = state_db
                 .admit_agent_message(
                     agent_id,
@@ -311,7 +313,7 @@ impl AgentControl {
                     | AgentMailboxPhase::TerminalFailure,
                 ) => return Ok(message_id),
             };
-            let attempt_id = new_attempt_id();
+            let attempt_id = new_attempt_id(&thread.session.mailbox_incarnation);
             if !state_db
                 .begin_agent_message_submission(
                     &message_id,

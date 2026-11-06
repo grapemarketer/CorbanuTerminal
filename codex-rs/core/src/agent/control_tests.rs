@@ -2121,8 +2121,9 @@ async fn issue1545_recovery_skips_a_message_a_live_sender_handed_over() {
     );
 }
 
-/// #1545: a `Submitted` row whose attempt was reserved by an earlier process (a crash after the
-/// `Submitted` write, before the recipient applied it) is still recovered, exactly once.
+/// #1545: a `Submitted` row whose attempt names no session of this process (an earlier process
+/// crashed after the `Submitted` write, before the recipient applied it) is still recovered,
+/// exactly once.
 #[tokio::test]
 async fn issue1545_recovery_resends_a_submitted_message_from_an_earlier_process_once() {
     let (home, mut config) = test_config().await;
@@ -2203,13 +2204,171 @@ async fn issue1545_recovery_resends_a_submitted_message_from_an_earlier_process_
         "the stored attempt is recovery's, the side that delivered"
     );
 
-    // A second recovery in this process (another reload) finds recovery's own hand-off.
+    // A second recovery while the same recipient session is still live (no reload in between)
+    // finds recovery's own hand-off to that session, which the session moves on.
     harness
         .control
         .recover_inter_agent_communications(thread_id)
         .await
-        .expect("second recovery");
+        .expect("second recovery, same live recipient session");
     assert_eq!(captured(), 1, "the recovered message is delivered once");
+}
+
+/// #1545 review: a session receives a hand-off, shuts down without applying it, and is reloaded
+/// in the same process. Its in-memory queue was dropped with it, so recovery at the reload must
+/// send the message again, once, to the new session; recovery on that live session must not.
+#[tokio::test]
+async fn issue1545_a_hand_off_to_a_session_replaced_by_an_in_process_reload_is_resent_once() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, _parent_thread) = harness.start_paginated_thread().await;
+    let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let mut child_config = harness.config.clone();
+    child_config.model_provider = child_config
+        .model_providers
+        .get("openrouter")
+        .cloned()
+        .expect("OpenRouter provider");
+    child_config.model_provider_id = "openrouter".to_string();
+    child_config.model = Some("x-ai/grok-4.5".to_string());
+    let child_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            child_config,
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(agent_path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+                agent_class: None,
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn_agent should succeed")
+        .thread_id;
+    let first_session = harness.manager.get_thread(child_id).await.expect("child");
+    wait_for_initial_turn_to_finish(&first_session).await;
+    first_session
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .expect("child rollout should persist with v2 metadata");
+    let state_db = harness.state_db.clone().expect("state db");
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        agent_path,
+        Vec::new(),
+        "handed to a session that is then replaced".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let message_id = communication.message_id.clone().expect("stable message id");
+    let captured = || {
+        harness
+            .manager
+            .captured_ops()
+            .iter()
+            .filter(|(captured_thread_id, op)| {
+                *captured_thread_id == child_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication: captured }
+                            if captured == &communication
+                    )
+            })
+            .count()
+    };
+    let row = async || {
+        state_db
+            .get_agent_message(&message_id)
+            .await
+            .expect("mailbox lookup")
+            .expect("mailbox row")
+    };
+
+    // A live sender hands the message to the idle child (trigger_turn = false), so it waits in
+    // the session's input queue; the row is Submitted.
+    harness
+        .control
+        .send_persisted_inter_agent_communication(
+            child_id,
+            communication.clone(),
+            /*parent_turn_id*/ None,
+        )
+        .await
+        .expect("live sender");
+    assert_eq!(captured(), 1, "the live sender hands the message over once");
+    let handed_over = row().await;
+    assert_eq!(handed_over.phase, codex_state::AgentMailboxPhase::Submitted);
+
+    // The session shuts down without applying it and is unloaded.
+    first_session
+        .shutdown_and_wait()
+        .await
+        .expect("child thread should shut down");
+    assert!(harness.manager.remove_thread(&child_id).await.is_some());
+    assert!(
+        !first_session
+            .codex
+            .session
+            .has_applied_agent_message_id(&message_id)
+            .await,
+        "the first session never applied the message"
+    );
+    assert_eq!(
+        row().await.phase,
+        codex_state::AgentMailboxPhase::Submitted,
+        "the row is still Submitted for the session that was replaced"
+    );
+
+    // Reloaded in the same process: recovery sends it to the new session, once.
+    harness
+        .control
+        .ensure_v2_agent_loaded(harness.config.clone(), child_id)
+        .await
+        .expect("known v2 agent should reload");
+    let second_session = harness
+        .manager
+        .get_thread(child_id)
+        .await
+        .expect("reloaded child");
+    assert_ne!(
+        second_session.codex.session.mailbox_incarnation,
+        first_session.codex.session.mailbox_incarnation,
+        "the reload gives the thread a new session incarnation"
+    );
+    assert_eq!(
+        captured(),
+        2,
+        "after the reload the message is delivered exactly once, to the new session"
+    );
+    let resent = row().await;
+    assert_eq!(resent.phase, codex_state::AgentMailboxPhase::Submitted);
+    assert_ne!(
+        resent.attempt_id, handed_over.attempt_id,
+        "the stored attempt is the one that handed the message to the new session"
+    );
+
+    // Recovery on the live, non-reloaded new session leaves its hand-off alone.
+    harness
+        .control
+        .recover_inter_agent_communications(child_id)
+        .await
+        .expect("recovery on the live session");
+    assert_eq!(
+        captured(),
+        2,
+        "the hand-off to the current session is not sent again"
+    );
 }
 
 #[tokio::test]
