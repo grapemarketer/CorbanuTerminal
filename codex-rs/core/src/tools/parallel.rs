@@ -53,9 +53,20 @@ const STOP_TURN_AFTER_REFUSED_REPEATS: u32 = 8;
 /// normalization would insert (#1467). A call whose tool already finished keeps
 /// its real output, so a finished-then-killed call (for example a patch that was
 /// applied) is not reported as aborted (D244).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct PendingToolCalls {
     calls: std::sync::Mutex<Vec<PendingToolCall>>,
+    /// The running turn's file-change tracker, so the abort path can send the
+    /// turn's file-change summary as a regular turn end does (D282).
+    turn_diff_tracker: std::sync::Mutex<Option<SharedTurnDiffTracker>>,
+}
+
+impl std::fmt::Debug for PendingToolCalls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingToolCalls")
+            .field("calls", &*self.lock())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -106,6 +117,22 @@ impl PendingToolCalls {
                 })
             })
             .collect()
+    }
+
+    /// Remembers the running turn's file-change tracker (D282).
+    pub(crate) fn set_turn_diff_tracker(&self, tracker: &SharedTurnDiffTracker) {
+        *self
+            .turn_diff_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(tracker));
+    }
+
+    /// The tracker [`Self::set_turn_diff_tracker`] stored, if any.
+    pub(crate) fn turn_diff_tracker(&self) -> Option<SharedTurnDiffTracker> {
+        self.turn_diff_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PendingToolCall>> {

@@ -3,4 +3,10 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "process-hardening",
     crate_name = "codex_process_hardening",
+    # #1610: Bazel gives every local Windows test the same TEMP (the client's
+    # TMP), and a legacy sandbox session in another test target (such as
+    # windows-sandbox-rs's unit tests) labels that TEMP Low while it runs
+    # (#158). The PF-27-S08 probes check that the broker token cannot delete
+    # there outside such a session, so they must not run alongside one.
+    unit_test_tags = ["exclusive-if-local"],
 )
