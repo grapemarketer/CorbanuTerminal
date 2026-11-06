@@ -2703,6 +2703,7 @@ impl Classifier {
             .flatten()
             .chain(&wrapper_outputs)
             .chain(modified_outputs.iter().flatten())
+            .chain(&simple.zsh_writes)
         {
             work::step();
             if outputs::unseen_place(file) {

@@ -10873,12 +10873,14 @@ fn issue_1309_follow_up_checks_are_linear() {
 /// #1607: zsh reads `>!` as `>|` (also `>>!`, `&>!`, `&>>!`, `>&!`, `>>&!`
 /// and with a descriptor, `2>!`): `echo x >! ~/.zshrc` writes `~/.zshrc`.
 /// bash and dash write a file `!` and pass the next word on, so both
-/// readings count: the `!` file, the word after it as written, and that
-/// word as an argument. The `|` forms (`>>|`, `&>|`, `&>>|`, `>&|`, `>>&|`)
+/// readings count: the `!` file, and zsh's file judged as written only
+/// (bash's words are left as they were). The `|` forms (`>>|`, `&>|`, `&>>|`, `>&|`, `>>&|`)
 /// already asked; they stay so.
 #[test]
 fn issue1607_zsh_clobber_redirections_write() {
+    use ProtectedActionKind::Credentials;
     use ProtectedActionKind::Persistence;
+    use ProtectedActionKind::UnseenCode;
     for shell in ["zsh", "bash"] {
         let line = |script: &str| kind(&[shell, "-lc", script]);
         for op in [
@@ -10899,11 +10901,25 @@ fn issue1607_zsh_clobber_redirections_write() {
             "cd ~ && echo x >! .zshrc",
             "cd ~ && echo x >>!.zshenv",
             "echo x >! ~/.zshrc 2>&1",
+            "echo x >! $(echo ~/.zshrc)",
+            "echo x >!$(echo ~/.zshrc)",
+            "echo x >>! `echo ~/.zshrc`",
+            "echo x >! ~/$(echo .zshrc)",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
-        // bash runs git with the option the `>!` precedes.
+        // bash's words stay as they were: git runs with the option the
+        // `>!` precedes, `~` is still what grep reads (not a `-C` value),
+        // `read` still sets the variable it names.
         assert!(line("git >! -c core.pager=sh log").is_some(), "{shell}");
+        for (script, expected) in [
+            ("grep -r token >!-C ~", Credentials),
+            ("touch PAGER; read >! PAGE[R] <<< id; git log", UnseenCode),
+            ("read >! \"$n\" <<< x", UnseenCode),
+            ("declare >(:>!) \"$n=x\"", UnseenCode),
+        ] {
+            assert_eq!(line(script), Some(expected), "{shell} {script:?}");
+        }
         // Ordinary redirections and pipes, a `!` elsewhere, and a quoted
         // `!` (zsh writes a file `!`), stay as they were.
         for script in [
