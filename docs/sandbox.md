@@ -48,8 +48,10 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. Such folders
-deeper in your workspace aren't covered yet.
+has ended). Check its contents before you choose to load it. The same goes
+for such folders deeper in your workspace: one that is new, or was replaced,
+when the command ends is treated the same way, and commands can't change the
+ones that existed when they started.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

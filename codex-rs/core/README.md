@@ -213,10 +213,25 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user. Not covered:
-`.codex`/`.agents` folders below the top of a writable root (between the
-project root and the working directory), which commands can create or change
-whether or not they exist. The
+folder while a session runs is reported, including the user.
+
+`.codex`/`.agents` deeper in a writable root (Core loads them from every
+folder between the project root and its working directory) are covered too
+(#1541, D283). When a session starts, it lists every one below the top of
+its writable roots, with its file identity; it doesn't look inside `.git`
+folders, inside those it finds, or behind links (about 30 ms on a
+100,000-file workspace). Each one it finds gets the top-level ones'
+protection: an explicit Medium label, the capability-SID write deny and the
+tracked Everyone delete-child denies; if the write deny can't be added, the
+command doesn't start. When the session ends (or, for one that crashed, at
+the next sweep), every such entry that wasn't in its list as the same file
+is recorded as possibly planted, like the top-level ones: a new one, or one
+replaced (say, by moving a folder above it away and recreating it), even if
+the user had confirmed it before. While the session runs, Core treats such
+an entry as planted as soon as it appears, and confirming it is refused. A
+nested link named `.codex` or `.agents` is never protected (its target is
+the sandbox's choice) and counts as planted after every session in its root
+until confirmed again. The
 Everyone deny entries are visible in the folder's security settings while a
 session needs them. Each one a session adds is recorded first, in
 `delete-child-denies.json` next to the integrity-label records (#1506 item 1,
