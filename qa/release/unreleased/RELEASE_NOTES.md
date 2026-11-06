@@ -232,6 +232,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
 
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.
+
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
 - **WebSocket connections now honour IP-range entries in `NO_PROXY`** (#722,
@@ -292,14 +304,16 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   conversation as using outside content** (#1536). The check now runs before
   the result is recorded instead of after it.
 
-## Remote work: every network refusal ends the command as failed
+## Telegram `/status`: token estimates are not a thread total
 
-- **A network request the remote environment's proxy refuses on its own now
-  ends the command as failed**, with the reason, as it does locally (#722,
-  D278). This covers blocked sites, local or private addresses, requests
-  limited mode doesn't allow, and requests to sites not on the allowlist when
-  no managed network rules are set. Before, these were refused but the
-  command could still end normally.
-- **Only stricter:** the remote side can only report a refusal; nothing it
-  sends can allow a request. Remote environments running an older version
-  don't send these reports, and behave as before.
+- **`/status` no longer shows unknown usage as a free thread.** After
+  compaction or rollback on a thread whose provider never reported usage, it
+  said `Thread total: 0 tokens (0 in, 0 out)`. It now says
+  `Thread total: not reported by the provider`, and `Context` shows the token
+  estimate (#1570).
+- **A full context window is shown as context, not as the thread's cost.**
+  When the window is exceeded, `Context` shows the full window and
+  `Thread total` stays the provider-reported usage, computed from the
+  provider's counters, which the fill now keeps (#1583). After compaction,
+  `Context` shows the new, smaller estimate rather than a full window, and
+  `/new` starts the new thread without the previous thread's total.
