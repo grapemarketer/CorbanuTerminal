@@ -11161,3 +11161,72 @@ fn issue_1309_follow_up_checks_are_linear() {
         });
     }
 }
+
+/// #1636: options a brace group or an empty expansion makes are judged in
+/// git's command as the shell cuts it, with no quote on the line: the word
+/// lexer cuts the command first or does not expand the group.
+#[test]
+fn issue1636_brace_made_git_options_ask_without_quotes() {
+    use ProtectedActionKind::UnseenCode;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // An operator joined to the group.
+            "git clone ./r d {-q,--upload-pack=./x}|cat",
+            "git clone ./r d {-q,--upload-pack=./x}&&echo ok",
+            "git clone ./r d {-q,--upload-pack=./x};x",
+            "git clone ./r d {-q,-u./x}|cat",
+            "git fetch origin {-q,--upload-pack=./x}|cat",
+            "git clone r d {-q,--config=core.sshCommand=./x}|cat",
+            // Cuts at `}`, `{`, `&>`, `<&`, `>|`, `${…}` and `$IFS`.
+            "git clone -b x,} r {--upload-pack=./x,} d",
+            "git clone -b }x r {--upload-pack=./x,} d",
+            "git clone -b {} r {--upload-pack=./x,} d",
+            "git clone -b x,{ r {--upload-pack=./x,} d",
+            "git clone -b {a,}} r {--upload-pack=./x,} d",
+            "git clone -b {,}} r {--upload-pack=./x,} d",
+            "git clone -b {{,} r {--upload-pack=./x,} d",
+            "git clone -b ${N:-x;y} r {--upload-pack=./x,} d",
+            "git clone -b ${N:- } r {--upload-pack=./x,} d",
+            "git clone -b x${IFS}} r {--upload-pack=./x,} d",
+            "git clone -b x$IFS{ r {--upload-pack=./x,} d",
+            "git clone r <&0 {--upload-pack=./x,} d",
+            "git clone r >|log {--upload-pack=./x,} d",
+            // Ranges, a group after one that does not expand, `$((…))`.
+            "git clone --{u..u}pload-pack=./x r d",
+            "git clone ${N}{--upload-pack=./x,} r d",
+            "git clone -b $((1)) r {--upload-pack=./x,} d",
+            // A brace-made command word.
+            "true;{git,clone} ./r d --upload-pack=./x",
+            "true;{gi,x}t clone ./r d --upload-pack=./x",
+            // Substitution openers in a comment.
+            "echo a # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+            // An empty expansion before an option.
+            "git clone ${N}--upload-pack=./x r d",
+            "git clone $N--upload-pack=./x r d",
+            "git clone $(true)--upload-pack=./x r d",
+            // Nested and inside a function.
+            "f() { git clone r d {-q,--upload-pack=./x}|cat; }; f",
+            "sh -c \"git clone r d {-q,--upload-pack=./x}|cat\"",
+        ] {
+            assert_eq!(line(script), Some(UnseenCode), "{shell} {script:?}");
+        }
+        // Ordinary lines stay as they were.
+        for script in [
+            "git add src/{a,b}.rs | cat",
+            "git add src/{a,b}.rs && git commit -m msg",
+            "git diff stash@{0}..stash@{1} | head",
+            "git log --oneline -{1..3} | cat",
+            "git show HEAD@{1} > /tmp/x",
+            "git checkout {main,dev} 2>&1",
+            "git rm -r --cached {a,b}/ ; git status",
+            "for f in {1..3}; do git log -$f; done",
+            "git add src/{a..c}.rs",
+            "git clone {c}{--upload-pack=./x,} r d",
+            "git log -n ${N}5 | cat",
+            "git log $RANGE --stat",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}

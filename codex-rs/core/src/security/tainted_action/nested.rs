@@ -16,6 +16,7 @@ use super::GitConfigWrites;
 use super::MAX_FOLDER_BYTES;
 use super::ProtectedActionKind;
 use super::WRITERS;
+use super::braces;
 use super::certain_cd;
 use super::code_variables;
 use super::git_config;
@@ -886,6 +887,35 @@ impl Classifier {
         loops: &launched_git::PositionalLoops,
         found: &mut Found,
     ) {
+        self.judge_git_words(texts, words, loops, found);
+        // #1636: and on the words as the shell makes them. This reading cuts
+        // the command where the shell does, so an option a brace group or an
+        // empty expansion makes is seen even where the word lexer cuts the
+        // command first (`git clone r d {-q,--upload-pack=./x}|cat`,
+        // `-b }x`, `$((1))`, a comment) or does not expand the group
+        // (`--{u..u}pload-pack`, `${N}{--upload-pack=./x,}`).
+        match shell_made(words) {
+            ShellMade::Same => {}
+            ShellMade::Words(made) => {
+                let texts: Vec<String> = made.iter().map(|word| word.text.clone()).collect();
+                self.judge_git_words(&texts, &made, loops, found);
+            }
+            ShellMade::TooMany => {
+                if texts.iter().any(|text| spells_git(text)) {
+                    note_git(found, ProtectedActionKind::UnseenCode);
+                }
+            }
+        }
+    }
+
+    /// [`Self::judge_git`] on one reading of the command's words.
+    fn judge_git_words(
+        &self,
+        texts: &[String],
+        words: &[Word],
+        loops: &launched_git::PositionalLoops,
+        found: &mut Found,
+    ) {
         if !texts.iter().any(|text| text.to_lowercase().contains("git")) {
             return;
         }
@@ -1681,6 +1711,98 @@ fn cut_matters(words: &[Word]) -> bool {
                 judged(part)
             })
     })
+}
+
+enum ShellMade {
+    Same,
+    Words(Vec<Word>),
+    TooMany,
+}
+
+/// #1636: a command's words as the shell makes them, where that may differ
+/// from this reading: brace groups expanded ([`braces::expand`]; in a word
+/// with quoted text only when it has an unquoted group), and an unknown
+/// expansion (or a substitution's output) at the start of a word that then
+/// reads as an option taken as empty (`${N}--upload-pack=./x`).
+fn shell_made(words: &[Word]) -> ShellMade {
+    /// Words one word may expand to, as the word lexer allows.
+    const MAX_WORDS: usize = 64;
+    let mut made = Vec::with_capacity(words.len());
+    let mut changed = false;
+    for word in words {
+        work::step();
+        let alternatives = if word.text.contains('{') && (!word.quoted || word.brace_expansion) {
+            match braces::expand(&word.text, MAX_WORDS) {
+                Some(alternatives) => alternatives,
+                None => return ShellMade::TooMany,
+            }
+        } else {
+            vec![word.text.clone()]
+        };
+        changed |= alternatives.len() != 1 || alternatives[0] != word.text;
+        for alternative in alternatives {
+            work::step();
+            let text = match word.dynamic.then(|| after_empty_expansions(&alternative)) {
+                Some(rest) if rest.starts_with('-') && rest.len() < alternative.len() => {
+                    changed = true;
+                    rest.to_string()
+                }
+                _ => alternative,
+            };
+            made.push(Word {
+                text,
+                brace_expansion: false,
+                ..word.clone()
+            });
+        }
+    }
+    if changed {
+        ShellMade::Words(made)
+    } else {
+        ShellMade::Same
+    }
+}
+
+/// #1636: `text` after the parameter expansions (`$N`, `${N}`, `$1`) and
+/// substitution outputs it starts with, which may be empty.
+fn after_empty_expansions(mut text: &str) -> &str {
+    loop {
+        work::step();
+        if let Some(rest) = text.strip_prefix(UNSEEN_OUTPUT) {
+            text = rest;
+        } else if let Some(rest) = text.strip_prefix("${") {
+            let mut depth = 1usize;
+            let end = rest.char_indices().find_map(|(at, ch)| {
+                work::step();
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(at)
+            });
+            match end {
+                Some(end) => text = &rest[end + 1..],
+                None => return text,
+            }
+        } else if let Some(rest) = text.strip_prefix('$') {
+            let name = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            let length =
+                if rest.starts_with(|ch: char| ch.is_ascii_digit() || "@*#?-$!".contains(ch)) {
+                    1
+                } else {
+                    name
+                };
+            if length == 0 {
+                return text;
+            }
+            text = &rest[length..];
+        } else {
+            return text;
+        }
+    }
 }
 
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).
