@@ -34,6 +34,7 @@ fn pf_27_s08_child_entry() {
         Ok("files") => file_report(),
         Ok("credential") => credential_report(),
         Ok("network") => network_report(),
+        Ok("tokendiag") => token_diagnostics(),
         _ => return,
     };
     let line: Vec<String> = report.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -91,6 +92,13 @@ fn pf_27_s08_broker_cannot_write_the_users_files() {
         let joined = std::env::join_paths(&dirs).expect("dirs");
         let report = run_child("files", &[(DIRS_ENV, joined)], confinement);
         eprintln!("pf27s08: files ({role}): {report:?}");
+        let unexpected = report.iter().any(|(key, value)| {
+            value != expected && !(role == "confined" && key == "locallow_delete")
+        });
+        if unexpected {
+            let dirs: Vec<PathBuf> = bases.iter().map(|(_, base)| base.join(role)).collect();
+            print_file_diagnostics(&dirs, confinement);
+        }
         assert_eq!(
             report.len(),
             bases.len() * FILE_OPERATIONS.len(),
@@ -280,6 +288,189 @@ fn prepare_files(dir: &Path) {
 
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// #1610: when a file probe's result is unexpected, print why it may have
+/// been allowed: the security descriptor (owner, group, DACL, mandatory
+/// label) of the probe files, the probe directory and each of its
+/// ancestors, the volume's file system, and the tokens of this process and
+/// of a child under `confinement` (integrity, groups, restricting SIDs).
+fn print_file_diagnostics(dirs: &[PathBuf], confinement: Confinement) {
+    for dir in dirs {
+        let files = ["existing.txt", "rename.txt", "delete.txt"].map(|name| dir.join(name));
+        let ancestors = dir.ancestors().map(Path::to_path_buf);
+        for path in files.into_iter().chain(ancestors) {
+            eprintln!("pf27s08-diag: sd {}: {}", path.display(), diag::sddl(&path));
+        }
+        eprintln!(
+            "pf27s08-diag: volume of {}: {}",
+            dir.display(),
+            diag::volume(dir)
+        );
+    }
+    eprintln!("pf27s08-diag: this process: {:?}", token_diagnostics());
+    match try_run_child("tokendiag", &[], confinement) {
+        Ok(report) => eprintln!("pf27s08-diag: child ({confinement:?}): {report:?}"),
+        Err(err) => eprintln!("pf27s08-diag: child ({confinement:?}): {err}"),
+    }
+}
+
+/// The current token's user, integrity level, groups and restricting SIDs
+/// (`SID:attributes`, `;`-separated, so a child can report them).
+fn token_diagnostics() -> Report {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::TOKEN_MANDATORY_LABEL;
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::Security::TOKEN_USER;
+    use windows_sys::Win32::Security::TokenGroups;
+    use windows_sys::Win32::Security::TokenIntegrityLevel;
+    use windows_sys::Win32::Security::TokenRestrictedSids;
+    use windows_sys::Win32::Security::TokenUser;
+
+    let clean = |text: String| text.replace([',', '='], " ");
+    let mut report = Report::new();
+    let token = match super::open_current_token(TOKEN_QUERY) {
+        Ok(token) => token,
+        Err(err) => {
+            report.insert("error".to_string(), clean(err.to_string()));
+            return report;
+        }
+    };
+    let token = token.as_raw_handle() as HANDLE;
+    let sid = |sid| super::sid_string(sid).unwrap_or_else(|err| clean(format!("?{err}")));
+    let list = |class| match super::token_information(token, class) {
+        Ok(buffer) => super::groups(&buffer)
+            .iter()
+            .map(|group| format!("{}:{:x}", sid(group.Sid), group.Attributes))
+            .collect::<Vec<_>>()
+            .join(";"),
+        Err(err) => clean(format!("error {err}")),
+    };
+    let user = super::token_information(token, TokenUser).map(|buffer| {
+        // SAFETY: the buffer holds a TOKEN_USER whose SID points into it.
+        sid(unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid })
+    });
+    let integrity = super::token_information(token, TokenIntegrityLevel).map(|buffer| {
+        // SAFETY: the buffer holds a TOKEN_MANDATORY_LABEL whose SID points
+        // into it.
+        sid(unsafe { (*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()).Label.Sid })
+    });
+    for (key, value) in [("user", user), ("integrity", integrity)] {
+        let value = value.unwrap_or_else(|err| clean(format!("error {err}")));
+        report.insert(key.to_string(), value);
+    }
+    report.insert("groups".to_string(), list(TokenGroups));
+    report.insert("restricted".to_string(), list(TokenRestrictedSids));
+    report
+}
+
+/// Security descriptor and volume queries for the #1610 diagnostics.
+mod diag {
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::path::Path;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
+    use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
+    use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str().encode_wide().chain(Some(0)).collect()
+    }
+
+    fn utf16(buffer: &[u16]) -> String {
+        let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..len])
+    }
+
+    /// Owner, group, DACL and mandatory label as SDDL (no `S:` part: no
+    /// explicit label, so medium by default).
+    pub(super) fn sddl(path: &Path) -> String {
+        let info = OWNER_SECURITY_INFORMATION
+            | GROUP_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION
+            | LABEL_SECURITY_INFORMATION;
+        let name = wide(path);
+        let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        // SAFETY: `name` is NUL-terminated; `descriptor` is freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                info,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != 0 {
+            return format!("error {status}");
+        }
+        let mut text: *mut u16 = ptr::null_mut();
+        // SAFETY: `descriptor` is valid; `text` is freed below.
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor,
+                SDDL_REVISION_1,
+                info,
+                &mut text,
+                ptr::null_mut(),
+            )
+        };
+        let result = if ok == 0 {
+            format!("error {}", std::io::Error::last_os_error())
+        } else {
+            // SAFETY: `text` is a NUL-terminated string from the call.
+            let result = unsafe {
+                let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+                String::from_utf16_lossy(std::slice::from_raw_parts(text, len))
+            };
+            // SAFETY: allocated with LocalAlloc by the call.
+            unsafe { LocalFree(text as HLOCAL) };
+            result
+        };
+        // SAFETY: allocated with LocalAlloc by GetNamedSecurityInfoW.
+        unsafe { LocalFree(descriptor as HLOCAL) };
+        result
+    }
+
+    /// The volume's mount point, file system and file system flags.
+    pub(super) fn volume(path: &Path) -> String {
+        let name = wide(path);
+        let mut root = [0_u16; 520];
+        let mut file_system = [0_u16; 64];
+        let mut flags = 0_u32;
+        // SAFETY: every buffer is writable for the length passed.
+        let ok = unsafe {
+            GetVolumePathNameW(name.as_ptr(), root.as_mut_ptr(), root.len() as u32) != 0
+                && GetVolumeInformationW(
+                    root.as_ptr(),
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    &mut flags,
+                    file_system.as_mut_ptr(),
+                    file_system.len() as u32,
+                ) != 0
+        };
+        if !ok {
+            return format!("error {}", std::io::Error::last_os_error());
+        }
+        format!("{} {} flags 0x{flags:x}", utf16(&root), utf16(&file_system))
+    }
 }
 
 fn outcome(result: std::io::Result<()>) -> String {
