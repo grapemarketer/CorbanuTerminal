@@ -204,7 +204,7 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
             sub.join("codex-renamed").exists() || sub.join("codex-moved").exists(),
             new_agents.is_dir(),
             planted(&new_agents),
-            planted(&canonical(&dot_codex)),
+            planted(&canonical(&sub).join(".codex")),
         ),
         (
             0,
