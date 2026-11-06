@@ -1920,7 +1920,7 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
                 "/d".to_string(),
                 "/c".to_string(),
                 format!(
-                    "echo d256> d256.txt && \"{git}\" add d256.txt && \"{git}\" -c user.name=d256 -c user.email=d256@example.com -c commit.gpgsign=false commit -q -m d256 && \"{git}\" log --format=d256-%s"
+                    "(echo d256> d256.txt && \"{git}\" add d256.txt && \"{git}\" -c user.name=d256 -c user.email=d256@example.com -c commit.gpgsign=false commit -q -m d256 && \"{git}\" log --format=d256-%s) 2>&1"
                 ),
             ],
             &["d256-d256"],
