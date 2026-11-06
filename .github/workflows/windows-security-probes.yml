@@ -148,6 +148,14 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact acl::tests::d263_delete_deny_that_cannot_be_written_is_an_error --nocapture --test-threads=1 2>&1 | tee d263-1542.log
           grep -q "test result: ok. 1 passed" d263-1542.log
           rm d263-1542.log
+      - name: D261 denies without the tree walk match it (D285, #1542 item 6)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::d285_ --nocapture --test-threads=1 2>&1 | tee d285.log
+          grep -q "test result: ok. 8 passed" d285.log
+          rm d285.log
       - name: Credential file watch (#442)
         if: ${{ !cancelled() }}
         shell: bash
@@ -291,6 +299,9 @@ jobs:
             $out
             if ($code -ne 0) { throw "#1542 item 3 failed in a normal session" }
             if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1542 item 3 did not run in a normal session" }
+            Assert-Tests $sandbox 'acl::delete_child::tests::d285_' 8
+            & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::d285_', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D285 ACL comparison failed in a normal session" }
             Assert-Tests $sandbox 'credential_watch' 18
             & $medium -Program $sandbox -Arguments @('credential_watch', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#442 credential watch failed in a normal session" }

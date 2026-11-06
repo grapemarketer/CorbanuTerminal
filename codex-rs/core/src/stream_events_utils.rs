@@ -94,6 +94,8 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
+    // Check before recording (#1536): a turn killed in between would skip it.
+    mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
     sess.record_conversation_items_from(
         turn_context,
         std::slice::from_ref(item),
@@ -114,7 +116,6 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
             .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &turn_context.sub_id)
             .await;
     }
-    mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
     let has_memory_citation = if let Some(memory_citation) =
         finalized_facts.and_then(|facts| facts.memory_citation.as_ref())
     {
