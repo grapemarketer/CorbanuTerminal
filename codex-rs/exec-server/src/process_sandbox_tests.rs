@@ -70,6 +70,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
         HashMap::new(),
         Some(&runtime_paths),
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare sandboxed request");
@@ -138,6 +139,7 @@ async fn sandbox_request_routes_custom_arg0_to_inner_helper() {
         HashMap::new(),
         Some(&runtime_paths),
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare sandboxed request");
@@ -201,6 +203,7 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         HashMap::new(),
         Some(&runtime_paths),
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare managed-network sandbox request");
@@ -241,6 +244,7 @@ async fn native_request_preserves_native_launch_fields() {
         env.clone(),
         /*runtime_paths*/ None,
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare native request");
@@ -293,6 +297,7 @@ async fn native_request_handles_remote_proxy_config_for_platform() {
 
     let prepared = prepare_exec_request(
         &params, env, /*runtime_paths*/ None, /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare request with executor-local proxy");
@@ -365,6 +370,7 @@ async fn disabled_remote_proxy_config_is_rejected_before_exporting_ports() {
         HashMap::new(),
         /*runtime_paths*/ None,
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .err()
@@ -422,6 +428,7 @@ async fn managed_network_selects_elevated_windows_spawn() {
         HashMap::new(),
         Some(&runtime_paths),
         /*network_policy_decider*/ None,
+        /*network_denial_reporter*/ None,
     )
     .await
     .expect("prepare sandboxed request");

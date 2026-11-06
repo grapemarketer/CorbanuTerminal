@@ -272,3 +272,15 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   to open an OpenAI-worded key prompt that ended in
   `Provider API-key selection is no longer available`. The list now starts on
   **Corbanu API**, whose wallet and API-key setup runs after **Done**.
+
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.

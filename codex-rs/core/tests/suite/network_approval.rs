@@ -1721,6 +1721,100 @@ async fn remote_limited_network_mode_still_fails_closed_without_asking() -> Resu
     Ok(())
 }
 
+/// #722 (D278): a request the remote proxy refuses on its own ends the
+/// command as failed, with the refusal, and nobody is asked.
+async fn assert_remote_own_denial_fails_command(
+    test: &TestCodex,
+    server: &wiremock::MockServer,
+    call_id: &str,
+    expected_detail: &str,
+) -> Result<()> {
+    let remote = test.executor_environment().selection().clone();
+    assert_eq!(remote.environment_id, REMOTE_ENVIRONMENT_ID);
+    let responses = mount_exec_network_turn(
+        server,
+        &format!("resp-{call_id}"),
+        call_id,
+        network_fetch_args(REMOTE_ENVIRONMENT_ID),
+    )
+    .await?;
+    submit_managed_network_turn(
+        test,
+        "fetch from the remote environment",
+        vec![remote],
+        ApprovalsReviewer::User,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        wait_for_completion_without_network_prompt(test),
+    )
+    .await
+    .context("the remote refusal should end the turn without a prompt")?;
+
+    let output = responses
+        .function_call_output_text(call_id)
+        .context("expected remote network output")?;
+    assert!(output.starts_with("exec_command failed"), "{output}");
+    assert!(
+        output.ends_with(&format!(
+            "Network access to \"{NETWORK_TEST_HOST}\" was blocked: {expected_detail}."
+        )),
+        "{output}"
+    );
+    Ok(())
+}
+
+/// #722 (D278): a blocked site (denylist) refused by the remote proxy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_blocked_site_ends_command_as_failed() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = network_unified_exec_test(
+        &server,
+        "full",
+        /*managed_requirements*/ true,
+        &format!("\n[permissions.workspace.network.domains]\n\"{NETWORK_TEST_HOST}\" = \"deny\"\n"),
+    )
+    .await?;
+    assert_remote_own_denial_fails_command(
+        &test,
+        &server,
+        "exec-remote-blocked-site",
+        "domain is explicitly denied by policy and cannot be approved from this prompt",
+    )
+    .await
+}
+
+/// #722 (D278): with no managed network rules nothing on this machine
+/// decides a remote miss; the remote proxy's refusal still ends the command
+/// as failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_miss_without_managed_rules_ends_command_as_failed() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test =
+        network_unified_exec_test(&server, "full", /*managed_requirements*/ false, "").await?;
+    assert_remote_own_denial_fails_command(
+        &test,
+        &server,
+        "exec-remote-unmanaged-miss",
+        "domain is not on the allowlist for the current sandbox mode",
+    )
+    .await
+}
+
 async fn managed_network_unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
     managed_network_unified_exec_test_in_mode(server, "limited").await
 }
@@ -1728,6 +1822,16 @@ async fn managed_network_unified_exec_test(server: &wiremock::MockServer) -> Res
 async fn managed_network_unified_exec_test_in_mode(
     server: &wiremock::MockServer,
     mode: &str,
+) -> Result<TestCodex> {
+    network_unified_exec_test(server, mode, /*managed_requirements*/ true, "").await
+}
+
+/// `extra_network_toml` is appended to the profile's network table.
+async fn network_unified_exec_test(
+    server: &wiremock::MockServer,
+    mode: &str,
+    managed_requirements: bool,
+    extra_network_toml: &str,
 ) -> Result<TestCodex> {
     let home = Arc::new(TempDir::new()?);
     fs::write(
@@ -1742,6 +1846,7 @@ async fn managed_network_unified_exec_test_in_mode(
 enabled = true
 mode = "{mode}"
 allow_local_binding = true
+{extra_network_toml}
 "#
         ),
     )?;
@@ -1753,21 +1858,45 @@ allow_local_binding = true
         /*exclude_slash_tmp*/ false,
     );
     let permission_profile_for_config = permission_profile.clone();
-    let mut builder = test_codex()
-        .with_home(home)
-        .with_cloud_config_bundle(managed_network_requirements_loader())
-        .with_config(move |config| {
-            config.use_experimental_unified_exec_tool = true;
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("test config should allow feature update");
-            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config
-                .permissions
-                .set_permission_profile(permission_profile_for_config)
-                .expect("set permission profile");
-        });
+    // Without managed requirements the harness's config load leaves the
+    // proxy off, so build the profile's proxy as a user config would.
+    let unmanaged_network = (!managed_requirements)
+        .then(|| {
+            let proxy = codex_network_proxy::NetworkProxyConfig {
+                enabled: true,
+                mode: match mode {
+                    "full" => codex_network_proxy::NetworkMode::Full,
+                    _ => codex_network_proxy::NetworkMode::Limited,
+                },
+                allow_local_binding: true,
+                ..Default::default()
+            };
+            codex_core::config::NetworkProxySpec::from_config_and_constraints(
+                proxy,
+                /*requirements*/ None,
+                &permission_profile,
+            )
+        })
+        .transpose()?;
+    let mut builder = test_codex().with_home(home);
+    if managed_requirements {
+        builder = builder.with_cloud_config_bundle(managed_network_requirements_loader());
+    }
+    let mut builder = builder.with_config(move |config| {
+        if let Some(network) = unmanaged_network.clone() {
+            config.permissions.network = Some(network);
+        }
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .permissions
+            .set_permission_profile(permission_profile_for_config)
+            .expect("set permission profile");
+    });
     let test = builder.build_with_remote_and_local_env(server).await?;
     // In the remote lane `config.cwd` is the container-side cwd, but these
     // tests also run commands in the local environment with that same cwd.
@@ -1775,9 +1904,10 @@ allow_local_binding = true
     if core_test_support::is_remote_test_environment() {
         fs::create_dir_all(&test.config.cwd)?;
     }
-    assert!(
+    assert_eq!(
         test.config.managed_network_requirements_enabled(),
-        "expected managed network requirements to be enabled"
+        managed_requirements,
+        "managed network requirements"
     );
     assert!(
         test.config.permissions.network.is_some(),

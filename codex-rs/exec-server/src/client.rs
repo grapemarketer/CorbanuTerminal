@@ -11,6 +11,9 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::BlockedRequestArgs;
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -103,6 +106,11 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::MAX_NETWORK_DENIED_PROTOCOL_BYTES;
+use crate::protocol::MAX_NETWORK_POLICY_HOST_BYTES;
+use crate::protocol::MAX_NETWORK_POLICY_REASON_BYTES;
+use crate::protocol::NETWORK_DENIED_METHOD;
+use crate::protocol::NetworkDeniedNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
@@ -187,7 +195,11 @@ pub(crate) struct SessionState {
     next_write_id: AtomicU64,
     network_policy_controller: ArcSwapOption<NetworkPolicyDecisionController>,
     network_policy_cancelled: CancellationToken,
+    /// Records the executor's own network denials (#722, D278).
+    network_denial_observer: ArcSwapOption<NetworkDenialObserver>,
 }
+
+struct NetworkDenialObserver(Arc<dyn BlockedRequestObserver>);
 
 #[derive(Clone)]
 struct NetworkPolicyDecisionController {
@@ -879,7 +891,17 @@ impl ExecServerClient {
         &self,
         params: ExecParams,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        network_denial_observer: Option<Arc<dyn BlockedRequestObserver>>,
     ) -> Result<Session, ExecServerError> {
+        let reports_denials = params
+            .network_proxy
+            .as_ref()
+            .is_some_and(|launch| launch.report_denials);
+        if reports_denials != network_denial_observer.is_some() {
+            return Err(ExecServerError::Protocol(
+                "network denial reports must match the configured observer".to_string(),
+            ));
+        }
         let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()
@@ -915,6 +937,11 @@ impl ExecServerClient {
                 state
                     .network_policy_controller
                     .store(Some(Arc::new(controller.clone())));
+            }
+            if let Some(observer) = network_denial_observer.as_ref() {
+                state
+                    .network_denial_observer
+                    .store(Some(Arc::new(NetworkDenialObserver(Arc::clone(observer)))));
             }
             if let Err(error) = self.inner.insert_session(&process_id, Arc::clone(&state)) {
                 self.inner.finish_process_start();
@@ -1165,6 +1192,7 @@ impl SessionState {
             next_write_id: AtomicU64::new(1),
             network_policy_controller: ArcSwapOption::empty(),
             network_policy_cancelled: CancellationToken::new(),
+            network_denial_observer: ArcSwapOption::empty(),
         }
     }
 
@@ -1485,6 +1513,7 @@ impl Inner {
         self.sessions.store(Arc::new(next_sessions));
         expected.network_policy_cancelled.cancel();
         expected.network_policy_controller.store(None);
+        expected.network_denial_observer.store(None);
     }
 
     fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
@@ -1497,6 +1526,54 @@ impl Inner {
         self.sessions.store(Arc::new(HashMap::new()));
         drained_sessions
     }
+}
+
+/// A denial the executor reported, as this machine's proxy would record it.
+/// Its strings are untrusted: anything malformed is replaced by a neutral
+/// value, never dropped, because a denial can only end a command as failed.
+fn executor_network_denial(params: NetworkDeniedNotification) -> BlockedRequest {
+    let NetworkDeniedNotification {
+        process_id: _,
+        protocol,
+        host,
+        port,
+        reason,
+    } = params;
+    let host = if host.len() <= MAX_NETWORK_POLICY_HOST_BYTES
+        && !host.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        host
+    } else {
+        String::new()
+    };
+    let is_code = |value: &str, max: usize| {
+        !value.is_empty()
+            && value.len() <= max
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':'))
+    };
+    let protocol = if is_code(&protocol, MAX_NETWORK_DENIED_PROTOCOL_BYTES) {
+        protocol
+    } else {
+        "unknown".to_string()
+    };
+    let reason = if is_code(&reason, MAX_NETWORK_POLICY_REASON_BYTES) {
+        reason
+    } else {
+        "executor_denied".to_string()
+    };
+    BlockedRequest::new(BlockedRequestArgs {
+        host,
+        reason,
+        client: None,
+        method: None,
+        mode: None,
+        protocol,
+        decision: Some("deny".to_string()),
+        source: Some("executor".to_string()),
+        port,
+    })
 }
 
 fn disconnected_message(reason: Option<&str>) -> String {
@@ -1525,6 +1602,7 @@ fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     for (_, session) in sessions {
         session.network_policy_cancelled.cancel();
         session.network_policy_controller.store(None);
+        session.network_denial_observer.store(None);
         // Sessions synthesize a closed read response and emit a pushed Failed
         // event. That covers both polling consumers and streaming consumers
         // such as environment-backed MCP stdio.
@@ -1593,6 +1671,21 @@ async fn handle_server_notification(
             inner
                 .handle_http_body_delta_notification(notification.params)
                 .await?;
+        }
+        NETWORK_DENIED_METHOD => {
+            let params: NetworkDeniedNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let observer = inner
+                .get_session(&params.process_id)
+                .and_then(|session| session.network_denial_observer.load_full());
+            if let Some(observer) = observer {
+                // Awaited before later notifications (the process's exit), so
+                // the denial is recorded before the command's result.
+                observer
+                    .0
+                    .on_blocked_request(executor_network_denial(params))
+                    .await;
+            }
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");
@@ -1793,6 +1886,7 @@ mod tests {
                     network_proxy: None,
                 },
                 /*network_policy_decider*/ None,
+                /*network_denial_observer*/ None,
             )
             .instrument(parent_span)
             .await
