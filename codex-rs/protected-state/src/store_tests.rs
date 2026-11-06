@@ -31,6 +31,26 @@ fn checkpoint(sequence: u64) -> IntegrityCheckpoint {
     }
 }
 
+/// Reopens a root this test just dropped. `ControllerRoot` holds an `flock`
+/// on its lock file; a sibling test that forks (to spawn a child) while the
+/// descriptor is open keeps a duplicate of it until the child execs, so the
+/// lock can outlive `drop` for a moment and `open` reports `Conflict` (#1448).
+/// Waits that out; any other result is returned as is.
+fn reopen(
+    registry: &std::path::Path,
+    storage: &std::path::Path,
+) -> Result<ControllerRoot, RootError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match ControllerRoot::open(registry, storage) {
+            Err(RootError::Conflict) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
 fn fixture() -> (tempfile::TempDir, ControllerRoot) {
     let temp = tempfile::tempdir().unwrap();
     for name in ["registry", "storage"] {
@@ -71,8 +91,7 @@ fn pf20_s03_enrollment_cas_restart_and_wrong_namespace() {
         RootError::Conflict
     );
     drop(root);
-    let restarted =
-        ControllerRoot::open(&temp.path().join("registry"), &temp.path().join("storage")).unwrap();
+    let restarted = reopen(&temp.path().join("registry"), &temp.path().join("storage")).unwrap();
     assert_eq!(
         IntegrityRootStore::load(&restarted),
         Ok(Some(checkpoint(/*sequence*/ 2)))
@@ -181,8 +200,7 @@ fn pf20_s03_lost_corrupt_key_registry_head_and_partial_enrollment_deny() {
         drop(root);
         fs::remove_file(temp.path().join(target)).unwrap();
         assert!(
-            ControllerRoot::open(&temp.path().join("registry"), &temp.path().join("storage"))
-                .is_err(),
+            reopen(&temp.path().join("registry"), &temp.path().join("storage")).is_err(),
             "{target}"
         );
     }
@@ -191,10 +209,7 @@ fn pf20_s03_lost_corrupt_key_registry_head_and_partial_enrollment_deny() {
         fs::write(temp.path().join(target), b"torn").unwrap();
         assert!(IntegrityRootStore::load(&root).is_err(), "{target}");
         drop(root);
-        assert!(
-            ControllerRoot::open(&temp.path().join("registry"), &temp.path().join("storage"))
-                .is_err()
-        );
+        assert!(reopen(&temp.path().join("registry"), &temp.path().join("storage")).is_err());
     }
     let (temp, root) = fixture();
     drop(root);
@@ -223,8 +238,7 @@ fn pf20_s03_torn_pending_and_symlink_replacements_latch_unavailable() {
         Err(IntegrityRootError::Unavailable)
     );
     drop(root);
-    let root =
-        ControllerRoot::open(&temp.path().join("registry"), &temp.path().join("storage")).unwrap();
+    let root = reopen(&temp.path().join("registry"), &temp.path().join("storage")).unwrap();
     fs::rename(
         temp.path().join("storage/head"),
         temp.path().join("storage/head-copy"),
@@ -268,7 +282,7 @@ fn pf20_s03_policy_anchor_retains_exact_existing_payload() {
     assert_eq!(root.load_policy(), Ok(Some(value.clone())));
     drop(root);
     assert_eq!(
-        ControllerRoot::open(&policy_registry, &policy_storage)
+        reopen(&policy_registry, &policy_storage)
             .unwrap()
             .load_policy(),
         Ok(Some(value))
@@ -353,8 +367,7 @@ fn pf20_s03_every_failed_durability_boundary_withholds_and_latches() {
             Err(IntegrityRootError::Unavailable)
         );
         drop(root);
-        let reopened =
-            ControllerRoot::open(&temp.path().join("registry"), &temp.path().join("storage"));
+        let reopened = reopen(&temp.path().join("registry"), &temp.path().join("storage"));
         match fault {
             Fault::NoSpace => assert_eq!(IntegrityRootStore::load(&reopened.unwrap()), Ok(None)),
             Fault::ShortWrite | Fault::FileSync => {
