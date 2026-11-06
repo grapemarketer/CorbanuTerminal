@@ -1955,7 +1955,12 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
                 /*use_private_desktop*/ true,
             )
             .await
-            .expect("spawn elevated tool");
+            .unwrap_or_else(|err| {
+                panic!(
+                    "spawn elevated tool {name}: {err:#}\n{}",
+                    sandbox_log(codex_home.path())
+                )
+            });
             collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 90))
                 .await
         });
