@@ -1846,6 +1846,124 @@ fn sec_win_1507_elevated_command_cannot_break_away_from_its_job() {
     );
 }
 
+/// D256 (#1507): common tools still work in an elevated-backend command
+/// whose job refuses breakaway: a cmd pipeline, Windows PowerShell calling a
+/// native program (with and without ConPTY), and `git init` and `git commit`.
+#[test]
+fn sec_win_1507_elevated_tools_work_without_breakaway() {
+    if option_env!("BAZEL_PACKAGE").is_some() {
+        return;
+    }
+    if !crate::setup::is_elevated().expect("elevation") {
+        eprintln!("sec-win-1507: the sandbox's setup needs an elevated run; skipped");
+        return;
+    }
+    let Some(git) = command_identity::git_for_windows("cmd\\git.exe") else {
+        return;
+    };
+    crate::window_station::tests::stage_sandbox_helpers();
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe")
+        .display()
+        .to_string();
+    let git = git.display().to_string();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    // (name, argv, expected output, ConPTY)
+    let cases: Vec<(&str, Vec<String>, &[&str], bool)> = vec![
+        (
+            "cmd pipeline",
+            vec![
+                cmd.clone(),
+                "/d".to_string(),
+                "/c".to_string(),
+                "echo d256-pipe| findstr d256 2>&1".to_string(),
+            ],
+            &["d256-pipe"],
+            false,
+        ),
+        (
+            "powershell",
+            vec![
+                powershell.clone(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "$x = & cmd /c echo d256-ps; $x | Select-String d256 | ForEach-Object { $_.Line }; \
+                 Get-ChildItem | Out-Null; 'd256-ps-done'"
+                    .to_string(),
+            ],
+            &["d256-ps", "d256-ps-done"],
+            false,
+        ),
+        (
+            "powershell (ConPTY)",
+            vec![
+                powershell,
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "& cmd /c echo d256-tty; 'd256-tty-done'".to_string(),
+            ],
+            &["d256-tty", "d256-tty-done"],
+            true,
+        ),
+        (
+            "git init",
+            vec![git.clone(), "init".to_string(), "-q".to_string()],
+            &[],
+            false,
+        ),
+        (
+            "git commit",
+            vec![
+                cmd,
+                "/d".to_string(),
+                "/c".to_string(),
+                format!(
+                    "echo d256> d256.txt && \"{git}\" add d256.txt && \"{git}\" -c user.name=d256 -c user.email=d256@example.com -c commit.gpgsign=false commit -q -m d256 && \"{git}\" log --format=d256-%s"
+                ),
+            ],
+            &["d256-d256"],
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, argv, expected, tty) in cases {
+        let codex_home = sandbox_home("elevated-tools");
+        let (stdout, exit_code) = runtime.block_on(async {
+            let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &PermissionProfile::workspace_write(),
+                workspace_roots_for(root.path()).as_slice(),
+                codex_home.path(),
+                argv,
+                root.path(),
+                HashMap::new(),
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(60_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                tty,
+                /*stdin_open*/ tty,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            .expect("spawn elevated tool");
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 90))
+                .await
+        });
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        println!("\nd256 tool {name}: exit={exit_code} stdout={stdout:?}");
+        if exit_code != 0 || !expected.iter().all(|part| stdout.contains(part)) {
+            failures.push(format!("{name}: exit={exit_code} stdout={stdout:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 const CRASH_ROOTS_ENV: &str = "CODEX_158_CRASH_ROOTS";
 const CRASH_CHILD_TEST: &str = "unified_exec::tests::legacy_integrity_crash_child_entry";
 const CRASH_CHILD_READY: &str = "integrity-crash-child: leased";
