@@ -282,13 +282,17 @@ struct ChatFunctionDelta {
     arguments: Option<String>,
 }
 
+/// Display counters. A counter stated as null reads as zero here, as a
+/// missing one does: `chat_accounting::decode` accepts null as "stated but
+/// unknown", and failing this parse would drop the whole chunk, including its
+/// text delta and finish reason.
 #[derive(Debug, Deserialize)]
 struct ChatUsage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     prompt_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     completion_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     total_tokens: i64,
     #[serde(default)]
     prompt_tokens_details: Option<ChatPromptTokensDetails>,
@@ -298,13 +302,13 @@ struct ChatUsage {
 
 #[derive(Debug, Deserialize)]
 struct ChatPromptTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     cached_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     reasoning_tokens: i64,
 }
 
@@ -1607,6 +1611,46 @@ mod tests {
             }) if response_id == "chatcmpl-1"
         );
         assert_eq!(events.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn null_usage_counter_keeps_the_rest_of_the_chunk() {
+        // A counter stated as null is a wire form the accounting decoder
+        // accepts (`ChatTokenPresence::Null`). It must not make the display
+        // parser drop the chunk, and with it the last text delta, the finish
+        // reason and the usage.
+        let events = collect_events(&[
+            br#"data: {"id":"chatcmpl-null","choices":[{"delta":{"content":"partial"}}]}"#,
+            b"\n\n",
+            br#"data: {"id":"chatcmpl-null","choices":[{"delta":{"content":" answer"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":null},"completion_tokens_details":{"reasoning_tokens":null}}}"#,
+            b"\n\n",
+            b"data: [DONE]\n\n",
+        ])
+        .await;
+
+        assert_matches!(
+            &events[events.len() - 2],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }))
+                if content == &vec![ContentItem::OutputText {
+                    text: "partial answer".to_string(),
+                }]
+        );
+        assert_matches!(
+            events.last(),
+            Some(Ok(ResponseEvent::Completed {
+                token_usage: Some(TokenUsage {
+                    input_tokens: 3,
+                    cached_input_tokens: 0,
+                    output_tokens: 2,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 5,
+                    ..
+                }),
+                end_turn: Some(false),
+                finish_reason: Some(CompletionFinishReason::Length),
+                ..
+            }))
+        );
     }
 
     #[tokio::test]
