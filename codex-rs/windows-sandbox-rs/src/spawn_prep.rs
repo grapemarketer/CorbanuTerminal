@@ -5,6 +5,7 @@ use crate::acl::ensure_allow_write_aces;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::cap::load_or_create_cap_sids;
+use crate::cap::new_command_identity_sid_string;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
@@ -27,8 +28,7 @@ use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
-use crate::token::create_readonly_token_with_cap;
-use crate::token::create_workspace_write_token_with_caps_from;
+use crate::token::create_legacy_token_with_caps_from;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
 use crate::workspace_acl::delete_child_route_denies;
@@ -158,26 +158,34 @@ pub(crate) fn prepare_legacy_session_security(
     capability_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, readonly_sid, readonly_sid_str, write_root_sids) = unsafe {
-        if uses_write_capabilities {
-            let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
-            if write_root_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-            }
-            let base = get_current_token_for_restriction()?;
-            let cap_ptrs: Vec<*mut c_void> = write_root_sids
-                .iter()
-                .map(|root| root.sid.as_ptr())
-                .collect();
-            let h_token = create_workspace_write_token_with_caps_from(base, cap_ptrs.as_slice());
-            CloseHandle(base);
-            let h_token = h_token?;
-            (h_token, None, None, write_root_sids)
-        } else {
-            let psid = LocalSid::from_string(&caps.readonly)?;
-            let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-            (h_token, Some(psid), Some(caps.readonly), Vec::new())
+    // D259 (#1507): the token copies the SID, so it can go once the token exists.
+    let command_identity = LocalSid::from_string(&new_command_identity_sid_string())?;
+    let (readonly_sid, readonly_sid_str, write_root_sids) = if uses_write_capabilities {
+        let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
+        if write_root_sids.is_empty() {
+            anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
         }
+        (None, None, write_root_sids)
+    } else {
+        let psid = LocalSid::from_string(&caps.readonly)?;
+        (Some(psid), Some(caps.readonly), Vec::new())
+    };
+    let cap_ptrs: Vec<*mut c_void> = match readonly_sid.as_ref() {
+        Some(psid) => vec![psid.as_ptr()],
+        None => write_root_sids
+            .iter()
+            .map(|root| root.sid.as_ptr())
+            .collect(),
+    };
+    let h_token = unsafe {
+        let base = get_current_token_for_restriction()?;
+        let h_token = create_legacy_token_with_caps_from(
+            base,
+            cap_ptrs.as_slice(),
+            command_identity.as_ptr(),
+        );
+        CloseHandle(base);
+        h_token?
     };
     // #158: Low integrity closes the parent FILE_DELETE_CHILD route that the
     // write-restricted token leaves open outside the writable roots.

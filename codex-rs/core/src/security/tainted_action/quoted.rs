@@ -10,6 +10,7 @@ use super::certain_cd::Joint;
 use super::shell::UNSEEN_OUTPUT;
 use super::shell::ansi_c;
 use super::work;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Word {
@@ -54,6 +55,11 @@ pub(super) struct Command {
     pub(super) substituted: bool,
     /// D194: what joins it to the command before it.
     pub(super) after: Joint,
+    /// #1515: this reading ended it at a `{`, `}` or `(` the shell may
+    /// read as text: an argument (`git -C { config core.pager sh`; bash
+    /// reads `}` so too), a glob (zsh `x(N)`, extglob `@(a)`) or zsh's
+    /// `=(…)`. The words after it may be its own.
+    pub(super) cut: bool,
 }
 
 impl Command {
@@ -105,6 +111,8 @@ fn read(text: &str, nesting: usize, body: bool, arithmetic: bool) -> Reading {
         unterminated: false,
         unsure: false,
         arithmetic: arithmetic || text.contains("((") || text.contains('['),
+        in_arithmetic: None,
+        closes: None,
     };
     if body {
         reader.substitutions_only();
@@ -170,6 +178,13 @@ struct Reader<'a> {
     /// The text may hold arithmetic (`$((`, `((`, `$[`) or a subscript
     /// (`a[...]`), where single quotes do not stop a substitution.
     arithmetic: bool,
+    /// #1515: the `((`/`$((` arithmetic being read, as the index of its
+    /// last `)` and its substitution depth: a `(` before that index at that
+    /// depth is arithmetic, not a cut. By index, so text this reading skips
+    /// (a comment, a here-document) cannot leave it open.
+    in_arithmetic: Option<(usize, usize)>,
+    /// [`clean_closes`] of the text, once a `((` needs it.
+    closes: Option<HashMap<usize, usize>>,
 }
 
 /// One list of commands being read.
@@ -268,6 +283,68 @@ impl Reader<'_> {
         }
     }
 
+    /// #1515: a `{` or `}` word where the shell reads a word (`git -C {
+    /// …`), not a reserved word: after a command's words, other than
+    /// `function NAME {`.
+    fn note_argument_brace(&mut self, list: &List) {
+        let words = &self.out[list.command].words;
+        let function = words.len() == 2 && !words[0].quoted && words[0].text == "function";
+        if !list.keyword && !words.is_empty() && !function {
+            self.out[list.command].cut = true;
+        }
+    }
+
+    /// #1515: whether a `(` opens a group, a function's `()`, an array
+    /// value, a `case` pattern or a test's pattern, rather than being text
+    /// a shell may read as a glob (`x(N)`, `@(a)`, `=(…)`) or as an
+    /// argument.
+    fn opens_group(&self, list: &List, next: Option<char>) -> bool {
+        let words = &self.out[list.command].words;
+        let first = words
+            .first()
+            .filter(|word| !word.quoted)
+            .map(|word| word.text.as_str());
+        let last = words
+            .last()
+            .filter(|word| !word.quoted)
+            .map(|word| word.text.as_str());
+        let named = words.len() + usize::from(list.has_word);
+        if !list.has_word {
+            return list.keyword
+                || (words.len() == 1 && first == Some("for"))
+                || (list.case_at.is_some() && last == Some("in"))
+                || first == Some("[[")
+                || (next == Some(')')
+                    && (named == 1 || (named == 2 && first == Some("function"))));
+        }
+        let text = list.word.text.as_str();
+        (next == Some(')')
+            && !list.word.quoted
+            && (named == 1 || (named == 2 && first == Some("function"))))
+            || first == Some("[[")
+            || (!list.word.quoted && array_name(text) && assigning(words))
+    }
+
+    /// #1515: whether `index` is inside the arithmetic being read, at its
+    /// depth.
+    fn arithmetic_at(&self, index: usize) -> bool {
+        self.in_arithmetic
+            .is_some_and(|(end, depth)| index < end && depth == self.nesting)
+    }
+
+    /// #1515: the `((` or `$((` whose second `(` is at `open` is
+    /// arithmetic, read at `depth`, when that bracket closes right before
+    /// the last `)` with no quote or backslash between.
+    fn note_arithmetic(&mut self, open: usize, depth: usize) {
+        let chars = self.chars;
+        let closes = self.closes.get_or_insert_with(|| clean_closes(chars));
+        if let Some(&close) = closes.get(&open)
+            && chars.get(close + 1) == Some(&')')
+        {
+            self.in_arithmetic = Some((close + 1, depth));
+        }
+    }
+
     fn finish_command(&mut self, list: &mut List) {
         self.finish_word(list);
         list.keyword = true;
@@ -349,6 +426,14 @@ impl Reader<'_> {
                     list.joint = Some(Joint::Other);
                 }
                 '(' => {
+                    // #1515: a `((` that `))` closes is arithmetic up to it.
+                    let opens = self.opens_group(&list, next);
+                    if opens && next == Some('(') && !self.arithmetic_at(index) {
+                        self.note_arithmetic(index + 1, self.nesting);
+                    }
+                    if !opens && !self.arithmetic_at(index) {
+                        self.out[list.command].cut = true;
+                    }
                     self.finish_command(&mut list);
                     opened.push(std::mem::take(&mut list.cases));
                     list.joint = Some(Joint::Other);
@@ -396,12 +481,14 @@ impl Reader<'_> {
                     }
                 }
                 '{' if !list.has_word && next.is_none_or(char::is_whitespace) => {
+                    self.note_argument_brace(&list);
                     self.finish_command(&mut list);
                     list.joint = Some(Joint::Other);
                 }
                 '}' if !list.has_word
                     && next.is_none_or(|next| next.is_whitespace() || ";|&)".contains(next)) =>
                 {
+                    self.note_argument_brace(&list);
                     self.finish_command(&mut list);
                     list.joint = Some(Joint::Other);
                 }
@@ -587,6 +674,9 @@ impl Reader<'_> {
             Some('(') => {
                 word.text.push_str(UNSEEN_OUTPUT);
                 dynamic(word);
+                if chars.get(index + 2) == Some(&'(') && !self.arithmetic_at(index) {
+                    self.note_arithmetic(index + 2, self.nesting + 1);
+                }
                 self.list(index + 2, /*nested*/ true)
             }
             Some('{') => {
@@ -757,6 +847,92 @@ impl Reader<'_> {
         }
         index
     }
+}
+
+/// #1515: each `(` of `chars` and the `)` that closes it, when nothing
+/// between them can make a shell count brackets other than this one pass
+/// does (one pass). Every review found another such corner of zsh's
+/// arithmetic (`${x#((}`, a comment, a here-document, `##(`, unpaired
+/// `[`/`]`, brackets in a nested `$(…)`), so the whole class is out: a
+/// quote, backslash, backtick, newline, `#`, `[`, `]`, `{`, `}` (so `${`)
+/// or `$(` between them, or a `${…}` around them, disqualifies the pair,
+/// and the text is read as commands.
+fn clean_closes(chars: &[char]) -> HashMap<usize, usize> {
+    // Each open `(`: where, and whether a `${…}` holds it.
+    let mut open: Vec<(usize, bool)> = Vec::new();
+    let mut last_quote = None;
+    let mut closes = HashMap::new();
+    // The `${…}` (and braces inside) open.
+    let mut braces = 0usize;
+    for (at, ch) in chars.iter().enumerate() {
+        work::step();
+        let before = at.checked_sub(1).map(|before| chars[before]);
+        match ch {
+            '{' if braces > 0 || before == Some('$') => {
+                braces += 1;
+                last_quote = Some(at);
+            }
+            '}' if braces > 0 => {
+                braces -= 1;
+                last_quote = Some(at);
+            }
+            '\'' | '"' | '`' | '\\' | '\n' | '#' | '[' | ']' | '{' | '}' => {
+                last_quote = Some(at);
+            }
+            '$' if chars.get(at + 1) == Some(&'(') => last_quote = Some(at),
+            '(' => open.push((at, braces > 0)),
+            ')' => {
+                if let Some((from, braced)) = open.pop()
+                    && !braced
+                    && last_quote.is_none_or(|quote| quote < from)
+                {
+                    closes.insert(from, at);
+                }
+            }
+            _ => {}
+        }
+    }
+    closes
+}
+
+/// #1515: an array assignment's start (`a=`, `a+=`, `a[1]=`), which `(`
+/// follows.
+fn array_name(text: &str) -> bool {
+    text.strip_suffix('=').is_some_and(variable_name)
+}
+
+/// #1515: whether a word after `words` is an assignment: they are all
+/// assignments (`a=1 b=(x)`), or a builtin that assigns comes first
+/// (`declare -a b=(x)`). Elsewhere `b=(x)` is a zsh glob.
+fn assigning(words: &[Word]) -> bool {
+    words.first().is_some_and(|first| {
+        !first.quoted
+            && matches!(
+                first.text.as_str(),
+                "declare" | "typeset" | "local" | "export" | "readonly" | "integer" | "float"
+            )
+    }) || words.iter().all(|word| {
+        work::step();
+        word.text
+            .split_once('=')
+            .is_some_and(|(name, _)| variable_name(name))
+    })
+}
+
+/// A variable's name in an assignment (`a`, `a+`, `a[1]`).
+fn variable_name(name: &str) -> bool {
+    let name = name.strip_suffix('+').unwrap_or(name);
+    let name = name
+        .split_once('[')
+        .filter(|(_, subscript)| subscript.ends_with(']'))
+        .map_or(name, |(name, _)| name);
+    name.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && name.chars().all(|ch| {
+            work::step();
+            ch.is_ascii_alphanumeric() || ch == '_'
+        })
 }
 
 /// The redirection at the start of `chars` and its length.

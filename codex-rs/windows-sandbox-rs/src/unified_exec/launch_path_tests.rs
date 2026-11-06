@@ -11,10 +11,13 @@
 //!
 //! Measured on the hosted Windows runner (elevated and in a normal session;
 //! no Explorer running), #1507: WMI, the Task Scheduler and `ShellWindows`
-//! refuse a legacy command with the errors their tests expect. Naming
-//! another legacy session's process as the parent, `ShellBrowserWindow` and
-//! `MMC20.Application` start the child outside the launcher's job; those
-//! tests are ignored until #1507 decides how to close them.
+//! refuse a legacy command with the errors their tests expect, and so does
+//! naming another legacy session's process as the parent since D259 gave
+//! each command its own identity in its default DACL (unless the launcher
+//! impersonates the other command's token first, #1560).
+//! `ShellBrowserWindow` and `MMC20.Application` start the child outside the
+//! launcher's job; those tests are ignored until D260 is measured on a real
+//! desktop.
 //!
 //! Refusals are matched on the step and the error code (HRESULT, or WMI's
 //! status name), never on message text, which Windows localizes. Every
@@ -635,9 +638,12 @@ fn legacy_launch_plain_child_stays_in_session() {
 
 /// #1507 route 1: a legacy command names a process of another, concurrent
 /// legacy session as its child's parent. The child would join that
-/// session's job, outside the launcher's.
+/// session's job, outside the launcher's. Since D259 each command's default
+/// DACL keeps other legacy commands from opening its processes with
+/// `PROCESS_CREATE_PROCESS`, so the launch is refused. A launcher that first
+/// impersonates the other command's token gets that right back (#1560,
+/// `command_identity::legacy_command_cannot_borrow_another_workspaces_command_token`).
 #[test]
-#[ignore = "#1507: the child joins the other session's job with its token; closing it needs a per-session default DACL, a product decision"]
 fn legacy_launch_under_another_session_process_stays_in_session() {
     let _guard = legacy_process_test_guard();
     let root = user_owned_test_root();

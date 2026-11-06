@@ -9,19 +9,22 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   matching usage report** (#290). Unknown usage is no longer reported as an
   all-zero usage object, so consumers can distinguish "not reported" from a
   measured zero. When usage is reported, the object is unchanged.
-- **Token estimates are not usage reports** (#1570). After compaction or
-  rollback, the thread's usage update can hold only a token estimate with
-  zero counters; when the context window fills, only the window size. Exec no
-  longer reports these: `usage` stays `null`, or keeps the last real report.
-  A provider that reports only `total_tokens` (no input or output counts)
-  now also gives `null`.
 - **A non-null usage does not prove the provider reported this turn.** On a
   resumed thread, if this turn's response reports no usage, `usage` still
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
-- **The usage is still the completing thread's own total.** It does not add
-  usage from spawned subagents and is not a difference from the start of the
-  invocation.
+- **Usage includes observed descendant work** (#290). Repeated cumulative
+  reports are counted once. Every history-forked descendant makes the total
+  `null`, as do a descendant with no report,
+  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
+  thread's own totals are not a difference from the start of the invocation.
+  Detached children can incur further usage after this snapshot.
+- **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
+  defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
+  report `usage: null`. A non-null total can be larger than in earlier versions
+  because it includes descendant work rather than only the root's own total.
+- **Context estimates are not provider reports.** Compaction, rollback and
+  full-window estimates keep the last measured report, or `null` if none exists.
 
 ### Compatibility
 
@@ -278,3 +281,27 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   to open an OpenAI-worded key prompt that ended in
   `Provider API-key selection is no longer available`. The list now starts on
   **Corbanu API**, whose wallet and API-key setup runs after **Done**.
+
+## A force-stopped turn still reports its file changes
+
+- **The turn's file-change summary is sent when an interrupt force-stops a
+  turn** (#1604, D282). When a turn misses the interrupt grace period and is
+  stopped, it now sends the summary of the files it changed, as a turn that
+  ends normally does, so the status line stays current.
+- **A turn stopped while recording a search result still marks the
+  conversation as using outside content** (#1536). The check now runs before
+  the result is recorded instead of after it.
+
+## Telegram `/status`: token estimates are not a thread total
+
+- **`/status` no longer shows unknown usage as a free thread.** After
+  compaction or rollback on a thread whose provider never reported usage, it
+  said `Thread total: 0 tokens (0 in, 0 out)`. It now says
+  `Thread total: not reported by the provider`, and `Context` shows the token
+  estimate (#1570).
+- **A full context window is shown as context, not as the thread's cost.**
+  When the window is exceeded, `Context` shows the full window and
+  `Thread total` stays the provider-reported usage, computed from the
+  provider's counters, which the fill now keeps (#1583). After compaction,
+  `Context` shows the new, smaller estimate rather than a full window, and
+  `/new` starts the new thread without the previous thread's total.
