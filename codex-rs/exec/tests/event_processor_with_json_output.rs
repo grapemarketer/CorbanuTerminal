@@ -1778,6 +1778,51 @@ fn usage_update(thread_id: &str, turn_id: &str, input_tokens: i64) -> ServerNoti
 }
 
 #[test]
+fn issue1577_usage_after_a_context_window_fill_keeps_the_earlier_reports() {
+    use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
+
+    let report = |input_tokens: i64, output_tokens: i64| CoreTokenUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens: input_tokens + output_tokens,
+        ..CoreTokenUsage::default()
+    };
+    // Core's thread totals: a real report, a context-window fill, another report.
+    let mut info = TokenUsageInfo::new_or_append(&None, &Some(report(4_200, 300)), Some(200_000))
+        .expect("first report creates the info");
+    info.fill_to_context_window(/*context_window*/ 200_000);
+    info.append_last_usage(&report(500, 60));
+
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let _ = processor.collect_thread_events(ServerNotification::ThreadTokenUsageUpdated(
+        codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            token_usage: ThreadTokenUsage::from(info),
+            account_usage: None,
+        },
+    ));
+
+    let completed = processor.collect_thread_events(completed_turn("thread-1", "turn-1"));
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Some(Usage {
+                    input_tokens: 4_700,
+                    cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
+                    output_tokens: 360,
+                    reasoning_output_tokens: 0,
+                }),
+            })],
+            status: CodexStatus::InitiateShutdown,
+        }
+    );
+}
+
+#[test]
 fn issue290_turn_completion_without_usage_update_reports_no_usage() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
