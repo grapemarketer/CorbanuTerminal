@@ -106,6 +106,14 @@ filter = 'package(codex-windows-sandbox) & test(legacy_)'
 test-group = 'windows_sandbox_legacy_sessions'
 
 [[profile.default.overrides]]
+# #1610: a legacy session labels %TEMP% Low while it runs (#158), and the
+# PF-27-S08 broker probes check that the broker cannot delete there outside
+# one, so they share the legacy sessions' group.
+platform = 'cfg(windows)'
+filter = 'package(codex-process-hardening) & test(pf_27_s08_)'
+test-group = 'windows_sandbox_legacy_sessions'
+
+[[profile.default.overrides]]
 # This Codex-home startup path still exceeded the broader Windows-heavy ceiling
 # in both Windows full-CI lanes after contention was reduced.
 platform = 'cfg(windows)'

@@ -16,7 +16,6 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -440,7 +439,7 @@ struct BridgeRuntime {
     // same thread until someone runs `/new`. The server already reports usage per
     // turn, so keep the latest report to give `/status` the running cost of a
     // thread that would otherwise grow unobserved.
-    last_token_usage: HashMap<ConversationKey, ThreadTokenUsage>,
+    last_token_usage: HashMap<ConversationKey, status::StatusTokenUsage>,
 }
 
 impl BridgeRuntime {
@@ -723,6 +722,9 @@ impl BridgeRuntime {
         self.sessions
             .set_thread(conversation, thread_id.clone())
             .await?;
+        // The previous thread's usage is not this thread's: `/status` shows
+        // nothing for it until the new thread reports or is estimated.
+        self.last_token_usage.remove(&conversation);
         Ok(thread_id)
     }
 

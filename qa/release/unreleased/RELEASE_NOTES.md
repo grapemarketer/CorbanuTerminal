@@ -240,6 +240,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   through `HTTP_PROXY`/`HTTPS_PROXY`. Host names are matched by name only (they
   are not resolved to check ranges), as before.
 
+## A timed-out network prompt for remote work closes
+
+- **The approval prompt for a remote network request now closes when the
+  request times out** (#722, D279). An unanswered request is still refused
+  after 10 minutes (plus the hook timeout) and the command still ends as
+  failed; before, its prompt stayed on screen and answering it did nothing.
+- **App-server clients:** the server resolves such a pending
+  `item/commandExecution/requestApproval` request itself and sends
+  `serverRequest/resolved`, as it already does when a turn ends. Any command
+  approval whose waiter in the core goes away unanswered is resolved the same
+  way.
+
 ## Interrupting a tool on a busy machine keeps its elapsed time
 
 - **The model now always sees how long an interrupted tool ran** (#1467,
@@ -292,14 +304,16 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   conversation as using outside content** (#1536). The check now runs before
   the result is recorded instead of after it.
 
-## A timed-out network prompt for remote work closes
+## Telegram `/status`: token estimates are not a thread total
 
-- **The approval prompt for a remote network request now closes when the
-  request times out** (#722, D279). An unanswered request is still refused
-  after 10 minutes (plus the hook timeout) and the command still ends as
-  failed; before, its prompt stayed on screen and answering it did nothing.
-- **App-server clients:** the server resolves such a pending
-  `item/commandExecution/requestApproval` request itself and sends
-  `serverRequest/resolved`, as it already does when a turn ends. Any command
-  approval whose waiter in the core goes away unanswered is resolved the same
-  way.
+- **`/status` no longer shows unknown usage as a free thread.** After
+  compaction or rollback on a thread whose provider never reported usage, it
+  said `Thread total: 0 tokens (0 in, 0 out)`. It now says
+  `Thread total: not reported by the provider`, and `Context` shows the token
+  estimate (#1570).
+- **A full context window is shown as context, not as the thread's cost.**
+  When the window is exceeded, `Context` shows the full window and
+  `Thread total` stays the provider-reported usage, computed from the
+  provider's counters, which the fill now keeps (#1583). After compaction,
+  `Context` shows the new, smaller estimate rather than a full window, and
+  `/new` starts the new thread without the previous thread's total.
