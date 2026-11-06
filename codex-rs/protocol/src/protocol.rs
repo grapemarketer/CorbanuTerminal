@@ -2265,15 +2265,16 @@ impl TokenUsageInfo {
         self.last_token_usage = last.clone();
     }
 
+    /// Marks the context window as full: `total_tokens` becomes the window and
+    /// `last_token_usage` carries the remainder. The provider-reported counters
+    /// in `total_token_usage` are kept, so later reports add to the thread's
+    /// real totals instead of to zeros (#1577).
     pub fn fill_to_context_window(&mut self, context_window: i64) {
         let previous_total = self.total_token_usage.total_tokens;
         let delta = (context_window - previous_total).max(0);
 
         self.model_context_window = Some(context_window);
-        self.total_token_usage = TokenUsage {
-            total_tokens: context_window,
-            ..TokenUsage::default()
-        };
+        self.total_token_usage.total_tokens = context_window;
         self.last_token_usage = TokenUsage {
             total_tokens: delta,
             ..TokenUsage::default()
@@ -6713,6 +6714,89 @@ mod tests {
         assert_eq!(value["msg"]["failed"][0]["error"], "bad");
         assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
+    }
+
+    fn issue1577_usage(input: i64, cached: i64, output: i64, reasoning: i64) -> TokenUsage {
+        TokenUsage {
+            input_tokens: input,
+            cached_input_tokens: cached,
+            cache_write_input_tokens: 1,
+            output_tokens: output,
+            reasoning_output_tokens: reasoning,
+            total_tokens: input + output,
+        }
+    }
+
+    #[test]
+    fn issue1577_fill_to_context_window_keeps_reported_counters() {
+        let first = issue1577_usage(
+            /*input*/ 4_000, /*cached*/ 1_000, /*output*/ 200, /*reasoning*/ 50,
+        );
+        let mut info = TokenUsageInfo::new_or_append(&None, &Some(first.clone()), Some(128_000))
+            .expect("first report creates the info");
+
+        info.fill_to_context_window(/*context_window*/ 128_000);
+
+        // The provider's counters survive; only total_tokens and last_token_usage
+        // carry the fill, exactly as before.
+        assert_eq!(
+            info,
+            TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 128_000,
+                    ..first
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 128_000 - 4_200,
+                    ..TokenUsage::default()
+                },
+                model_context_window: Some(128_000),
+            }
+        );
+
+        // The next real report is added to the earlier counters, not to zeros.
+        let second = issue1577_usage(
+            /*input*/ 300, /*cached*/ 100, /*output*/ 40, /*reasoning*/ 10,
+        );
+        info.append_last_usage(&second);
+        assert_eq!(
+            info.total_token_usage,
+            TokenUsage {
+                input_tokens: 4_300,
+                cached_input_tokens: 1_100,
+                cache_write_input_tokens: 2,
+                output_tokens: 240,
+                reasoning_output_tokens: 60,
+                total_tokens: 128_000 + 340,
+            }
+        );
+        assert_eq!(info.last_token_usage, second);
+
+        // A second fill moves total_tokens and last_token_usage as before
+        // (total_tokens is already past the window, so last is 0).
+        info.fill_to_context_window(/*context_window*/ 128_000);
+        assert_eq!(info.total_token_usage.input_tokens, 4_300);
+        assert_eq!(info.total_token_usage.output_tokens, 240);
+        assert_eq!(info.total_token_usage.total_tokens, 128_000);
+        assert_eq!(info.last_token_usage, TokenUsage::default());
+    }
+
+    #[test]
+    fn issue1577_full_context_window_without_reports_has_zero_counters() {
+        assert_eq!(
+            TokenUsageInfo::full_context_window(/*context_window*/ 64_000),
+            TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 64_000,
+                    ..TokenUsage::default()
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 64_000,
+                    ..TokenUsage::default()
+                },
+                model_context_window: Some(64_000),
+            }
+        );
     }
 
     #[test]
