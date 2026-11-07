@@ -299,22 +299,36 @@ jobs:
           # PowerShell; native commands are checked through $LASTEXITCODE instead.
           $ErrorActionPreference = 'Continue'
           $medium = '.github/scripts/run-at-medium-integrity.ps1'
-          # #1689: a normal session's own TEMP lets its user label it (a
-          # user's %TEMP% is theirs, with Full control). The runner's TEMP is
-          # made elevated and inherits D:\'s ACL, which on some runners doesn't
-          # give the user WRITE_OWNER: a normal session then couldn't label it,
-          # or what tests make in it, Low.
-          'TEMP ACL before the #1689 grant:'
-          icacls $env:TEMP | Select-String -NotMatch 'S-1-5-21-'
+          # #1752: a temp folder secured like a real user's %LOCALAPPDATA%\Temp:
+          # owned by the user, Full control (so #1689's WRITE_OWNER for Low
+          # labels) for the user, SYSTEM and Administrators, nothing else. The
+          # runner's D:\tmp is made elevated and inherits D:\'s ACL: any
+          # signed-in account may read it and create in it, and the user may
+          # lack WRITE_OWNER there.
           $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          # /C: what earlier steps left in TEMP may not take the inherited entry.
-          icacls $env:TEMP /grant "*${user}:(OI)(CI)(WO)" /C /Q | Out-Null
-          $granted = (Get-Acl -LiteralPath $env:TEMP).Access | Where-Object {
-            $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $user -and
-            $_.AccessControlType -eq 'Allow' -and
-            ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::TakeOwnership)
+          $temp = Join-Path $env:RUNNER_TEMP 'medium-temp'
+          New-Item -ItemType Directory $temp -ErrorAction Stop | Out-Null
+          icacls $temp /setowner "*$user" /Q | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "setting the owner of $temp failed" }
+          icacls $temp /inheritance:r /grant:r "*${user}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "securing $temp failed" }
+          $acl = Get-Acl -LiteralPath $temp
+          $sid = { param($id) $id.Translate([Security.Principal.SecurityIdentifier]).Value }
+          $full = [Security.AccessControl.FileSystemRights]::FullControl
+          $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+          $entries = @($acl.Access | ForEach-Object {
+            if ($_.AccessControlType -ne 'Allow' -or $_.IsInherited -or ($_.FileSystemRights -band $full) -ne $full -or
+                $_.InheritanceFlags -ne $inherit -or $_.PropagationFlags -ne 'None') { throw "unexpected entry on ${temp}: $($_ | Out-String)" }
+            & $sid $_.IdentityReference
+          } | Sort-Object)
+          $expected = @($user, 'S-1-5-18', 'S-1-5-32-544' | Sort-Object)
+          if (-not $acl.AreAccessRulesProtected -or (Compare-Object $entries $expected) -or (& $sid $acl.GetOwner([Security.Principal.SecurityIdentifier])) -ne $user) {
+            throw "$temp is not secured like a user's temp folder: $($acl.Sddl)"
           }
-          if (-not $granted) { throw "granting WRITE_OWNER on TEMP failed" }
+          "TEMP for this step: $temp ($($acl.Sddl))"
+          $env:TEMP = $temp
+          $env:TMP = $temp
+          if ([IO.Path]::GetTempPath().TrimEnd('\') -ne $temp) { throw "TEMP was not switched to $temp" }
           function Get-TestExe([string[]]$CargoArgs) {
             $artifacts = cargo test --locked --manifest-path codex-rs/Cargo.toml @CargoArgs --no-run --message-format=json
             if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed" }
