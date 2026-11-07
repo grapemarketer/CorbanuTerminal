@@ -601,6 +601,33 @@ impl Classifier {
             // Words before it were checked as wrappers (starts ascend).
             let mut wrappers_checked = 0;
             let mut joined_left = MAX_JOINED_BYTES;
+            // #1685: a value set in zsh's `functions`, `aliases`,
+            // `galiases` or `saliases` or bash's `BASH_ALIASES` is code run
+            // by name later (`functions[f]='tee -a ~/.zshrc'; f`): a line of
+            // its own too, within the same budget.
+            let mut tables = 0;
+            for (at, text) in texts.iter().enumerate() {
+                work::step();
+                let Some(value) = code_table_value(text) else {
+                    continue;
+                };
+                tables += 1;
+                let Some(rest) = joined_left
+                    .checked_sub(value.len() + 1)
+                    .filter(|_| tables <= outbound::MAX_JUDGED_POSITIONS)
+                else {
+                    found.unreadable = true;
+                    break;
+                };
+                joined_left = rest;
+                push_script(
+                    found,
+                    folders,
+                    value.to_string(),
+                    replaced(launches[at]),
+                    unknown,
+                );
+            }
             let mut runners = 0;
             // #1449: one runner's options are read to the end of the
             // command; any other's up to `MAX_JUDGED_POSITIONS` words.
@@ -754,18 +781,29 @@ impl Classifier {
                 // #1685: an alias's value is a line of its own, run later
                 // (`alias x='tee -a ~/.zshrc'`): every check of a line counts
                 // on it. (The word lexer reads `eval`'s and `trap`'s text.)
+                // Within the command's budget for joined lines.
                 if resolved_name == "alias" {
-                    for arg in &texts[at + 1..] {
+                    for (nth, value) in texts[at + 1..]
+                        .iter()
+                        .filter_map(|arg| arg.split_once('=').map(|(_, value)| value))
+                        .enumerate()
+                    {
                         work::step();
-                        if let Some((_, value)) = arg.split_once('=') {
-                            push_script(
-                                found,
-                                folders,
-                                value.to_string(),
-                                replaced(launches[at]),
-                                unknown,
-                            );
-                        }
+                        let Some(rest) = joined_left
+                            .checked_sub(value.len() + 1)
+                            .filter(|_| nth < outbound::MAX_JUDGED_POSITIONS)
+                        else {
+                            found.unreadable = true;
+                            break;
+                        };
+                        joined_left = rest;
+                        push_script(
+                            found,
+                            folders,
+                            value.to_string(),
+                            replaced(launches[at]),
+                            unknown,
+                        );
                     }
                 }
                 // #1422: `compgen -C cmd` runs `cmd` as shell code.
@@ -2122,6 +2160,21 @@ fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)
         work::step();
         writes_in(line)
     })
+}
+
+/// #1685: the value of an assignment to an entry of a table of code run
+/// by name (`functions[f]=…`, `aliases[x]=…`, `BASH_ALIASES[x]=…`).
+fn code_table_value(text: &str) -> Option<&str> {
+    const TABLES: &[&str] = &[
+        "functions",
+        "aliases",
+        "galiases",
+        "saliases",
+        "BASH_ALIASES",
+    ];
+    let (name, rest) = text.split_once('[')?;
+    let (_, value) = rest.split_once("]=").or_else(|| rest.split_once("]+="))?;
+    TABLES.contains(&name).then_some(value)
 }
 
 /// #1620: see [`code_writes_zsh_program`].
