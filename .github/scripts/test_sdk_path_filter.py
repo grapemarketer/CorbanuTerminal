@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D287/D314: run sdk.yml's own "Detect changed paths" script against real
+"""D287/D314/D336: run sdk.yml's own "Detect changed paths" script against real
 git diffs and check which pull requests run the TypeScript SDK job."""
 
 import os
@@ -76,6 +76,20 @@ CASES = [
     ("this workflow", [".github/workflows/sdk.yml"], True),
     ("SDK with unrelated", ["sdk/typescript/package.json", "README.md"], True),
     ("lockfile with unrelated", ["pnpm-lock.yaml", "docs/x.md"], True),
+    # D336: root workspace files, alone and with an unrelated file.
+    ("root package.json", ["package.json"], True),
+    ("root pnpm-workspace.yaml", ["pnpm-workspace.yaml"], True),
+    ("root .npmrc", [".npmrc"], True),
+    ("root package.json with unrelated", ["package.json", "README.md"], True),
+    ("root pnpm-workspace.yaml with unrelated", ["pnpm-workspace.yaml", "docs/x.md"], True),
+    ("root .npmrc with unrelated", [".npmrc", "codex-rs/core/src/lib.rs"], True),
+    # A nested SDK package.json still runs through sdk/typescript/*.
+    ("SDK package.json", ["sdk/typescript/package.json"], True),
+    # D336 look-alikes that are not the root files skip.
+    ("Python SDK package.json", ["sdk/python/package.json"], False),
+    ("devcontainer package.json", [".devcontainer/codex-install/package.json"], False),
+    ("nested .npmrc", ["sdk/python/.npmrc"], False),
+    ("package.json.bak", ["package.json.bak"], False),
     # Unrelated-only pull requests still skip.
     ("unrelated docs", ["README.md", "docs/x.md"], False),
     ("unrelated Rust", ["codex-rs/core/src/lib.rs", "codex-rs/core/Cargo.toml"], False),
