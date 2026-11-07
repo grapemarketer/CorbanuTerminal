@@ -221,7 +221,9 @@ fn legacy_nested_metadata_cost_on_a_large_workspace() {
         let mut found = 0;
         for _ in 0..3 {
             let started = Instant::now();
-            found = crate::nested_metadata::find(std::slice::from_ref(root)).len();
+            found = crate::nested_metadata::find(std::slice::from_ref(root))
+                .entries
+                .len();
             times.push(started.elapsed().as_millis());
         }
         let entries = walkdir_count(root);
