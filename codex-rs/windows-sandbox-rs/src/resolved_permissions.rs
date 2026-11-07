@@ -156,10 +156,25 @@ impl ResolvedWindowsSandboxPermissions {
     ) -> Vec<WindowsWritableRoot> {
         let mut roots = self.writable_roots_other_than_temp_for_cwd(cwd);
         if self.has_writable_tmpdir_entry() {
+            // #1708: explicit read-only (and deny) paths inside a temp root
+            // are carved out of it like any other root's. The default
+            // `.git`/`.codex`/`.agents` protections stay off there (D283).
+            let explicit_non_write: Vec<PathBuf> = self
+                .file_system
+                .get_read_only_paths_with_cwd(cwd)
+                .into_iter()
+                .chain(self.file_system.get_unreadable_roots_with_cwd(cwd))
+                .map(AbsolutePathBuf::into_path_buf)
+                .collect();
             roots.extend(windows_temp_env_roots(env_map).into_iter().map(|root| {
+                let read_only_subpaths = explicit_non_write
+                    .iter()
+                    .filter(|path| strictly_inside(path, &root))
+                    .cloned()
+                    .collect();
                 WindowsWritableRoot {
                     root,
-                    read_only_subpaths: Vec::new(),
+                    read_only_subpaths,
                 }
             }));
         }
@@ -227,6 +242,40 @@ fn windows_temp_env_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether `path` lies below `root` (not at it), as spelled or with links
+/// followed (`%TEMP%` is often an 8.3 short name; `path` may not exist yet).
+fn strictly_inside(path: &Path, root: &Path) -> bool {
+    let below = |path: &Path, root: &Path| path != root && path.starts_with(root);
+    below(path, root)
+        || canonicalize_allowing_missing(path)
+            .zip(dunce::canonicalize(root).ok())
+            .is_some_and(|(path, root)| below(&path, &root))
+}
+
+/// `path` with links followed: its nearest existing ancestor canonicalized,
+/// plus the rest as spelled.
+fn canonicalize_allowing_missing(path: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        match dunce::canonicalize(existing) {
+            Ok(real) => {
+                return Some(
+                    missing
+                        .iter()
+                        .rev()
+                        .fold(real, |path, part| path.join(part)),
+                );
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(existing.file_name()?.to_os_string());
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +321,92 @@ mod tests {
         .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(expected_roots, roots);
+    }
+
+    /// #1708: a temp root carries the explicit read-only and deny paths
+    /// inside it (missing ones too; spelled like the root, in another case,
+    /// or matching only once both are resolved), but not the root itself, the
+    /// default `.git`/`.codex`/`.agents` protections, nor paths outside it.
+    #[test]
+    fn temp_root_carries_explicit_read_only_paths_inside_it() {
+        let tmp = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(tmp.path()).expect("canonical tempdir");
+        let cwd = base.join("workspace");
+        let temp_dir = base.join("temp");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::create_dir_all(temp_dir.join("keep")).expect("create keep");
+        std::fs::create_dir_all(temp_dir.join("cased")).expect("create cased");
+        std::fs::create_dir_all(temp_dir.join(".git")).expect("create .git");
+        // `TMP` spells the temp root as configured; `TEMP` through `..`, which
+        // only matches the configured paths once both are resolved.
+        let temp_env = base.join("workspace").join("..").join("temp");
+        let absolute = |path: PathBuf| AbsolutePathBuf::from_absolute_path(path).expect("abs");
+        let entry = |path: PathBuf, access| FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: absolute(path),
+            },
+            access,
+            missing_path_behavior: None,
+        };
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                        missing_path_behavior: None,
+                    },
+                    entry(cwd.clone(), FileSystemAccessMode::Write),
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        },
+                        access: FileSystemAccessMode::Write,
+                        missing_path_behavior: None,
+                    },
+                    entry(temp_dir.clone(), FileSystemAccessMode::Read),
+                    entry(temp_dir.join("keep"), FileSystemAccessMode::Read),
+                    entry(base.join("TEMP").join("CASED"), FileSystemAccessMode::Read),
+                    entry(temp_dir.join("missing"), FileSystemAccessMode::Read),
+                    entry(temp_dir.join("secret"), FileSystemAccessMode::Deny),
+                    entry(base.join("elsewhere"), FileSystemAccessMode::Read),
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                workspace_roots_for(cwd.as_path()).as_slice(),
+            )
+            .expect("managed permission profile");
+        let env_map = HashMap::from([
+            ("TEMP".to_string(), temp_env.to_string_lossy().into_owned()),
+            ("TMP".to_string(), temp_dir.to_string_lossy().into_owned()),
+        ]);
+
+        let temp_roots: Vec<Vec<PathBuf>> = permissions
+            .writable_roots_for_cwd(&cwd, &env_map)
+            .into_iter()
+            .filter(|root| root.root == temp_env || root.root == temp_dir)
+            .map(|root| {
+                let mut subpaths = root.read_only_subpaths;
+                subpaths.sort();
+                subpaths
+            })
+            .collect();
+
+        let mut expected = vec![
+            base.join("TEMP").join("CASED"),
+            temp_dir.join("keep"),
+            temp_dir.join("missing"),
+            temp_dir.join("secret"),
+        ];
+        expected.sort();
+        assert_eq!(temp_roots, vec![expected.clone(), expected]);
     }
 
     #[test]

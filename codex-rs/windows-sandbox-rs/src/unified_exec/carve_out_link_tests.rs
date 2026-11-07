@@ -512,3 +512,98 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
         ))
     );
 }
+
+/// #1708: a configured read-only path inside a writable root that comes only
+/// from the temp folder setting is protected when it reaches the backend only
+/// through the profile (the shell tool, unified exec), as when it is also
+/// passed as an extra deny-write path. The rest of the temp folder stays
+/// writable. Only the profile-only case failed before #1708; the other was
+/// already protected and is kept as the reference.
+#[test]
+fn legacy_read_only_path_under_temp_root_is_protected() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            let temp = test_root.path().join("temp");
+            let keep = temp.join("keep");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            fs::create_dir_all(&keep).expect("create read-only path");
+            fs::write(keep.join("orig.txt"), "original").expect("seed read-only file");
+            let absolute =
+                |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+            let profile = PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path {
+                            path: absolute(&workspace),
+                        },
+                        FileSystemAccessMode::Write,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        },
+                        FileSystemAccessMode::Write,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path {
+                            path: absolute(&keep),
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                ]),
+                NetworkSandboxPolicy::Restricted,
+            );
+            let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+                vec![absolute(&keep)]
+            } else {
+                Vec::new()
+            };
+            let temp_value = temp.to_string_lossy().into_owned();
+            let started = run_script(
+                &profile,
+                &workspace,
+                &carve_outs,
+                HashMap::from([
+                    ("TEMP".to_string(), temp_value.clone()),
+                    ("TMP".to_string(), temp_value),
+                    ("K".to_string(), keep.to_string_lossy().into_owned()),
+                ]),
+                concat!(
+                    "echo planted> \"%K%\\new.txt\"\r\n",
+                    "echo changed> \"%K%\\orig.txt\"\r\n",
+                    "echo temp-ok> \"%TEMP%\\beside.txt\"\r\n",
+                ),
+            );
+            (
+                as_deny_write_path,
+                started,
+                keep.join("new.txt").exists(),
+                fs::read_to_string(keep.join("orig.txt")).ok(),
+                fs::read_to_string(temp.join("beside.txt"))
+                    .ok()
+                    .map(|text| text.trim_end().to_string()),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [false, true].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            false,
+            Some("original".to_string()),
+            Some("temp-ok".to_string())
+        ))
+    );
+}

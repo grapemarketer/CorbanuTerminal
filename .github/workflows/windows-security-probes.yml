@@ -133,6 +133,7 @@ env:
     carve_out_link::link_above_carve_out_finds_links_below_the_root
     carve_out_link::legacy_top_level_project_metadata_link_stops_the_command
     carve_out_link::legacy_missing_read_only_path_is_created_and_protected
+    carve_out_link::legacy_read_only_path_under_temp_root_is_protected
     cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
     cloud_placeholder::legacy_cloud_placeholder_root_gets_its_label_back
     cloud_placeholder::legacy_nested_project_metadata_in_cloud_placeholders_is_watched
@@ -175,13 +176,13 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
           grep -q "test result: ok. 3 passed" d283-1541.log
           rm d283-1541.log
-      - name: Configured read-only paths the legacy backend makes (#1686)
+      - name: Configured read-only paths the legacy backend makes (#1686, #1708)
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones --nocapture --test-threads=1 2>&1 | tee d1686.log
-          grep -q "test result: ok. 1 passed" d1686.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones resolved_permissions::tests::temp_root_carries_explicit_read_only_paths_inside_it --nocapture --test-threads=1 2>&1 | tee d1686.log
+          grep -q "test result: ok. 2 passed" d1686.log
           rm d1686.log
       - name: D261 denies without the tree walk match it (D285, #1542 item 6)
         if: ${{ !cancelled() }}
