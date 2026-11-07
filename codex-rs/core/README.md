@@ -274,7 +274,8 @@ command could replace, that is, one whose folder lies inside a writable
 root, whether in the path as configured or on the way to a link's target
 (#1542 item 1, D293). D263's denies land on the link's target, so the link
 itself could be removed and the read-only path recreated behind it.
-Configure the path through the link's target instead. The check runs again
+Configure the path through the link's target instead. The same holds for a
+read-only path that is itself such a link (#1667). The check runs again
 after the folders' own `DELETE` denies are written (their parents'
 delete-child denies follow just after), which narrows the window for a link
 a running command swaps in meanwhile. A root spelled through a link from
