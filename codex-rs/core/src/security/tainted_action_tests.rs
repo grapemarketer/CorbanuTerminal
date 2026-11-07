@@ -8637,10 +8637,15 @@ fn d191_other_mktemp_spellings_still_ask() {
             Persistence,
         ),
         ("_=$(mktemp); : ~/.bashrc; echo evil >> \"$_\"", Persistence),
-        ("_=$(mktemp -d); trap 'rm -rf \"$_\"' EXIT; : ~", UnseenCode),
+        // #1685: these ask as Persistence now: trap's quoted action and
+        // the variables `eval` text sets are judged.
+        (
+            "_=$(mktemp -d); trap 'rm -rf \"$_\"' EXIT; : ~",
+            Persistence,
+        ),
         (
             "DIRSTACK=$(mktemp -d); trap 'rm -rf \"$DIRSTACK\"' EXIT",
-            UnseenCode,
+            Persistence,
         ),
         ("TMP=$(mktemp); echo x > \"$TMP\"", Persistence),
         (
@@ -8652,14 +8657,17 @@ fn d191_other_mktemp_spellings_still_ask() {
             // #1685: the trap's `rm` removes a protected home file.
             Persistence,
         ),
-        ("tmp=$(mktemp); trap 'rm -rf \"$tmp\" ~/x' EXIT", UnseenCode),
+        (
+            "tmp=$(mktemp); trap 'rm -rf \"$tmp\" ~/x' EXIT",
+            Persistence,
+        ),
         (
             "tmp=$(mktemp); trap 'rm -rf \"$tmp\"' EXIT; trap 'rm -rf ~' INT",
-            UnseenCode,
+            Persistence,
         ),
         (
             "tmp=$(mktemp); t\"\"rap 'rm -rf \"$tmp\" x' EXIT",
-            UnseenCode,
+            Persistence,
         ),
         (
             "tmp=$(mktemp); xargs mv ./link <<< \"$tmp\"; echo x >> \"$tmp\"",
@@ -8770,8 +8778,8 @@ fn d191_other_mktemp_spellings_still_ask() {
         ),
         ("tmp=$(mktemp) | cat; echo > \"$tmp\"", Persistence),
         ("tmp=$(mktemp) & echo > \"$tmp\"", Persistence),
-        ("eval 'tmp=$(mktemp)'; echo > \"$tmp\"", UnseenCode),
-        ("eval \"tmp=$(mktemp)\"; echo > \"$tmp\"", UnseenCode),
+        ("eval 'tmp=$(mktemp)'; echo > \"$tmp\"", Persistence),
+        ("eval \"tmp=$(mktemp)\"; echo > \"$tmp\"", Persistence),
         ("tmp=$(mktemp); eval 'echo > \"$tmp\"'", Persistence),
         ("tmp=$(mktemp); eval \"rm -f $tmp\"", UnseenCode),
         ("bash -c 'tmp=$(mktemp); echo > \"$tmp\"'", Persistence),
@@ -11888,6 +11896,42 @@ fn issue1685_review1_forms_ask() {
             "aliases[ll]='ls -l'",
             "eval 'X=1 ls'",
             "trap 'x=1' EXIT",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1685 review 2: a table value after a later `]=`, array forms of the
+/// tables, variables `eval` text sets, and trap's quoted action.
+#[test]
+fn issue1685_review2_forms_ask() {
+    use ProtectedActionKind::Persistence;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        assert_eq!(
+            line("functions[f]+='tee -a ~/.zshrc #]=x'; f"),
+            Some(Persistence),
+            "{shell}"
+        );
+        for script in [
+            "aliases+=(x 'tee -a ~/.zshrc')",
+            "functions=(f 'cp a ~/.zshrc')",
+            "BASH_ALIASES+=([x]='tee -a ~/.zshrc')",
+            "typeset -A aliases=(x 'tee -a ~/.zshrc')",
+            "eval 'F=~/.zshrc'; tee -a \"$F\"",
+            "eval F=~/.zshrc; cp a $F",
+            "eval 'export F=~/.zshrc'; cp a \"$F\"",
+            "trap \"git config --comment 'x --get ' core.pager sh\" EXIT",
+            "trap -- \"cp a '$HOME/.zshrc'\" EXIT",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "trap 'echo \"done\"' EXIT",
+            "eval \"x=1\"",
+            "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT; echo x > \"$tmp\"",
+            "aliases[ll]='ls -l'",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }

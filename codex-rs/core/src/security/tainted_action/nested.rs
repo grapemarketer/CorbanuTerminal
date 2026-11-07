@@ -606,27 +606,31 @@ impl Classifier {
             // by name later (`functions[f]='tee -a ~/.zshrc'; f`): a line of
             // its own too, within the same budget.
             let mut tables = 0;
-            for (at, text) in texts.iter().enumerate() {
+            // An array form (`aliases+=(x '…')`) is not read: it fails
+            // closed.
+            'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
-                let Some(value) = code_table_value(text) else {
-                    continue;
-                };
-                tables += 1;
-                let Some(rest) = joined_left
-                    .checked_sub(value.len() + 1)
-                    .filter(|_| tables <= outbound::MAX_JUDGED_POSITIONS)
-                else {
-                    found.unreadable = true;
-                    break;
-                };
-                joined_left = rest;
-                push_script(
-                    found,
-                    folders,
-                    value.to_string(),
-                    replaced(launches[at]),
-                    unknown,
-                );
+                let (values, array) = code_table_values(text);
+                found.unreadable |= array;
+                for value in values {
+                    work::step();
+                    tables += 1;
+                    let Some(rest) = joined_left
+                        .checked_sub(value.len() + 1)
+                        .filter(|_| tables <= outbound::MAX_JUDGED_POSITIONS)
+                    else {
+                        found.unreadable = true;
+                        break 'tables;
+                    };
+                    joined_left = rest;
+                    push_script(
+                        found,
+                        folders,
+                        value.to_string(),
+                        replaced(launches[at]),
+                        unknown,
+                    );
+                }
             }
             let mut runners = 0;
             // #1449: one runner's options are read to the end of the
@@ -804,6 +808,32 @@ impl Classifier {
                             replaced(launches[at]),
                             unknown,
                         );
+                    }
+                }
+                // #1685: trap's action, when it holds quotes or backslashes
+                // the word lexer drops, is a line of its own read with them
+                // (as `eval`'s, #1283). Not on a line where D191 found every
+                // trap only removes temp paths, whose variables a line of its
+                // own would not know.
+                if resolved_name == "trap" && !self.temp_traps {
+                    let args = &texts[at + 1..];
+                    let args = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+                    if let Some(action) = args.first()
+                        && action.contains(['\'', '"', '\\'])
+                    {
+                        match joined_left.checked_sub(action.len() + 1) {
+                            Some(rest) => {
+                                joined_left = rest;
+                                push_script(
+                                    found,
+                                    folders,
+                                    action.clone(),
+                                    replaced(launches[at]),
+                                    unknown,
+                                );
+                            }
+                            None => found.unreadable = true,
+                        }
                     }
                 }
                 // #1422: `compgen -C cmd` runs `cmd` as shell code.
@@ -2162,9 +2192,13 @@ fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)
     })
 }
 
-/// #1685: the value of an assignment to an entry of a table of code run
-/// by name (`functions[f]=…`, `aliases[x]=…`, `BASH_ALIASES[x]=…`).
-fn code_table_value(text: &str) -> Option<&str> {
+/// #1685: the values an assignment to an entry of a table of code run by
+/// name may set (`functions[f]=…`, `aliases[x]+=…`, `BASH_ALIASES[x]=…`):
+/// the text after each `]=` or `]+=`, since a subscript may hold one
+/// (`functions[f]+='… #]=x'` sets the text after the first). And whether
+/// it is an array form of such a table (`aliases+=(…)`, `functions=(…)`)
+/// or an empty value.
+fn code_table_values(text: &str) -> (Vec<&str>, bool) {
     const TABLES: &[&str] = &[
         "functions",
         "aliases",
@@ -2172,9 +2206,27 @@ fn code_table_value(text: &str) -> Option<&str> {
         "saliases",
         "BASH_ALIASES",
     ];
-    let (name, rest) = text.split_once('[')?;
-    let (_, value) = rest.split_once("]=").or_else(|| rest.split_once("]+="))?;
-    TABLES.contains(&name).then_some(value)
+    let name_end = text.find(['[', '+', '=']).unwrap_or(text.len());
+    if !TABLES.contains(&&text[..name_end]) {
+        return (Vec::new(), false);
+    }
+    let rest = &text[name_end..];
+    // The reading ends the word before an array's `(` (`aliases=`).
+    if matches!(rest, "=" | "+=") || rest.starts_with("=(") || rest.starts_with("+=(") {
+        return (Vec::new(), true);
+    }
+    if !rest.starts_with('[') {
+        return (Vec::new(), false);
+    }
+    let values = rest
+        .match_indices(']')
+        .filter_map(|(at, _)| {
+            work::step();
+            let after = &rest[at + 1..];
+            after.strip_prefix('=').or_else(|| after.strip_prefix("+="))
+        })
+        .collect();
+    (values, false)
 }
 
 /// #1620: see [`code_writes_zsh_program`].

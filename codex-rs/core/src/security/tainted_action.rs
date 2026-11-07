@@ -639,6 +639,7 @@ impl Classifier {
             in_file: 0,
             reads_follow: false,
             temp: None,
+            temp_traps: false,
             held: None,
             workspace: String::new(),
             cut_values: HashSet::new(),
@@ -722,6 +723,18 @@ fn carried_command(words: &[String], from: Option<&(usize, String)>) -> Carried 
         carried.command = Some((index, name));
     }
     carried
+}
+
+/// #1685: whether word `at` is in a piece of `eval` or `trap` text before
+/// its command word ([`Carried::spans`], which ascend).
+fn before_carried_command(spans: &[(usize, usize)], at: usize) -> bool {
+    spans
+        .get(
+            spans
+                .partition_point(|(start, _)| *start <= at)
+                .wrapping_sub(1),
+        )
+        .is_some_and(|(_, end)| at < *end)
 }
 
 /// Commands that install something to run later outside the sandbox:
@@ -1426,6 +1439,9 @@ struct Classifier {
     windows_budget: usize,
     /// D191: the action's own line's variables that hold a `mktemp` path.
     temp: Option<mktemp::Scope>,
+    /// #1685: the line being read by the quote-aware reading had a D191
+    /// scope: each of its traps only removes temp paths.
+    temp_traps: bool,
     /// D191: prompts only a temp path raised, dropped only when the action
     /// asks for nothing else (else it asks as on main, for the strongest).
     held: Option<ProtectedActionKind>,
@@ -2160,6 +2176,7 @@ impl Classifier {
         }
         // D191: the prompts only a temp path raised, kept now unless its
         // variable kept that path (see `release_held`).
+        let temp_traps = self.temp.is_some();
         if let Some(scope) = std::mem::replace(&mut self.temp, outer_temp) {
             match scope.finish(arithmetic.assigns_unseen_name(command)) {
                 (Some(kind), true) => self.note(kind),
@@ -2185,7 +2202,9 @@ impl Classifier {
         }
         self.rebuilt_foreign = outer_foreign;
         // #885: nested shells' scripts and sed programs, read with quotes.
+        let outer_temp_traps = std::mem::replace(&mut self.temp_traps, temp_traps);
         self.quoted_pass(command, cwd, depth, (lexed_seds, lexed_shells));
+        self.temp_traps = outer_temp_traps;
         self.sed_scope = outer_scope;
         self.sudo_redefined = outer_sudo_redefined;
         self.quoted_text = outer_quoted_text;
@@ -2438,6 +2457,29 @@ impl Classifier {
             command: carried,
             spans: carried_spans,
         } = carried_command(words, modified.as_ref().or(command.as_ref()));
+        // #1685: a variable that text sets has a value this reading does
+        // not follow (`eval 'F=~/.zshrc'; tee -a "$F"`): unseen, as for
+        // output it cannot see.
+        let declares = carried.as_ref().is_some_and(|(_, name)| {
+            matches!(
+                name.as_str(),
+                "export" | "local" | "declare" | "readonly" | "typeset"
+            )
+        });
+        for (at, word) in words.iter().enumerate() {
+            work::step();
+            let in_text = before_carried_command(&carried_spans, at)
+                || (declares && carried.as_ref().is_some_and(|(index, _)| at > *index));
+            if in_text
+                && let Some((name, _)) = word.split_once('=')
+                && !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                variables.insert(name.to_string(), shell::UNSEEN_OUTPUT.to_string());
+            }
+        }
         // #1685: a folder change in that text is not followed (`trap` runs
         // it later): the folder is one this reading cannot know.
         if carried
@@ -2473,13 +2515,7 @@ impl Classifier {
                         || (at > 0 && runs_next(&lower[at - 1]))
                         // #1685: or before the command of `eval` or
                         // `trap` text (`eval '=tee -a ~/.zshrc'`).
-                        || carried_spans
-                            .get(
-                                carried_spans
-                                    .partition_point(|(start, _)| *start <= at)
-                                    .wrapping_sub(1),
-                            )
-                            .is_some_and(|(_, end)| at < *end))
+                        || before_carried_command(&carried_spans, at))
             })
         {
             self.note(ProtectedActionKind::UnseenCode);
