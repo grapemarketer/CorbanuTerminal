@@ -520,3 +520,79 @@ async fn detect_home_skips_skills_when_all_skill_directories_exist() {
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
+
+#[tokio::test]
+async fn import_repo_mcp_skips_servers_that_clash_with_builtin_namespaces() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    let codex_home = root.path().join(".codex");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        codex_home.join("config.toml"),
+        "[features]\nnon_prefixed_mcp_tool_names = true\n",
+    )
+    .expect("write user config");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{
+          "mcpServers": {
+            "docs": {"command": "docs-server"},
+            "web": {"command": "web-server"}
+          }
+        }"#,
+    )
+    .expect("write mcp");
+
+    let outcome = service_for_paths(root.path().join(EXTERNAL_AGENT_DIR), codex_home)
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        }])
+        .await;
+
+    let [item_result] = outcome.item_results.as_slice() else {
+        panic!("expected one item result: {outcome:?}");
+    };
+    assert_eq!(
+        item_result.successes,
+        vec![import_success(
+            ExternalAgentConfigMigrationItemType::McpServerConfig,
+            Some(repo_root.clone()),
+            "docs",
+            "docs",
+        )]
+    );
+    let [error] = item_result.raw_errors.as_slice() else {
+        panic!("expected one import error: {item_result:?}");
+    };
+    assert_eq!(
+        (
+            error.source.as_deref(),
+            error.sub_error_type.as_deref(),
+            item_result.error_count
+        ),
+        (Some("web"), Some("non_prefixed_mcp_server_name_clash"), 1)
+    );
+    assert!(
+        error
+            .message
+            .starts_with("MCP server `web` would be exposed without the `mcp__` prefix"),
+        "{}",
+        error.message
+    );
+    let config: TomlValue = toml::from_str(
+        &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
+    )
+    .expect("parse config");
+    let expected: TomlValue = toml::from_str(
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+"#,
+    )
+    .expect("parse expected config");
+    assert_eq!(config, expected);
+}

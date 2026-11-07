@@ -2181,46 +2181,12 @@ impl Config {
     /// exposed without the `mcp__` prefix under a built-in tool namespace
     /// (#1655).
     pub fn non_prefixed_mcp_server_name_clash(&self, name: &str) -> Option<String> {
-        if !self.features.enabled(Feature::NonPrefixedMcpToolNames) {
-            return None;
-        }
-        let listed = self.non_prefixed_mcp_tool_servers.as_deref();
-        if listed.is_some_and(|servers| !servers.iter().any(|server| server == name)) {
-            return None;
-        }
-        let multi_agent_v2_namespace = self.multi_agent_v2.tool_namespace.as_deref();
-        if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name, multi_agent_v2_namespace) {
-            return None;
-        }
-        let taken = if codex_mcp::unprefixed_mcp_namespace_is_builtin(
-            name, /*multi_agent_v2_tool_namespace*/ None,
-        ) {
-            "a built-in tool namespace"
-        } else {
-            "the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`)"
-        };
-        let fix = if listed.is_some() {
-            format!(
-                "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
-            )
-        } else {
-            "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
-        };
-        // The suggested name must itself be a valid server name and TOML key.
-        let suggested: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .chain("_mcp".chars())
-            .collect();
-        Some(format!(
-            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{suggested}` (`[mcp_servers.{suggested}]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {suggested} ...`)."
-        ))
+        non_prefixed_mcp_server_name_clash(
+            self.features.enabled(Feature::NonPrefixedMcpToolNames),
+            self.non_prefixed_mcp_tool_servers.as_deref(),
+            self.multi_agent_v2.tool_namespace.as_deref(),
+            name,
+        )
     }
 
     /// Rejects enabled configured servers, and `server_names` entries, that
@@ -2231,14 +2197,15 @@ impl Config {
             .get()
             .iter()
             .filter(|(_, server)| server.enabled)
-            .map(|(name, _)| name);
-        let listed = self.non_prefixed_mcp_tool_servers.iter().flatten();
-        let mut names: Vec<&String> = configured.chain(listed).collect();
-        names.sort();
-        names.dedup();
-        match names
-            .into_iter()
-            .find_map(|name| self.non_prefixed_mcp_server_name_clash(name))
+            .map(|(name, _)| name.as_str());
+        match non_prefixed_mcp_server_name_clashes(
+            self.features.enabled(Feature::NonPrefixedMcpToolNames),
+            self.non_prefixed_mcp_tool_servers.as_deref(),
+            self.multi_agent_v2.tool_namespace.as_deref(),
+            configured,
+        )
+        .into_iter()
+        .next()
         {
             Some(message) => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2526,6 +2493,128 @@ pub fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// The #1655 name check for a config that has not been built into a
+/// [`Config`] yet (for example a pending config write): every message a
+/// config load would reject it with; the load reports the first.
+pub fn non_prefixed_mcp_server_name_clashes_in_config_toml(
+    cfg: &ConfigToml,
+    requirements: &ConfigRequirements,
+) -> std::io::Result<Vec<String>> {
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    let features = ManagedFeatures::from_configured(
+        configured_features,
+        requirements.feature_requirements.clone(),
+    )?;
+    let enabled = features.enabled(Feature::NonPrefixedMcpToolNames);
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    let listed = cfg
+        .features
+        .as_ref()
+        .and_then(|features| features.non_prefixed_mcp_tool_names.as_ref())
+        .and_then(|feature| match feature {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => config.server_names.clone(),
+        });
+    let mut servers = cfg.mcp_servers.clone();
+    filter_mcp_servers_by_requirements(&mut servers, requirements.mcp_servers.as_ref());
+    let configured = servers
+        .iter()
+        .filter(|(_, server)| server.enabled)
+        .map(|(name, _)| name.as_str());
+    Ok(non_prefixed_mcp_server_name_clashes(
+        enabled,
+        listed.as_deref(),
+        resolve_multi_agent_v2_config(cfg).tool_namespace.as_deref(),
+        configured,
+    ))
+}
+
+/// Why an MCP server named `name` can't be used, if it would be exposed
+/// without the `mcp__` prefix under a built-in tool namespace (#1655).
+fn non_prefixed_mcp_server_name_clash(
+    non_prefixed_enabled: bool,
+    listed: Option<&[String]>,
+    multi_agent_v2_namespace: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    if !non_prefixed_enabled {
+        return None;
+    }
+    if listed.is_some_and(|servers| !servers.iter().any(|server| server == name)) {
+        return None;
+    }
+    if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name, multi_agent_v2_namespace) {
+        return None;
+    }
+    let taken = if codex_mcp::unprefixed_mcp_namespace_is_builtin(
+        name, /*multi_agent_v2_tool_namespace*/ None,
+    ) {
+        "a built-in tool namespace"
+    } else {
+        "the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`)"
+    };
+    let fix = if listed.is_some() {
+        format!(
+            "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
+        )
+    } else {
+        "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
+    };
+    // The suggested name must itself be a valid server name and TOML key.
+    let suggested: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .chain("_mcp".chars())
+        .collect();
+    Some(format!(
+        "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{suggested}` (`[mcp_servers.{suggested}]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {suggested} ...`)."
+    ))
+}
+
+/// Every clash among enabled `configured` servers and `server_names`
+/// entries, in name order.
+fn non_prefixed_mcp_server_name_clashes<'a>(
+    non_prefixed_enabled: bool,
+    listed: Option<&'a [String]>,
+    multi_agent_v2_namespace: Option<&str>,
+    configured: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
+    if !non_prefixed_enabled {
+        return Vec::new();
+    }
+    let mut names: Vec<&str> = configured
+        .chain(listed.into_iter().flatten().map(String::as_str))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            non_prefixed_mcp_server_name_clash(
+                non_prefixed_enabled,
+                listed,
+                multi_agent_v2_namespace,
+                name,
+            )
+        })
+        .collect()
 }
 
 /// Validate user-visible feature settings against managed feature requirements.

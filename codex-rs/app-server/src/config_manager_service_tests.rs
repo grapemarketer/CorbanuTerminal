@@ -197,6 +197,90 @@ async fn write_value_rejects_legacy_profile_selector() -> Result<()> {
 }
 
 #[tokio::test]
+async fn writes_reject_new_non_prefixed_mcp_server_name_clash() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let write = |key_path: &str, value: serde_json::Value| ConfigValueWriteParams {
+        file_path: Some(path.display().to_string()),
+        key_path: key_path.to_string(),
+        value,
+        merge_strategy: MergeStrategy::Replace,
+        expected_version: None,
+    };
+    let assert_clash = |error: ConfigManagerError| {
+        assert_eq!(
+            error.write_error_code(),
+            Some(ConfigWriteErrorCode::ConfigValidationError)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("MCP server `web` would be exposed without the `mcp__` prefix"),
+            "{error}"
+        );
+    };
+
+    // Adding a clashing server while the feature is on.
+    let enabled = "[features]\nnon_prefixed_mcp_tool_names = true\n";
+    std::fs::write(&path, enabled)?;
+    assert_clash(
+        service
+            .write_value(write(
+                "mcp_servers.web",
+                serde_json::json!({"command": "web-server"}),
+            ))
+            .await
+            .expect_err("clashing server write should fail"),
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, enabled);
+
+    // A disabled server is not exposed, so it can be written.
+    service
+        .write_value(write(
+            "mcp_servers.web",
+            serde_json::json!({"command": "web-server", "enabled": false}),
+        ))
+        .await
+        .expect("disabled clashing server write succeeds");
+
+    // Turning the feature on while a clashing server exists.
+    let server = "[mcp_servers.web]\ncommand = \"web-server\"\n";
+    std::fs::write(&path, server)?;
+    assert_clash(
+        service
+            .write_value(write(
+                "features.non_prefixed_mcp_tool_names",
+                serde_json::json!(true),
+            ))
+            .await
+            .expect_err("enabling the feature should fail"),
+    );
+    // Listing only other servers in `server_names` keeps `web` prefixed.
+    service
+        .batch_write(ConfigBatchWriteParams {
+            edits: vec![codex_app_server_protocol::ConfigEdit {
+                key_path: "features.non_prefixed_mcp_tool_names".to_string(),
+                value: serde_json::json!({"enabled": true, "server_names": ["docs"]}),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: Some(path.display().to_string()),
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await
+        .expect("feature limited to other servers succeeds");
+
+    // A clash the config already has does not block unrelated writes.
+    std::fs::write(&path, format!("{enabled}{server}"))?;
+    service
+        .write_value(write("model", serde_json::json!("gpt-main")))
+        .await
+        .expect("unrelated write succeeds");
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_rejects_legacy_profile_table() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);

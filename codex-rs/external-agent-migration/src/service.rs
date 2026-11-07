@@ -37,6 +37,7 @@ pub(super) use crate::utils::read_json_file as read_external_settings;
 use crate::utils::rewrite_external_agent_terms;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_protocol::protocol::Product;
@@ -57,6 +58,9 @@ const EXTERNAL_AGENT_DIR: &str = crate::ClaSource::CONFIG_DIR;
 const EXTERNAL_AGENT_CONFIG_MD: &str = crate::ClaSource::CONFIG_MD;
 
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
+
+/// MCP servers an import skipped, as `(name, reason)`.
+type SkippedMcpServers = Vec<(String, String)>;
 
 #[derive(Clone)]
 pub struct ExternalAgentConfigService {
@@ -290,23 +294,50 @@ impl ExternalAgentConfigService {
                     }
                     .await
                 }
-                ExternalAgentConfigMigrationItemType::McpServerConfig => (|| {
-                    let migrated_server_names =
-                        self.import_mcp_server_config(migration_item.cwd.as_deref())?;
-                    emit_migration_metric(
-                        EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
-                        ExternalAgentConfigMigrationItemType::McpServerConfig,
-                        /*skills_count*/ None,
-                    );
-                    for server_name in migrated_server_names {
-                        item_result.record_success(
-                            Some(server_name.clone()),
-                            Some(server_name),
-                            /*title*/ None,
+                ExternalAgentConfigMigrationItemType::McpServerConfig => {
+                    let cwd = migration_item.cwd.as_deref();
+                    // Without a loadable config there is nothing to check
+                    // against; the import then behaves as before.
+                    let config = ConfigBuilder::default()
+                        .codex_home(self.codex_home.clone())
+                        .fallback_cwd(Some(
+                            cwd.map(Path::to_path_buf)
+                                .unwrap_or_else(|| self.codex_home.clone()),
+                        ))
+                        .build()
+                        .await
+                        .ok();
+                    (|| {
+                        let (migrated_server_names, skipped_servers) = self
+                            .import_mcp_server_config(cwd, |name| {
+                                config.as_ref().and_then(|config| {
+                                    config.non_prefixed_mcp_server_name_clash(name)
+                                })
+                            })?;
+                        emit_migration_metric(
+                            EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
+                            ExternalAgentConfigMigrationItemType::McpServerConfig,
+                            /*skills_count*/ None,
                         );
-                    }
-                    Ok(())
-                })(),
+                        for server_name in migrated_server_names {
+                            item_result.record_success(
+                                Some(server_name.clone()),
+                                Some(server_name),
+                                /*title*/ None,
+                            );
+                        }
+                        for (server_name, message) in skipped_servers {
+                            record_import_error(
+                                &mut item_result,
+                                "mcp_server_import",
+                                Some("non_prefixed_mcp_server_name_clash"),
+                                message,
+                                Some(server_name),
+                            );
+                        }
+                        Ok(())
+                    })()
+                }
                 ExternalAgentConfigMigrationItemType::Subagents => (|| {
                     let imported_subagents =
                         self.import_subagents(migration_item.cwd.as_deref())?;
@@ -565,18 +596,43 @@ impl ExternalAgentConfigService {
         )))
     }
 
-    fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
+    /// Imports the external agent's MCP servers, returning the names written
+    /// and the servers skipped because `name_clash` (the #1655 name check)
+    /// rejected them, with its message.
+    fn import_mcp_server_config(
+        &self,
+        cwd: Option<&Path>,
+        name_clash: impl Fn(&str) -> Option<String>,
+    ) -> io::Result<(Vec<String>, SkippedMcpServers)> {
         let Some(scope) = MigrationScope::from_cwd(cwd)? else {
-            return Ok(Vec::new());
+            return Ok(Default::default());
         };
         let target_config = match &scope {
             MigrationScope::Home => self.codex_home.join("config.toml"),
             MigrationScope::Repository { root } => root.join(".codex").join("config.toml"),
         };
         let settings = self.effective_source_settings(&scope)?;
-        let migrated = self.build_mcp_config(&scope, settings)?;
+        let mut migrated = self.build_mcp_config(&scope, settings)?;
+        let mut skipped = Vec::new();
+        if let Some(servers) = migrated
+            .get_mut("mcp_servers")
+            .and_then(TomlValue::as_table_mut)
+        {
+            servers.retain(|name, _| match name_clash(name) {
+                Some(message) => {
+                    skipped.push((name.to_string(), message));
+                    false
+                }
+                None => true,
+            });
+            if servers.is_empty()
+                && let Some(root) = migrated.as_table_mut()
+            {
+                root.remove("mcp_servers");
+            }
+        }
         if is_empty_toml_table(&migrated) {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), skipped));
         }
 
         let Some(target_parent) = target_config.parent() else {
@@ -586,7 +642,7 @@ impl ExternalAgentConfigService {
         if !target_config.exists() {
             let migrated_server_names = migrated_mcp_server_names(&migrated);
             write_toml_file(&target_config, &migrated)?;
-            return Ok(migrated_server_names);
+            return Ok((migrated_server_names, skipped));
         }
 
         let existing_raw = fs::read_to_string(&target_config)?;
@@ -600,7 +656,7 @@ impl ExternalAgentConfigService {
         if !merged_server_names.is_empty() {
             write_toml_file(&target_config, &existing)?;
         }
-        Ok(merged_server_names)
+        Ok((merged_server_names, skipped))
     }
 
     fn import_subagents(&self, cwd: Option<&Path>) -> io::Result<Vec<String>> {
