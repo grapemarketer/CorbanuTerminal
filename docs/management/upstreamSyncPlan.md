@@ -6,6 +6,14 @@ D273 (do it now as a dedicated, owned program), D274 (target `rust-v0.165.0`, fi
 D275 (follow upstream's removals; rebuild our permission and sandbox behaviour on the new path in a "needs security
 sign-off" PR; keep our `AGENTS.md` and skills), D276 (afterwards, sync per upstream minor release or monthly), D277
 (invite @goodalexander; done on #94).
+**2026-11-07 decisions (#1532):** D303 target `rust-v0.167.0` (replaces D274); D304 active-plan slot 2 (governed
+record: [`docs/plans/active/upstream-sync-rust-v0.167.0.md`](../plans/active/upstream-sync-rust-v0.167.0.md), sprints
+PF-85-S00..S06); D305 monthly cadence afterwards (replaces D276; security-file changes get their own reviewed slice);
+D306 48-hour merge hold on `main` after the final merge; D307 up to 8 review rounds for the S3 security PR and the
+final merge PR; D316 `codex-voice-host` stays out of our lanes (workspace `exclude`); D317 `rusty_v8` from a
+CorbanuCore-owned copy ([provenance](upstreamSync/rusty_v8-provenance.md)); D318 security-owner reviewer account
+pending (CODEOWNERS block request-only); D319 the security owner decides `age` 0.11 and the reduced `zip` decoders in
+S1, with hard backward compatibility for existing vault files and archives.
 
 Product basis: `docs/corbanu-product-spec.md`, principle "7. **Upstream velocity:** Maintain continuous Codex parity
 without removing Corbanu-specific behavior", and row 11 "Upstream Codex parity". Engineering contract:
@@ -109,7 +117,7 @@ different contents under numbers we already use (e.g. upstream `0047_rollout_mig
   upstream crates that overlap ours (`agent-roles`, `message-board`, `runtime-agent-instance`, `mxc-sandbox`,
   `windows-sandbox-service`, `user-verification`, `workload-identity`, `guardian-context`).
 
-### Target recommendation (decision for Travis; D274 stands until he answers)
+### Target recommendation (decided: D303, `rust-v0.167.0`)
 
 Recommend switching the fixed target to **`rust-v0.167.0`**. It costs +21 conflicted files (+2.4%), +144 hunks (+4.9%)
 and +8.3k conflict lines (+6.5%), with no extra sandbox or Windows-sandbox conflicts, and it compiles on our toolchain.
@@ -263,12 +271,17 @@ reels, code-blind functional runs).
 - **Exit:** skeleton commit with two parents (`main`, pinned tag SHA, verified); ledger covers every conflicted path
   exactly once plus security-review and migration rows; `cargo metadata` succeeds; workflow files parse; SG1 recorded.
 - **Security gate SG1 (supply chain):** compare third-party packages before and after across `Cargo.lock`,
-  `MODULE.bazel(.lock)` and `pnpm-lock.yaml` (new crates, new git sources such as `seanh-oai/rusty_v8` at 0.167.0,
-  licences, advisories via cargo-deny). Re-run the same comparison at S5.
+  `MODULE.bazel(.lock)` and `pnpm-lock.yaml` (new crates, new git sources such as the `rusty_v8` fork at 0.167.0,
+  now `CorbanuCore/rusty_v8` per D317, licences, advisories via cargo-deny). Re-run the same comparison at S5.
 - **Rollback:** nothing on `main` changes; the sync branch can be abandoned or re-cut.
 
 ### S1 Tier 1: below core
 
+- **Kept-ours manifest choices (D319):** the security owner decides `age` 0.11 (vault file format) and our reduced
+  `zip` decoder set (#968) against upstream's versions. Hard requirement: existing vault files and archives keep
+  working. Compatibility test before either changes: vault files and archives written by the last released Corbanu
+  build (checked-in fixtures, generated once with that release and a disposable home) open and decrypt with the
+  synced build, and vault files the synced build writes still open in that release, or the format stays unchanged.
 - **Scope:** S1a protocol (regenerate app-server schemas with `just write-app-server-schema`); S1b config/providers/
   auth (regenerate `models.json`, re-apply the Corbanu catalog, keep the OpenAI-style route default, vault-backed login,
   Corbanu home); S1c other crates (follow upstream's `core-skills` split; **renumber upstream migrations 0047–0062
