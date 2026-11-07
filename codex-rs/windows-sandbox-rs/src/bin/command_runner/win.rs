@@ -36,11 +36,12 @@ use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
-use codex_windows_sandbox::get_current_token_for_elevated_restriction;
+use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
+use codex_windows_sandbox::restrict_current_default_dacl;
 use codex_windows_sandbox::restrict_current_token_access;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
@@ -242,16 +243,22 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// process, its threads and its token gave that account full access: a
 /// command could start a child under the runner, with its unrestricted
 /// token, or write the runner's memory, threads or token. Afterwards the
-/// account may only query and wait for them, and objects the runner creates
-/// without explicit security (its later threads included) get the same.
-/// Returns the token the command's token is made from, opened first because
-/// the runner can't open its own token for that afterwards.
-fn harden_runner() -> Result<OwnedWinHandle> {
-    let base = OwnedWinHandle::new(unsafe { get_current_token_for_elevated_restriction()? });
-    codex_process_hardening::protect_new_objects_by_default()
-        .context("protect the runner's new objects")?;
+/// account may only query this process and its threads (and wait for
+/// them) and query its token, and objects the runner creates without
+/// explicit security (threads Windows starts in it, console hosts) give the
+/// commands no write right either. Returns the token the command's token is
+/// made from, opened first: the runner can't open its own token for that
+/// afterwards.
+fn harden_runner(log_dir: &Path) -> Result<OwnedWinHandle> {
+    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     codex_process_hardening::restrict_current_process_access()
         .context("restrict access to the runner's process and threads")?;
+    if !restrict_current_default_dacl().context("restrict the runner's default DACL")? {
+        log_note(
+            "runner: not in the sandbox users' group; its default DACL is unchanged",
+            Some(log_dir),
+        );
+    }
     restrict_current_token_access().context("restrict access to the runner's token")?;
     Ok(base)
 }
@@ -622,14 +629,16 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let ipc_spawn = match harden_runner().and_then(|base| spawn_ipc_process(&req, &base)) {
+    let ipc_spawn = match harden_runner(req.codex_home.as_path())
+        .and_then(|base| spawn_ipc_process(&req, &base))
+    {
         Ok(value) => value,
         Err(err) => {
             let _ = send_error(
                 &pipe_write,
                 ErrorStage::SpawnChild,
                 windows_error_code(&err),
-                err.to_string(),
+                format!("{err:#}"),
             );
             return Err(err);
         }

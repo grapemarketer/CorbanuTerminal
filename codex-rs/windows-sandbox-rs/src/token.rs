@@ -18,6 +18,7 @@ use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
+use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::CreateRestrictedToken;
 use windows_sys::Win32::Security::CreateWellKnownSid;
@@ -151,6 +152,51 @@ unsafe fn set_object_dacl(handle: HANDLE, grants: &[(*mut c_void, u32)]) -> Resu
     Ok(())
 }
 
+/// The elevated sandbox's users' group (setup creates it and adds both
+/// sandbox accounts).
+const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
+
+/// D324 (#1648): gives objects the elevated runner creates from now on
+/// without explicit security (the threads Windows starts in it, pipes,
+/// console hosts) a default DACL of `GENERIC_ALL` for SYSTEM and the
+/// sandbox users' group, and `READ_CONTROL` for `OWNER RIGHTS`. The runner
+/// is unrestricted, so the group gives it full access; its commands, and
+/// every other elevated command, have the group only as a normal group, not
+/// as a restricting SID, so they get no write right. Before, they got full
+/// access through the sandbox account. Returns false, changing nothing, if
+/// this process isn't in the group (a setup older than the group).
+pub fn restrict_current_default_dacl() -> Result<bool> {
+    let mut group = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP)?;
+    // SAFETY: the SID buffers outlive every call; the token handle is
+    // closed below.
+    unsafe {
+        let psid_group = group.as_mut_ptr() as *mut c_void;
+        let mut member = 0;
+        if CheckTokenMembership(0, psid_group, &mut member) == 0 {
+            return Err(anyhow!("CheckTokenMembership failed: {}", GetLastError()));
+        }
+        if member == 0 {
+            return Ok(false);
+        }
+        let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+        let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
+        let mut token: HANDLE = 0;
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, &mut token) == 0 {
+            return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
+        }
+        let result = set_default_dacl_grants(
+            token,
+            &[
+                (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+                (psid_group, GENERIC_ALL),
+                (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
+            ],
+        );
+        CloseHandle(token);
+        result.map(|()| true)
+    }
+}
+
 /// D324 (#1648): limits the elevated runner's own token to `TOKEN_QUERY` for
 /// its user, the sandbox account its commands share. Its token DACL gave
 /// that account full access, and the account is a restricting SID of every
@@ -251,27 +297,12 @@ impl Drop for LocalSid {
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
-    open_current_token_for_restriction(/*extra_access*/ 0)
-}
-
-/// [`get_current_token_for_restriction`] for the elevated runner, with
-/// `WRITE_DAC`: a token `CreateRestrictedToken` makes from the handle has
-/// the handle's access, and D324 replaces the made token's own DACL.
-///
-/// # Safety
-/// Caller must close the returned handle.
-pub unsafe fn get_current_token_for_elevated_restriction() -> Result<HANDLE> {
-    open_current_token_for_restriction(READ_CONTROL | WRITE_DAC)
-}
-
-unsafe fn open_current_token_for_restriction(extra_access: u32) -> Result<HANDLE> {
     let desired = TOKEN_DUPLICATE
         | TOKEN_QUERY
         | TOKEN_ASSIGN_PRIMARY
         | TOKEN_ADJUST_DEFAULT
         | TOKEN_ADJUST_SESSIONID
-        | TOKEN_ADJUST_PRIVILEGES
-        | extra_access;
+        | TOKEN_ADJUST_PRIVILEGES;
     let mut h: HANDLE = 0;
     #[link(name = "advapi32")]
     unsafe extern "system" {
