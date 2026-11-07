@@ -299,9 +299,12 @@ fn is_tainted(session: &Session) -> bool {
         .is_some_and(|state| state.taint_generation > 0)
 }
 
-/// D334 (#1702): a follow-up task to a running (or still starting) agent
-/// joins its work; to any other agent it starts a new turn, so it asks like
-/// a restart. A target that cannot be read or found counts as not running.
+/// D334 (#1702): a follow-up task to an agent with a turn running joins its
+/// work; to any other agent it starts a new turn, so it asks like a restart.
+/// `PendingInit` is not running: a finished agent reloaded without a turn
+/// (by `send_message`, say) reads `PendingInit` too (#1768 review). A target
+/// that cannot be read or found counts as not running. This reads the target
+/// before `PreToolUse` hooks, which the operator configures, could rewrite it.
 async fn followup_target_is_running(invocation: &ToolInvocation) -> bool {
     let ToolPayload::Function { arguments } = &invocation.payload else {
         return false;
@@ -321,15 +324,13 @@ async fn followup_target_is_running(invocation: &ToolInvocation) -> bool {
     else {
         return false;
     };
-    matches!(
-        invocation
-            .session
-            .services
-            .agent_control
-            .get_status(thread_id)
-            .await,
-        AgentStatus::PendingInit | AgentStatus::Running
-    )
+    invocation
+        .session
+        .services
+        .agent_control
+        .get_status(thread_id)
+        .await
+        == AgentStatus::Running
 }
 
 /// One line per post-taint decision (PF-26 counts these); never arguments.

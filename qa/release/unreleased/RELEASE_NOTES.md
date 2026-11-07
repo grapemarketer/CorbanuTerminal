@@ -132,8 +132,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   approval on every route, and so does a MultiAgentV2 `followup_task` (and
   `followup_task_plaintext`) to an agent that isn't running, since it starts a
   new turn there; the prompt says it is "a request to restart a finished
-  agent", and with approvals off it is refused. A follow-up to a running agent
-  goes ahead. On the Responses route both used to go ahead.
+  agent", and with approvals off it is refused. A follow-up to an agent with a
+  turn running goes ahead. Before, `resume_agent` and `followup_task` went
+  ahead on every route that offers them, and `resume_agent_v1` asked as an
+  unclassified tool.
 - **The same rules apply under Aggressive** (D335).
 
 ## `/security` wording

@@ -7597,26 +7597,82 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
     let tools = ["followup_task", "followup_task_plaintext"];
     let targets = [format!("thread:{agent_id}"), "worker".to_string()];
 
-    let running = manager.agent_control().get_status(agent_id).await;
-    assert!(
-        matches!(running, AgentStatus::PendingInit | AgentStatus::Running),
-        "{running:?}"
+    let restart = format!(
+        "Not run: Security level {level:?}: this is a request to restart a finished agent \
+         after untrusted content entered the session, so it needs your approval, and \
+         approvals are off (approval_policy = never)."
     );
-    for tool in tools {
-        for target in &targets {
-            assert_eq!(
-                dispatch(tool, target.clone()).await,
-                Ok(()),
-                "{level:?} {tool} {target}"
-            );
+    let asks_for_every_target = |label: &'static str| {
+        let dispatch = &dispatch;
+        let targets = &targets;
+        let restart = &restart;
+        let session = &session;
+        let turn = &turn;
+        async move {
+            for tool in tools {
+                // An unknown target counts as not running.
+                for target in targets.iter().cloned().chain(["nobody".to_string()]) {
+                    let refusal = dispatch(tool, target.clone()).await.expect_err("asks");
+                    assert!(
+                        refusal.starts_with(restart.as_str()),
+                        "{level:?} {label} {tool} {target}: {refusal}"
+                    );
+                }
+                // So do arguments without a readable target.
+                let invocation = invocation(
+                    session.clone(),
+                    turn.clone(),
+                    tool,
+                    function_payload(json!({"message": "continue"})),
+                );
+                let refusal = check_dispatch(&invocation, ToolOrigin::Builtin)
+                    .await
+                    .expect_err("asks");
+                assert!(
+                    refusal.starts_with(restart.as_str()),
+                    "{level:?} {label} {tool}: {refusal}"
+                );
+            }
         }
-    }
+    };
+
+    // #1768 review: a session (re)loaded without a turn is `PendingInit`, as
+    // is a finished agent that `send_message` reloaded; a follow-up would
+    // start its turn, so it asks.
+    let status = manager.agent_control().get_status(agent_id).await;
+    assert_eq!(status, AgentStatus::PendingInit);
+    asks_for_every_target("pending").await;
 
     let thread = manager
         .get_thread(agent_id)
         .await
         .expect("worker thread should exist");
     let first_turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn.sub_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+    let status = manager.agent_control().get_status(agent_id).await;
+    assert_eq!(status, AgentStatus::Running);
+    for tool in tools {
+        for target in &targets {
+            assert_eq!(
+                dispatch(tool, target.clone()).await,
+                Ok(()),
+                "{level:?} running {tool} {target}"
+            );
+        }
+    }
+
     thread
         .session
         .send_event(
@@ -7632,24 +7688,7 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
             }),
         )
         .await;
-    let finished = manager.agent_control().get_status(agent_id).await;
-    assert!(
-        matches!(finished, AgentStatus::Completed(_)),
-        "{finished:?}"
-    );
-    let restart = format!(
-        "Not run: Security level {level:?}: this is a request to restart a finished agent \
-         after untrusted content entered the session, so it needs your approval, and \
-         approvals are off (approval_policy = never)."
-    );
-    for tool in tools {
-        // An unknown target counts as not running.
-        for target in targets.iter().cloned().chain(["nobody".to_string()]) {
-            let refusal = dispatch(tool, target.clone()).await.expect_err("asks");
-            assert!(
-                refusal.starts_with(&restart),
-                "{level:?} {tool} {target}: {refusal}"
-            );
-        }
-    }
+    let status = manager.agent_control().get_status(agent_id).await;
+    assert!(matches!(status, AgentStatus::Completed(_)), "{status:?}");
+    asks_for_every_target("finished").await;
 }
