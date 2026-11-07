@@ -84,6 +84,9 @@ const PURE_FILTERS: &[&str] = &[
 /// What the pass found in one command line.
 #[derive(Default)]
 struct Found {
+    /// #1704: the text read is the code `eval` or `trap` runs, read as
+    /// shell like a line's own words.
+    evaluated: bool,
     /// Scripts that nested shells run, with the folder they run in, and
     /// what a launcher does with its input there (#1268).
     /// #1283: and whether that folder is unknown.
@@ -612,11 +615,13 @@ impl Classifier {
             // `set -A aliases …`), nor any other write to one: they fail
             // closed (#1704).
             // #1704: words that may be any or several where a writer reads
-            // its options count only in text read as shell at this
-            // reading's own level (not `awk '{print $2}'` read again as
-            // code), as for #937's arithmetic.
-            let seen: Option<Vec<code_tables::Seen>> =
-                (level == 0 && self.not_shell == 0 && self.rebuilt == 0).then(|| {
+            // its options count where text is read as shell: at this
+            // reading's own level or for `eval`/`trap` text (not `awk
+            // '{print $2}'` read again as code), as for #937's arithmetic.
+            let seen: Option<Vec<code_tables::Seen>> = ((level == 0 || found.evaluated)
+                && self.not_shell == 0
+                && self.rebuilt == 0)
+                .then(|| {
                     command
                         .words
                         .iter()
@@ -932,6 +937,10 @@ impl Classifier {
                 }
                 continue;
             }
+            // #1704: `eval` and `trap` run their text as shell.
+            let evaluates = command_at
+                .as_ref()
+                .is_some_and(|(_, name)| matches!(name.as_str(), "eval" | "trap"));
             // Also redirection files, comments and other text the shell
             // does not pass on as words.
             let quoted = command
@@ -974,7 +983,9 @@ impl Classifier {
                     // command lines do not count: a decoy (`echo 'sed p'`)
                     // must not make up for a command this reading missed.
                     let counts = (found.sed_commands, found.shell_commands);
+                    let evaluated = std::mem::replace(&mut found.evaluated, evaluates);
                     self.walk(&reading.commands, &mut inner, level + 1, found);
+                    found.evaluated = evaluated;
                     found.unreadable |= inner.unfollowed;
                     if !word.lines {
                         (found.sed_commands, found.shell_commands) = counts;

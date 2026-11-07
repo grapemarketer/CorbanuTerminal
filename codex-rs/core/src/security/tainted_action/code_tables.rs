@@ -138,15 +138,26 @@ pub(super) enum Seen {
     /// One word of a value the classifier cannot see (`"$o"`).
     One,
     /// Any number of words: an unquoted expansion, which may split (`$o`,
-    /// `$(cat f)`), a brace expansion, or an unquoted pattern that may
-    /// match a file named like an option or a table (`?A`, not
-    /// `:completion:*`).
+    /// `$(cat f)`), one of several words (`"$@"`), a brace expansion, or
+    /// an unquoted pattern that may match a file named like an option or
+    /// a table (`?A`, not `:completion:*`).
     Many,
 }
 
 impl Seen {
     pub(super) fn of(word: &quoted::Word) -> Self {
-        if word.splits || word.brace_expansion || (word.globs && may_match(&word.text)) {
+        // In double quotes too: `"$@"`, `"${a[@]}"`, zsh's flags
+        // (`"${(@f)x}"`, `"${=x}"`), and zsh's `$=x`, `$~x` and `$^x`,
+        // which the reading keeps as text.
+        let several = [
+            "$@", "${@", "[@]", "${(", "${=", "${~", "${^", "$=", "$~", "$^",
+        ]
+        .iter()
+        .any(|form| {
+            work::step();
+            word.text.contains(form)
+        });
+        if word.splits || word.brace_expansion || several || (word.globs && may_match(&word.text)) {
             Seen::Many
         } else if word.dynamic {
             Seen::One
@@ -247,25 +258,28 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
             .unwrap_or(Seen::Known)
     };
     let many = |at: usize| seen_at(at) == Seen::Many;
-    // Whether a word after `at` may be a name the word at `at` (one the
-    // classifier cannot see) gives an option for: one it cannot see either,
-    // or one naming a table. Worked out once, from the end.
-    let mut later = Vec::new();
-    let mut names_later = |at: usize| {
-        if later.is_empty() {
-            later = vec![false; args.len() + 1];
+    // Whether a word after `at` is one the classifier cannot see, or names
+    // a table. Worked out once, from the end.
+    let later = std::cell::OnceCell::new();
+    let names_later = |at: usize| {
+        let later = later.get_or_init(|| {
+            let mut later = vec![false; args.len() + 1];
             for at in (0..args.len()).rev() {
                 work::step();
                 later[at] = later[at + 1] || seen_at(at) != Seen::Known || names_table(&args[at]);
             }
-        }
+            later
+        });
         later.get(at + 1).copied().unwrap_or(false)
     };
-    // A word where an option goes: several words, or one, with a name
-    // after it, may be an option taking a name (`set $o commands ls ./x`,
-    // `set $(cat f)`).
-    let mut option = |at: usize| match seen_at(at) {
+    // A word where an option goes: several words may be an option taking a
+    // name (`set $(cat f)`). So may one with a word after it where options
+    // take names, or both (`set "$o" ls ./x` with `-Acommands`); where
+    // none does, it may be a flag moving a later word, one the classifier
+    // cannot see or a table's name, into a name's place.
+    let option = |at: usize, takes_names: bool| match seen_at(at) {
         Seen::Many => true,
+        Seen::One if takes_names => at + 1 < args.len(),
         Seen::One => names_later(at),
         Seen::Known => false,
     };
@@ -276,7 +290,7 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         // context or style that is several words may hold the name
         // (`zstyle -a $(cat f)`).
         "zstyle" => {
-            if option(0) {
+            if option(0, true) {
                 return true;
             }
             let Some(option) = args.first().filter(|arg| arg.starts_with('-')) else {
@@ -320,7 +334,7 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         } else if options && arg.len() > 1 && arg.starts_with(['-', '+']) {
             // Where options lead, one the classifier cannot see (`-$o`) may
             // be any.
-            if leading && option(at) {
+            if leading && option(at, !names.is_empty()) {
                 return true;
             }
             if let Some((flag_at, flag)) = arg[1..]
@@ -336,7 +350,7 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
                 }
                 at = value;
             }
-        } else if options && leading && option(at) {
+        } else if options && leading && option(at, !names.is_empty()) {
             return true;
         } else {
             let index = operand.unwrap_or(0);
@@ -355,11 +369,11 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
 const GLOB: [char; 9] = ['*', '?', '[', '{', '^', '~', '#', '(', '<'];
 
 /// Whether a pattern may match a file named like an option or a table
-/// (`?A`, `*`, `function[s]`). One matching only paths (`~/x`, `*/x`),
-/// names with another start (`:completion:*`) or names holding a `.`
-/// (`*.png`, `*.(jpeg|png)`), which no name, table or option letter does,
-/// cannot; not past zsh's `^`, `~` or a group, nor a `.` in brackets or
-/// before `#` (`*~a/b`, `^*.png`, `*[.]x`, `x.#`).
+/// (`?A`, `-e?`, `*`, `function[s]`). One matching only paths (`~/x`,
+/// `*/x`), names with another start (`:completion:*`), or names holding a
+/// `.` and ending other than in `]` (`*.png`), which no table, name or
+/// option taking one is, cannot; not past zsh's `^`, `~` or a group, nor a
+/// `.` in brackets or before `#` (`*~a/b`, `^*.png`, `*[.]x`, `x.#`).
 fn may_match(pattern: &str) -> bool {
     let Some(glob) = pattern.find(GLOB) else {
         return false;
@@ -372,15 +386,18 @@ fn may_match(pattern: &str) -> bool {
             .next_back()
             .map_or(prefix, |(last, _)| &prefix[..last]);
     }
-    if !["-", "+"].iter().chain(TABLES).any(|start| {
-        work::step();
-        start.starts_with(prefix)
-    }) {
+    if !prefix.starts_with(['-', '+'])
+        && !TABLES.iter().any(|table| {
+            work::step();
+            table.starts_with(prefix)
+        })
+    {
         return false;
     }
     let mut chars = pattern.chars().peekable();
     let mut first = true;
     let mut bracket = false;
+    let mut dot = false;
     while let Some(ch) = chars.next() {
         work::step();
         match ch {
@@ -389,12 +406,12 @@ fn may_match(pattern: &str) -> bool {
             '[' => bracket = true,
             ']' => bracket = false,
             '/' if !bracket => return false,
-            '.' if !bracket && chars.peek() != Some(&'#') => return false,
+            '.' if !bracket && chars.peek() != Some(&'#') => dot = true,
             _ => {}
         }
         first = false;
     }
-    true
+    !(dot && !bracket && !pattern.ends_with(GLOB) && !pattern.ends_with(']'))
 }
 
 /// Whether the command `name` with `args` writes a variable named by a

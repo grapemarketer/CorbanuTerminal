@@ -12388,9 +12388,10 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
 /// word the classifier cannot see may be an option taking a name (`o=-A;
 /// set $o commands ls ./x` defines `ls`) or, unquoted, several words
 /// (`set $(cat f)`); so may an unquoted one before a name (`zstyle -a
-/// $(cat f)`). One word with a name after it asks too (`"$o"` then
-/// `functions`). Read with quotes, in text read as shell. `zselect` and
-/// `zsystem flock` read options after operands. Only adds prompts.
+/// $(cat f)`). One word with a word after it asks too (`"$o"` may be
+/// `-Acommands`). Read with quotes, in text read as shell and in `eval` and
+/// `trap` text. `zselect` and `zsystem flock` read options after operands.
+/// Only adds prompts.
 #[test]
 fn issue1704_hidden_words_where_writers_read_options_ask() {
     for shell in ["bash", "zsh"] {
@@ -12411,6 +12412,23 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "set *~a/b",
             "set ^*.png",
             "set -.#A commands ls ./x",
+            "set -e? commands ls ./x",
+            "print -r* x",
+            "print -l *a.b]",
+            // One word holding an option and its name, or several in
+            // quotes or zsh's own spellings (review 1).
+            "o=$(cat f); set \"$o\" ls ./x; ls",
+            "o=$(cat f); print \"$o\" 'echo pwned'; f",
+            "printf \"$fmt\" x",
+            "o=$(cat f); set $=o; ls",
+            "o=$(cat f); set \"$=o\"; ls",
+            "o=-A; set $~o commands ls ./x",
+            "set $^o commands ls ./x",
+            "set -- $(cat f); set \"$@\"; ls",
+            "set \"${(@f)$(<f)}\"; ls",
+            "mapfile -t a < f; printf \"${a[@]}\"; ls",
+            "eval 'set ?A commands ls ./x'",
+            "trap 'set ?A commands ls ./x' EXIT",
             "zstyle -$o :x y functions",
             "zstyle \"$o\" :x y functions",
             "zstyle -s $c y n",
@@ -12447,7 +12465,7 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "set -euo pipefail",
             "set x $y",
             "printf '%s\\n' \"$x\"",
-            "printf \"$fmt\" x",
+            "printf \"$fmt\"",
             "printf -- \"$x\"",
             "printf '* -text\\n' > f",
             "printf '<%s>' x",
@@ -12491,6 +12509,14 @@ fn issue1704_option_checks_are_linear() {
     });
     work::assert_linear("words after one unseen", |scale| {
         let line = format!("print \"$o\" {}", "x ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("unseen words where options take no names", |scale| {
+        let line = format!("zgetattr {}x", "\"$a\" ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("eval text", |scale| {
+        let line = format!("eval 'set -e {}x'", "\"$a\" y ".repeat(200 * scale));
         let _ = kind(&["zsh", "-lc", &line]);
     });
     work::assert_linear("many zstyles", |scale| {
