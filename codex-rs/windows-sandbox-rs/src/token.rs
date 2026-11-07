@@ -156,6 +156,23 @@ unsafe fn set_object_dacl(handle: HANDLE, grants: &[(*mut c_void, u32)]) -> Resu
 /// sandbox accounts).
 const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 
+/// The sandbox users' group SID if this process is in it (the elevated
+/// runner is, unless its setup predates the group).
+fn current_sandbox_users_group() -> Result<Option<Vec<u8>>> {
+    // A setup older than the group never created it.
+    let Ok(mut group) = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP) else {
+        return Ok(None);
+    };
+    let mut member = 0;
+    // SAFETY: the SID buffer outlives the call; 0 checks this process's token.
+    if unsafe { CheckTokenMembership(0, group.as_mut_ptr() as *mut c_void, &mut member) } == 0 {
+        return Err(anyhow!("CheckTokenMembership failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    Ok((member != 0).then_some(group))
+}
+
 /// D324 (#1648): gives objects the elevated runner creates from now on
 /// without explicit security (the threads Windows starts in it, pipes,
 /// console hosts) a default DACL of `GENERIC_ALL` for SYSTEM and the
@@ -166,18 +183,13 @@ const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 /// access through the sandbox account. Returns false, changing nothing, if
 /// this process isn't in the group (a setup older than the group).
 pub fn restrict_current_default_dacl() -> Result<bool> {
-    let mut group = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP)?;
+    let Some(mut group) = current_sandbox_users_group()? else {
+        return Ok(false);
+    };
     // SAFETY: the SID buffers outlive every call; the token handle is
     // closed below.
     unsafe {
         let psid_group = group.as_mut_ptr() as *mut c_void;
-        let mut member = 0;
-        if CheckTokenMembership(0, psid_group, &mut member) == 0 {
-            return Err(anyhow!("CheckTokenMembership failed: {}", GetLastError()));
-        }
-        if member == 0 {
-            return Ok(false);
-        }
         let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
         let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
         let mut token: HANDLE = 0;
@@ -604,16 +616,26 @@ pub unsafe fn create_readonly_token_with_caps_and_user_from(
 
 /// D324 (#1648): an elevated command's token. Every elevated command runs as
 /// the same sandbox account (per network mode), which is also a restricting
-/// SID of its token, so its default DACL grants full access only to SYSTEM
-/// and the logon SID of this command's runner: each runner is a logon of its
-/// own (`CreateProcessWithLogonW`), so that SID identifies this command, as
-/// D259's command SID does a legacy one. The sandbox account, Everyone and
-/// the capability SIDs get read and execute, and so does `OWNER RIGHTS`: the
-/// sandbox account owns every elevated command's objects, and an owner is
-/// otherwise always allowed `WRITE_DAC`. Before D324 the logon SID,
-/// Everyone and the capability SIDs, restricting SIDs of every elevated
-/// token, had `GENERIC_ALL`, so any elevated command could open another's
-/// processes for every write right.
+/// SID of its token, and the runners Core starts from one logon session share
+/// their logon SID (the secondary logon service gives each the caller's), so
+/// neither identifies one command. As D259 does for a legacy command, the
+/// token gets a fresh SID of its own as an extra restricting SID, never
+/// persisted or named by any ACL. Its default DACL grants full access only to
+/// SYSTEM, the sandbox users' group (a normal group of every elevated token,
+/// never a restricting SID, so it passes only the normal access check) and
+/// that command SID: a write right needs both checks, so only this command
+/// and its runner may write to its objects. The logon SID, the sandbox
+/// account, Everyone and the capability SIDs get read and execute, and so
+/// does `OWNER RIGHTS`: the sandbox account owns every elevated command's
+/// objects, and an owner is otherwise always allowed `WRITE_DAC`. Before D324
+/// the logon SID, Everyone and the capability SIDs, restricting SIDs of every
+/// elevated token, had `GENERIC_ALL`, so any elevated command could open
+/// another's processes for every write right. Not closed (as #1560 for
+/// legacy): `TOKEN_DUPLICATE` isn't a write right, so the group still lets
+/// another elevated command impersonate this command's token.
+///
+/// If the runner isn't in the sandbox users' group (a setup older than the
+/// group), the token keeps the pre-D324 default DACL.
 unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
@@ -624,11 +646,26 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
+    let Some(mut group) = current_sandbox_users_group()? else {
+        return create_token(
+            base_token,
+            psid_capabilities,
+            &extra_restricting_sids,
+            DefaultDacl::Shared,
+        );
+    };
+    // The token copies the SID, so it can go once the token exists.
+    let command = LocalSid::from_string(&crate::cap::new_command_identity_sid_string())?;
+    extra_restricting_sids.push(command.as_ptr());
     create_token(
         base_token,
         psid_capabilities,
         &extra_restricting_sids,
-        DefaultDacl::Elevated { psid_user },
+        DefaultDacl::Elevated {
+            psid_user,
+            psid_group: group.as_mut_ptr() as *mut c_void,
+            psid_command: command.as_ptr(),
+        },
     )
 }
 
@@ -654,8 +691,14 @@ enum DefaultDacl {
     /// D259: a legacy command's, with its command SID (also added as a
     /// restricting SID).
     Legacy { psid_command: *mut c_void },
-    /// D324: an elevated command's; `psid_user` is the sandbox account.
-    Elevated { psid_user: *mut c_void },
+    /// D324: an elevated command's; `psid_user` is the sandbox account,
+    /// `psid_group` the sandbox users' group and `psid_command` the command's
+    /// SID (already among the restricting SIDs).
+    Elevated {
+        psid_user: *mut c_void,
+        psid_group: *mut c_void,
+        psid_command: *mut c_void,
+    },
 }
 
 unsafe fn create_token(
@@ -732,9 +775,15 @@ unsafe fn create_token(
             psid_everyone,
             psid_capabilities,
         ),
-        DefaultDacl::Elevated { psid_user } => set_elevated_default_dacl(
+        DefaultDacl::Elevated {
+            psid_user,
+            psid_group,
+            psid_command,
+        } => set_elevated_default_dacl(
             new_token,
             psid_user,
+            psid_group,
+            psid_command,
             psid_logon,
             psid_everyone,
             psid_capabilities,
@@ -790,6 +839,8 @@ unsafe fn set_legacy_default_dacl(
 unsafe fn set_elevated_default_dacl(
     token: HANDLE,
     psid_user: *mut c_void,
+    psid_group: *mut c_void,
+    psid_command: *mut c_void,
     psid_logon: *mut c_void,
     psid_everyone: *mut c_void,
     psid_capabilities: &[*mut c_void],
@@ -799,7 +850,9 @@ unsafe fn set_elevated_default_dacl(
     let read_execute = GENERIC_READ | GENERIC_EXECUTE;
     let mut grants = vec![
         (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
-        (psid_logon, GENERIC_ALL),
+        (psid_group, GENERIC_ALL),
+        (psid_command, GENERIC_ALL),
+        (psid_logon, read_execute),
         (owner_rights.as_mut_ptr() as *mut c_void, read_execute),
         (psid_user, read_execute),
         (psid_everyone, read_execute),
