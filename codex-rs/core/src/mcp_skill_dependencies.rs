@@ -112,12 +112,16 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
     let mut updated = false;
     let mut added = Vec::new();
-    for (name, config) in missing {
+    for (name, server_config) in missing {
         if servers.contains_key(&name) {
             continue;
         }
-        servers.insert(name.clone(), config.clone());
-        added.push((name, config));
+        if let Some(message) = config.non_prefixed_mcp_server_name_clash(&name) {
+            warn!("not installing MCP dependency for mentioned skills: {message}");
+            continue;
+        }
+        servers.insert(name.clone(), server_config.clone());
+        added.push((name, server_config));
         updated = true;
     }
 

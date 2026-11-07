@@ -201,3 +201,13 @@ fn unoffered_tool_name_never_matches_an_offered_tool() {
         "{next}"
     );
 }
+
+#[test]
+fn builtin_namespaces_include_core_defaults() {
+    for namespace in [
+        crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE,
+        crate::config::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE,
+    ] {
+        assert!(BUILTIN_TOOL_NAMESPACES.contains(&namespace), "{namespace}");
+    }
+}

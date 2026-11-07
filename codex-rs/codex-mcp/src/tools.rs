@@ -21,6 +21,27 @@ use crate::mcp::sanitize_responses_api_tool_name;
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
 
+/// Namespaces of built-in tools (the multi-agent V2 namespace is configurable;
+/// `collaboration` is its default). An MCP server exposed without the `mcp__`
+/// prefix must not take one: on the Responses wire its tools would clash with
+/// the built-in's, and on wires without namespaces its calls would replay as
+/// built-in calls (#688, #1655).
+pub const BUILTIN_TOOL_NAMESPACES: &[&str] = &[
+    "collaboration",
+    "clock",
+    "image_gen",
+    "memories",
+    "multi_agent_v1",
+    "skills",
+    "web",
+];
+
+/// Whether an MCP server named `server_name` would take a built-in tool
+/// namespace if its tools were exposed without the `mcp__` prefix.
+pub fn unprefixed_mcp_namespace_is_builtin(server_name: &str) -> bool {
+    BUILTIN_TOOL_NAMESPACES.contains(&sanitize_responses_api_tool_name(server_name).as_str())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
     /// Raw MCP server name used for routing the tool call.
@@ -119,6 +140,7 @@ where
     I: IntoIterator<Item = ToolInfo>,
 {
     let mut seen_raw_names = HashSet::new();
+    let mut forced_prefix_servers = HashSet::new();
     let mut candidates = Vec::new();
     for tool in tools {
         let raw_namespace_identity = format!(
@@ -136,10 +158,21 @@ where
             continue;
         }
 
-        let callable_namespace = callable_namespace_with_prefix(
-            &sanitize_responses_api_tool_name(&tool.callable_namespace),
-            prefix_mcp_tool_names && !non_prefixed_mcp_tool_servers.contains(&tool.server_name),
-        );
+        let namespace = sanitize_responses_api_tool_name(&tool.callable_namespace);
+        let mut prefixed =
+            prefix_mcp_tool_names && !non_prefixed_mcp_tool_servers.contains(&tool.server_name);
+        if !prefixed && BUILTIN_TOOL_NAMESPACES.contains(&namespace.as_str()) {
+            // Config load rejects configured servers like this; servers from
+            // other sources (plugins, skill dependencies) keep the prefix.
+            prefixed = true;
+            if forced_prefix_servers.insert(tool.server_name.clone()) {
+                warn!(
+                    "MCP server `{}` keeps the `mcp__` prefix: `{namespace}` is a built-in tool namespace; rename the server to expose it without the prefix",
+                    tool.server_name
+                );
+            }
+        }
+        let callable_namespace = callable_namespace_with_prefix(&namespace, prefixed);
 
         candidates.push(CallableToolCandidate {
             callable_namespace,

@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_mcp::BUILTIN_TOOL_NAMESPACES;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::code_mode_name_for_tool_name;
@@ -36,20 +37,6 @@ pub(crate) struct FlatToolNames {
     multi_agent_v2_namespace: Option<String>,
 }
 
-/// Namespaces of built-in tools. Only these keep the bare-name fallback when
-/// earlier calls are replayed on wires without namespaces: any other namespace
-/// may be an MCP server's, including one configured without the `mcp__`
-/// prefix, whose bare tool name a built-in can share (#688).
-const BUILTIN_TOOL_NAMESPACES: &[&str] = &[
-    crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE,
-    "collaboration",
-    "clock",
-    "image_gen",
-    "memories",
-    "skills",
-    "web",
-];
-
 impl FlatToolNames {
     /// Returns the namespaced tool a flat name stands for.
     pub(crate) fn resolve(&self, flat_name: &str) -> Option<&ToolName> {
@@ -74,7 +61,10 @@ impl FlatToolNames {
     }
 
     /// Whether `namespace` belongs to built-in tools, so an earlier call this
-    /// request does not offer may replay under its bare name.
+    /// request does not offer may replay under its bare name. Any other
+    /// namespace may be an MCP server's, including one configured without the
+    /// `mcp__` prefix, whose bare tool name a built-in can share (#688); MCP
+    /// setup keeps such servers out of the built-in namespaces (#1655).
     pub(crate) fn is_builtin_namespace(&self, namespace: &str) -> bool {
         !namespace.starts_with("mcp__")
             && (BUILTIN_TOOL_NAMESPACES.contains(&namespace)

@@ -300,7 +300,7 @@ Payload:
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
 const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
-const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+pub(crate) const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
 const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
@@ -2174,6 +2174,53 @@ impl Config {
     pub(crate) fn prefix_mcp_tool_names(&self) -> bool {
         !self.features.enabled(Feature::NonPrefixedMcpToolNames)
             || self.non_prefixed_mcp_tool_servers.is_some()
+    }
+
+    /// Why an MCP server named `name` can't be used here, if it would be
+    /// exposed without the `mcp__` prefix under a built-in tool namespace
+    /// (#1655).
+    pub fn non_prefixed_mcp_server_name_clash(&self, name: &str) -> Option<String> {
+        if !self.features.enabled(Feature::NonPrefixedMcpToolNames) {
+            return None;
+        }
+        let listed = self.non_prefixed_mcp_tool_servers.as_deref();
+        if listed.is_some_and(|servers| !servers.iter().any(|server| server == name)) {
+            return None;
+        }
+        let multi_agent_v2_namespace = self.multi_agent_v2.tool_namespace.as_deref();
+        if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name)
+            && multi_agent_v2_namespace != Some(name)
+        {
+            return None;
+        }
+        let fix = if listed.is_some() {
+            format!(
+                "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
+            )
+        } else {
+            "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
+        };
+        Some(format!(
+            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is a built-in tool namespace. To fix it, {fix}. To rename, use a name such as `{name}_mcp` (`[mcp_servers.{name}_mcp]` in config.toml, or `corbanu mcp remove {name}` and `corbanu mcp add {name}_mcp ...`)."
+        ))
+    }
+
+    fn validate_non_prefixed_mcp_server_names(&self) -> std::io::Result<()> {
+        let configured = self.mcp_servers.get().keys();
+        let listed = self.non_prefixed_mcp_tool_servers.iter().flatten();
+        let mut names: Vec<&String> = configured.chain(listed).collect();
+        names.sort();
+        names.dedup();
+        match names
+            .into_iter()
+            .find_map(|name| self.non_prefixed_mcp_server_name_clash(name))
+        {
+            Some(message) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                message,
+            )),
+            None => Ok(()),
+        }
     }
 
     pub fn mcp_protocol_mode(&self) -> McpProtocolMode {
@@ -5268,6 +5315,7 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
+        config.validate_non_prefixed_mcp_server_names()?;
         Ok(config)
         })
         .await

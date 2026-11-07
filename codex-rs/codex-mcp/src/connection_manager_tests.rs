@@ -16,10 +16,12 @@ use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tool_catalog_cache::McpToolCatalogCache;
+use crate::tools::BUILTIN_TOOL_NAMESPACES;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
+use crate::tools::unprefixed_mcp_namespace_is_builtin;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
@@ -1052,6 +1054,53 @@ fn test_normalize_tools_global_feature_omits_prefix_for_every_server() {
             ToolName::namespaced("calendar", "list"),
         ])
     );
+}
+
+#[test]
+fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
+    let tools = vec![
+        create_test_tool("web", "search"),
+        create_test_tool("image.gen", "draw"),
+        create_test_tool("history", "search"),
+    ];
+
+    for (prefix_mcp_tool_names, non_prefixed) in [
+        (false, Vec::new()),
+        (
+            true,
+            vec![
+                "web".to_string(),
+                "image.gen".to_string(),
+                "history".to_string(),
+            ],
+        ),
+    ] {
+        let model_tools = normalize_tools_for_model_with_prefix(
+            tools.clone(),
+            prefix_mcp_tool_names,
+            &non_prefixed,
+        );
+
+        assert_eq!(
+            model_tool_names(&model_tools),
+            HashSet::from([
+                ToolName::namespaced("mcp__web", "search"),
+                ToolName::namespaced("mcp__image_gen", "draw"),
+                ToolName::namespaced("history", "search"),
+            ])
+        );
+    }
+}
+
+#[test]
+fn test_unprefixed_mcp_namespace_is_builtin() {
+    for name in BUILTIN_TOOL_NAMESPACES {
+        assert!(unprefixed_mcp_namespace_is_builtin(name), "{name}");
+    }
+    assert!(unprefixed_mcp_namespace_is_builtin("image.gen"));
+    assert!(!unprefixed_mcp_namespace_is_builtin("mcp__web"));
+    assert!(!unprefixed_mcp_namespace_is_builtin("web_mcp"));
+    assert!(!unprefixed_mcp_namespace_is_builtin("Web"));
 }
 
 #[test]
