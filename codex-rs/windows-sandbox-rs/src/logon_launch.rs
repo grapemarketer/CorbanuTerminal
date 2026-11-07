@@ -60,6 +60,7 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+use windows_sys::Win32::Foundation::ERROR_INVALID_SECURITY_DESCR;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -95,6 +96,7 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::ResumeThread;
+use windows_sys::Win32::System::Threading::STARTF_FORCEOFFFEEDBACK;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
@@ -309,6 +311,9 @@ fn set_kernel_object_dacl(handle: HANDLE, sddl: &str) -> anyhow::Result<()> {
         ) == 0
         {
             GetLastError()
+        } else if present == 0 || dacl.is_null() {
+            // A null DACL would grant everyone full access.
+            ERROR_INVALID_SECURITY_DESCR
         } else {
             SetSecurityInfo(
                 handle,
@@ -494,7 +499,7 @@ fn spawn_helper(
     // SAFETY: zeroed POD with its size set, as the API requires.
     let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     // Values in the holder's table, as the parent-process attribute requires.
     startup.StartupInfo.hStdInput = held_stdin;
     startup.StartupInfo.hStdOutput = held_stdout;
@@ -894,6 +899,8 @@ fn create_process_with_logon_here(
     // SAFETY: zeroed POD with its size set, as the API requires.
     let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
     startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    // The runner is a GUI-subsystem binary: no busy cursor while it starts.
+    startup.dwFlags = STARTF_FORCEOFFFEEDBACK;
     // SAFETY: zeroed POD filled in by the call.
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: only changes this process's error mode; restored below.

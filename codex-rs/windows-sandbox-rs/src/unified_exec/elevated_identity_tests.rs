@@ -569,13 +569,15 @@ fn sec_win_1648_elevated_command_cannot_write_to_or_borrow_a_console_host() {
     );
 }
 
-/// Measurement for #1721, not a gate: a command racing the start-up of 20
-/// other elevated commands' runners, counting runners it opened for
-/// `PROCESS_CREATE_PROCESS` or whose token it opened for
-/// `TOKEN_ADJUST_DEFAULT` before they restricted themselves.
+/// #1721: a command racing the start-up of 20 other elevated commands'
+/// runners opens none of their processes for `PROCESS_CREATE_PROCESS`, their
+/// tokens for `TOKEN_ADJUST_DEFAULT`, their main threads for
+/// `THREAD_SET_CONTEXT` or a console host of theirs (Core protects a runner
+/// before it runs; the runner has no console). Still open and only reported:
+/// the threads Windows' loader starts in a runner before its first statement
+/// (`thread_won`).
 #[test]
-#[ignore = "#1721: measures the runner start-up window D324 leaves open; run with --include-ignored"]
-fn sec_win_1648_measure_runner_startup_race() {
+fn sec_win_1648_racing_command_cannot_open_a_starting_runner() {
     let Some(codex_home) = elevated_home("d324-race") else {
         return;
     };
@@ -643,6 +645,20 @@ fn sec_win_1648_measure_runner_startup_race() {
         println!("d324 race: {note}");
     }
     assert!(line.starts_with("race seen="), "{line}");
+    let count = |name: &str| -> usize {
+        line.split(' ')
+            .find_map(|field| field.strip_prefix(&format!("{name}=")))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("no {name} in {line}"))
+    };
+    assert!(count("seen") >= 10, "the racer saw too few runners: {line}");
+    for name in ["process_won", "token_won", "main_thread_won", "host_won"] {
+        assert_eq!(
+            count(name),
+            0,
+            "a racing command opened a starting runner: {line}"
+        );
+    }
 }
 
 /// D324 keeps what an elevated command may do to itself: open its own child

@@ -260,15 +260,26 @@ fn harden_runner() -> Result<OwnedWinHandle> {
     // (#1721).
     // SAFETY: no arguments; a failure means there was no console.
     unsafe { FreeConsole() };
-    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
+    let base = unsafe { get_current_token_for_restriction() }.map(OwnedWinHandle::new);
     // The token first: Core started this process with a DACL nobody but
     // SYSTEM may open, and the process DACL set last lets the sandbox account
     // query it, which is enough to open its token.
-    restrict_current_default_dacl().context("restrict the runner's default DACL")?;
-    restrict_current_token_access().context("restrict access to the runner's token")?;
-    codex_process_hardening::restrict_current_process_access()
-        .context("restrict access to the runner's process and threads")?;
-    Ok(base)
+    // Every step runs even if an earlier one failed: the runner lives on
+    // until it has reported the error.
+    let steps = [
+        restrict_current_default_dacl().context("restrict the runner's default DACL"),
+        restrict_current_token_access().context("restrict access to the runner's token"),
+        codex_process_hardening::restrict_current_process_access()
+            .context("restrict access to the runner's process and threads"),
+    ];
+    let errors: Vec<String> = steps
+        .into_iter()
+        .filter_map(|step| step.err().map(|err| format!("{err:#}")))
+        .collect();
+    if !errors.is_empty() {
+        anyhow::bail!("harden the runner: {}", errors.join("; "));
+    }
+    base
 }
 
 fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpawnedProcess> {

@@ -186,8 +186,13 @@ unsafe fn token_has_enabled_group(token: HANDLE, sid: *mut c_void) -> Result<boo
             GetLastError()
         ));
     }
-    let groups = &*(buffer.as_ptr() as *const TOKEN_GROUPS);
-    let entries = std::slice::from_raw_parts(groups.Groups.as_ptr(), groups.GroupCount as usize);
+    let groups = buffer.as_ptr() as *const TOKEN_GROUPS;
+    // The entries run past the declared one-element array: derive their
+    // pointer from the buffer, not from a reference to that array.
+    let entries = std::slice::from_raw_parts(
+        std::ptr::addr_of!((*groups).Groups).cast::<SID_AND_ATTRIBUTES>(),
+        (*groups).GroupCount as usize,
+    );
     Ok(entries
         .iter()
         .any(|entry| entry.Attributes & SE_GROUP_ENABLED != 0 && EqualSid(entry.Sid, sid) != 0))
@@ -219,11 +224,13 @@ unsafe fn sandbox_users_group_of(token: HANDLE) -> Result<Vec<u8>> {
 /// hold the group only as a normal group, not as a restricting SID, so they
 /// get no write right. Rights outside the generic read, write and execute
 /// mappings, such as `TOKEN_DUPLICATE`, aren't write rights, so the normal
-/// check alone decides them; the group has no `GENERIC_ALL`, so its
-/// objects' tokens don't grant them either. (A ConPTY console host's token
-/// was still measured to open for `TOKEN_DUPLICATE`; a restricted token can
-/// only identify as it, not act as it.) Before, they got full access through
-/// the sandbox account. Fails if the runner isn't in the group.
+/// check alone decides them; the group has no `GENERIC_ALL`, so the
+/// runner's process and threads don't grant them. A ConPTY console host's
+/// own token still opens for `TOKEN_DUPLICATE` (measured), but a command
+/// impersonating it gets identification level only, so it can't act as it
+/// (writes and process creation fail with 1346, measured). Before, they got
+/// full access through the sandbox account. Fails if the runner isn't in the
+/// group.
 pub fn restrict_current_default_dacl() -> Result<()> {
     // SAFETY: the token handle is closed below.
     unsafe {

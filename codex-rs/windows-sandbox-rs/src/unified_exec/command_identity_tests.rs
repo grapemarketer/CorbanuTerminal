@@ -911,7 +911,8 @@ pub(super) fn git_for_windows(relative: &str) -> Option<PathBuf> {
         return Some(path);
     }
     assert!(
-        std::env::var_os("GITHUB_ACTIONS").is_none(),
+        std::env::var_os("GITHUB_ACTIONS").is_none()
+            && std::env::var_os("CODEX_SEC_WIN_1648_REQUIRE").is_none(),
         "{} is missing on CI",
         path.display()
     );

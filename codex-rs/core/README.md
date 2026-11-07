@@ -205,12 +205,13 @@ runner also limits what the sandbox account, which all elevated commands
 share, may do to it: query its process and threads (and wait for them),
 query its token, and nothing on the objects it creates without explicit
 security, such as its pipes and the ConPTY console host, which get full
-access for SYSTEM and read, write and execute (no `TOKEN_DUPLICATE`) for the
-sandbox users' group. Measured on CI, elevated and in a normal session: an
+access for SYSTEM and read, write and execute for the sandbox users' group. Measured on CI, elevated and in a normal session: an
 elevated command can no longer open another elevated command's process, its
 own or another command's runner, or a runner's console host for any of the 8
-write rights, adjust their tokens, or open a runner's or console host's
-token; it keeps full access to its own processes; a cmd pipeline,
+write rights, adjust their tokens, or open a runner's token; a ConPTY
+console host's token still opens for `TOKEN_DUPLICATE`, but a command
+impersonating it gets identification level only and can't write or start
+processes as it (measured); it keeps full access to its own processes; a cmd pipeline,
 PowerShell (with and without ConPTY), `git init` and `git status` still
 work. Core starts each runner suspended and, before it runs, limits its
 process and main thread to SYSTEM; the runner has no console, so no console
@@ -218,11 +219,16 @@ host starts before its first step. Not closed: the threads Windows' loader
 starts in a runner before that first step get the logon's default DACL,
 which gives the sandbox account full access, so a command racing a
 runner's start-up can still open one for write rights (10 to 16 of 20
-start-ups on CI, #1721). Elevated commands can
-still read each other's processes, as before (reads aren't restricted), end
-them (D292), and borrow another elevated command's token through the
-group's `TOKEN_DUPLICATE` and write in that command's writable roots, as
-legacy commands can (#1560). So the docs
+start-ups on CI, #1721). Such a thread lets the command run code in the
+unrestricted runner, outside its restricted token and job, so this
+start-up race is the remaining route out of the elevated sandbox that D324
+didn't close; a CI test keeps the other start-up routes closed. Elevated
+commands can still read each other's processes, including their ConPTY
+console hosts (another workspace's terminal output), as before (reads
+aren't restricted), end them (D292), and borrow another elevated command's
+token through the group's `TOKEN_DUPLICATE` and write in that command's
+writable roots, as legacy commands can (#1560); impersonating another
+command's threads may be a second borrowing route (unmeasured, #1560). So the docs
 still say neither backend keeps concurrent projects apart. Closing the
 borrowing for both backends, after the #1560 token measurement, is D324's
 second step. Killing
