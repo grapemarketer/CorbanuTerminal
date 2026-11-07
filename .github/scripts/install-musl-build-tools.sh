@@ -63,9 +63,11 @@ download_verified() {
   local url
   for url in "$@"; do
     echo "Downloading ${url}"
+    # The tarball is ~200 KB: bound each mirror to about three minutes, and
+    # treat a connected-but-stalled transfer as failed so we move on.
     if ! curl -fsSL --proto '=https' --tlsv1.2 \
-      --retry 5 --retry-all-errors --retry-connrefused \
-      --connect-timeout 20 --max-time 300 \
+      --retry 5 --retry-all-errors --retry-connrefused --retry-max-time 120 \
+      --connect-timeout 20 --max-time 60 --speed-limit 1024 --speed-time 20 \
       "${url}" -o "${partial}"; then
       echo "Download failed from ${url}; trying the next mirror." >&2
       continue
