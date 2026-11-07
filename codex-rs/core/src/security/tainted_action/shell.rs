@@ -92,6 +92,10 @@ pub(super) struct SimpleCommand {
     pub(super) operated: Vec<usize>,
     /// D194: what joins it to the command before it.
     pub(super) after: Joint,
+    /// #1772 item 1: when `redirections_last` moved the words a
+    /// redirection holds after the others, the position each word had as
+    /// written (`written_at[now]`); empty when nothing moved.
+    pub(super) written_at: Vec<usize>,
 }
 
 /// Lexed simple commands, in the order they finish (a substitution comes
@@ -972,7 +976,7 @@ impl Lexer {
                 // #1772 item 2: an escaped space in a redirection's file
                 // (`>a\ b ./x`) is part of the file name.
                 '\\' if self.redirect != Redirect::None
-                    && next.is_some_and(|after| after.is_whitespace()) =>
+                    && next.is_some_and(char::is_whitespace) =>
                 {
                     self.current.escaped = true;
                     self.word.extend(next);
@@ -1187,6 +1191,7 @@ impl SimpleCommand {
             &mut self.hidden,
             &mut self.operated,
         ] {
+            work::step();
             for at in indexes.iter_mut() {
                 work::step();
                 *at = moved.get(*at).copied().unwrap_or(*at);
@@ -1198,6 +1203,7 @@ impl SimpleCommand {
             *at = moved.get(*at).copied().unwrap_or(*at);
         }
         self.zsh_writes.sort_unstable();
+        self.written_at = order;
     }
 }
 

@@ -48,7 +48,7 @@ type Read = (Vec<String>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 
 /// The words and redirection positions the lexer reads, per command.
 fn lexed(line: &str) -> Vec<Read> {
-    shell::simple_commands(&["bash", "-lc", line].map(str::to_string))
+    shell::simple_commands(&[line.to_string()])
         .commands
         .into_iter()
         .map(|command| {
@@ -138,6 +138,25 @@ fn issue_1772_redirection_cases_ask() {
         .filter(|(_, verdict)| verdict.is_some())
         .collect();
     assert_eq!(asking, Vec::new(), "ordinary redirections now ask");
+}
+
+/// #1719's asks stay: a path, shell or `eval` hidden behind a redirection
+/// as written asks also when the file it runs is harmless.
+#[cfg(unix)]
+#[test]
+fn issue_1772_keeps_1719_hidden_command_asks() {
+    let quiet: Vec<&str> = [
+        ">log ./x",
+        "2>&1 ./x",
+        "<<EOF ./x",
+        ">log eval ./x",
+        "eval '>log ./x'",
+        ">'a b' ./x",
+    ]
+    .into_iter()
+    .filter(|line| in_workspace(X_OK, line).is_none())
+    .collect();
+    assert_eq!(quiet, Vec::<&str>::new(), "#1719 lines now quiet");
 }
 
 /// The lexer's reading: a redirection's words follow the command's, every

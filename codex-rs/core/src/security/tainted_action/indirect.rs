@@ -413,15 +413,17 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
 /// removes the redirection's words, so that command is never judged.
 /// `2>/dev/null git status`, `exec >out` and foreign text read as shell
 /// (`<?php echo 1;`) are read as before. `from`: the operands of `eval`.
+/// #1772 item 1: the command word is the one as written: the lexer moves
+/// a redirection's words last (`SimpleCommand::written_at`).
 pub(super) fn redirect_hides_command(
     command: &SimpleCommand,
     words: &[String],
     from: usize,
 ) -> bool {
-    let Some(rest) = words.get(from..) else {
+    let Some((rest, rest_held)) = as_written(command, words, from) else {
         return false;
     };
-    if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
+    if !command_word(&rest).is_some_and(|(at, _)| rest_held[at]) {
         return false;
     }
     let Some(runs) = unredirected(command, words, from) else {
@@ -432,6 +434,33 @@ pub(super) fn redirect_hides_command(
             || runs[at].starts_with('-')
             || matches!(name.as_str(), "eval" | "source" | "." | "trap")
     }) || invocation(&runs).is_some()
+}
+
+/// #1772 item 1: the words from `from` on in the order they were written,
+/// and whether a redirection holds each. `from` counts the words as the
+/// lexer left them; the words before it keep their order, so it stands
+/// after the written position of the word before it.
+fn as_written(
+    command: &SimpleCommand,
+    words: &[String],
+    from: usize,
+) -> Option<(Vec<String>, Vec<bool>)> {
+    let rest = words.get(from..)?;
+    if command.written_at.len() != words.len() {
+        let holds = (from..words.len()).map(|at| held(command, at)).collect();
+        return Some((rest.to_vec(), holds));
+    }
+    let start = from
+        .checked_sub(1)
+        .map_or(0, |before| command.written_at[before] + 1);
+    let mut written: Vec<(usize, usize)> = (0..words.len())
+        .map(|now| (command.written_at[now], now))
+        .filter(|(at, _)| *at >= start)
+        .collect();
+    written.sort_unstable();
+    let holds = written.iter().map(|(_, now)| held(command, *now)).collect();
+    let words = written.iter().map(|(_, now)| words[*now].clone()).collect();
+    Some((words, holds))
 }
 
 /// #1482 item 2: whether the word at `at` is part of a redirection
