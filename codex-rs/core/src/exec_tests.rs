@@ -1045,10 +1045,9 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
             &temp_dir.path().abs(),
             WindowsSandboxLevel::Elevated,
         ),
-        Some(
-            "windows elevated sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
-                .to_string()
-        )
+        Some(codex_sandboxing::writable_inside_read_only_refusal(
+            &docs, &nested
+        ))
     );
 }
 

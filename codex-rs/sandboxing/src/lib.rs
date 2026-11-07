@@ -60,6 +60,7 @@ pub use windows::resolve_windows_elevated_filesystem_overrides;
 pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;
 pub use windows::windows_sandbox_uses_elevated_backend;
+pub use windows::writable_inside_read_only_refusal;
 pub use windows_legacy_warning::LEGACY_WINDOWS_SANDBOX_WARNING;
 pub use windows_legacy_warning::legacy_windows_sandbox_warning;
 

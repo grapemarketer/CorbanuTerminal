@@ -88,3 +88,75 @@ fn missing_read_only_paths_reach_the_restricted_token_backend() {
 
     assert_eq!(deny_write, expected);
 }
+
+/// D331: a writable folder inside a read-only one is refused by both
+/// backends' resolvers with the same clear message, naming both folders; a
+/// deny-read profile that needs no other override (a Moderate-style
+/// protected file) gets the clear "can't block reading" refusal from the
+/// non-admin resolver (`command/exec`, the exec server) rather than the
+/// backend's unclear error.
+#[test]
+fn unenforceable_profiles_get_clear_refusals() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        dunce::canonicalize(temp_dir.path()).expect("canonical temp dir"),
+    )
+    .expect("absolute cwd");
+    let (docs, out) = (cwd.join("docs"), cwd.join("docs").join("out"));
+    std::fs::create_dir_all(out.as_path()).expect("create docs/out");
+    let entry = |path: &AbsolutePathBuf, access| {
+        FileSystemSandboxEntry::new(FileSystemPath::Path { path: path.clone() }, access)
+    };
+    let root_read = FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Read,
+    );
+    let profile = |entries: Vec<FileSystemSandboxEntry>| {
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(entries),
+            NetworkSandboxPolicy::Restricted,
+        )
+    };
+    let nested = profile(vec![
+        root_read.clone(),
+        entry(&cwd, FileSystemAccessMode::Write),
+        entry(&docs, FileSystemAccessMode::Read),
+        entry(&out, FileSystemAccessMode::Write),
+    ]);
+    let deny_read = profile(vec![
+        root_read,
+        entry(&cwd, FileSystemAccessMode::Write),
+        entry(&cwd.join("secret.env"), FileSystemAccessMode::Deny),
+    ]);
+    let unelevated = |profile: &PermissionProfile| {
+        resolve_windows_restricted_token_filesystem_overrides(
+            SandboxType::WindowsRestrictedToken,
+            profile,
+            &cwd,
+            WindowsSandboxLevel::RestrictedToken,
+        )
+        .err()
+    };
+    let refusal = writable_inside_read_only_refusal(docs.as_path(), out.as_path());
+
+    assert_eq!(
+        (
+            unelevated(&nested),
+            resolve_windows_elevated_filesystem_overrides(
+                SandboxType::WindowsRestrictedToken,
+                &nested,
+                &cwd,
+                /*use_windows_elevated_backend*/ true,
+            )
+            .err(),
+            unelevated(&deny_read),
+        ),
+        (
+            Some(refusal.clone()),
+            Some(refusal),
+            Some(UNELEVATED_DENY_READ_REFUSAL.to_string()),
+        )
+    );
+}
