@@ -4658,6 +4658,157 @@ fn d156_git_settings_after_a_split_value_ask() {
     }
 }
 
+/// D258: unrelated commands and literal braces cannot make git's brace
+/// safeguard ask; the quote and expansion must belong to this command. (In a
+/// line that is not plain words, D156's reading stays: `printf '%s\n'`, a
+/// backslash, a comment or a redirection anywhere in the line keeps these
+/// asking.)
+#[test]
+fn d258_unrelated_or_literal_quotes_do_not_promote_brace_words() {
+    for command in [
+        "git add src/{a,b}.rs && git commit -m \"msg\"",
+        "git add src/{a,b}.rs && git commit -m 'msg'",
+        "git add {src,tests}/{a,b}.rs && git commit -m 'fix: a, b; c'",
+        "git add src/{a,b}.rs && git commit -m \"\"",
+        "git add src/{a,b}.rs && git commit -m \"handle {a,b}\"",
+        "git add src/{a,b}.rs\ngit commit -m \"msg\"",
+        "git add src/{a,b}.rs || git commit -m \"msg\"",
+        "git commit -m \"msg\" && git add src/{a,b}.rs",
+        "git commit -m \"handle {a,b}\"",
+        "git -c 'user.name=msg' diff stash@{0}..stash@{1}",
+        "git diff stash@{0}..stash@{1} && printf '%s' \"msg\"",
+        "git show 'HEAD^{commit}'",
+        "git diff 'HEAD~1' HEAD",
+    ] {
+        assert_eq!(script(command), None, "{command}");
+    }
+    assert_eq!(kind(&["git", "add", "src/{a,b}.rs"]), None);
+    assert_eq!(kind(&["git", "commit", "-m", "handle {a,b}"]), None);
+}
+
+/// D258: an earlier quote can hide a brace-generated option, including a
+/// quote before git in a wrapper or inside the expanding word itself.
+#[test]
+fn d258_quotes_before_expanding_git_words_still_ask() {
+    for command in [
+        "git clone -b 'a; b' {--upload-pack=./x,} URL",
+        "git clone -b 'a; b' {\"--upload-pack=./x\",} URL",
+        "git clone -b 'a; b' --upload-pack{=./x,} URL",
+        "git clone {--upload-pack='./x',} URL",
+        "env 'A=;' git clone {--upload-pack=./x,} URL",
+        "env 'A=|' git clone {--upload-pack=./x,} URL",
+        "git >'a; b' clone {--upload-pack=./x,} URL",
+        "git clone >'a; b' {--upload-pack=./x,} URL",
+        "env >'a; b' git clone {--upload-pack=./x,} URL",
+        "git -c user.name=${N:-'a; b'} clone {--upload-pack=./x,} URL",
+        "git -c user.name=$(printf 'a; b') clone {--upload-pack=./x,} URL",
+        "git -c user.name=a\\\nb clone {--upload-pack=./x,} URL",
+        "git clone --{u.\\\n.u}pload-pack=./x URL",
+        "git clone -b 'a; b' --{u.\\\n.u}pload-pack=./x URL",
+        "git -c 'user.name=a; b' {--no-pager,-c} 'alias.x=!./x' x",
+        "git clone -b 'a; b' {--upload-pack=./x,{--quiet,}} URL",
+        "git clone -b 'a; b' {1..3} URL",
+        "git add src/{a,b}.rs && git clone -b 'a; b' {--upload-pack=./x,} URL",
+        "git clone -b 'a; b' {--upload-pack=./x,} URL && git add src/{a,b}.rs",
+        "git add src/{a,b}.rs && git commit -m \"$(./unseen)\"",
+        // The word lexer reads `$'` as an ANSI-C string whatever the
+        // quoting around it, on into a later command (#1580 review).
+        "grep -n 'TODO$' notes.txt; git clone {--upload-pack=./x,} ./r d; echo 'done'",
+        "echo \"$'\"; git clone {--upload-pack=./x,} ./r d; echo \"'\"",
+        // So is a substitution it opens in a quote, an escape, a comment or
+        // a here-document, closed in git's command (#1580 review 2).
+        "grep -n '`' notes.txt; git clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo '`'; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo \\`; git clone -b x`true` r {--upload-pack=./x,} d",
+        "echo '$('; git clone -b $( (echo x) ) r {--upload-pack=./x,} d",
+        "cat <<'EOF'\na ` tick\nEOF\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        "echo 'a' # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+        // The word lexer also ends the command at a `}` starting a word,
+        // `&>`, `<&`, `>|` and an operator in `${...}`, and never expands a
+        // range (#1580 review 3).
+        "echo \"x\"; git clone -b }x r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-x;y} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r &>/dev/null {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r <&0 {--upload-pack=./x,} d",
+        "echo \"x\"; git clone r >|log {--upload-pack=./x,} d",
+        "echo \"x\"; git clone --{u..u}pload-pack=./x r d",
+        // Commas, brace alternatives, `$IFS`, here-documents and comments
+        // the word lexer misreads (#1580 review 4).
+        "echo \"x\"; git clone -b x,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x,{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:-,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {a,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {,}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b {{,} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x${IFS}} r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b x$IFS{ r {--upload-pack=./x,} d",
+        "echo \"x\"; git clone -b ${N:- } r {--upload-pack=./x,} d",
+        "cat <<E\n'\nE\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo a;# it's\ngit clone --{quiet,upload-pack=./x}>'log' r d",
+        "echo \"x\"; git clone ${N}{--upload-pack=./x,} r d",
+        // The word lexer expands braces before it finds commands, so an
+        // operator joined to a group cuts its alternatives (review 5).
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}|cat",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&&echo ok",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x}&",
+        "echo \"x\"; git clone ./r d {-q,--upload-pack=./x};x",
+        "echo \"x\"; git clone ./r d {-q,-u./x}|cat",
+        "echo \"x\"; git fetch origin {-q,--upload-pack=./x}|cat",
+        "git clone ./r d {-q,--upload-pack=./x}|grep -v \"warn\"",
+        "echo \"x\"; git clone ./r d x|{-q,--upload-pack=./x}",
+        // zsh brace-expands a `${...}` operand.
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,}} ./r d",
+        "git clone -b 'a; b' ${x:-{--upload-pack=./x,{1..2}}} ./r d",
+    ] {
+        assert_eq!(
+            script(command),
+            Some(ProtectedActionKind::UnseenCode),
+            "{command}"
+        );
+    }
+}
+
+/// D258: the lines where git's brace check reads quotes per command.
+#[test]
+fn d258_plain_lines_for_the_brace_check() {
+    for text in [
+        "git add src/{a,b}.rs && git commit -m \"msg\"",
+        "git diff stash@{0}..stash@{1}",
+        "git commit -m 'fix: a, b; c' | tee -a log",
+        "git add {src,tests}/{a,b}.rs\ngit status",
+    ] {
+        assert!(super::brace_plain(text), "{text}");
+    }
+    for text in [
+        "git add {a,}",
+        "x {} y",
+        "x }y",
+        "x { y",
+        "x {a..b}",
+        "x {a",
+        "x {a,{b,c}}",
+        "x {a,'b'}",
+        "x $'a'",
+        "x `y`",
+        "x $(y)",
+        "x <(y)",
+        "x >f",
+        "x &>f",
+        "x # c",
+        "cat <<E",
+        "x \\{a,b\\}",
+        "x ${y}",
+        "x (y)",
+        "x *",
+        "x {a,b}|cat",
+        "x a;{a,b}",
+        "x {a,b}&&y",
+    ] {
+        assert!(!super::brace_plain(text), "{text}");
+    }
+}
+
 /// D156: reading git's options with quoted values whole stays linear.
 #[test]
 fn d156_checks_are_linear() {
@@ -4669,6 +4820,18 @@ fn d156_checks_are_linear() {
         ("=git words", "=git -c user.name=x "),
         ("hidden gits", "$g -c 'user.name=a; b' "),
         ("brace words", "git 'a; b' {--x,} "),
+        (
+            "command-local brace quotes",
+            "git add src/{a,b}.rs && git commit -m \"msg\"; ",
+        ),
+        ("nested brace words", "git 'a; b' x{a,{b,c}} "),
+        ("parameter brace words", "git 'a; b' ${x:-${y:-{a,b}}} "),
+        ("ANSI-C lines", "grep 'a$' f; git add {a,b}; "),
+        ("substitution lines", "echo '`'; git add {a,b}; "),
+        (
+            "continued brace ranges",
+            "git clone --{u.\\\n.u}pload-pack=./x URL; ",
+        ),
     ] {
         work::assert_linear(label, |scale| {
             let line = format!("git {} status", unit.repeat(100 * scale));
@@ -7003,6 +7166,135 @@ fn issue_1516_git_grep_open_files_in_pager_asks() {
     ] {
         if script(command).is_some() {
             wrong.push(format!("quiet: {command}"));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+}
+
+/// #1528: a dashed helper named by its Windows path (`git-grep.exe`) is read
+/// with its subcommand there, and a subcommand git does not know (an alias
+/// from existing config, a typo `help.autocorrect` runs) asks on `-O`, `-u`
+/// and `--open-files-in-pager`, as `grep` or `clone` would. Only adds
+/// prompts: git's own commands read as before.
+#[test]
+fn issue_1528_dashed_helpers_and_unknown_subcommands_ask() {
+    use ProtectedActionKind::UnseenCode;
+    let mut wrong = Vec::new();
+    // Aliases and autocorrected typos, in the POSIX reading.
+    for command in [
+        "git g -Osh x",
+        "git g -O sh x",
+        "git g -nOsh x",
+        "git g x -Osh",
+        "git g --open-files-in-pager=sh x",
+        "git g --op=sh x",
+        "git gerp -Osh x",
+        "git GREP -Osh x",
+        "git cl -u ./x u",
+        "git cl -u./x u",
+        "git cl -qu ./x u",
+        "git -C /r g -Osh x",
+        "git -c color.ui=never g -Osh x",
+        "git --git-dir /r/.git g -Osh x",
+        "git --no-pager gerp -Osh x",
+        "git.exe g -Osh x",
+        "nice git g -Osh x",
+        "sh -c 'git g -Osh x'",
+        // A later word that is a git command name does not make the
+        // subcommand known (#1597 review).
+        "git g -Osh log",
+        "git g -Osh -- status",
+        "git -C log g -Osh x",
+        "git cl -u ./x status",
+        // An alias or typo for clone, init or push (from #1597).
+        "git cl --config core.fsmonitor=./x u",
+        "git cl --config=core.hooksPath=./h u",
+        "git cl --template=./t u",
+        "git clnoe --template=./x u",
+        "git cl -qc core.fsmonitor=./x u",
+        "git p --exec=./x u",
+        // Optional porcelain may not be installed, so its name may be an alias.
+        "git gui -Osh x",
+        // A dashed helper's later git starts another subcommand.
+        "git-bisect run git g -Osh x",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(command.to_string());
+        }
+        if kind(&["/bin/zsh", "-lc", command]) != Some(UnseenCode) {
+            wrong.push(format!("zsh: {command}"));
+        }
+    }
+    // The Windows reading: dashed helpers by name and by path, and aliases.
+    for line in [
+        "git-grep.exe -Osh x",
+        "git-grep -Osh x",
+        r"C:\Git\mingw64\libexec\git-core\git-grep.exe -Osh x",
+        r"C:\Git\mingw64\libexec\git-core\git-grep.exe --open-files-in-pager=sh x",
+        "git-clone.exe -u ./x u",
+        r"C:\Git\mingw64\libexec\git-core\git-clone.exe -u ./x u",
+        r"C:\Git\mingw64\libexec\git-core\git-clone.exe --upload-pack=./x u",
+        "git g -Osh x",
+        "git gerp -Osh x",
+        "git cl -u ./x u",
+        r"C:\Git\cmd\git.exe g -Osh x",
+        r"C:\Git\cmd\git.exe -C C:\r gerp -Osh x",
+    ] {
+        if cmd(line) != Some(UnseenCode) {
+            wrong.push(format!("cmd: {line}"));
+        }
+        if powershell(line) != Some(UnseenCode) {
+            wrong.push(format!("powershell: {line}"));
+        }
+    }
+    // The prompts before this change stay.
+    for command in [
+        "git grep -Osh x",
+        "git clone -u ./x u",
+        "git clone --upload-pack=./x u",
+        "git-grep -Osh x",
+        "git-clone -u ./x u",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(format!("kept: {command}"));
+        }
+    }
+    for line in [
+        "git grep -Osh x",
+        r"C:\Git\cmd\git.exe clone --upload-pack=./x u",
+    ] {
+        if cmd(line) != Some(UnseenCode) || powershell(line) != Some(UnseenCode) {
+            wrong.push(format!("kept windows: {line}"));
+        }
+    }
+    // git's own commands with the same letters read as before.
+    for command in [
+        "git add -u",
+        "git status -uno",
+        "git status -u",
+        "git log -Oorder.txt",
+        "git branch -u origin/main",
+        "git -C /r status -uno",
+        "git -c color.ui=never add -u",
+        "git-status -uno",
+        "git log -c",
+        "git commit -c HEAD",
+    ] {
+        if script(command).is_some() {
+            wrong.push(format!("quiet: {command}"));
+        }
+    }
+    for line in [
+        "git status -uno",
+        "git log -Oorder.txt",
+        "git-status.exe -uno",
+        "git-log.exe -Oorder.txt",
+    ] {
+        if cmd(line).is_some() {
+            wrong.push(format!("quiet cmd: {line}"));
+        }
+        if powershell(line).is_some() {
+            wrong.push(format!("quiet powershell: {line}"));
         }
     }
     assert_eq!(wrong, Vec::<String>::new());
@@ -10867,5 +11159,102 @@ fn issue_1309_follow_up_checks_are_linear() {
             let line = format!("{prefix}{}{suffix}", unit.repeat(200 * scale));
             let _ = script(&line);
         });
+    }
+}
+
+/// #1607: zsh reads `>!` as `>|` (also `>>!`, `&>!`, `&>>!`, `>&!`, `>>&!`
+/// and with a descriptor, `2>!`): `echo x >! ~/.zshrc` writes `~/.zshrc`.
+/// bash and dash write a file `!` and pass the next word on, so both
+/// readings count: the `!` file, and zsh's file judged as written only
+/// (bash's words are left as they were). The `|` forms (`>>|`, `&>|`, `&>>|`, `>&|`, `>>&|`)
+/// already asked; they stay so.
+#[test]
+fn issue1607_zsh_clobber_redirections_write() {
+    use ProtectedActionKind::Credentials;
+    use ProtectedActionKind::Persistence;
+    use ProtectedActionKind::UnseenCode;
+    for shell in ["zsh", "bash"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for op in [
+            ">!", ">>!", "&>!", "&>>!", ">&!", ">>&!", "2>!", "2>>!", "1>>!", ">>|", "&>|", "&>>|",
+            ">&|", ">>&|", "2>>|",
+        ] {
+            for target in [" ~/.zshrc", "~/.zshrc", " =mytool", " \"$HOME/.zshrc\""] {
+                let script = format!("echo x {op}{target}");
+                assert_eq!(line(&script), Some(Persistence), "{shell} {script:?}");
+            }
+        }
+        for script in [
+            "make >! log; echo x >>! ~/.zshenv",
+            "sh -c \"echo x >! ~/.zshrc\"",
+            "f() { echo x >>! ~/.zshrc; }; f",
+            "(echo x &>! ~/.zshrc)",
+            "echo $(echo x >! ~/.zshrc)",
+            "cd ~ && echo x >! .zshrc",
+            "cd ~ && echo x >>!.zshenv",
+            "echo x >! ~/.zshrc 2>&1",
+            "echo x >! $(echo ~/.zshrc)",
+            "echo x >!$(echo ~/.zshrc)",
+            "echo x >>! `echo ~/.zshrc`",
+            "echo x >! ~/$(echo .zshrc)",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        // The line's variables count in zsh's file as in any other
+        // (review round 2): it asks as `>` does (`>|` is no measure: the
+        // word reading splits it as a pipe, so its file is also a program).
+        for op in [">!", ">>!", "&>!", "2>!"] {
+            for template in [
+                "f=~/.zshrc; echo x OP $f",
+                "f=~/.zshrc; echo x OP\"$f\"",
+                "f=~/.zshrc; echo x OP \"$f\"",
+                "f=$(cat notes); echo x OP \"$f\"",
+                "P=..; cd /home/fixture/w && echo x OP $P/.zshrc",
+                "P=../../../../..; cd /home/fixture/w; for i in 1 2 3 4; do cd d; echo x OP $P/.zshrc; done",
+            ] {
+                let script = template.replace("OP", op);
+                let plain = template.replace("OP", &op.replace('!', ""));
+                let expected = line(&plain);
+                assert!(expected.is_some(), "{shell} {plain:?}");
+                assert_eq!(line(&script), expected, "{shell} {script:?}");
+            }
+        }
+        // bash's words stay as they were: git runs with the option the
+        // `>!` precedes, `~` is still what grep reads (not a `-C` value),
+        // `read` still sets the variable it names.
+        assert!(line("git >! -c core.pager=sh log").is_some(), "{shell}");
+        for (script, expected) in [
+            ("grep -r token >!-C ~", Credentials),
+            ("touch PAGER; read >! PAGE[R] <<< id; git log", UnseenCode),
+            ("read >! \"$n\" <<< x", UnseenCode),
+            ("declare >(:>!) \"$n=x\"", UnseenCode),
+        ] {
+            assert_eq!(line(script), Some(expected), "{shell} {script:?}");
+        }
+        // Ordinary redirections and pipes, a `!` elsewhere, and a quoted
+        // `!` (zsh writes a file `!`), stay as they were.
+        for script in [
+            "echo x >! out.txt",
+            "echo x >>!out.txt",
+            "make 2>! err.log",
+            "make >>! build.log 2>&1",
+            "echo x &>! out.txt",
+            "echo x >&! out.txt",
+            "echo x >>&! out.txt",
+            "echo x >>| out.txt",
+            "echo x &>| out.txt",
+            "echo x > out.txt",
+            "echo x >> log",
+            "echo x >| out.txt",
+            "ls | grep x",
+            "echo hi! > out.txt",
+            "echo x > out!",
+            "[ a != b ] && echo x > out.txt",
+            "if ! grep -q x f; then echo y >> log; fi",
+            "echo x >\\! ~/.zshrc",
+            "echo x >'!' ~/.zshrc",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
     }
 }

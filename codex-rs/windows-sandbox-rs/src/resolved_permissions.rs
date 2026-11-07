@@ -119,8 +119,10 @@ impl ResolvedWindowsSandboxPermissions {
     /// read-only carve-out, as opposed to the default `.git`/`.codex`/`.agents`
     /// protections).
     pub(crate) fn is_explicit_read_only_path(&self, path: &Path, cwd: &Path) -> bool {
+        // D293 (#1542 item 2): also when spelled against a writable root's
+        // resolved path.
         self.file_system
-            .has_explicit_non_write_entry_for_path_with_cwd(path, cwd)
+            .has_explicit_non_write_entry_resolving_to(path, cwd)
     }
 
     pub(crate) fn has_full_disk_read_access(&self) -> bool {

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use tokio::sync::watch;
 use tracing::trace;
@@ -37,9 +38,12 @@ impl RemoteProcess {
         &self,
         params: ExecParams,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        network_denial_observer: Option<Arc<dyn BlockedRequestObserver>>,
     ) -> Result<StartedExecProcess, crate::ExecServerError> {
         let client = self.client.get().await?;
-        let session = client.start_process(params, network_policy_decider).await?;
+        let session = client
+            .start_process(params, network_policy_decider, network_denial_observer)
+            .await?;
         let sandbox_type = sandbox_type_from_protocol(session.sandbox_type());
 
         Ok(StartedExecProcess {
@@ -53,6 +57,7 @@ impl ExecBackend for RemoteProcess {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_> {
         Box::pin(RemoteProcess::start(
             self, params, /*network_policy_decider*/ None,
+            /*network_denial_observer*/ None,
         ))
     }
 
@@ -61,7 +66,21 @@ impl ExecBackend for RemoteProcess {
         params: ExecParams,
         decider: Arc<dyn NetworkPolicyDecider>,
     ) -> ExecBackendFuture<'_> {
-        Box::pin(RemoteProcess::start(self, params, Some(decider)))
+        Box::pin(RemoteProcess::start(
+            self,
+            params,
+            Some(decider),
+            /*network_denial_observer*/ None,
+        ))
+    }
+
+    fn start_with_network_callbacks(
+        &self,
+        params: ExecParams,
+        decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        denial_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) -> ExecBackendFuture<'_> {
+        Box::pin(RemoteProcess::start(self, params, decider, denial_observer))
     }
 }
 

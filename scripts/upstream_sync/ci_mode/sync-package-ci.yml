@@ -1,0 +1,96 @@
+# sync-ci-mode: sync branch only; scripts/upstream_sync/ci_mode.py adds and removes this file (S0 -> S4).
+# Package-scoped clippy and tests while the workspace still has conflict markers (upstreamSyncPlan.md section 4).
+# Trigger: push the commit to test to a branch named sync-ci/<anything>. A workflow_dispatch workflow cannot be
+# used: GitHub only dispatches workflows whose file also exists on the default branch.
+# Packages and platforms come from .github/sync-package-ci.json at that commit, for example
+#   {"packages": ["codex-core"], "platforms": ["linux", "macos", "windows"], "test": true}
+name: sync-package-ci
+
+on:
+  push:
+    branches: ["sync-ci/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-package-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      packages: ${{ steps.plan.outputs.packages }}
+      test: ${{ steps.plan.outputs.test }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: plan
+        shell: python
+        run: |
+          import json, os, re
+          cfg = json.load(open(".github/sync-package-ci.json"))
+          pkgs = cfg["packages"]
+          assert pkgs and all(re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in pkgs), pkgs
+          legs = {
+              "linux": {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
+              "macos": {"runner": "macos-15", "target": "aarch64-apple-darwin"},
+              "windows": {"runner": "windows-2022", "target": "x86_64-pc-windows-msvc"},
+          }
+          include = [legs[p] for p in cfg.get("platforms", ["linux", "macos", "windows"])]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"matrix={json.dumps({'include': include})}\n")
+              out.write(f"packages={' '.join('-p ' + p for p in pkgs)}\n")
+              out.write(f"test={'true' if cfg.get('test', True) else 'false'}\n")
+
+  package:
+    needs: plan
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: codex-rs
+    env:
+      CARGO_INCREMENTAL: "0"
+      CORBANU_TEST_NO_NATIVE_KEYRING: "1"
+      RUST_BACKTRACE: "1"
+      RUST_MIN_STACK: "8388608"
+      PACKAGES: ${{ needs.plan.outputs.packages }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        working-directory: .
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - name: Configure rusty_v8 artifacts when the action exists
+        id: v8
+        working-directory: .
+        run: |
+          if [ -f .github/actions/setup-rusty-v8/action.yml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
+      - if: ${{ steps.v8.outputs.present == 'true' }}
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: cargo clippy (packages, --tests, -D warnings)
+        # PACKAGES is validated by the plan job (names only) and intentionally word-split.
+        run: cargo clippy --locked --target "${{ matrix.target }}" $PACKAGES --all-targets -- -D warnings
+      - name: cargo test (packages)
+        if: ${{ needs.plan.outputs.test == 'true' }}
+        run: cargo test --locked --target "${{ matrix.target }}" $PACKAGES
