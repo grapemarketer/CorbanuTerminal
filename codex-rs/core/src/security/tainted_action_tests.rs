@@ -6980,6 +6980,47 @@ fn issue_1482_wrapper_option_values_are_not_the_command() {
     assert_eq!(wrong, Vec::<&str>::new(), "should be quiet");
 }
 
+/// #1482 review: a cluster letter that is not a known flag may take a value
+/// that holds the rest of the word (`xargs -i`, `systemd-run -E`, `nsenter
+/// -n`, `sudo -R`), so such a cluster is one word, as on main, and the
+/// command after it is judged.
+#[cfg(unix)]
+#[test]
+fn issue_1482_unknown_cluster_letters_keep_one_word() {
+    let evil = "echo x >> ~/.zshenv\n";
+    let words = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
+    let lines = [
+        "xargs -iI sh x",
+        "systemd-run --user -dEu sh x",
+        "nsenter -nt sh x",
+        "sudo -Ru sh x",
+    ];
+    for (line, at, name) in [
+        (lines[0], 2, "sh"),
+        (lines[1], 3, "sh"),
+        (lines[2], 2, "sh"),
+        (lines[3], 2, "sh"),
+        // Known flags before a value letter still take its value.
+        ("sudo -iu root sh x", 3, "sh"),
+        ("nsenter -at 1 sh x", 3, "sh"),
+        ("systemd-run -dqp X=1 sh x", 3, "sh"),
+        ("xargs -0I {} sh x", 3, "sh"),
+        ("taskset 0x3 sh x", 2, "sh"),
+        ("taskset -c -a 0 sh x", 4, "sh"),
+    ] {
+        assert_eq!(
+            indirect::command_word(&words(line)),
+            Some((at, name.to_string())),
+            "{line}"
+        );
+    }
+    let quiet: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| in_workspace(&[("x", evil)], line).is_none())
+        .collect();
+    assert_eq!(quiet, Vec::<&str>::new(), "should ask");
+}
+
 /// #1302 follow-up: programs named by a path, behind a wrapper's folder,
 /// are judged in linear work.
 #[cfg(unix)]

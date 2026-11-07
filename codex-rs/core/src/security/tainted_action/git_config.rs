@@ -274,7 +274,7 @@ pub(super) fn inspection_only_prefix(prefix: &[String]) -> bool {
                 if option == "--" {
                     options = false;
                 }
-                at += super::indirect::option_words(option, value_options);
+                at += super::indirect::option_words(&name, option, value_options);
             } else if option.contains('=') {
                 at += 1;
             } else {

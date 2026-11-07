@@ -246,14 +246,36 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     ("watch", &["-n", "--interval"], 0),
 ];
 
+/// #1482: letters known to take no value, per wrapper. A cluster is read
+/// through these only: a letter not listed here may take a value (`sudo
+/// -R`, `xargs -i`, `nsenter -n`), which would hold the rest of the word,
+/// so a cluster with one is read as one word, as before.
+const FLAG_LETTERS: &[(&str, &str)] = &[
+    ("sudo", "ABbEeHiKklnPSsVv"),
+    ("doas", "Lns"),
+    ("env", "0iv"),
+    ("time", "alpqv"),
+    ("timeout", "v"),
+    ("exec", "cl"),
+    ("xargs", "0oprtx"),
+    ("caffeinate", "dimsu"),
+    ("ionice", "t"),
+    ("flock", "Fnosux"),
+    ("runuser", "flmPp"),
+    ("nsenter", "aFZ"),
+    ("systemd-run", "dGPqrSt"),
+    ("watch", "bcegptx"),
+];
+
 /// #1482: how many words a wrapper's option word uses: one, or two when
-/// it takes a value that is not attached. A letter that takes a value
-/// takes the rest of its word, or the next word at the end of a cluster
-/// (`sudo -nC 3`, `sudo -nD sub`, `env -iu X`). A long option takes the
-/// next word only when it is named in full (`sudo --chdir sub`); an
-/// abbreviation is read as before, since some long options (`xargs
-/// --replace`) take an optional value that is never a separate word.
-pub(super) fn option_words(option: &str, value_options: &[&str]) -> usize {
+/// it takes a value that is not attached. A short cluster takes the next
+/// word only when its last letter takes a value and every letter before it
+/// is a known flag of `wrapper` (`sudo -nC 3`, `sudo -nD sub`, `env -iu
+/// X`); any other cluster is one word. A long option takes the next word
+/// only when it is named in full (`sudo --chdir sub`); an abbreviation is
+/// read as before, since some long options take an optional value that is
+/// never a separate word.
+pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) -> usize {
     if value_options.contains(&option) {
         return 2;
     }
@@ -263,6 +285,10 @@ pub(super) fn option_words(option: &str, value_options: &[&str]) -> usize {
     let Some(letters) = option.strip_prefix('-') else {
         return 1;
     };
+    let flags = FLAG_LETTERS
+        .iter()
+        .find(|(name, _)| *name == wrapper)
+        .map_or("", |(_, flags)| *flags);
     for (at, letter) in letters.char_indices() {
         work::step();
         let takes_value = value_options.iter().any(|value_option| {
@@ -273,6 +299,9 @@ pub(super) fn option_words(option: &str, value_options: &[&str]) -> usize {
         });
         if takes_value {
             return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !flags.contains(letter) {
+            return 1;
         }
     }
     1
@@ -329,7 +358,7 @@ fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(us
         while let Some(option) = words.get(index) {
             work::step();
             if option.starts_with('-') {
-                index += option_words(option, value_options);
+                index += option_words(&name, option, value_options);
             } else if option.contains('=') {
                 index += 1;
             } else {
