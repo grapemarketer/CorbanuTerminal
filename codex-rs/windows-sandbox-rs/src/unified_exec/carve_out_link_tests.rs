@@ -36,7 +36,7 @@ impl Drop for Unlink {
 /// Runs `script` (cmd lines) as a legacy workspace-write command on
 /// `workspace` with `profile` and the extra read-only `carve_outs`; returns
 /// the start error, or the exit code and the sandbox log.
-fn run_script(
+pub(super) fn run_script(
     profile: &PermissionProfile,
     workspace: &Path,
     carve_outs: &[AbsolutePathBuf],

@@ -127,6 +127,7 @@ env:
     carve_out_link::legacy_link_above_read_only_path_stops_the_command
     carve_out_link::legacy_read_only_path_through_a_linked_root_keeps_its_ancestors
     carve_out_link::link_above_carve_out_finds_links_below_the_root
+    cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
 
 jobs:
   probes:
