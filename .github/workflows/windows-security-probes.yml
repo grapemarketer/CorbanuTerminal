@@ -128,6 +128,7 @@ env:
     nested_metadata::legacy_workspace_stays_watched_when_temp_resolves_to_it
     nested_metadata::legacy_configured_project_metadata_the_sandbox_makes_is_not_planted
     carve_out_link::legacy_link_above_read_only_path_stops_the_command
+    carve_out_link::legacy_link_above_read_only_path_leaves_its_target_unchanged
     carve_out_link::legacy_read_only_path_that_is_a_link_stops_the_command
     carve_out_link::legacy_read_only_path_through_a_linked_root_keeps_its_ancestors
     carve_out_link::link_above_carve_out_finds_links_below_the_root
@@ -299,6 +300,22 @@ jobs:
           # PowerShell; native commands are checked through $LASTEXITCODE instead.
           $ErrorActionPreference = 'Continue'
           $medium = '.github/scripts/run-at-medium-integrity.ps1'
+          # #1689: a normal session's own TEMP lets its user label it (a
+          # user's %TEMP% is theirs, with Full control). The runner's TEMP is
+          # made elevated and inherits D:\'s ACL, which on some runners doesn't
+          # give the user WRITE_OWNER: a normal session then couldn't label it,
+          # or what tests make in it, Low.
+          'TEMP ACL before the #1689 grant:'
+          icacls $env:TEMP | Select-String -NotMatch 'S-1-5-21-'
+          $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          # /C: what earlier steps left in TEMP may not take the inherited entry.
+          icacls $env:TEMP /grant "*${user}:(OI)(CI)(WO)" /C /Q | Out-Null
+          $granted = (Get-Acl -LiteralPath $env:TEMP).Access | Where-Object {
+            $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $user -and
+            $_.AccessControlType -eq 'Allow' -and
+            ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::TakeOwnership)
+          }
+          if (-not $granted) { throw "granting WRITE_OWNER on TEMP failed" }
           function Get-TestExe([string[]]$CargoArgs) {
             $artifacts = cargo test --locked --manifest-path codex-rs/Cargo.toml @CargoArgs --no-run --message-format=json
             if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed" }
@@ -334,9 +351,28 @@ jobs:
             & $medium -Program $d1 -Arguments @('--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
-            Assert-Tests $sandbox 'sec_win_' 33
+            # The D324 tests skip here: no elevated setup is recorded yet.
+            Assert-Tests $sandbox 'sec_win_' 42
             & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
+            # D324 (#1648): the elevated backend from a normal session. Each test
+            # reuses the setup an elevated run recorded right before it.
+            # The ignored #1560 borrow test runs only on request.
+            $d324Ignored = @(& $sandbox --list --ignored --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' })
+            $d324 = @(& $sandbox --list --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' } | Where-Object { $d324Ignored -notcontains $_ })
+            if ($d324.Count -ne 8) { throw "expected 8 D324 tests, found $($d324.Count)" }
+            New-Item -ItemType Directory -Force $env:CODEX_PF27S06_SETUP_SEED | Out-Null
+            foreach ($t in $d324) {
+              & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+              $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "D324 $t failed in a normal session" }
+              if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
+            }
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')

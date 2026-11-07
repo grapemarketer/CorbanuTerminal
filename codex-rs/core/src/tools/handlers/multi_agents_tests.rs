@@ -149,6 +149,28 @@ fn assert_wait_v2_agents_include_task(
     );
 }
 
+/// #1701: start a thread as `parent`'s spawned child, so `wait_agent` called
+/// by `parent` may read it.
+async fn start_own_child(
+    manager: &ThreadManager,
+    config: crate::config::Config,
+    parent: ThreadId,
+) -> crate::thread_manager::NewThread {
+    let mut options = StartThreadOptions::new(config);
+    options.session_source = Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+        agent_class: None,
+    }));
+    manager
+        .start_thread(options)
+        .await
+        .expect("child thread should start")
+}
+
 fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
 }
@@ -5113,10 +5135,13 @@ async fn wait_agent_times_out_when_status_is_not_final() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1701: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -5156,10 +5181,13 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1701: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -5194,10 +5222,13 @@ async fn wait_agent_returns_final_status_without_timeout() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1701: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let mut status_rx = manager
         .agent_control()
@@ -5238,6 +5269,138 @@ async fn wait_agent_returns_final_status_without_timeout() {
         }
     );
     assert_eq!(success, None);
+}
+
+/// #1701: V1 refuses a loaded thread the caller did not spawn (another
+/// root thread), instead of returning its final status.
+#[tokio::test]
+async fn wait_agent_refuses_threads_the_caller_did_not_spawn() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let caller = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("caller root should start");
+    session.thread_id = caller.thread_id;
+    let other_root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("other root should start");
+    // Another root's child is not the caller's either.
+    let other_child = start_own_child(&manager, config.clone(), other_root.thread_id).await;
+    for thread in [&other_root, &other_child] {
+        let mut status_rx = manager
+            .agent_control()
+            .subscribe_status(thread.thread_id)
+            .await
+            .expect("subscribe should succeed");
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+        let _ = timeout(Duration::from_secs(1), status_rx.changed()).await;
+    }
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    for target in [other_root.thread_id, other_child.thread_id] {
+        let err = WaitAgentHandler::default()
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "wait_agent",
+                function_payload(json!({
+                    "targets": [target.to_string()],
+                    "timeout_ms": 10_000
+                })),
+            ))
+            .await
+            .err()
+            .expect("wait_agent on another thread's agent should be refused");
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(format!(
+                "wait_agent can only wait for agents spawned by this agent or by its sub-agents; `{target}` is not one of them"
+            ))
+        );
+    }
+    // Mixed with an own child, the whole wait is still refused.
+    let own_child = start_own_child(&manager, config.clone(), caller.thread_id).await;
+    let err = WaitAgentHandler::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "wait_agent",
+            function_payload(json!({
+                "targets": [own_child.thread_id.to_string(), other_root.thread_id.to_string()],
+                "timeout_ms": 10_000
+            })),
+        ))
+        .await
+        .err()
+        .expect("a wait that names another thread should be refused");
+    assert!(
+        matches!(err, FunctionCallError::RespondToModel(_)),
+        "{err:?}"
+    );
+    for thread in [&caller, &own_child] {
+        let _ = thread.thread.submit(Op::Shutdown {}).await;
+    }
+}
+
+/// #1701 control: V1 still waits on a grandchild (an agent of the caller's
+/// agent).
+#[tokio::test]
+async fn wait_agent_waits_for_the_callers_descendants() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    let child = start_own_child(&manager, config.clone(), session.thread_id).await;
+    let grandchild = start_own_child(&manager, config.clone(), child.thread_id).await;
+    let mut status_rx = manager
+        .agent_control()
+        .subscribe_status(grandchild.thread_id)
+        .await
+        .expect("subscribe should succeed");
+    let _ = grandchild
+        .thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+    let _ = timeout(Duration::from_secs(1), status_rx.changed())
+        .await
+        .expect("shutdown status should arrive");
+    let output = WaitAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait_agent",
+            function_payload(json!({
+                "targets": [grandchild.thread_id.to_string()],
+                "timeout_ms": 10_000
+            })),
+        ))
+        .await
+        .expect("wait_agent on a descendant should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        wait::WaitAgentResult {
+            status: HashMap::from([(grandchild.thread_id.to_string(), AgentStatus::Shutdown)]),
+            timed_out: false
+        }
+    );
+    let _ = child.thread.submit(Op::Shutdown {}).await;
 }
 
 #[tokio::test]
@@ -5326,6 +5489,127 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     assert_wait_v2_result(&result, "Wait completed.", /*timed_out*/ false);
     assert_wait_v2_agents_include_task(&result, "test_process");
     assert_eq!(success, None);
+}
+
+/// #1701: V2 reports only the caller's own agents, not another root
+/// thread's agent (or the root itself) with their final messages.
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_lists_only_the_callers_agents() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    let other_root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("other root should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+
+    let foreign = session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            vec![UserInput::Text {
+                text: "foreign task".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: other_root.thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/foreign").expect("agent path")),
+                agent_nickname: None,
+                agent_role: None,
+                agent_class: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("foreign agent should spawn");
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let spawn_output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "test_process"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let _ = expect_text_output(spawn_output);
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
+        .await
+        .expect("relative path should resolve");
+    let worker_path = session
+        .services
+        .agent_control
+        .get_agent_metadata(agent_id)
+        .expect("worker metadata")
+        .agent_path
+        .expect("worker path");
+    let wait_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            WaitAgentHandlerV2::default()
+                .handle(invocation(
+                    session,
+                    turn,
+                    "wait_agent",
+                    function_payload(json!({"timeout_ms": 10_000})),
+                ))
+                .await
+        }
+    });
+    tokio::task::yield_now().await;
+    session
+        .input_queue
+        .enqueue_mailbox_communication(
+            InterAgentCommunication::new(
+                worker_path.clone(),
+                AgentPath::root(),
+                Vec::new(),
+                "completed".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            /*parent_turn_id*/ None,
+        )
+        .await;
+    let wait_output = wait_task
+        .await
+        .expect("wait task should join")
+        .expect("wait_agent should succeed");
+    let (content, _) = expect_text_output(wait_output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    let names: Vec<&str> = result
+        .agents
+        .iter()
+        .map(|agent| agent.agent_name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec![worker_path.as_str()],
+        "{names:?} (foreign {})",
+        foreign.thread_id
+    );
 }
 
 #[tokio::test]

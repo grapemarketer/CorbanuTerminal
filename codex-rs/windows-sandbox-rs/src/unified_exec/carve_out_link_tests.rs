@@ -120,6 +120,108 @@ fn legacy_link_above_read_only_path_stops_the_command() {
     );
 }
 
+/// The explicit ACEs of `path`'s DACL and its mandatory label, as SDDL.
+fn explicit_aces(path: &Path) -> Vec<String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
+    use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
+    use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
+
+    let info = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    let wide = crate::winutil::to_wide(path);
+    let mut sd = std::ptr::null_mut();
+    let mut text: *mut u16 = std::ptr::null_mut();
+    // SAFETY: `wide` is NUL-terminated; `sd` and `text` are freed below.
+    let sddl = unsafe {
+        let code = GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            info,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sd,
+        );
+        assert_eq!(
+            code,
+            ERROR_SUCCESS,
+            "GetNamedSecurityInfoW {}",
+            path.display()
+        );
+        let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd,
+            SDDL_REVISION_1,
+            info,
+            &mut text,
+            std::ptr::null_mut(),
+        );
+        LocalFree(sd as HLOCAL);
+        assert_ne!(
+            converted, 0,
+            "ConvertSecurityDescriptorToStringSecurityDescriptorW"
+        );
+        let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+        let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+        LocalFree(text as HLOCAL);
+        sddl
+    };
+    sddl.split('(')
+        .skip(1)
+        .filter_map(|ace| ace.split(')').next())
+        .filter(|ace| {
+            !ace.split(';')
+                .nth(1)
+                .is_some_and(|flags| flags.contains("ID"))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// #1720: a junction above an explicit read-only path stops the command
+/// before the host writes anything on the junction's target, as when the
+/// host would have to make the path. Before, the deny-write ACE for the
+/// sandbox landed on the target first.
+#[test]
+fn legacy_link_above_read_only_path_leaves_its_target_unchanged() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let outside = test_root.path().join("outside");
+    let target = outside.join("b\\c");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&target).expect("create target");
+    let link = workspace.join("a");
+    junction(&link, &outside);
+    let _unlink = Unlink(link.clone());
+    let before = explicit_aces(&target);
+    let carve_outs = [AbsolutePathBuf::from_absolute_path(link.join("b\\c")).expect("absolute")];
+    let started = run_script(
+        &PermissionProfile::workspace_write(),
+        &workspace,
+        &carve_outs,
+        HashMap::new(),
+        "",
+    );
+
+    assert_eq!(
+        (
+            started
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.contains("is a link")),
+            explicit_aces(&target),
+        ),
+        (true, before),
+        "{started:?}"
+    );
+}
+
 /// #1667: a configured read-only path that is itself a junction in the
 /// writable root stops the command. Before, its denies landed on the
 /// junction's target, and the command could remove the junction and create a

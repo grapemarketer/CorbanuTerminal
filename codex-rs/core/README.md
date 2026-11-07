@@ -191,11 +191,47 @@ time with different writable roots (different projects, or different extra
 writable folders): either can write in the other's. Documented for now
 (D291, Travis 2026-11-06) in the non-admin warning and `docs/sandbox.md`. D291
 also pointed people who work on several projects at once to the elevated
-backend, but measured since, its commands can do the same to each other and
-more: they share one sandbox account and get full access to each other's
-processes even without borrowing a token (#1648, awaiting a decision). So the
-docs say neither backend keeps concurrent projects apart. A redesigned legacy
-token that closes the borrowing is to be measured separately. Killing
+backend, but measured since, its commands could do the same to each other and
+more: they share one sandbox account (a restricting SID of every elevated
+token) and the logon SID of the session that starts their runners, and had
+full access to each other's processes and runners even without borrowing a
+token (#1648). Since D324 (Travis 2026-11-07) each elevated command's token
+carries its own identity SID too, and its default DACL grants full access
+only to SYSTEM, the sandbox users' group (every elevated token holds it as a
+normal group, never as a restricting SID, so it can't pass the write check)
+and that SID; the logon SID, the sandbox account, `OWNER RIGHTS`, Everyone
+and the capability SIDs get read and execute. As its first step, each
+runner also limits what the sandbox account, which all elevated commands
+share, may do to it: query its process and threads (and wait for them),
+query its token, and nothing on the objects it creates without explicit
+security, such as its pipes and the ConPTY console host, which get full
+access for SYSTEM and read, write and execute for the sandbox users' group. Measured on CI, elevated and in a normal session: an
+elevated command can no longer open another elevated command's process, its
+own or another command's runner, or a runner's console host for any of the 8
+write rights, adjust their tokens, or open a runner's token; a ConPTY
+console host's token still opens for `TOKEN_DUPLICATE`, but a command
+impersonating it gets identification level only and can't write or start
+processes as it (measured); it keeps full access to its own processes; a cmd pipeline,
+PowerShell (with and without ConPTY), `git init` and `git status` still
+work. Core starts each runner suspended and, before it runs, limits its
+process and main thread to SYSTEM; the runner has no console, so no console
+host starts before its first step. Not closed: the threads Windows' loader
+starts in a runner before that first step get the logon's default DACL,
+which gives the sandbox account full access, so a command racing a
+runner's start-up can still open one for write rights (10 to 16 of 20
+start-ups on CI, #1721). Such a thread lets the command run code in the
+unrestricted runner, outside its restricted token and job, so this
+start-up race is the remaining route out of the elevated sandbox that D324
+didn't close; a CI test keeps the other start-up routes closed. Elevated
+commands can still read each other's processes, including their ConPTY
+console hosts (another workspace's terminal output), as before (reads
+aren't restricted), end them (D292), and borrow another elevated command's
+token through the group's `TOKEN_DUPLICATE` and write in that command's
+writable roots, as legacy commands can (#1560); impersonating another
+command's threads may be a second borrowing route (unmeasured, #1560). So the docs
+still say neither backend keeps concurrent projects apart. Closing the
+borrowing for both backends, after the #1560 token measurement, is D324's
+second step. Killing
 another command's processes stays possible on purpose (D292). Two routes
 still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child

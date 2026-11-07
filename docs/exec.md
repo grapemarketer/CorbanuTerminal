@@ -13,10 +13,11 @@ billing or run-cost record:
   total unknown: its first update can replay inherited counters, and exec cannot
   establish an authoritative baseline from that update. The selected thread's
   totals are not an invocation-start delta.
-- In MultiAgentV2, omitting `fork_turns` from `spawn_agent` defaults to `"all"`:
-  the child copies history, so these default multi-agent runs report `usage: null`.
-  All history-forked descendants make the aggregate unknown. When usage is
-  non-null, it can be larger than earlier versions because descendants are included.
+- In MultiAgentV2, omitting `fork_turns` from `spawn_agent` defaults to
+  `"all"`: the child copies history, so these default multi-agent runs report
+  `usage: null`. All history-forked descendants make the aggregate unknown.
+  When usage is non-null, it can be larger than earlier versions because
+  descendants are included.
 - If the selected thread or an observed descendant has no usage report, `usage`
   is `null`. Unknown usage is never reported as zero counters, so consumers must
   handle the null case instead of reading token counts from it.

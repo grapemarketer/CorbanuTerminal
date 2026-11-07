@@ -96,6 +96,22 @@ impl Handler {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
+        // #1701: only the caller's own agents (and theirs) can be waited on;
+        // another loaded thread's final message is not the caller's to read.
+        for receiver_thread_id in &receiver_thread_ids {
+            if session
+                .services
+                .agent_control
+                .is_foreign_loaded_thread(session.thread_id, *receiver_thread_id)
+                .await
+                .unwrap_or(true)
+            {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "wait_agent can only wait for agents spawned by this agent or by its sub-agents; `{receiver_thread_id}` is not one of them"
+                )));
+            }
+        }
+
         session
             .emit_turn_item_started(
                 &turn,
