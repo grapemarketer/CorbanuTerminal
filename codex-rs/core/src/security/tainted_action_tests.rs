@@ -11932,6 +11932,11 @@ fn issue1685_review2_forms_ask() {
             ": ${functions[f]::='tee -a ~/.zshrc'}; f",
             "set -A functions f 'tee -a ~/.zshrc'; f",
             "typeset -n r=functions",
+            // Review 4: `+A`, the name attached, an earlier option.
+            "set +A functions f 'tee -a ~/.zshrc'; f",
+            "set -Afunctions f 'tee -a ~/.zshrc'; f",
+            "set -xAfunctions f 'tee -a ~/.zshrc'; f",
+            "read -A -r functions < x",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
         }
@@ -11941,6 +11946,8 @@ fn issue1685_review2_forms_ask() {
             "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT; echo x > \"$tmp\"",
             "aliases[ll]='ls -l'",
             "ls -A functions",
+            "set -- functions",
+            "read -r functions < x",
             "grep -rn functions src",
             "jq '.functions[0]' f.json",
         ] {

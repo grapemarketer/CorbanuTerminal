@@ -610,16 +610,22 @@ impl Classifier {
             // closed.
             let array_setter = indirect::command_word(&texts)
                 .is_some_and(|(_, name)| matches!(name.as_str(), "set" | "read"));
+            // In `set`/`read`: an option holding `A` (`-A`, `+A`, `-rA`)
+            // was given; `--` ends them.
+            let mut array_option = false;
+            let mut options_end = false;
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
+                let option = array_setter && !options_end && text.starts_with(['-', '+']);
+                options_end |= text == "--";
+                // `set -Afunctions …`, `-xAfunctions`: the name attached.
+                let attached = option && text.contains("Afunctions");
+                array_option |= option && text != "--" && text.contains('A');
                 found.unreadable |= array
-                    || sets_functions_otherwise(
-                        text,
-                        at.checked_sub(1)
-                            .map(|at| &texts[at])
-                            .filter(|_| array_setter),
-                    );
+                    || attached
+                    || (array_setter && array_option && text == "functions")
+                    || sets_functions_otherwise(text);
                 for value in values {
                     work::step();
                     tables += 1;
@@ -2240,17 +2246,11 @@ fn code_table_values(text: &str) -> (Vec<&str>, bool) {
 /// #1685: whether a word may set zsh's `functions` table other than by an
 /// assignment to an entry ([`code_table_values`]): a subscript named
 /// elsewhere (`printf -v 'functions[f]' …`, `${functions[f]::=…}`, `read
-/// 'functions[f]'`), a reference (`typeset -n r=functions`) or the table
-/// after an array option (`set -A functions f …`). `previous`: the word
-/// before it, in a `set` or `read` command. (Alias tables: `aliases.rs`.)
-fn sets_functions_otherwise(text: &str, previous: Option<&String>) -> bool {
+/// 'functions[f]'`) or a reference (`typeset -n r=functions`). (The table
+/// after an array option, `set -A functions f …`, is found by the caller;
+/// alias tables by `aliases.rs`.)
+fn sets_functions_otherwise(text: &str) -> bool {
     const TABLE: &str = "functions";
-    if text == TABLE {
-        return previous.is_some_and(|word| {
-            word.strip_prefix('-')
-                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('A'))
-        });
-    }
     text.match_indices(TABLE).any(|(at, _)| {
         work::step();
         let rest = &text[at + TABLE.len()..];
