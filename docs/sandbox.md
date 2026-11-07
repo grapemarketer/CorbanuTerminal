@@ -79,11 +79,14 @@ sandboxes do this. It has two side effects:
   folder has already been made, delete it while no session is running, then
   create the file.
 - A read-only path inside `.git`, such as `.git\hooks`, in a folder that
-  isn't a git repository yet creates a protected `.git` there that holds only
-  an empty `hooks` folder. Git doesn't treat that as a repository, so git
-  commands in that folder report "not a git repository" or use a repository
-  in a folder above it. Run `git init` there yourself, or remove the entry
-  and then delete that `.git` folder while no session is running.
+  isn't a git repository yet creates a `.git` there that holds only an empty
+  `hooks` folder. The non-admin sandbox protects that `.git` at once. The
+  default sandbox protects only `hooks` for the command that made it, and the
+  whole `.git` from the next command on (#1758). Git doesn't treat such a
+  `.git` as a repository, so git commands in that folder report "not a git
+  repository" or use a repository in a folder above it. Run `git init` there
+  yourself, or remove the entry and then delete that `.git` folder while no
+  session is running.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some
