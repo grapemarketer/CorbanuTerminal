@@ -219,13 +219,13 @@ unsafe fn sandbox_users_group_of(token: HANDLE) -> Result<Vec<u8>> {
 /// hold the group only as a normal group, not as a restricting SID, so they
 /// get no write right. Rights outside the generic read, write and execute
 /// mappings, such as `TOKEN_DUPLICATE`, aren't write rights, so the normal
-/// check alone decides them; as the group has no `GENERIC_ALL`, they don't
-/// get those either, so they can't borrow the console host's unrestricted
-/// token. Before, they got full access through the sandbox account. Fails if
-/// the runner isn't in the group.
+/// check alone decides them; the group has no `GENERIC_ALL`, so its
+/// objects' tokens don't grant them either. (A ConPTY console host's token
+/// was still measured to open for `TOKEN_DUPLICATE`; a restricted token can
+/// only identify as it, not act as it.) Before, they got full access through
+/// the sandbox account. Fails if the runner isn't in the group.
 pub fn restrict_current_default_dacl() -> Result<()> {
-    // SAFETY: the SID buffers outlive every call; the token handle is
-    // closed below.
+    // SAFETY: the token handle is closed below.
     unsafe {
         let mut token: HANDLE = 0;
         if OpenProcessToken(
@@ -236,25 +236,33 @@ pub fn restrict_current_default_dacl() -> Result<()> {
         {
             return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
         }
-        let result = (|| -> Result<()> {
-            let mut group = sandbox_users_group_of(token)?;
-            let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
-            let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
-            set_default_dacl_grants(
-                token,
-                &[
-                    (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
-                    (
-                        group.as_mut_ptr() as *mut c_void,
-                        GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
-                    ),
-                    (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
-                ],
-            )
-        })();
+        let result = restrict_runner_default_dacl(token);
         CloseHandle(token);
         result
     }
+}
+
+/// [`restrict_current_default_dacl`] on the runner's `token`, opened with
+/// `TOKEN_QUERY | TOKEN_ADJUST_DEFAULT`: Core does it too while the runner
+/// is still suspended, where it may (#1721).
+///
+/// # Safety
+/// `token` must be a valid token handle with those rights.
+pub(crate) unsafe fn restrict_runner_default_dacl(token: HANDLE) -> Result<()> {
+    let mut group = sandbox_users_group_of(token)?;
+    let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+    let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
+    set_default_dacl_grants(
+        token,
+        &[
+            (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+            (
+                group.as_mut_ptr() as *mut c_void,
+                GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+            ),
+            (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
+        ],
+    )
 }
 
 /// D324 (#1648): limits the elevated runner's own token to `TOKEN_QUERY` for

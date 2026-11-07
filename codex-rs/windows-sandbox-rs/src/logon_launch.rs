@@ -65,12 +65,20 @@ use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
+use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GetSecurityDescriptorControl;
+use windows_sys::Win32::Security::GetSecurityDescriptorDacl;
+use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::Security::SE_DACL_PROTECTED;
+use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
+use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 use windows_sys::Win32::System::Pipes::CreatePipe;
@@ -80,10 +88,12 @@ use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessW;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
 use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::OpenProcessToken;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::ResumeThread;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
@@ -170,6 +180,9 @@ pub struct LaunchedProcess {
     /// Why the new process's logon could not be given that access, if it
     /// could not.
     pub window_access_error: Option<String>,
+    /// Why its default DACL could not be restricted before it ran (D324,
+    /// #1721), if it could not; it restricts it itself first thing.
+    pub default_dacl_error: Option<String>,
 }
 
 /// A process just started, still suspended if `thread` is not 0.
@@ -184,37 +197,55 @@ struct Started {
 /// logon service refuses it, `launcher_exe` (the command runner) makes the
 /// call instead; see the module docs.
 ///
-/// Outside the interactive window station (an SSH session, a service), the
-/// new process starts suspended, its logon SID gets access to this process's
-/// window station and desktop, which it starts on, and then it runs (#341,
-/// #345). If the access can't be given, it runs anyway (the window station
-/// may admit it), and the error is in
-/// [`LaunchedProcess::window_access_error`].
+/// The new process starts suspended. D324 (#1648, #1721): before it runs,
+/// its process and main thread get a DACL only SYSTEM may open (Core keeps
+/// its handles), and, where this process may open its token for it, the
+/// default DACL the runner gives itself
+/// ([`crate::token::restrict_current_default_dacl`]). The logon's DACLs give
+/// the sandbox account full access, and every elevated command's token holds
+/// that account as a restricting SID, so until then any of them could open
+/// the runner (unrestricted) for writing. The runner restricts them itself
+/// first thing, and lets the sandbox account query its process again. What
+/// remains is the moment between the service creating the process and this
+/// call.
+///
+/// Outside the interactive window station (an SSH session, a service), its
+/// logon SID also gets access to this process's window station and desktop,
+/// which it starts on, before it runs (#341, #345). If the access can't be
+/// given, it runs anyway (the window station may admit it), and the error
+/// is in [`LaunchedProcess::window_access_error`].
 pub fn create_process_with_logon(
     request: &LogonLaunchRequest<'_>,
     launcher_exe: &Path,
 ) -> anyhow::Result<LaunchedProcess> {
-    let suspended =
-        !current_window_station_name().is_some_and(|name| is_interactive_window_station(&name));
-    let started = create_process_with_logon_any(request, launcher_exe, suspended)?;
+    let started = create_process_with_logon_any(request, launcher_exe, /*suspended*/ true)?;
     let mut launched = LaunchedProcess {
         pid: started.pid,
         process: started.process,
         via_launcher: started.via_launcher,
         window_access: None,
         window_access_error: None,
+        default_dacl_error: None,
     };
-    if started.thread == 0 {
-        return Ok(launched);
-    }
-    // Ends the process if anything below panics before it runs.
+    // Ends the process if anything below fails or panics before it runs.
     let suspended = Suspended {
         process: launched.process,
         thread: started.thread,
     };
-    match process_logon_sid(started.process).and_then(|sid| WindowAccess::grant_runner(&sid)) {
-        Ok(access) => launched.window_access = access,
-        Err(err) => launched.window_access_error = Some(format!("{err:#}")),
+    match protect_before_start(started.process, started.thread) {
+        Ok(error) => launched.default_dacl_error = error,
+        Err(err) => {
+            drop(suspended);
+            // SAFETY: the process was ended; the handle is not used again.
+            unsafe { CloseHandle(launched.process) };
+            return Err(err);
+        }
+    }
+    if !current_window_station_name().is_some_and(|name| is_interactive_window_station(&name)) {
+        match process_logon_sid(started.process).and_then(|sid| WindowAccess::grant_runner(&sid)) {
+            Ok(access) => launched.window_access = access,
+            Err(err) => launched.window_access_error = Some(format!("{err:#}")),
+        }
     }
     if let Err(err) = suspended.resume() {
         // SAFETY: the process was ended; the handle is not used again.
@@ -222,6 +253,80 @@ pub fn create_process_with_logon(
         return Err(err).context("resume the started process");
     }
     Ok(launched)
+}
+
+/// The DACL a suspended runner's process and main thread get from Core:
+/// SYSTEM only, and `READ_CONTROL` for `OWNER RIGHTS` (the sandbox account
+/// owns them).
+const STARTING_RUNNER_DACL: &str = "D:P(A;;GA;;;SY)(A;;RC;;;OW)";
+
+/// See [`create_process_with_logon`]: protects a suspended `process` and its
+/// main `thread`. Returns why its default DACL stays the logon's until it
+/// runs, if it does.
+fn protect_before_start(process: HANDLE, thread: HANDLE) -> anyhow::Result<Option<String>> {
+    if thread == 0 {
+        anyhow::bail!("the runner was not started suspended");
+    }
+    set_kernel_object_dacl(process, STARTING_RUNNER_DACL)
+        .context("protect the runner's process before it runs")?;
+    set_kernel_object_dacl(thread, STARTING_RUNNER_DACL)
+        .context("protect the runner's main thread before it runs")?;
+    let mut token: HANDLE = 0;
+    // SAFETY: `process` is a live process handle; the token is closed below.
+    unsafe {
+        if OpenProcessToken(process, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, &mut token) == 0 {
+            return Ok(Some(format!("OpenProcessToken failed: {}", GetLastError())));
+        }
+        let result = crate::token::restrict_runner_default_dacl(token);
+        CloseHandle(token);
+        Ok(result.err().map(|err| format!("{err:#}")))
+    }
+}
+
+/// Replaces kernel object `handle`'s DACL with `sddl`'s, protected from
+/// inheritance.
+fn set_kernel_object_dacl(handle: HANDLE, sddl: &str) -> anyhow::Result<()> {
+    let wide = to_wide(sddl);
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `wide` is NUL-terminated; the descriptor is freed below.
+    unsafe {
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            ptr::null_mut(),
+        ) == 0
+        {
+            anyhow::bail!("parse {sddl}: {}", GetLastError());
+        }
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let status = if GetSecurityDescriptorDacl(
+            descriptor,
+            &mut present,
+            &mut dacl,
+            &mut defaulted,
+        ) == 0
+        {
+            GetLastError()
+        } else {
+            SetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                dacl,
+                ptr::null(),
+            )
+        };
+        LocalFree(descriptor as HLOCAL);
+        if status != ERROR_SUCCESS {
+            anyhow::bail!("SetSecurityInfo failed: {status}");
+        }
+    }
+    Ok(())
 }
 
 /// A process started suspended: ended on drop unless [`Suspended::resume`]
@@ -803,7 +908,9 @@ fn create_process_with_logon_here(
             /*dwlogonflags*/ 0,
             application.as_ptr(),
             command_line.as_mut_ptr(),
-            CREATE_NO_WINDOW
+            // D324 (#1721): no console, so no console host, which the runner
+            // would start with the logon's default DACL before it runs.
+            DETACHED_PROCESS
                 | CREATE_UNICODE_ENVIRONMENT
                 | if suspended { CREATE_SUSPENDED } else { 0 },
             ptr::null::<c_void>(),

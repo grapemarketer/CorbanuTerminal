@@ -77,9 +77,6 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-// Kept in sync with codex_exec_server::CODEX_FS_HELPER_ARG1 without introducing
-// a dependency cycle.
-const FS_HELPER_ARG: &str = "--codex-run-as-fs-helper";
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 const TERMINATION_WAIT_MS: u32 = 5_000;
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
@@ -248,24 +245,30 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// them) and query its token, and objects the runner creates without
 /// explicit security (threads Windows starts in it, pipes, the console
 /// host) give the commands no write right and no `TOKEN_DUPLICATE` either.
-/// Runs first thing in `main`: the secondary logon service starts the
-/// runner running, with the logon's DACLs, so until here any elevated
-/// command could open it. That startup window is not closed (#1721).
+/// Runs first thing in `main`. Core starts the runner suspended and, before
+/// it runs, gives its process and main thread a DACL that only SYSTEM may
+/// open (and its default DACL this one, where Core may), but from the
+/// secondary logon service creating it until then, any elevated command
+/// could open it (#1721).
 /// Returns the token the command's token is made from, opened first: the
 /// runner can't open its own token for that afterwards.
 fn harden_runner() -> Result<OwnedWinHandle> {
-    // The console Core starts the runner with (`CREATE_NO_WINDOW`) has a
-    // console host the runner started, with its unrestricted token, before
-    // any of this: it gives the sandbox account full access, so a command
-    // could start a child under it. The runner needs no console (its
-    // commands get their own or a ConPTY), so it detaches and the host exits.
+    // A console's host is a process the runner starts with its unrestricted
+    // token and, before this, the logon's default DACL, which gives the
+    // sandbox account full access: a command could start a child under it.
+    // Core starts the runner without a console (`DETACHED_PROCESS`), and its
+    // commands get their own or a ConPTY; if one was attached anyway, the
+    // runner leaves it, and its host exits.
     // SAFETY: no arguments; a failure means there was no console.
     unsafe { FreeConsole() };
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
-    codex_process_hardening::restrict_current_process_access()
-        .context("restrict access to the runner's process and threads")?;
+    // The token first: Core started this process with a DACL nobody but
+    // SYSTEM may open, and the process DACL set last lets the sandbox account
+    // query it, which is enough to open its token.
     restrict_current_default_dacl().context("restrict the runner's default DACL")?;
     restrict_current_token_access().context("restrict access to the runner's token")?;
+    codex_process_hardening::restrict_current_process_access()
+        .context("restrict access to the runner's process and threads")?;
     Ok(base)
 }
 
@@ -390,11 +393,10 @@ fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpa
             &req.env,
             stdin_mode,
             StderrMode::Separate,
-            if req.command.get(1).is_some_and(|arg| arg == FS_HELPER_ARG) {
-                ConsoleMode::NoWindow
-            } else {
-                ConsoleMode::Inherit
-            },
+            // D324: the runner has no console to inherit (see
+            // `harden_runner`), so each command gets a hidden one of its own,
+            // whose host it starts with its own token.
+            ConsoleMode::NoWindow,
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
