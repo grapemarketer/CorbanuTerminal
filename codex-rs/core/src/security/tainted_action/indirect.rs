@@ -418,33 +418,51 @@ pub(super) fn redirect_hides_command(
     words: &[String],
     from: usize,
 ) -> bool {
-    let held = |at: usize| {
-        command.writes_to.contains(&at)
-            || command.redirect_words.contains(&at)
-            || command.stdin_from == Some(at)
-            || command.here_string == Some(at)
-    };
-    let Some(words) = words.get(from..) else {
+    let Some(rest) = words.get(from..) else {
         return false;
     };
-    if !command_word(words).is_some_and(|(at, _)| held(from + at)) {
+    if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
         return false;
     }
-    // One pass over the words, once per simple command.
-    let runs: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| {
-            work::step();
-            !held(from + at)
-        })
-        .map(|(_, word)| word.clone())
-        .collect();
+    let Some(runs) = unredirected(command, words, from) else {
+        return false;
+    };
     command_word(&runs).is_some_and(|(at, name)| {
         runs[at].contains('/')
             || runs[at].starts_with('-')
             || matches!(name.as_str(), "eval" | "source" | "." | "trap")
     }) || invocation(&runs).is_some()
+}
+
+/// #1482 item 2: whether the word at `at` is part of a redirection
+/// (`redirect_hides_command`). The lexer adds the indexes in ascending
+/// order, so each lookup is a binary search, not a scan of the line.
+fn held(command: &SimpleCommand, at: usize) -> bool {
+    work::step();
+    command.writes_to.binary_search(&at).is_ok()
+        || command.redirect_words.binary_search(&at).is_ok()
+        || command.stdin_from == Some(at)
+        || command.here_string == Some(at)
+}
+
+/// #1482 items 2 and 4: the words from `from` on without those a
+/// redirection holds, as the shell runs them (`>log sudo -A true` runs
+/// `sudo -A true`); `None` when no redirection holds one. One pass over
+/// the words.
+fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Option<Vec<String>> {
+    let rest = words.get(from..)?;
+    let mut any = false;
+    let runs = rest
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| {
+            let hidden = held(command, from + at);
+            any |= hidden;
+            !hidden
+        })
+        .map(|(_, word)| word.clone())
+        .collect();
+    any.then_some(runs)
 }
 
 /// #1482 item 4: whether a sudo among the programs of these words runs an
@@ -454,7 +472,15 @@ pub(super) fn redirect_hides_command(
 /// -p A ./x` asks for nothing; `sudo -R sub -A ./x` runs a helper).
 /// `sudo -i` (the target user's home) is a folder option of
 /// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
-pub(super) fn sudo_runs_helper(words: &[String]) -> bool {
+/// The words are read as written and, when a redirection holds some of
+/// them, as the shell runs them (`>log sudo -A true`, `sudo 2>&1 -A
+/// true`, `sudo {fd}>log -e f`). `from`: the operands of `eval`.
+pub(super) fn sudo_runs_helper(command: &SimpleCommand, words: &[String], from: usize) -> bool {
+    words.get(from..).is_some_and(sudo_in_words_runs_helper)
+        || unredirected(command, words, from).is_some_and(|runs| sudo_in_words_runs_helper(&runs))
+}
+
+fn sudo_in_words_runs_helper(words: &[String]) -> bool {
     let options = WRAPPERS
         .iter()
         .find(|(wrapper, _, _)| *wrapper == "sudo")
@@ -497,29 +523,42 @@ pub(super) fn sudo_runs_helper(words: &[String]) -> bool {
         }
         (false, false)
     };
-    programs(words).into_iter().any(|at| {
+    // Whether sudo's option scan, from each word on, reaches a helper: the
+    // scan from a word only depends on that word and the scan after it
+    // (from the next word, or the one after its value). Read once, from
+    // the end, so chained sudos whose scans run past each other (`sudo -R
+    // sudo -R … ./x`, `--us`, `-xu`) cost one read per word, not one per
+    // sudo and word. Filled at the first sudo.
+    let mut helper_from: Vec<bool> = Vec::new();
+    for at in programs(words) {
         work::step();
         let name = basename(&words[at]).to_lowercase();
         if name == "sudoedit" {
             return true;
         }
         if name != "sudo" {
-            return false;
+            continue;
         }
-        let mut next = at + 1;
-        while let Some(option) = words.get(next) {
-            work::step();
-            if option == "--" || !option.starts_with('-') || option == "-" {
-                break;
+        if helper_from.is_empty() {
+            helper_from = vec![false; words.len() + 2];
+            for (next, option) in words.iter().enumerate().rev() {
+                work::step();
+                if option == "--" || !option.starts_with('-') || option == "-" {
+                    continue;
+                }
+                let (helper, takes) = read(option);
+                helper_from[next] = helper
+                    || helper_from
+                        .get(next + 1 + usize::from(takes))
+                        .copied()
+                        .unwrap_or_default();
             }
-            let (helper, takes) = read(option);
-            if helper {
-                return true;
-            }
-            next += 1 + usize::from(takes);
         }
-        false
-    })
+        if helper_from[at + 1] {
+            return true;
+        }
+    }
+    false
 }
 
 /// The invocation a simple command makes, if it runs a shell or interpreter.

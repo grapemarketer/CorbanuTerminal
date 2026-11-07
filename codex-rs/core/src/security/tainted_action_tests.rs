@@ -7131,6 +7131,18 @@ fn issue_1482_items_2_to_5_ask() {
         (x_ok, "eval sudoedit ./x"),
         (x_ok, "sudo -R sub -A ./x"),
         (x_ok, "sudo --user root --askpass ./x"),
+        // Review 2: a redirection before or among sudo's options.
+        (x_ok, ">log sudo -A true"),
+        (x_ok, "2>/dev/null sudo -A true"),
+        (x_ok, "sudo >log -A true"),
+        (x_ok, "sudo 2>&1 -A true"),
+        (x_ok, "sudo {fd}>log -e f"),
+        (x_ok, ">log sudoedit f"),
+        // Review 2: each sudo's options are read as before, past the next
+        // program the wrapper reading sees (`env`, the `-R` value).
+        (x_ok, "sudo -R env -A true"),
+        (x_ok, "sudo -R sudo -A true"),
+        (x_ok, "sudo --us root -A true"),
     ] {
         if in_workspace(files, line).is_none() {
             wrong.push(line);
@@ -7158,6 +7170,8 @@ fn issue_1482_items_2_to_5_ask() {
         (x_ok, "sudo -p A ./x"),
         // #1309: `-s` runs `$SHELL`, read as before.
         (x_ok, "sudo -s ./x"),
+        (x_ok, ">log sudo true"),
+        (x_ok, "sudo 2>&1 -u root true"),
         // D217: sudo's own `-C N` names no folder.
         (three_evil, "sudo -C 3 ./run.sh"),
     ] {
@@ -7207,8 +7221,9 @@ fn issue_1482_items_2_to_5_ask() {
     assert_eq!(wrong, Vec::<&[&str]>::new(), "should be quiet");
 }
 
-/// #1482 items 2-5 (review 1 of #1719): the redirection and sudo option
-/// checks stay linear in the line's length.
+/// #1482 items 2-5 (reviews 1 and 2 of #1719): the redirection and sudo
+/// option checks stay linear in the line's length, also for chained sudos
+/// whose option reading runs past the next sudo (`-R`, `--us`, `-xu`).
 #[test]
 fn issue_1482_items_2_to_5_checks_are_linear() {
     for (label, unit) in [
@@ -7216,6 +7231,9 @@ fn issue_1482_items_2_to_5_checks_are_linear() {
         ("descriptors", "2>&1 "),
         ("sudo options", "-u root "),
         ("sudo clusters", "-nu root "),
+        ("chained sudo -R", "sudo -R "),
+        ("chained sudo --us", "sudo --us "),
+        ("chained sudo -xu", "sudo -xu "),
     ] {
         work::assert_linear(label, |scale| {
             let units = unit.repeat(400 * scale);

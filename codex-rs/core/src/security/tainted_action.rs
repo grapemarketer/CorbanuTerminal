@@ -2328,11 +2328,11 @@ impl Classifier {
             .as_ref()
             .filter(|(_, name)| name == "eval")
             .map(|(index, _)| index + 1);
-        if indirect::redirect_hides_command(simple, words, 0)
-            || indirect::sudo_runs_helper(words)
+        if indirect::redirect_hides_command(simple, words, /*from*/ 0)
+            || indirect::sudo_runs_helper(simple, words, /*from*/ 0)
             || operands.is_some_and(|from| {
                 indirect::redirect_hides_command(simple, words, from)
-                    || indirect::sudo_runs_helper(&words[from..])
+                    || indirect::sudo_runs_helper(simple, words, from)
             })
         {
             self.note(ProtectedActionKind::UnseenCode);
