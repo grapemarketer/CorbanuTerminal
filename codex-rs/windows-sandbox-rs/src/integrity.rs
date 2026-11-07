@@ -483,12 +483,6 @@ pub(crate) fn token_is_low_integrity(h_token: HANDLE) -> bool {
     token_integrity_rid(h_token).is_some_and(|rid| rid <= LOW_INTEGRITY_RID)
 }
 
-/// Whether `h_token` is known to run above Low integrity; false when its
-/// level can't be read.
-pub(crate) fn token_is_above_low_integrity(h_token: HANDLE) -> bool {
-    token_integrity_rid(h_token).is_some_and(|rid| rid > LOW_INTEGRITY_RID)
-}
-
 /// The RID of `h_token`'s integrity level, or `None` if it can't be read.
 fn token_integrity_rid(h_token: HANDLE) -> Option<u32> {
     let mut buffer = [0u64; 16];

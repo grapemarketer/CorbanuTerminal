@@ -203,6 +203,12 @@ struct List {
     /// The current word's unquoted brace groups and their separators.
     braces: Vec<bool>,
     redirect: Redirect,
+    /// #1607: a `!` follows the output redirection just read (`>!`, `>>!`,
+    /// `&>!`, `>&!`, `2>!`), which zsh reads as `>|`: the file is the word
+    /// after the `!`, where bash writes a file `!` (or `!f`).
+    clobber: bool,
+    /// #1607: the next word is written too (after `>! `).
+    also_written: bool,
     /// Here-documents whose bodies start after the next newline.
     pending: Vec<HereDocument>,
     /// `case` commands open in this list at the current bracket depth:
@@ -253,6 +259,10 @@ impl Reader<'_> {
         list.braces.clear();
         let command = &mut self.out[list.command];
         let redirect = std::mem::replace(&mut list.redirect, Redirect::None);
+        let clobber = std::mem::take(&mut list.clobber) && redirect == Redirect::Stdout;
+        if std::mem::take(&mut list.also_written) && redirect == Redirect::None {
+            command.writes_to.push(word.clone());
+        }
         if redirect == Redirect::None && !word.quoted {
             let keyword = std::mem::replace(&mut list.keyword, false);
             match word.text.as_str() {
@@ -279,7 +289,20 @@ impl Reader<'_> {
                 command.words.push(word);
             }
             Redirect::Stdin | Redirect::Descriptor => command.other_text.push(word),
-            Redirect::Stdout => command.writes_to.push(word),
+            Redirect::Stdout => {
+                // #1607: both readings write. zsh writes the word after
+                // the `!`: the rest of this one (`>!f`) or the next one
+                // (`>! f`, which bash passes on as an argument).
+                match word.text.strip_prefix('!').filter(|_| clobber) {
+                    Some("") => list.also_written = true,
+                    Some(rest) => command.writes_to.push(Word {
+                        text: rest.to_owned(),
+                        ..word.clone()
+                    }),
+                    None => {}
+                }
+                command.writes_to.push(word);
+            }
             Redirect::HereString => command.input.push(Word {
                 whole: true,
                 ..word
@@ -360,6 +383,7 @@ impl Reader<'_> {
 
     fn finish_command(&mut self, list: &mut List) {
         self.finish_word(list);
+        list.also_written = false;
         list.quoted_before = false;
         list.word.quoted_before = false;
         list.keyword = true;
@@ -409,6 +433,8 @@ impl Reader<'_> {
             quoted_before: false,
             braces: Vec::new(),
             redirect: Redirect::None,
+            clobber: false,
+            also_written: false,
             pending: Vec::new(),
             cases: 0,
             keyword: true,
@@ -471,6 +497,7 @@ impl Reader<'_> {
                     } else {
                         2
                     };
+                    list.clobber = chars.get(index) == Some(&'!');
                     continue;
                 }
                 ';' | '&' => {
@@ -478,6 +505,9 @@ impl Reader<'_> {
                     if let Some(op) = certain_cd::operator(previous, ch, next) {
                         list.joint = Some(Joint::then(list.joint, op));
                     }
+                    // #1607: zsh's `>>&!` (this reading ends a command at
+                    // the `&` of `>>&`).
+                    list.clobber = ch == '&' && previous == Some('>') && next == Some('!');
                 }
                 '|' => {
                     self.finish_word(&mut list);
@@ -600,6 +630,7 @@ impl Reader<'_> {
                         list.redirect = redirect;
                     }
                     index += used;
+                    list.clobber = chars.get(index) == Some(&'!');
                     continue;
                 }
                 ch => {

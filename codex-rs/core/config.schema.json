@@ -5972,6 +5972,10 @@
       "description": "When `true`, reopening a conversation (resume, restart, `/side` or any other fork) does not send the paid warm-up request that primes the model's cache; the first reply after reopening may be slower. Defaults to `false`.",
       "type": "boolean"
     },
+    "skip_startup_warmup": {
+      "description": "When `true`, no conversation sends the startup warm-up request, new or reopened; the first reply may be slower. For clients that start a thread only for realtime voice, which never uses the warm-up (#1045). Defaults to `false`.",
+      "type": "boolean"
+    },
     "sqlite_home": {
       "allOf": [
         {

@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_sandboxing::SandboxType;
 use tokio::sync::broadcast;
@@ -233,6 +234,21 @@ pub trait ExecBackend: Send + Sync {
                 "exec backend does not support remote network policy decisions".to_string(),
             ))
         })
+    }
+
+    /// Starts a process with optional controller-side network callbacks: a
+    /// policy decider and an observer for the executor's own denials (#722,
+    /// D278). Backends without remote executors ignore the observer.
+    fn start_with_network_callbacks(
+        &self,
+        params: ExecParams,
+        decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        _denial_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) -> ExecBackendFuture<'_> {
+        match decider {
+            Some(decider) => self.start_with_network_policy_decider(params, decider),
+            None => self.start(params),
+        }
     }
 }
 
