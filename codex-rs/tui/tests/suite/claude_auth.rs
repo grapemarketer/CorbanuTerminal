@@ -128,7 +128,7 @@ fn tmux_claude_auth_managed_success_cancel_failure_recovery_and_resume() -> Resu
         /*provide_openai_fixture*/ true,
     ))?;
     let pane = session.primary_pane();
-    pane.wait_stable_contains("Corbanu Terminal", READY_TIMEOUT)?;
+    chat_ready::wait_session_configured(pane, READY_TIMEOUT)?;
 
     open_claude_auth_choice(pane)?;
     pane.send_key(TmuxKey::Escape)?;
@@ -179,7 +179,7 @@ fn tmux_claude_auth_managed_success_cancel_failure_recovery_and_resume() -> Resu
         /*provide_openai_fixture*/ true,
     ))?;
     let resumed_pane = resumed.primary_pane();
-    resumed_pane.wait_stable_contains("Corbanu Terminal", READY_TIMEOUT)?;
+    chat_ready::wait_session_configured(resumed_pane, READY_TIMEOUT)?;
     open_providers(resumed_pane)?;
     wait_claude_configured(resumed_pane)?;
     let resumed_viewport = resumed_pane.capture_viewport()?;
@@ -288,7 +288,7 @@ fn tmux_claude_auth_compatibility_selects_existing_login() -> Result<()> {
         /*provide_openai_fixture*/ true,
     ))?;
     let pane = session.primary_pane();
-    pane.wait_stable_contains("Corbanu Terminal", READY_TIMEOUT)?;
+    chat_ready::wait_session_configured(pane, READY_TIMEOUT)?;
     open_claude_auth_choice(pane)?;
     select_label(pane, "Claude Code login")?;
     wait_claude_configured(pane)?;

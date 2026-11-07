@@ -5,6 +5,7 @@ use anyhow::Result;
 use anyhow::ensure;
 use tempfile::tempdir;
 
+use crate::support::chat_ready::wait_session_configured;
 use crate::support::tmux::CommandSpec;
 use crate::support::tmux::SessionSpec;
 use crate::support::tmux::TerminalSize;
@@ -53,7 +54,7 @@ fn tmux_security_profiles_are_observation_only_at_normal_and_narrow_widths() -> 
             .current_dir(&repo),
         )?;
         let pane = session.primary_pane();
-        pane.wait_stable_contains("Corbanu Terminal", TIMEOUT)?;
+        wait_session_configured(pane, TIMEOUT)?;
         command(pane, "/security")?;
         pane.wait_stable_contains("Security profiles", TIMEOUT)?;
         for _ in 0..3 {

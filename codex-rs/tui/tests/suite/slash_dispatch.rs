@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use tempfile::tempdir;
 
+use crate::support::chat_ready::wait_session_configured;
 use crate::support::tmux::CommandSpec;
 use crate::support::tmux::SessionSpec;
 use crate::support::tmux::TerminalSize;
@@ -43,7 +44,7 @@ fn tmux_smoke_single_enter_dispatches_slash_command_and_exits_cleanly() -> Resul
     )?;
     let pane = session.primary_pane();
 
-    pane.wait_stable_contains("Corbanu Terminal", Duration::from_secs(/*secs*/ 15))?;
+    wait_session_configured(pane, Duration::from_secs(/*secs*/ 30))?;
     pane.send_literal("/status")?;
     pane.wait_stable_contains("/status", Duration::from_secs(/*secs*/ 5))?;
     pane.send_key(TmuxKey::Enter)?;

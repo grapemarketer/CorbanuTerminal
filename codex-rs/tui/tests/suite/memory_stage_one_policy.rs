@@ -1,3 +1,4 @@
+use crate::support::chat_ready::wait_session_configured;
 use crate::support::tmux::CommandSpec;
 use crate::support::tmux::SessionSpec;
 use crate::support::tmux::TerminalSize;
@@ -218,7 +219,7 @@ async fn tmux_memory_worker_policy_canary_permissive_and_protected() -> Result<(
             .current_dir(&repo),
         )?;
         let pane = restarted.primary_pane();
-        pane.wait_stable_contains("Corbanu Terminal", TIMEOUT)?;
+        wait_session_configured(pane, TIMEOUT)?;
         submit(pane, "/status", &mut input_events)?;
         pane.wait_stable_contains("Security:", TIMEOUT)?;
         let after_restart = server.received_requests().await.unwrap();
