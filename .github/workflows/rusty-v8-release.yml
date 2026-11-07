@@ -365,7 +365,7 @@ jobs:
           $basename = "sccache-$version-$platform"
           $url = "https://github.com/mozilla/sccache/releases/download/$version/$basename.tar.gz"
           cd ~
-          curl -LO $url
+          curl.exe -fLO --retry 5 --retry-all-errors --retry-connrefused --connect-timeout 20 --max-time 300 $url
           tar -xzvf "$basename.tar.gz"
           . $basename/sccache --start-server
           echo "$(pwd)/$basename" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
