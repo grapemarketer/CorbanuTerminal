@@ -300,3 +300,114 @@ fn issue_1047_remote_window_is_not_told_it_starts_here() {
         }
     }
 }
+
+/// #1094: the grants view inherits the window's session location. Remote
+/// and daemon windows still save revocations, but cannot offer a restart
+/// that the app-server launch guard refuses. Embedded sessions keep it.
+#[test]
+fn issue_1094_revocation_restart_follows_the_window_session_location() {
+    use crate::security::revocation_view::REVOCATION_REMOTE_RESTART_REFUSED;
+    use crate::security::revocation_view::RevocationView;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    for sessions_in_this_process in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut picker = picker(&root, /*live*/ false);
+        picker.set_core_levels(CoreLevels {
+            sessions_in_this_process,
+            ..CoreLevels::default()
+        });
+        let (target, _) = picker.revocation_target();
+        let codex_home = target.codex_home.clone();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let mut view = RevocationView::new(
+            target,
+            crate::keymap::RuntimeKeymap::defaults().list,
+            Some(AppEventSender::new(tx)),
+        );
+        let cases: [(&str, &[KeyCode], bool, &[&str]); 3] = [
+            ("revoke_all", &[KeyCode::Enter, KeyCode::Enter], false, &[]),
+            (
+                "kill_switch_on",
+                &[
+                    KeyCode::Enter,
+                    KeyCode::Down,
+                    KeyCode::Enter,
+                    KeyCode::Enter,
+                ],
+                true,
+                &["kill_switch_on"],
+            ),
+            (
+                "kill_switch_off",
+                &[
+                    KeyCode::Enter,
+                    KeyCode::Enter,
+                    KeyCode::Down,
+                    KeyCode::Enter,
+                ],
+                false,
+                &["kill_switch_off"],
+            ),
+        ];
+        for (name, keys, kill_switch_active, expected_change_events) in cases {
+            for code in keys {
+                view.handle_key_event(key(*code));
+            }
+            assert_eq!(
+                LevelBasis::read(&codex_home, SecurityLevel::Permissive, /*thread*/ None)
+                    .kill_switch_active,
+                kill_switch_active,
+                "{name}"
+            );
+            let mut lines: Vec<String> = view
+                .lines(/*width*/ 90)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect();
+            let footer = view.footer();
+            lines.push(String::new());
+            lines.push(footer.clone());
+            let done = lines.join("\n");
+            assert!(done.contains("Saved: it holds after a restart."), "{done}");
+            assert_eq!(
+                footer.starts_with("r restart now"),
+                sessions_in_this_process,
+                "{name}: {done}"
+            );
+            // Wrapping changes whitespace, not the shared explanation.
+            assert_eq!(
+                done.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(REVOCATION_REMOTE_RESTART_REFUSED),
+                !sessions_in_this_process,
+                "{name}: {done}"
+            );
+            // The #1047 sentence is about confirming a level; it doesn't
+            // apply here and would contradict "Level: Permissive".
+            assert!(!done.contains("only under Permissive"), "{name}: {done}");
+            view.handle_key_event(key(KeyCode::Char('r')));
+            let mut change_events = Vec::new();
+            let mut restarts = 0;
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    AppEvent::RestartForSecurityLevel => restarts += 1,
+                    AppEvent::KillSwitchTurnedOn => change_events.push("kill_switch_on"),
+                    AppEvent::KillSwitchTurnedOff => change_events.push("kill_switch_off"),
+                    other => panic!("unexpected event: {other:?}"),
+                }
+            }
+            assert_eq!(change_events, expected_change_events, "{name}");
+            assert_eq!(restarts, usize::from(sessions_in_this_process), "{name}");
+            if !sessions_in_this_process {
+                insta::assert_snapshot!(format!("issue_1094_remote_{name}"), done);
+            }
+        }
+    }
+}
