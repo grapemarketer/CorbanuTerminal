@@ -177,6 +177,20 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::d285_ --nocapture --test-threads=1 2>&1 | tee d285.log
           grep -q "test result: ok. 8 passed" d285.log
           rm d285.log
+      - name: D311/D313 multi-threaded, handle-relative below-check matches the walk (#1542)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # The elevated runner may create symbolic links: no link case skips.
+          CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::walk_equality::d311_ --nocapture --test-threads=1 2>&1 | tee d311.log
+          grep -q "test result: ok. 5 passed" d311.log
+          if grep -q "skipped: no symbolic link privilege" d311.log; then exit 1; fi
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::walk::tests:: --nocapture --test-threads=1 2>&1 | tee d313.log
+          grep -q "test result: ok. 5 passed" d313.log
+          rm d311.log d313.log
       - name: Credential file watch (#442)
         if: ${{ !cancelled() }}
         shell: bash
@@ -323,6 +337,12 @@ jobs:
             Assert-Tests $sandbox 'acl::delete_child::tests::d285_' 8
             & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::d285_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D285 ACL comparison failed in a normal session" }
+            Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::d311_' 5
+            & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::walk_equality::d311_', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D311 below-check comparison failed in a normal session" }
+            Assert-Tests $sandbox 'acl::walk::tests::' 5
+            & $medium -Program $sandbox -Arguments @('acl::walk::tests::', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D313 handle-relative walk tests failed in a normal session" }
             Assert-Tests $sandbox 'credential_watch' 18
             & $medium -Program $sandbox -Arguments @('credential_watch', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#442 credential watch failed in a normal session" }
