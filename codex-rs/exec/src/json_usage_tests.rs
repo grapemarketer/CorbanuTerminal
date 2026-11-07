@@ -107,18 +107,20 @@ fn baseline_overflow_is_unknown_instead_of_panicking() {
 }
 
 /// #1637: the root counts from zero, so its first report needs no inherited
-/// prefix. A resumed root whose first report has `total < last` (possible after
-/// a compaction estimate) keeps a known total, and so does a descendant whose
-/// first report only has `total_tokens` below `last` (`Usage` does not export it).
+/// prefix. A resumed root whose first report is a compaction estimate on top of
+/// its stored counters (`last` is zero counters plus an estimate larger than
+/// `total.total_tokens`, as `recompute_token_usage` sends) keeps a known total,
+/// and so does a descendant whose first report only has `total_tokens` below
+/// `last` (`Usage` does not export it).
 #[test]
 fn root_first_report_and_total_tokens_do_not_need_a_baseline() {
     let mut usage = JsonUsage::default();
     usage.register_thread("child", "root");
-    let mut root = report("root", /*total*/ 100, /*last*/ 100);
+    let mut root = report("root", /*total*/ 100, /*last*/ 0);
     let ServerNotification::ThreadTokenUsageUpdated(update) = &mut root else {
         unreachable!()
     };
-    update.token_usage.last.input_tokens = 150;
+    update.token_usage.last.total_tokens = 5_000;
     let mut child = report("child", /*total*/ 40, /*last*/ 40);
     let ServerNotification::ThreadTokenUsageUpdated(update) = &mut child else {
         unreachable!()
