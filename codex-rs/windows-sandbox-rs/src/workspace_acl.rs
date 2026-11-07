@@ -124,6 +124,13 @@ pub unsafe fn deny_moving_ancestors(
     cap_sids: &[*mut c_void],
     denies: &mut Vec<DeleteChildDeny>,
 ) -> Result<()> {
+    if let Some(link) = link_above_carve_out(path, root) {
+        anyhow::bail!(
+            "{} is a link (a junction or symbolic link) above the read-only path {}. The non-admin Windows sandbox can't keep a command from replacing a link there and recreating the read-only path, so it doesn't start commands with this configuration (#1542). Configure the read-only path through the link's target instead, or replace the link with a folder.",
+            link.display(),
+            path.display()
+        );
+    }
     for ancestor in &ancestors_below_root(path, root) {
         if is_reparse_point(ancestor) || !ancestor.is_dir() {
             continue;
@@ -142,6 +149,24 @@ pub unsafe fn deny_moving_ancestors(
         }
     }
     Ok(())
+}
+
+/// D293 (#1542 item 1): a folder above `path`, as spelled, and below the
+/// highest folder that is writable root `root` (or resolves to it; the root
+/// itself may be spelled through a link), that is a link. The link's target
+/// gets D263's denies (paths are canonicalized), but the link itself could be
+/// removed and the read-only path recreated behind it. A folder that is a
+/// link to the root itself (`root\alias -> root`) counts.
+pub(crate) fn link_above_carve_out(path: &Path, root: &Path) -> Option<PathBuf> {
+    let canonical_root = canonicalize_path(root);
+    let ancestors: Vec<&Path> = path.ancestors().skip(1).collect();
+    let top = ancestors
+        .iter()
+        .rposition(|ancestor| canonicalize_path(ancestor) == canonical_root)?;
+    ancestors[..top]
+        .iter()
+        .find(|ancestor| is_reparse_point(ancestor))
+        .map(|ancestor| ancestor.to_path_buf())
 }
 
 pub(crate) fn is_reparse_point(path: &Path) -> bool {

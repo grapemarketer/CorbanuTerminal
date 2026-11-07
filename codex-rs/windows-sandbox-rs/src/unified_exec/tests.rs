@@ -2751,3 +2751,7 @@ mod command_identity;
 /// D285: what the per-command ACL work costs on a large workspace.
 #[path = "acl_cost_tests.rs"]
 mod acl_cost;
+
+/// D293 (#1542 items 1 and 2): links above explicit read-only paths.
+#[path = "carve_out_link_tests.rs"]
+mod carve_out_link;

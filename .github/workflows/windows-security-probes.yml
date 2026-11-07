@@ -117,6 +117,9 @@ env:
     command_identity::legacy_command_cannot_write_to_another_commands_process
     command_identity::legacy_command_keeps_write_access_to_its_own_processes
     command_identity::legacy_command_tools_work_with_command_identity
+    carve_out_link::legacy_link_above_read_only_path_stops_the_command
+    carve_out_link::legacy_read_only_path_through_a_linked_root_keeps_its_ancestors
+    carve_out_link::link_above_carve_out_finds_links_below_the_root
 
 jobs:
   probes:
