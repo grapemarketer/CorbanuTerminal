@@ -295,9 +295,6 @@ jobs:
         if: ${{ !cancelled() }}
         shell: powershell
         run: |
-          # Actions sets 'Stop', which turns cargo's stderr into errors in Windows
-          # PowerShell; native commands are checked through $LASTEXITCODE instead.
-          $ErrorActionPreference = 'Continue'
           $medium = '.github/scripts/run-at-medium-integrity.ps1'
           # #1752: a temp folder secured like a real user's %LOCALAPPDATA%\Temp:
           # owned by the user, Full control (so #1689's WRITE_OWNER for Low
@@ -310,8 +307,8 @@ jobs:
           New-Item -ItemType Directory $temp -ErrorAction Stop | Out-Null
           icacls $temp /setowner "*$user" /Q | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "setting the owner of $temp failed" }
-          # A new DACL replaces all of the inherited one (icacls left an
-          # explicit CREATOR OWNER entry).
+          # A fresh DACL, protected, replaces the inherited one
+          # (`icacls /inheritance:r` would copy D:\'s CREATOR OWNER entry in).
           $full = [Security.AccessControl.FileSystemRights]::FullControl
           $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
           $dacl = New-Object Security.AccessControl.DirectorySecurity
@@ -336,6 +333,10 @@ jobs:
           $env:TEMP = $temp
           $env:TMP = $temp
           if ([IO.Path]::GetTempPath().TrimEnd('\') -ne $temp) { throw "TEMP was not switched to $temp" }
+          # Until here Actions' 'Stop' makes any failure in the check above
+          # fatal. 'Stop' also turns cargo's stderr into errors in Windows
+          # PowerShell; native commands are checked through $LASTEXITCODE.
+          $ErrorActionPreference = 'Continue'
           function Get-TestExe([string[]]$CargoArgs) {
             $artifacts = cargo test --locked --manifest-path codex-rs/Cargo.toml @CargoArgs --no-run --message-format=json
             if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed" }
