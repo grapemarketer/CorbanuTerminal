@@ -230,27 +230,36 @@ fn command_identity_child_entry() {
     std::thread::sleep(Duration::from_secs(/*secs*/ 60));
 }
 
-/// Inside a legacy session. `peer`: what this command may do to the process
-/// in `CODEX_D259_TARGET`, another legacy command's. `borrow`: whether it
-/// can write `CODEX_D259_FILE` with that process's token. `self`: what it
-/// may do to its own child and token, and that it can end the child. Prints
-/// one `d259: ` line. Does nothing otherwise.
+/// Inside a sandboxed session. `peer`: what this command may do to the
+/// process in `CODEX_D259_TARGET` (`self` names this process), another
+/// command's. `borrow`: whether it can write `CODEX_D259_FILE` with that
+/// process's token. `peer_parent`/`borrow_parent`: the same for that
+/// process's parent (an elevated command's runner). `self`: what it may do
+/// to its own child and token, and that it can end the child. Prints one
+/// `d259: ` line. Does nothing otherwise.
 #[test]
 fn command_identity_probe_entry() {
     let Some(mode) = std::env::var_os(PROBE_ENV) else {
         return;
     };
     let target = || -> u32 {
-        std::env::var(TARGET_ENV)
-            .expect("target pid")
-            .parse()
-            .expect("numeric target pid")
+        let target = std::env::var(TARGET_ENV).expect("target pid");
+        if target == "self" {
+            return std::process::id();
+        }
+        target.parse().expect("numeric target pid")
     };
+    let file = || PathBuf::from(std::env::var_os(FILE_ENV).expect("target file"));
     let line = if mode == "peer" {
         access_report(target())
     } else if mode == "borrow" {
-        let file = PathBuf::from(std::env::var_os(FILE_ENV).expect("target file"));
-        borrow_report(target(), &file)
+        borrow_report(target(), &file())
+    } else if mode == "peer_parent" {
+        let (parent, image) = parent_of(target());
+        format!("parent={image} {}", access_report(parent))
+    } else if mode == "borrow_parent" {
+        let (parent, image) = parent_of(target());
+        format!("parent={image} {}", borrow_report(parent, &file()))
     } else {
         let dir = PathBuf::from(std::env::var_os(CHILD_ENV).expect("child dir"));
         let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
@@ -283,6 +292,51 @@ fn command_identity_probe_entry() {
         format!("{access} own_token_adjust_default={own} {child_report} ended_child={ended}")
     };
     println!("\n{RESULT}{line}");
+}
+
+/// The parent process id and image name of process `pid`.
+fn parent_of(pid: u32) -> (u32, String) {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Process32FirstW;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Process32NextW;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS;
+    let mut entries = Vec::new();
+    // SAFETY: the snapshot handle is checked and closed here; the entry is
+    // sized as the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        assert!(snapshot != INVALID_HANDLE_VALUE, "process snapshot");
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            entries.push((
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                String::from_utf16_lossy(&entry.szExeFile[..len]),
+            ));
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    let parent = entries
+        .iter()
+        .find(|(id, _, _)| *id == pid)
+        .map(|(_, parent, _)| *parent)
+        .expect("target process listed");
+    let image = entries
+        .iter()
+        .find(|(id, _, _)| *id == parent)
+        .map(|(_, _, image)| image.clone())
+        .unwrap_or_default();
+    (parent, image)
 }
 
 fn probe_argv(entry: &str) -> Vec<String> {
@@ -634,3 +688,6 @@ fn legacy_command_tools_work_with_command_identity() {
         sandbox_log(home)
     );
 }
+
+#[path = "elevated_identity_tests.rs"]
+mod elevated;
