@@ -24,6 +24,15 @@ fn junction(link: &Path, target: &Path) {
     );
 }
 
+/// Removes a junction (not its target) when dropped.
+struct Unlink(PathBuf);
+
+impl Drop for Unlink {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
 /// Runs `script` (cmd lines) as a legacy workspace-write command on
 /// `workspace` with `profile` and the extra read-only `carve_outs`; returns
 /// the start error, or the exit code and the sandbox log.
@@ -111,8 +120,8 @@ fn legacy_link_above_read_only_path_stops_the_command() {
 }
 
 /// Item 2: an explicit read-only path configured through a writable root
-/// that is itself a junction (so it is listed against the root's resolved
-/// path) keeps D263's protection: the command can't move the folder above
+/// that is itself a junction at the top of a drive (so it is listed against
+/// the root's resolved path) keeps D263's protection: the command can't move the folder above
 /// it away and recreate it.
 #[test]
 fn legacy_read_only_path_through_a_linked_root_keeps_its_ancestors() {
@@ -122,8 +131,17 @@ fn legacy_read_only_path_through_a_linked_root_keeps_its_ancestors() {
     fs::create_dir_all(workspace.join("a\\b\\c")).expect("create carve-out");
     let kept = workspace.join("a\\b\\c\\keep.txt");
     fs::write(&kept, "original").expect("seed carve-out file");
-    let linked = test_root.path().join("linked");
+    // At the top of a drive: a link deeper down keeps the root's logical
+    // spelling (`canonicalize_preserving_symlinks`), so only this one gets the
+    // carve-out listed against the resolved root.
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let linked = PathBuf::from(format!("{drive}\\")).join(format!(
+        "d293-{}-{}",
+        std::process::id(),
+        TEST_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     junction(&linked, &workspace);
+    let _unlink = Unlink(linked.clone());
     let absolute = |path: PathBuf| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
     let profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
