@@ -310,12 +310,19 @@ jobs:
           New-Item -ItemType Directory $temp -ErrorAction Stop | Out-Null
           icacls $temp /setowner "*$user" /Q | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "setting the owner of $temp failed" }
-          icacls $temp /inheritance:r /grant:r "*${user}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "securing $temp failed" }
-          $acl = Get-Acl -LiteralPath $temp
-          $sid = { param($id) $id.Translate([Security.Principal.SecurityIdentifier]).Value }
+          # A new DACL replaces all of the inherited one (icacls left an
+          # explicit CREATOR OWNER entry).
           $full = [Security.AccessControl.FileSystemRights]::FullControl
           $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+          $dacl = New-Object Security.AccessControl.DirectorySecurity
+          $dacl.SetAccessRuleProtection($true, $false)
+          foreach ($s in @($user, 'S-1-5-18', 'S-1-5-32-544')) {
+            $dacl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+              (New-Object Security.Principal.SecurityIdentifier($s)), $full, $inherit, 'None', 'Allow')))
+          }
+          [IO.Directory]::SetAccessControl($temp, $dacl)
+          $acl = Get-Acl -LiteralPath $temp
+          $sid = { param($id) $id.Translate([Security.Principal.SecurityIdentifier]).Value }
           $entries = @($acl.Access | ForEach-Object {
             if ($_.AccessControlType -ne 'Allow' -or $_.IsInherited -or ($_.FileSystemRights -band $full) -ne $full -or
                 $_.InheritanceFlags -ne $inherit -or $_.PropagationFlags -ne 'None') { throw "unexpected entry on ${temp}: $($_ | Out-String)" }
