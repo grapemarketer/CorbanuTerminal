@@ -38,21 +38,30 @@ fn mcp(tool: &str, acts_outside: bool, arguments: Value) -> Option<ProtectedActi
     classify_mcp(&call, &fixture(HOME))
 }
 
-/// The built-in tools a session registers that the matrix leaves
-/// unclassified, with every feature on; `zai` uses a provider without
-/// namespace tools, which gets the `_v1` agent-tool aliases.
-async fn unclassified_builtin_tools(zai: bool) -> Vec<String> {
+/// The built-in tools a session registers, with every feature on, and the
+/// ones the matrix leaves unclassified. `zai` uses a provider without
+/// namespace tools and multi-agent V1, which registers the `_v1` agent-tool
+/// aliases.
+async fn builtin_tools(zai: bool) -> (Vec<String>, Vec<String>) {
     let home = tempfile::tempdir().expect("home");
     let test_cwd = tempfile::tempdir().expect("create test cwd");
     let mut config = build_test_config(home.path(), test_cwd.path()).await;
     for spec in codex_features::FEATURES {
         let _ = config.features.enable(spec.id);
     }
+    let zai_provider = codex_model_provider_info::ModelProviderInfo::create_zai_provider();
     if zai {
+        let _ = config
+            .features
+            .disable(codex_features::Feature::MultiAgentV2);
         config.model_provider_id = codex_model_provider_info::ZAI_PROVIDER_ID.to_string();
-        config.model_provider = codex_model_provider_info::ModelProviderInfo::create_zai_provider();
+        config.model_provider = zai_provider.clone();
     }
-    let (_session, turn) = make_session_and_context_for_config(config).await;
+    let (_session, mut turn) = make_session_and_context_for_config(config).await;
+    if zai {
+        turn.provider =
+            codex_model_provider::create_model_provider(zai_provider, turn.auth_manager.clone());
+    }
     let step = StepContext::for_test(Arc::new(turn));
     let runtimes = build_core_tool_runtimes(
         step.turn.as_ref(),
@@ -62,23 +71,26 @@ async fn unclassified_builtin_tools(zai: bool) -> Vec<String> {
         /*wait_for_environment_tool_config*/ None,
     );
     assert!(runtimes.len() > 10, "{}", runtimes.len());
-    runtimes
+    let names = runtimes
+        .iter()
+        .map(|runtime| runtime.tool_name().to_string())
+        .collect();
+    let unclassified = runtimes
         .iter()
         .filter(|runtime| {
             coverage(runtime.tool_origin(), &runtime.tool_name()) == Coverage::Unclassified
         })
         .map(|runtime| runtime.tool_name().to_string())
-        .collect()
+        .collect();
+    (names, unclassified)
 }
 
 /// Every built-in tool a session can register is on the matrix: a new tool
 /// is unclassified (and asks after untrusted content) until it is listed.
 #[tokio::test]
 async fn pf_23_s01_every_builtin_tool_route_is_classified() {
-    assert_eq!(
-        unclassified_builtin_tools(/*zai*/ false).await,
-        Vec::<String>::new()
-    );
+    let (_, unclassified) = builtin_tools(/*zai*/ false).await;
+    assert_eq!(unclassified, Vec::<String>::new());
 }
 
 /// D320 (#1653): on a provider without namespace tools (Z.AI, Chat
@@ -87,7 +99,10 @@ async fn pf_23_s01_every_builtin_tool_route_is_classified() {
 /// aliases still ask as unclassified tools after untrusted content.
 #[tokio::test]
 async fn d320_agent_tool_aliases_are_classified_without_namespace_tools() {
-    let mut unclassified = unclassified_builtin_tools(/*zai*/ true).await;
+    let (names, mut unclassified) = builtin_tools(/*zai*/ true).await;
+    for alias in ["spawn_agent_v1", "wait_agent_v1"] {
+        assert!(names.iter().any(|name| name == alias), "{alias}: {names:?}");
+    }
     unclassified.sort();
     assert_eq!(
         unclassified,
