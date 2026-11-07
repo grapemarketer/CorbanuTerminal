@@ -955,7 +955,9 @@ fn restore(root: &Path, original: &[LabelAce]) -> Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err).with_context(|| format!("inspect {}", root.display())),
         // A link now stands where the root was: never relabel what it points at.
-        Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => Ok(()),
+        // Other reparse points, such as cloud placeholders, are the folder
+        // itself (#1668).
+        Ok(meta) if meta.file_type().is_symlink() => Ok(()),
         // SAFETY: relabels an existing folder or file that is not a link.
         Ok(_) => unsafe { set_explicit_labels(root, original) },
     }
