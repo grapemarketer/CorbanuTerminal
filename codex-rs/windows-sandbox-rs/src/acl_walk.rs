@@ -1,5 +1,5 @@
 //! D311/D313 (#1542): the pieces of our own tree walk, shared by D261's
-//! below-check (and, later, the #158 label walk):
+//! below-check and the #158 label walk:
 //! - [`par_walk`]: several threads take folders from a shared queue;
 //! - each folder stays open while it is walked: [`list`] reads its entries
 //!   through its handle and [`open_relative`] opens each entry relative to
@@ -43,6 +43,13 @@ fn cpus() -> usize {
 /// Threads for a read-mostly check (D312): one per CPU, at most 8.
 pub(crate) fn check_threads() -> usize {
     cpus().clamp(1, MAX_THREADS)
+}
+
+/// Threads for the label walk (D312), which writes most objects: label
+/// writes contend (hosted, 4 CPUs: 2 threads 1.2 s, 8 threads 3.0 s), so half
+/// the CPUs, at most 8.
+pub(crate) fn label_threads() -> usize {
+    (cpus() / 2).clamp(1, MAX_THREADS)
 }
 
 /// Runs `visit` on every item, the seeds and those it adds to its second

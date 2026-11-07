@@ -354,6 +354,13 @@ unsafe fn set_file_label(path: &Path, level: &str, flags: u32) -> Result<()> {
 }
 
 unsafe fn apply_label_acl(path: &Path, acl: &mut LabelAcl) -> Result<()> {
+    // D311: our own walk, with the same result; on any failure Windows'
+    // walk below, which rewrites every label under `path` again.
+    if !walk::is_mutant(walk::Mutant::WindowsWalk)
+        && walk::set_label_tree(path, acl.as_ptr()).is_ok()
+    {
+        return Ok(());
+    }
     // Inheritable label ACEs propagate to existing children.
     let code = SetNamedSecurityInfoW(
         to_wide(path).as_ptr(),
@@ -511,3 +518,7 @@ fn token_integrity_rid(h_token: HANDLE) -> Option<u32> {
         Some(*GetSidSubAuthority(label.Label.Sid, u32::from(count) - 1))
     }
 }
+
+/// D311 part 2: the label walk of our own.
+#[path = "integrity_walk.rs"]
+pub(crate) mod walk;
