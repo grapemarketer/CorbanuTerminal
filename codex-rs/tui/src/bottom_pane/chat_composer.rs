@@ -4232,6 +4232,10 @@ impl ChatComposer {
         self.queue_submissions = queue_submissions;
     }
 
+    pub(crate) fn queues_submissions(&self) -> bool {
+        self.queue_submissions
+    }
+
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
         if self.footer.context_window_percent == percent
             && self.footer.context_window_used_tokens == used_tokens
