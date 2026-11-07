@@ -158,6 +158,90 @@ Path(os.environ["BAZEL_ARGS_CAPTURE"]).write_text(
             self.assertIn("--keep_going", args)
             self.assertNotIn("--config=ci-windows", args)
 
+    def run_with_exit_codes(self, exit_codes: list[int]) -> tuple[subprocess.CompletedProcess[str], int]:
+        """Run the wrapper with a fake Bazel that exits with each code in turn."""
+        script = Path(__file__).with_name("run-bazel-ci.sh")
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            counter = temp_path / "calls"
+            jvm_out = temp_path / "o" / "server" / "jvm.out"
+            jvm_out.parent.mkdir(parents=True)
+            jvm_out.write_text("jvm.out: server stderr\n", encoding="utf-8")
+            (temp_path / "o" / "java.log").write_text(
+                "java.log: NullPointerException at Example.java:1\n"
+                "args: --remote_header=x-buildbuddy-api-key=SECRET123 --config=ci\n"
+                "args: --remote_header x-buildbuddy-api-key=SECRET456\n"
+                "env: --client_env=BUILDBUDDY_API_KEY=\"SECRET789\"\n",
+                encoding="utf-8",
+            )
+            fake_bazel = temp_path / "bazel"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+counter = Path({str(counter)!r})
+calls = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(calls))
+codes = {exit_codes!r}
+code = codes[min(calls, len(codes)) - 1]
+if code == 37:
+    print("FATAL: bazel crashed due to an internal error.")
+    print("Server terminated abruptly (error code: 14, error message: 'Socket closed', "
+          "log file: '{jvm_out}')")
+sys.exit(code)
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+
+            env = os.environ.copy()
+            env.pop("BUILDBUDDY_API_KEY", None)
+            env.pop("RUNNER_OS", None)
+            env["CODEX_BAZEL_BIN"] = str(fake_bazel)
+
+            result = subprocess.run(
+                ["bash", str(script), "--", "build", "--", "//codex-rs/cli:codex"],
+                cwd=script.parents[2],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            calls = int(counter.read_text()) if counter.exists() else 0
+            return result, calls
+
+    def test_a_bazel_server_crash_is_logged_and_retried_once(self) -> None:
+        result, calls = self.run_with_exit_codes([37, 0])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, 2)
+        # Diagnostics go to stderr: callers such as sdk.yml parse stdout.
+        self.assertIn("jvm.out: server stderr", result.stderr)
+        self.assertIn("java.log: NullPointerException", result.stderr)
+        self.assertIn("retrying once", result.stderr)
+        self.assertNotIn("java.log", result.stdout)
+        for secret in ["SECRET123", "SECRET456", "SECRET789"]:
+            self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn("--remote_header=<redacted>", result.stderr)
+
+    def test_a_second_bazel_server_crash_fails(self) -> None:
+        result, calls = self.run_with_exit_codes([37, 37, 0])
+
+        self.assertEqual(result.returncode, 37)
+        self.assertEqual(calls, 2)
+        self.assertEqual(result.stderr.count("java.log: NullPointerException"), 2)
+        self.assertIn("crashed again on the retry", result.stderr)
+
+    def test_build_and_test_failures_are_not_retried(self) -> None:
+        for code in [1, 3]:
+            with self.subTest(code=code):
+                result, calls = self.run_with_exit_codes([code, 0])
+
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
