@@ -34,6 +34,7 @@ pub(crate) enum Route {
     McpTool,
     WriteStdin,
     UnclassifiedTool,
+    AgentLaunch,
     PolicyRequest,
 }
 
@@ -43,6 +44,7 @@ impl Route {
             Self::McpTool => "mcp_tool",
             Self::WriteStdin => "write_stdin",
             Self::UnclassifiedTool => "unclassified_tool",
+            Self::AgentLaunch => "agent_launch",
             Self::PolicyRequest => "policy_request",
         }
     }
@@ -227,9 +229,9 @@ pub(crate) async fn ask_human_answer(
         .map(|answer| answer.answers == [ALLOW])
 }
 
-/// PF-23-S01 dispatch-boundary check: an unclassified route, or a policy
-/// request an automatic reviewer would answer, needs the human after
-/// untrusted content.
+/// PF-23-S01 dispatch-boundary check: an unclassified route, starting an
+/// agent (D320), or a policy request an automatic reviewer would answer,
+/// needs the human after untrusted content.
 pub(crate) async fn check_dispatch(
     invocation: &ToolInvocation,
     origin: ToolOrigin,
@@ -239,6 +241,7 @@ pub(crate) async fn check_dispatch(
             Route::UnclassifiedTool,
             ProtectedActionKind::UnclassifiedTool,
         ),
+        Coverage::AgentLaunch => (Route::AgentLaunch, ProtectedActionKind::AgentLaunch),
         Coverage::PolicyRequest
             if invocation.tool_name.name != "request_permissions"
                 || crate::guardian::routes_approval_to_guardian(&invocation.turn) =>

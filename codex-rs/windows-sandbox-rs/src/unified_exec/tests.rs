@@ -47,7 +47,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
+pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
     LEGACY_PROCESS_TEST_LOCK
         .lock()
         .expect("legacy Windows sandbox process test lock poisoned")
@@ -2998,4 +2998,4 @@ mod carve_out_link;
 
 /// #1668: cloud-file placeholder folders at or above read-only paths.
 #[path = "cloud_placeholder_tests.rs"]
-mod cloud_placeholder;
+pub(crate) mod cloud_placeholder;
