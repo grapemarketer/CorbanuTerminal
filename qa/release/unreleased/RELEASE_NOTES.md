@@ -244,6 +244,15 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   sends can allow a request. Remote environments running an older version
   don't send these reports, and behave as before.
 
+## Chat Completions and Anthropic: earlier MCP calls keep their own name
+
+- **An MCP tool's earlier calls no longer replay as a built-in's** (#688). On
+  providers without tool namespaces, a call recorded for an MCP tool that the
+  request no longer offers (its server was removed, or the 128-tool limit left
+  it out) used to replay under its bare name, such as `shell`, which a
+  built-in tool can share. It now replays under the MCP tool's flat name
+  (`mcp__server__tool`), or a hashed form if another tool has that name.
+
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
 - **WebSocket connections now honour IP-range entries in `NO_PROXY`** (#722,
@@ -251,6 +260,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   listed range now goes direct, as HTTP requests already did, instead of
   through `HTTP_PROXY`/`HTTPS_PROXY`. Host names are matched by name only (they
   are not resolved to check ranges), as before.
+
+## A timed-out network prompt for remote work closes
+
+- **The approval prompt for a remote network request now closes when the
+  request times out** (#722, D279). An unanswered request is still refused
+  after 10 minutes (plus the hook timeout) and the command still ends as
+  failed; before, its prompt stayed on screen and answering it did nothing.
+- **App-server clients:** the server resolves such a pending
+  `item/commandExecution/requestApproval` request itself and sends
+  `serverRequest/resolved`, as it already does when a turn ends. Any command
+  approval whose waiter in the core goes away unanswered is resolved the same
+  way.
 
 ## Interrupting a tool on a busy machine keeps its elapsed time
 

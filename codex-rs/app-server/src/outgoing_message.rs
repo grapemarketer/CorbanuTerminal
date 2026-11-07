@@ -28,6 +28,7 @@ use tracing::warn;
 
 use crate::error_code::internal_error;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
+use crate::server_request_error::WITHDRAWN_PENDING_REQUEST_ERROR_REASON;
 pub(crate) use codex_app_server_transport::ConnectionId;
 pub(crate) use codex_app_server_transport::OutgoingError;
 pub(crate) use codex_app_server_transport::OutgoingMessage;
@@ -196,6 +197,31 @@ impl ThreadScopedOutgoingMessageSender {
         T: Into<ClientResponsePayload>,
     {
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    /// #722 (D279): core no longer waits for this command approval (its
+    /// request timed out or was cancelled and the action was refused), so
+    /// resolve the pending client request and let clients close the prompt.
+    pub(crate) async fn withdraw_command_execution_approval(
+        &self,
+        turn_id: &str,
+        approval_id: &str,
+    ) {
+        let mut error = internal_error("the approval request was withdrawn");
+        error.data = Some(serde_json::json!({
+            "reason": WITHDRAWN_PENDING_REQUEST_ERROR_REASON,
+        }));
+        self.outgoing
+            .cancel_requests_for_thread_matching(self.thread_id, error, |request| {
+                matches!(
+                    request,
+                    ServerRequest::CommandExecutionRequestApproval { params, .. }
+                        if params.turn_id == turn_id
+                            && params.approval_id.as_deref().unwrap_or(&params.item_id)
+                                == approval_id
+                )
+            })
+            .await;
     }
 
     pub(crate) async fn send_error(
@@ -464,6 +490,37 @@ impl OutgoingMessageSender {
             .collect::<Vec<_>>();
         requests.sort_by(|left, right| left.id().cmp(right.id()));
         requests
+    }
+
+    /// Fails the thread's pending requests that `matches` selects with `error`.
+    pub(crate) async fn cancel_requests_for_thread_matching(
+        &self,
+        thread_id: ThreadId,
+        error: JSONRPCErrorError,
+        matches: impl Fn(&ServerRequest) -> bool,
+    ) {
+        let entries = {
+            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+            let request_ids = request_id_to_callback
+                .iter()
+                .filter_map(|(request_id, entry)| {
+                    (entry.thread_id == Some(thread_id) && matches(&entry.request))
+                        .then_some(request_id.clone())
+                })
+                .collect::<Vec<_>>();
+            request_ids
+                .into_iter()
+                .filter_map(|request_id| request_id_to_callback.remove(&request_id))
+                .collect::<Vec<_>>()
+        };
+        for entry in entries {
+            self.analytics_events_client
+                .track_server_request_aborted(now_unix_timestamp_ms(), entry.request.id().clone());
+            if let Err(err) = entry.callback.send(Err(error.clone())) {
+                let request_id = entry.request.id();
+                warn!("could not notify callback for {request_id:?} due to: {err:?}");
+            }
+        }
     }
 
     pub(crate) async fn cancel_requests_for_thread(
@@ -1363,6 +1420,97 @@ mod tests {
                 &first_request_id,
                 &second_request_id
             ]
+        );
+    }
+
+    /// #722 (D279): withdrawing one command approval resolves only that
+    /// request, with the "withdrawn" reason; others stay pending.
+    #[tokio::test]
+    async fn withdraw_command_execution_approval_resolves_only_that_request() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let thread_id = ThreadId::new();
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![ConnectionId(1)],
+            thread_id,
+        );
+        let approval = |item_id: &str, approval_id: Option<&str>| {
+            ServerRequestPayload::CommandExecutionRequestApproval(
+                CommandExecutionRequestApprovalParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: item_id.to_string(),
+                    started_at_ms: 0,
+                    approval_id: approval_id.map(str::to_string),
+                    environment_id: None,
+                    reason: None,
+                    network_approval_context: None,
+                    command: None,
+                    cwd: None,
+                    command_actions: None,
+                    additional_permissions: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            )
+        };
+        let (_withdrawn_id, withdrawn_waiter) = thread_outgoing
+            .send_request(approval("call-1", Some("network#1")))
+            .await;
+        let (other_id, mut other_waiter) = thread_outgoing
+            .send_request(approval("call-2", Some("network#2")))
+            .await;
+        let (_no_approval_id, mut no_approval_waiter) = thread_outgoing
+            .send_request(approval("network#1", None))
+            .await;
+
+        thread_outgoing
+            .withdraw_command_execution_approval("turn-2", "network#1")
+            .await;
+        assert_eq!(
+            outgoing.pending_requests_for_thread(thread_id).await.len(),
+            3,
+            "another turn's approval is not withdrawn"
+        );
+
+        thread_outgoing
+            .withdraw_command_execution_approval("turn-1", "network#1")
+            .await;
+        let result = timeout(Duration::from_secs(1), withdrawn_waiter)
+            .await
+            .expect("withdrawn waiter should resolve")
+            .expect("withdrawn waiter should receive a callback");
+        let error = result.expect_err("a withdrawn request fails");
+        assert!(
+            crate::server_request_error::is_withdrawn_server_request_error(&error),
+            "{error:?}"
+        );
+        // `network#1` as an item id without an approval id also matches.
+        let result = timeout(Duration::from_secs(1), &mut no_approval_waiter)
+            .await
+            .expect("item-id waiter should resolve")
+            .expect("item-id waiter should receive a callback");
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                other_waiter.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "the other stays pending"
+        );
+        assert_eq!(
+            outgoing
+                .pending_requests_for_thread(thread_id)
+                .await
+                .iter()
+                .map(ServerRequest::id)
+                .collect::<Vec<_>>(),
+            vec![&other_id]
         );
     }
 

@@ -73,6 +73,7 @@ use ts_rs::TS;
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::ExecApprovalRequestWithdrawnEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::GuardianAssessmentAction;
 pub use crate::approvals::GuardianAssessmentDecisionSource;
@@ -1535,6 +1536,9 @@ pub enum EventMsg {
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    /// An earlier `ExecApprovalRequest` is no longer awaited; close its prompt.
+    ExecApprovalRequestWithdrawn(ExecApprovalRequestWithdrawnEvent),
 
     RequestPermissions(RequestPermissionsEvent),
 

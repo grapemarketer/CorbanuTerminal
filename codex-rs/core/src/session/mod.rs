@@ -309,6 +309,31 @@ impl SteerInputError {
 /// waits for that list (API-key sign-ins need no fetch and never wait).
 const FIRST_MODEL_LIST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Sends [`EventMsg::ExecApprovalRequestWithdrawn`] when a command approval
+/// is dropped before it was answered (#722, D279).
+struct WithdrawApprovalOnDrop {
+    tx_event: Sender<Event>,
+    event: Option<ExecApprovalRequestWithdrawnEvent>,
+}
+
+impl WithdrawApprovalOnDrop {
+    fn disarm(mut self) {
+        self.event = None;
+    }
+}
+
+impl Drop for WithdrawApprovalOnDrop {
+    fn drop(&mut self) {
+        if let Some(event) = self.event.take() {
+            // Unbounded channel: never blocks. A closed channel has no client.
+            let _ = self.tx_event.try_send(Event {
+                id: event.turn_id.clone(),
+                msg: EventMsg::ExecApprovalRequestWithdrawn(event),
+            });
+        }
+    }
+}
+
 /// Notes from the previous real user turn.
 ///
 /// Conceptually this is the same role that `previous_model` used to fill, but
@@ -385,6 +410,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecApprovalRequestWithdrawnEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ModelRerouteEvent;
 use codex_protocol::protocol::ModelRerouteReason;
@@ -3082,6 +3108,11 @@ impl Session {
             .as_ref()
             .map(PluginCommandAttribution::serialized_fields)
             .unzip();
+        let withdrawn = ExecApprovalRequestWithdrawnEvent {
+            call_id: call_id.clone(),
+            approval_id: approval_id.clone(),
+            turn_id: turn_context.sub_id.clone(),
+        };
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             plugin_id,
@@ -3100,8 +3131,17 @@ impl Session {
             available_decisions: Some(available_decisions),
             parsed_cmd,
         });
+        // #722 (D279): a caller that stops waiting (a remote network request
+        // timed out or its process ended) drops this future, and the action is
+        // already refused. Tell clients to close the prompt.
+        let withdraw_on_drop = WithdrawApprovalOnDrop {
+            tx_event: self.tx_event.clone(),
+            event: Some(withdrawn),
+        };
         self.send_event(turn_context, event).await;
-        rx_approve.await.unwrap_or(ReviewDecision::Abort)
+        let decision = rx_approve.await.unwrap_or(ReviewDecision::Abort);
+        withdraw_on_drop.disarm();
+        decision
     }
 
     #[expect(
@@ -5620,3 +5660,7 @@ mod home_access_session_tests;
 #[cfg(test)]
 #[path = "stale_approval_tests.rs"]
 mod stale_approval_tests;
+
+#[cfg(test)]
+#[path = "withdrawn_approval_tests.rs"]
+mod withdrawn_approval_tests;

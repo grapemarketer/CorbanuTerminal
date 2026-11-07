@@ -6,6 +6,7 @@ use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
+use crate::server_request_error::is_withdrawn_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -726,6 +727,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 )
                 .await;
             });
+        }
+        EventMsg::ExecApprovalRequestWithdrawn(withdrawn) => {
+            outgoing
+                .withdraw_command_execution_approval(
+                    &withdrawn.turn_id,
+                    &withdrawn.effective_approval_id(),
+                )
+                .await;
         }
         EventMsg::RequestUserInput(request) => {
             let user_input_guard = thread_watch_manager
@@ -2046,7 +2055,15 @@ async fn on_command_execution_request_approval_response(
                 }
             }
         }
-        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
+        // #722 (D279): a withdrawn request is handled like a turn transition:
+        // core stopped waiting (the action was already refused), so nothing is
+        // submitted and the item is left to the turn's end.
+        Ok(Err(err))
+            if is_turn_transition_server_request_error(&err)
+                || is_withdrawn_server_request_error(&err) =>
+        {
+            return;
+        }
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
             (

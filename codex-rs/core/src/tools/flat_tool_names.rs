@@ -105,6 +105,25 @@ pub(crate) fn flat_tool_name_for(tool_name: &ToolName) -> String {
     }
 }
 
+/// A flat name for replaying a call of a namespaced tool this request does not
+/// offer: its preferred name when that is portable and no offered tool has it,
+/// otherwise the hashed form, so the call never reads as an offered tool's.
+pub(crate) fn unoffered_flat_tool_name(tool_name: &ToolName, offered: &HashSet<&str>) -> String {
+    let preferred = preferred_flat_tool_name(tool_name);
+    if is_portable_tool_name(&preferred) && !offered.contains(preferred.as_str()) {
+        return preferred;
+    }
+    let identity = tool_identity(tool_name);
+    let mut attempt = 0_u32;
+    loop {
+        let candidate = hashed_flat_name(&preferred, &identity, attempt);
+        if !offered.contains(candidate.as_str()) {
+            return candidate;
+        }
+        attempt = attempt.saturating_add(1);
+    }
+}
+
 /// Gives every namespaced tool a unique, portable flat name.
 ///
 /// `reserved` holds the names of the top-level tools sent alongside, which a
