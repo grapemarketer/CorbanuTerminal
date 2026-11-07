@@ -11208,6 +11208,24 @@ fn issue1636_brace_made_git_options_ask_without_quotes() {
             // Nested and inside a function.
             "f() { git clone r d {-q,--upload-pack=./x}|cat; }; f",
             "sh -c \"git clone r d {-q,--upload-pack=./x}|cat\"",
+            // Review 1: bash drops braces around `..` with a nested comma
+            // group; words past the 64-word bound; `${N:-…}` defaults and
+            // zsh's forms of an empty expansion.
+            "git clone -b }x r {--upload-pack=../x{,}} d",
+            "git clone -b }x r {-u../x{,}} d",
+            "g{i..i}t ls-remote --upload-pack=./x ./r {1..65}",
+            "git ls-remote ./r {1..65}{-q,--upload-pack=./x}",
+            "git clone ${N:---upload-pack=./x} r d",
+            "git clone ${N---upload-pack=./x} r d",
+            "git clone ${N:+--upload-pack=./x} r d",
+            "git clone ${N+--upload-pack=./x} r d",
+            "git clone ${N:=--upload-pack=./x} r d",
+            "git clone ${N:-{-q,--upload-pack=./x}} r d",
+            "git clone $=N--upload-pack=./x r d",
+            "git clone $^N--upload-pack=./x r d",
+            "git clone $~N--upload-pack=./x r d",
+            "git clone $N[1]--upload-pack=./x r d",
+            "git clone $N:t--upload-pack=./x r d",
         ] {
             assert_eq!(line(script), Some(UnseenCode), "{shell} {script:?}");
         }
@@ -11225,8 +11243,31 @@ fn issue1636_brace_made_git_options_ask_without_quotes() {
             "git clone {c}{--upload-pack=./x,} r d",
             "git log -n ${N}5 | cat",
             "git log $RANGE --stat",
+            "git add tests/case{1..80}.json",
+            "git rm -q out{000..199}.log",
+            "git log $$-x | cat",
+            "echo {1..100} | git hash-object --stdin",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
     }
+}
+
+/// #1636: reading git's words as the shell makes them stays linear.
+#[test]
+fn issue1636_shell_made_words_are_linear() {
+    for (label, unit) in [
+        ("range chains", "git clone r --{u..u}{u..u}{u..u}{u..u}x "),
+        ("brace words", "git add {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}x "),
+        ("nested groups", "git add {a,{b,{c,{d,e}}}} "),
+        ("defaults", "git log ${N:-${N:-${N:---x}}} "),
+        ("zsh forms", "git log $=N[1]:t:h--x "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let _ = script(&unit.repeat(100 * scale));
+        });
+    }
+    work::assert_linear("one long word", |scale| {
+        let _ = script(&format!("git clone --{}", "{u..u}".repeat(100 * scale)));
+    });
 }

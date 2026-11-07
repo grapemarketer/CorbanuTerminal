@@ -2,87 +2,193 @@
 //! quote-aware reading (`nested.rs`). Unlike the word lexer's expansion
 //! (`shell::expand_braces`), it expands every group as bash does: ranges
 //! (`{u..u}`), a group after one that does not expand (`{c}{a,b}`,
-//! `${N}{a,b}`), and nested groups, left to right. Quotes are already
-//! removed from the text it gets, so quoted braces expand too: that can only
-//! add words.
+//! `${N}{a,b}`), nested groups, left to right, and bash's reading of a
+//! group with `..` and a nested comma group (`{-u../x{,}}` is `-u../x`
+//! twice; zsh keeps those braces, a word that is no option either way).
+//! It gets text with quotes and backslashes removed, so it may expand braces
+//! the shell leaves as written (`'{a,b}'`), or leave a group the shell
+//! expands where an escaped brace pairs with an unquoted one; D258's check
+//! covers lines with quotes or backslashes.
 
 use super::work;
 
-/// The words `text` expands to, in the shell's order, or `None` past `limit`
-/// words.
-pub(super) fn expand(text: &str, limit: usize) -> Option<Vec<String>> {
+/// Groups one word may expand, per word it may expand to.
+const STEPS_PER_WORD: usize = 4;
+/// Longest word expanded: no option or command name is longer.
+const MAX_WORD_BYTES: usize = 4096;
+
+/// The words a word expands to, in the shell's order.
+pub(super) struct Expansion {
+    pub(super) words: Vec<String>,
+    /// Past a bound: `words` are the first ones, and the rest (or, for a
+    /// word past `MAX_WORD_BYTES`, the word as written) was not expanded.
+    pub(super) truncated: bool,
+}
+
+/// `text`'s expansion, up to `limit` words.
+pub(super) fn expand(text: &str, limit: usize) -> Expansion {
+    if text.len() > MAX_WORD_BYTES {
+        return Expansion {
+            words: vec![text.to_string()],
+            truncated: true,
+        };
+    }
     let mut done = Vec::new();
+    // In reverse order: the last is expanded next.
     let mut pending = vec![text.to_string()];
+    let mut steps = STEPS_PER_WORD * limit;
+    let mut truncated = false;
     while let Some(word) = pending.pop() {
         work::step();
-        match first_group(&word, limit)? {
-            None => done.push(word),
-            Some((open, close, alternatives)) => {
-                let (prefix, suffix) = (&word[..open], &word[close + 1..]);
-                // Reversed, so the first alternative is expanded first.
-                for alternative in alternatives.iter().rev() {
-                    work::step();
-                    pending.push(format!("{prefix}{alternative}{suffix}"));
-                }
-            }
+        let Some(group) = first_group(&word) else {
+            done.push(word);
+            continue;
+        };
+        if steps == 0 {
+            pending.push(word);
+            truncated = true;
+            break;
         }
-        if done.len() + pending.len() > limit {
-            return None;
+        steps -= 1;
+        let room = limit.saturating_sub(done.len() + pending.len()).max(1);
+        let mut alternatives = group.alternatives(&word[group.open + 1..group.close], room + 1);
+        if alternatives.len() > room {
+            alternatives.truncate(room);
+            truncated = true;
+        }
+        let (prefix, suffix) = (&word[..group.open], &word[group.close + 1..]);
+        for alternative in alternatives.iter().rev() {
+            work::step();
+            pending.push(format!("{prefix}{alternative}{suffix}"));
+        }
+        if truncated {
+            break;
         }
     }
-    Some(done)
+    while let Some(word) = pending.pop() {
+        work::step();
+        done.push(word);
+    }
+    done.truncate(limit.max(1));
+    Expansion {
+        words: done,
+        truncated,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    /// `{a,b}`: split at its commas outside nested groups.
+    Commas,
+    /// bash: `..` outside nested groups and a comma in one (`{x..{a,b}}`):
+    /// the braces go.
+    Dropped,
+    /// `{1..3}`, `{a..c}`.
+    Range,
+}
+
+/// A group that expands: the byte offsets of its braces.
+struct Group {
+    open: usize,
+    close: usize,
+    kind: Kind,
+}
+
+impl Group {
+    /// Up to `room` of its alternatives.
+    fn alternatives(&self, inner: &str, room: usize) -> Vec<String> {
+        match self.kind {
+            Kind::Commas => split_top(inner, room),
+            Kind::Dropped => vec![inner.to_string()],
+            Kind::Range => range(inner, room).unwrap_or_default(),
+        }
+    }
+}
+
+/// An open `{` while scanning a word.
+struct Open {
+    at: usize,
+    /// A comma outside nested groups.
+    comma: bool,
+    /// A comma anywhere inside.
+    any_comma: bool,
+    /// `..` outside nested groups.
+    dots: bool,
+    nested: bool,
+    previous_dot: bool,
 }
 
 /// The first group that expands, as bash finds it: the first `{` whose
-/// matching `}` holds a comma outside nested groups or is a range. Its byte
-/// span and alternatives (`Some(None)`: none), or `None` for a range past
-/// `limit`.
-#[allow(clippy::type_complexity)]
-fn first_group(word: &str, limit: usize) -> Option<Option<(usize, usize, Vec<String>)>> {
-    let bytes = word.as_bytes();
-    // The matching `}` of each `{`, and whether a comma is directly inside.
-    let mut close = vec![None; bytes.len()];
-    let mut comma = vec![false; bytes.len()];
-    let mut stack: Vec<usize> = Vec::new();
-    for (at, byte) in bytes.iter().enumerate() {
+/// matching `}` holds a comma outside nested groups or is a range (or bash
+/// drops its braces, see [`Kind::Dropped`]). One pass: groups close inner
+/// first, and none opened later can come before one already found once no
+/// group is open around it.
+fn first_group(word: &str) -> Option<Group> {
+    let mut stack: Vec<Open> = Vec::new();
+    let mut best: Option<Group> = None;
+    for (at, byte) in word.bytes().enumerate() {
         work::step();
         match byte {
-            b'{' => stack.push(at),
+            b'{' => {
+                if let Some(open) = stack.last_mut() {
+                    open.nested = true;
+                    open.previous_dot = false;
+                }
+                stack.push(Open {
+                    at,
+                    comma: false,
+                    any_comma: false,
+                    dots: false,
+                    nested: false,
+                    previous_dot: false,
+                });
+            }
             b'}' => {
-                if let Some(open) = stack.pop() {
-                    close[open] = Some(at);
+                let Some(open) = stack.pop() else {
+                    continue;
+                };
+                if let Some(outer) = stack.last_mut() {
+                    outer.any_comma |= open.any_comma;
+                    outer.previous_dot = false;
+                }
+                let inner = &word[open.at + 1..at];
+                let kind = if open.comma {
+                    Some(Kind::Commas)
+                } else if !open.nested && range(inner, 0).is_some() {
+                    Some(Kind::Range)
+                } else if open.dots && open.any_comma {
+                    Some(Kind::Dropped)
+                } else {
+                    None
+                };
+                if let Some(kind) = kind
+                    && best.as_ref().is_none_or(|best| open.at < best.open)
+                {
+                    best = Some(Group {
+                        open: open.at,
+                        close: at,
+                        kind,
+                    });
+                }
+                if stack.is_empty() && best.is_some() {
+                    break;
                 }
             }
-            b',' => {
-                if let Some(open) = stack.last() {
-                    comma[*open] = true;
+            _ => {
+                if let Some(open) = stack.last_mut() {
+                    open.comma |= byte == b',';
+                    open.any_comma |= byte == b',';
+                    open.dots |= byte == b'.' && open.previous_dot;
+                    open.previous_dot = byte == b'.';
                 }
             }
-            _ => {}
         }
     }
-    for open in 0..bytes.len() {
-        work::step();
-        let Some(end) = close[open] else {
-            continue;
-        };
-        let inner = &word[open + 1..end];
-        if comma[open] {
-            return Some(Some((open, end, split_top(inner))));
-        }
-        if !inner.contains('{') {
-            match range(inner, limit) {
-                Range::Not => {}
-                Range::Words(words) => return Some(Some((open, end, words))),
-                Range::TooMany => return None,
-            }
-        }
-    }
-    Some(None)
+    best
 }
 
-/// `inner` split at commas outside nested groups.
-fn split_top(inner: &str) -> Vec<String> {
+/// `inner` split at commas outside nested groups: the first `room` parts.
+fn split_top(inner: &str, room: usize) -> Vec<String> {
     let mut parts = Vec::new();
     let mut depth = 0usize;
     let mut start = 0;
@@ -93,6 +199,9 @@ fn split_top(inner: &str) -> Vec<String> {
             '}' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
                 parts.push(inner[start..at].to_string());
+                if parts.len() == room {
+                    return parts;
+                }
                 start = at + 1;
             }
             _ => {}
@@ -102,59 +211,53 @@ fn split_top(inner: &str) -> Vec<String> {
     parts
 }
 
-enum Range {
-    Not,
-    Words(Vec<String>),
-    TooMany,
-}
-
-/// A bash sequence `x..y[..step]` of integers or of single characters.
-fn range(inner: &str, limit: usize) -> Range {
-    let parts: Vec<&str> = inner.split("..").collect();
-    let (from, to, step) = match parts.as_slice() {
-        [from, to] => (*from, *to, None),
-        [from, to, step] => (*from, *to, Some(*step)),
-        _ => return Range::Not,
-    };
-    let step = match step.map(integer) {
+/// A bash sequence `x..y[..step]` of integers or of single characters: its
+/// first `room` words, or `None` when `inner` is no sequence. With `room`
+/// 0, only whether it is one.
+fn range(inner: &str, room: usize) -> Option<Vec<String>> {
+    let mut parts = inner.split("..");
+    let (from, to, step) = (parts.next()?, parts.next()?, parts.next());
+    if parts.next().is_some() {
+        return None;
+    }
+    let step = match step {
         None => 1,
-        Some(Integer::Value(step)) => step.unsigned_abs().max(1),
-        Some(Integer::Huge) => return Range::TooMany,
-        Some(Integer::Not) => return Range::Not,
+        Some(step) => integer(step)?.map_or(u64::MAX, |step| step.unsigned_abs().max(1)),
     };
+    let mut words = Vec::new();
     match (integer(from), integer(to)) {
-        (Integer::Value(from_value), Integer::Value(to_value)) => {
-            let count = from_value.abs_diff(to_value) / step + 1;
-            if count > limit as u64 {
-                return Range::TooMany;
-            }
-            let padded = |text: &str| {
-                text.trim_start_matches('-').len() > 1
-                    && text.trim_start_matches('-').starts_with('0')
+        (Some(from_value), Some(to_value)) => {
+            // Past i64: as many words as any bound allows.
+            let (Some(first), Some(last)) = (from_value, to_value) else {
+                for _ in 0..room {
+                    work::step();
+                    words.push(from.to_string());
+                }
+                return Some(words);
             };
-            let width = if padded(from) || padded(to) {
+            let pad = |text: &str| {
+                let digits = text.trim_start_matches('-');
+                digits.len() > 1 && digits.starts_with('0')
+            };
+            let width = if pad(from) || pad(to) {
                 from.len().max(to.len())
             } else {
                 0
             };
-            let mut words = Vec::new();
-            let mut value = i128::from(from_value);
-            let up = to_value >= from_value;
-            for _ in 0..count {
+            let mut value = i128::from(first);
+            let (end, up) = (i128::from(last), last >= first);
+            let within = |value: i128| if up { value <= end } else { value >= end };
+            while words.len() < room && within(value) {
                 work::step();
-                words.push(if width > 0 {
-                    let digits = format!(
-                        "{:0width$}",
-                        value.unsigned_abs(),
-                        width = width - usize::from(value < 0)
-                    );
-                    if value < 0 {
-                        format!("-{digits}")
-                    } else {
-                        digits
-                    }
+                let digits = format!(
+                    "{:0width$}",
+                    value.unsigned_abs(),
+                    width = width.saturating_sub(usize::from(value < 0))
+                );
+                words.push(if value < 0 {
+                    format!("-{digits}")
                 } else {
-                    value.to_string()
+                    digits
                 });
                 value = if up {
                     value + i128::from(step)
@@ -162,10 +265,8 @@ fn range(inner: &str, limit: usize) -> Range {
                     value - i128::from(step)
                 };
             }
-            Range::Words(words)
         }
-        (Integer::Huge, _) | (_, Integer::Huge) => Range::TooMany,
-        _ => {
+        (None, None) => {
             let (mut from_chars, mut to_chars) = (from.chars(), to.chars());
             let (Some(first), None, Some(last), None) = (
                 from_chars.next(),
@@ -173,41 +274,41 @@ fn range(inner: &str, limit: usize) -> Range {
                 to_chars.next(),
                 to_chars.next(),
             ) else {
-                return Range::Not;
+                return None;
             };
-            let (first, last) = (u32::from(first), u32::from(last));
-            let count = u64::from(first.abs_diff(last)) / step + 1;
-            if count > limit as u64 {
-                return Range::TooMany;
-            }
-            let mut words = Vec::new();
-            for index in 0..count {
+            let (mut code, end, up) = (
+                u64::from(u32::from(first)),
+                u64::from(u32::from(last)),
+                last >= first,
+            );
+            let within = |code: u64| if up { code <= end } else { code >= end };
+            while words.len() < room && within(code) {
                 work::step();
-                let offset = u32::try_from(index * step).unwrap_or(u32::MAX);
-                let code = if last >= first {
-                    first.saturating_add(offset)
+                words.extend(
+                    u32::try_from(code)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .map(String::from),
+                );
+                code = if up {
+                    code.saturating_add(step)
+                } else if code < step {
+                    break;
                 } else {
-                    first.saturating_sub(offset)
+                    code - step
                 };
-                words.extend(char::from_u32(code).map(String::from));
             }
-            Range::Words(words)
         }
+        _ => return None,
     }
+    Some(words)
 }
 
-enum Integer {
-    Not,
-    Value(i64),
-    Huge,
-}
-
-fn integer(text: &str) -> Integer {
+/// An integer as bash reads one in a sequence: `Some(None)` past i64.
+fn integer(text: &str) -> Option<Option<i64>> {
     let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Integer::Not;
-    }
-    text.parse().map_or(Integer::Huge, Integer::Value)
+    (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| text.parse().ok())
 }
 
 #[cfg(test)]
@@ -240,19 +341,39 @@ mod tests {
             ("stash@{0}", vec!["stash@{0}"]),
             ("{a..b..c}", vec!["{a..b..c}"]),
             ("{ab..c}", vec!["{ab..c}"]),
+            ("{a..}", vec!["{a..}"]),
+            ("{x.{c,d}.y}", vec!["{x.c.y}", "{x.d.y}"]),
+            // bash drops these braces (zsh keeps them).
+            (
+                "{--upload-pack=../x{,}}",
+                vec!["--upload-pack=../x", "--upload-pack=../x"],
+            ),
+            ("{x{1..2}..{c,d}}", vec!["x1..c", "x1..d", "x2..c", "x2..d"]),
+            ("{x{a..b}{c,d}}", vec!["{xac}", "{xad}", "{xbc}", "{xbd}"]),
         ] {
+            let expansion = expand(text, 64);
             assert_eq!(
-                expand(text, 64),
-                Some(words.iter().map(ToString::to_string).collect()),
+                (expansion.words, expansion.truncated),
+                (words.iter().map(ToString::to_string).collect(), false),
                 "{text}"
             );
         }
-        for text in [
-            "{1..65}",
-            "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-            "{1..99999999999999999999}",
+        for (text, first) in [
+            ("{1..65}", "1"),
+            ("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", "aaaaaaa"),
+            ("{1..99999999999999999999}", "1"),
+            ("--x{1..99999999999999999999}", "--x1"),
         ] {
-            assert_eq!(expand(text, 64), None, "{text}");
+            let expansion = expand(text, 64);
+            assert!(expansion.truncated, "{text}");
+            assert_eq!(expansion.words.len(), 64, "{text}");
+            assert_eq!(expansion.words[0], first, "{text}");
         }
+        let chain = "{u..u}".repeat(300);
+        let expansion = expand(&chain, 64);
+        assert!(expansion.truncated);
+        assert_eq!(expansion.words.len(), 1);
+        let long = format!("--{}", "x".repeat(5000));
+        assert!(expand(&long, 64).truncated);
     }
 }

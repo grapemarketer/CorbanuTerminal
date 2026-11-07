@@ -894,16 +894,12 @@ impl Classifier {
         // command first (`git clone r d {-q,--upload-pack=./x}|cat`,
         // `-b }x`, `$((1))`, a comment) or does not expand the group
         // (`--{u..u}pload-pack`, `${N}{--upload-pack=./x,}`).
-        match shell_made(words) {
-            ShellMade::Same => {}
-            ShellMade::Words(made) => {
-                let texts: Vec<String> = made.iter().map(|word| word.text.clone()).collect();
-                self.judge_git_words(&texts, &made, loops, found);
-            }
-            ShellMade::TooMany => {
-                if texts.iter().any(|text| spells_git(text)) {
-                    note_git(found, ProtectedActionKind::UnseenCode);
-                }
+        if let Some(made) = shell_made(words) {
+            let made_texts: Vec<String> = made.words.iter().map(|word| word.text.clone()).collect();
+            self.judge_git_words(&made_texts, &made.words, loops, found);
+            // Past a bound, the words not made may hold git's or an option.
+            if made.unsure() && texts.iter().chain(&made_texts).any(|text| spells_git(text)) {
+                note_git(found, ProtectedActionKind::UnseenCode);
             }
         }
     }
@@ -1713,96 +1709,196 @@ fn cut_matters(words: &[Word]) -> bool {
     })
 }
 
-enum ShellMade {
-    Same,
-    Words(Vec<Word>),
-    TooMany,
+/// #1636: a command's words as the shell may make them ([`shell_made`]).
+struct ShellMade {
+    words: Vec<Word>,
+    /// Where the words of each word expanded only in part start, with
+    /// whether that word may make an option (it starts with `-`, `{`, `$`,
+    /// `=` or a substitution's output).
+    truncated: Vec<(usize, bool)>,
 }
 
-/// #1636: a command's words as the shell makes them, where that may differ
+impl ShellMade {
+    /// Whether a word expanded only in part may hide an option or git's
+    /// name: it may make an option, or no git comes before it.
+    fn unsure(&self) -> bool {
+        self.truncated.iter().any(|(at, option)| {
+            work::step();
+            *option
+                || !self.words[..*at].iter().any(|word| {
+                    work::step();
+                    let program = name(&word.text);
+                    program == "git"
+                        || git_helpers::git_name(&program).is_some()
+                        || indirect::equals_git(&word.text)
+                })
+        })
+    }
+}
+
+/// #1636: a command's words as the shell may make them, where that differs
 /// from this reading: brace groups expanded ([`braces::expand`]; in a word
-/// with quoted text only when it has an unquoted group), and an unknown
+/// with quoted text only when it has an unquoted group; empty words of an
+/// unquoted one dropped, as the shell drops them), and an unknown
 /// expansion (or a substitution's output) at the start of a word that then
-/// reads as an option taken as empty (`${N}--upload-pack=./x`).
-fn shell_made(words: &[Word]) -> ShellMade {
+/// reads as an option ([`option_readings`]). `None`: the same words.
+fn shell_made(words: &[Word]) -> Option<ShellMade> {
     /// Words one word may expand to, as the word lexer allows.
     const MAX_WORDS: usize = 64;
-    let mut made = Vec::with_capacity(words.len());
+    /// Words of one command, made.
+    const MAX_MADE: usize = 1024;
+    let mut made = ShellMade {
+        words: Vec::with_capacity(words.len()),
+        truncated: Vec::new(),
+    };
     let mut changed = false;
     for word in words {
         work::step();
-        let alternatives = if word.text.contains('{') && (!word.quoted || word.brace_expansion) {
-            match braces::expand(&word.text, MAX_WORDS) {
-                Some(alternatives) => alternatives,
-                None => return ShellMade::TooMany,
+        let expands = word.text.contains('{') && (!word.quoted || word.brace_expansion);
+        let alternatives = if expands {
+            let room = MAX_WORDS.min(MAX_MADE.saturating_sub(made.words.len()).max(1));
+            let expansion = braces::expand(&word.text, room);
+            if expansion.truncated {
+                let option = word.text.starts_with(['-', '{', '$', '='])
+                    || word.text.starts_with(UNSEEN_OUTPUT);
+                made.truncated.push((made.words.len(), option));
             }
+            expansion.words
         } else {
             vec![word.text.clone()]
         };
         changed |= alternatives.len() != 1 || alternatives[0] != word.text;
         for alternative in alternatives {
             work::step();
-            let text = match word.dynamic.then(|| after_empty_expansions(&alternative)) {
-                Some(rest) if rest.starts_with('-') && rest.len() < alternative.len() => {
-                    changed = true;
-                    rest.to_string()
-                }
-                _ => alternative,
+            if expands && !word.quoted && alternative.is_empty() {
+                continue;
+            }
+            // zsh-only forms (`$=N`) may read as text here.
+            let readings = if word.dynamic || alternative.starts_with('$') {
+                option_readings(&alternative)
+            } else {
+                Vec::new()
             };
-            made.push(Word {
-                text,
-                brace_expansion: false,
-                ..word.clone()
-            });
+            changed |= !readings.is_empty();
+            let texts = if readings.is_empty() {
+                vec![alternative]
+            } else {
+                readings
+            };
+            for text in texts {
+                work::step();
+                made.words.push(Word {
+                    text,
+                    brace_expansion: false,
+                    ..word.clone()
+                });
+            }
         }
     }
-    if changed {
-        ShellMade::Words(made)
-    } else {
-        ShellMade::Same
-    }
+    changed.then_some(made)
 }
 
-/// #1636: `text` after the parameter expansions (`$N`, `${N}`, `$1`) and
-/// substitution outputs it starts with, which may be empty.
-fn after_empty_expansions(mut text: &str) -> &str {
-    loop {
+/// #1636: the options `text` may make when the parameter expansions and
+/// substitution outputs it starts with are empty, or (`${N:-…}`, `${N-…}`,
+/// `${N:+…}`, `${N:=…}`) their words: `${N}--upload-pack=./x`,
+/// `${N:---upload-pack=./x}`. zsh's `$=N`, `$^N`, `$~N`, subscripts and
+/// `:x` modifiers too. Expansions that are never empty (`$$`, `$#`, `$?`,
+/// `$-`) end the search.
+fn option_readings(text: &str) -> Vec<String> {
+    /// Readings tried; each is shorter than the one it comes from.
+    const MAX_READINGS: usize = 16;
+    let mut found = Vec::new();
+    let mut pending = vec![text.to_string()];
+    let mut tried = 0;
+    while let Some(reading) = pending.pop() {
         work::step();
-        if let Some(rest) = text.strip_prefix(UNSEEN_OUTPUT) {
-            text = rest;
-        } else if let Some(rest) = text.strip_prefix("${") {
-            let mut depth = 1usize;
-            let end = rest.char_indices().find_map(|(at, ch)| {
-                work::step();
-                match ch {
-                    '{' => depth += 1,
-                    '}' => depth -= 1,
-                    _ => {}
+        tried += 1;
+        if tried > MAX_READINGS {
+            break;
+        }
+        match leading_expansion(&reading) {
+            Some((length, value)) => {
+                let rest = &reading[length..];
+                if let Some(value) = value {
+                    pending.push(format!("{value}{rest}"));
                 }
-                (depth == 0).then_some(at)
-            });
-            match end {
-                Some(end) => text = &rest[end + 1..],
-                None => return text,
+                pending.push(rest.to_string());
             }
-        } else if let Some(rest) = text.strip_prefix('$') {
-            let name = rest
-                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                .unwrap_or(rest.len());
-            let length =
-                if rest.starts_with(|ch: char| ch.is_ascii_digit() || "@*#?-$!".contains(ch)) {
-                    1
-                } else {
-                    name
-                };
-            if length == 0 {
-                return text;
+            None => {
+                if reading.starts_with('-') && reading.len() < text.len() {
+                    found.push(reading);
+                }
             }
-            text = &rest[length..];
-        } else {
-            return text;
         }
     }
+    found
+}
+
+/// #1636: the length of the parameter expansion or substitution output
+/// `text` starts with, if any, and the word it may be instead of the value
+/// (`${N:-word}`).
+fn leading_expansion(text: &str) -> Option<(usize, Option<String>)> {
+    if text.starts_with(UNSEEN_OUTPUT) {
+        return Some((UNSEEN_OUTPUT.len(), None));
+    }
+    let rest = text.strip_prefix('$')?;
+    if let Some(inner) = rest.strip_prefix('{') {
+        let mut depth = 1usize;
+        let end = inner.char_indices().find_map(|(at, ch)| {
+            work::step();
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(at)
+        })?;
+        let body = &inner[..end];
+        // zsh flags (`${(f)N}`), then the name and a subscript.
+        let body = match body.strip_prefix('(') {
+            Some(flags) => flags.split_once(')').map_or("", |(_, rest)| rest),
+            None => body,
+        };
+        let body = body.trim_start_matches(['#', '!', '=', '^', '~']);
+        let name = body
+            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || "@*".contains(ch)))
+            .unwrap_or(body.len());
+        let after = skip_subscript(&body[name..]);
+        let value = [":-", ":=", ":+", "-", "=", "+"]
+            .iter()
+            .find_map(|op| after.strip_prefix(op))
+            .map(str::to_string);
+        return Some((2 + end + 1, value));
+    }
+    let flags = rest.len() - rest.trim_start_matches(['=', '^', '~']).len();
+    let after_flags = &rest[flags..];
+    let name = if after_flags.starts_with(|ch: char| ch.is_ascii_digit() || "@*!".contains(ch)) {
+        1
+    } else {
+        after_flags
+            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+            .unwrap_or(after_flags.len())
+    };
+    if name == 0 {
+        return None;
+    }
+    let mut after = skip_subscript(&after_flags[name..]);
+    // zsh's `:t`, `:h`, … modifiers.
+    while let Some(modified) = after
+        .strip_prefix(':')
+        .filter(|modified| modified.starts_with(|ch: char| ch.is_ascii_alphabetic()))
+    {
+        work::step();
+        after = &modified[1..];
+    }
+    Some((text.len() - after.len(), None))
+}
+
+/// `text` after a `[…]` subscript it starts with.
+fn skip_subscript(text: &str) -> &str {
+    text.strip_prefix('[')
+        .and_then(|inner| inner.split_once(']'))
+        .map_or(text, |(_, rest)| rest)
 }
 
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).
