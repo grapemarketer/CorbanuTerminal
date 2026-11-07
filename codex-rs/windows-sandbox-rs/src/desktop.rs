@@ -1,5 +1,5 @@
 use crate::logging;
-use crate::token::get_current_token_for_restriction;
+use crate::token::get_current_token_for_query;
 use crate::token::get_logon_sid_bytes;
 use crate::window_station::WindowAccess;
 use crate::window_station::current_logon_sid;
@@ -202,7 +202,7 @@ impl PrivateDesktop {
 }
 
 unsafe fn grant_desktop_access(handle: isize, logs_base_dir: Option<&Path>) -> Result<()> {
-    let token = get_current_token_for_restriction()?;
+    let token = get_current_token_for_query()?;
     let mut logon_sid = get_logon_sid_bytes(token)?;
     CloseHandle(token);
 
