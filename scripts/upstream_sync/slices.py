@@ -12,9 +12,22 @@ import re
 import sys
 
 SEC_CRATES = (
-    "linux-sandbox", "windows-sandbox-rs", "network-proxy", "sandboxing", "process-hardening", "execpolicy",
-    "execpolicy-legacy", "shell-escalation", "secret-broker", "secret-broker-service", "security-level",
-    "security-policy", "protected-state", "content-security", "browser-isolation", "linux-pidfd-spawn",
+    "linux-sandbox",
+    "windows-sandbox-rs",
+    "network-proxy",
+    "sandboxing",
+    "process-hardening",
+    "execpolicy",
+    "execpolicy-legacy",
+    "shell-escalation",
+    "secret-broker",
+    "secret-broker-service",
+    "security-level",
+    "security-policy",
+    "protected-state",
+    "content-security",
+    "browser-isolation",
+    "linux-pidfd-spawn",
 )
 SEC_CORE = re.compile(
     r"^core/(src/(tools/(approvals|orchestrator|sandboxing|network_approval|runtimes/"
@@ -23,9 +36,21 @@ SEC_CORE = re.compile(
     r"|tests/suite/(.*sandbox|exec_policy|approvals|unified_exec|shell|seatbelt|landlock|network|security|permissions))"
 )
 ABOVE_CORE = (
-    "app-server", "app-server-client", "app-server-daemon", "app-server-transport", "chatgpt", "cli", "core-api",
-    "exec", "ext/image-generation", "ext/memories", "ext/web-search", "memories/write", "thread-manager-sample",
-    "tui", "mcp-server",
+    "app-server",
+    "app-server-client",
+    "app-server-daemon",
+    "app-server-transport",
+    "chatgpt",
+    "cli",
+    "core-api",
+    "exec",
+    "ext/image-generation",
+    "ext/memories",
+    "ext/web-search",
+    "memories/write",
+    "thread-manager-sample",
+    "tui",
+    "mcp-server",
 )
 # Conflicted paths outside S3a that carry permission, sandbox, secret or approval logic (named security paths).
 SEC_ADJ = re.compile(
@@ -53,19 +78,40 @@ SLICES = {
     "S4e other crates above core": ("3", "unassigned", True),
 }
 
-TIER0 = re.compile(r"(^|/)(Cargo\.toml|Cargo\.lock|MODULE\.bazel(\.lock)?|BUILD\.bazel|rust-toolchain\.toml)$")
+TIER0 = re.compile(
+    r"(^|/)(Cargo\.toml|Cargo\.lock|MODULE\.bazel(\.lock)?|BUILD\.bazel|rust-toolchain\.toml)$"
+)
 
 
 def slice_of(p):
     if p.startswith((".github/workflows/", ".github/actions/", ".github/scripts/")):
         return "S0 manifests/locks/CI"
     # Every Cargo/Bazel manifest and lockfile is Tier 0, including those under tools/ or sdk/.
-    if TIER0.search(p) or p.startswith(("codex-rs/.cargo/", "codex-rs/.config/", "patches/")) or p in (
-        "codex-rs/deny.toml", "codex-rs/.gitignore",
+    if (
+        TIER0.search(p)
+        or p.startswith(("codex-rs/.cargo/", "codex-rs/.config/", "patches/"))
+        or p
+        in (
+            "codex-rs/deny.toml",
+            "codex-rs/.gitignore",
+        )
     ):
         return "S0 manifests/locks/CI"
-    if p.startswith((".github/", "scripts/", "tools/", ".codex/", ".devcontainer/", "codex-cli/", "docs/", "sdk/")) \
-            or "/" not in p:
+    if (
+        p.startswith(
+            (
+                ".github/",
+                "scripts/",
+                "tools/",
+                ".codex/",
+                ".devcontainer/",
+                "codex-cli/",
+                "docs/",
+                "sdk/",
+            )
+        )
+        or "/" not in p
+    ):
         return "S1d tooling/repo"
     q = p.removeprefix("codex-rs/")
     top = q.split("/")[0]
@@ -84,12 +130,26 @@ def slice_of(p):
         if top == "exec":
             return "S4d exec"
         return "S4e other crates above core"
-    if top in ("config", "model-provider", "model-provider-info", "models-manager", "login", "codex-api",
-               "backend-client", "provider-auth", "vault", "aws-auth", "keyring-store"):
+    if top in (
+        "config",
+        "model-provider",
+        "model-provider-info",
+        "models-manager",
+        "login",
+        "codex-api",
+        "backend-client",
+        "provider-auth",
+        "vault",
+        "aws-auth",
+        "keyring-store",
+    ):
         return "S1b config/providers/auth"
     if top in ("core", "core-api"):
-        if re.match(r"core/(src/agent/|src/tools/handlers/multi_agents|assets/agent"
-                    r"|tests/suite/(subagent|spawn|agent|multi_agent))", q):
+        if re.match(
+            r"core/(src/agent/|src/tools/handlers/multi_agents|assets/agent"
+            r"|tests/suite/(subagent|spawn|agent|multi_agent))",
+            q,
+        ):
             return "S2c core agents"
         if q.startswith("core/src/tools/"):
             return "S2b core tools (non-shell)"
@@ -101,7 +161,9 @@ def slice_of(p):
 
 def is_named_security(p):
     """True for paths the plan names as security paths (S3a plus SEC_ADJ)."""
-    return slice_of(p).startswith("S3") or bool(SEC_ADJ.match(p.removeprefix("codex-rs/")))
+    return slice_of(p).startswith("S3") or bool(
+        SEC_ADJ.match(p.removeprefix("codex-rs/"))
+    )
 
 
 def main():
@@ -123,7 +185,9 @@ def main():
     for s in sorted(agg):
         print(f"{s:36} files {agg[s][0]:4} hunks {agg[s][1]:5} lines {agg[s][2]:6}")
     print("total", sum(a[0] for a in agg.values()))
-    adj = [r["path"] for r in rows if r["sec_review"] and not r["slice"].startswith("S3")]
+    adj = [
+        r["path"] for r in rows if r["sec_review"] and not r["slice"].startswith("S3")
+    ]
     print("security-review paths outside S3:", len(adj))
     if "--adj" in sys.argv:
         print("\n".join(adj))

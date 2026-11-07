@@ -61,11 +61,17 @@ def main():
         sys.exit(1)
     mpath = os.path.join(dest, manifest)
     fetch(BASE.format(version=a.version, name=manifest), mpath)
-    report(sha256(mpath) == trusted[manifest], f"manifest {manifest} sha256 {sha256(mpath)[:16]}... matches trust root")
+    report(
+        sha256(mpath) == trusted[manifest],
+        f"manifest {manifest} sha256 {sha256(mpath)[:16]}... matches trust root",
+    )
     if not ok:
         sys.exit(1)  # don't follow an untrusted manifest
-    entries = [line.split() for line in open(mpath, encoding="utf-8").read().replace("\r", "").splitlines()
-               if line.strip()]
+    entries = [
+        line.split()
+        for line in open(mpath, encoding="utf-8").read().replace("\r", "").splitlines()
+        if line.strip()
+    ]
     report(len(entries) == 2, f"manifest lists {len(entries)} files (expect 2)")
     for digest, name in entries:
         name = name.lstrip("*")
@@ -75,7 +81,10 @@ def main():
         path = os.path.join(dest, name)
         fetch(BASE.format(version=a.version, name=name), path)
         got = sha256(path)
-        report(got == digest, f"{name} ({os.path.getsize(path)} bytes) sha256 {got[:16]}...")
+        report(
+            got == digest,
+            f"{name} ({os.path.getsize(path)} bytes) sha256 {got[:16]}...",
+        )
     print(f"{'ALL PASS' if ok else 'FAILED'} {a.target} files in {dest}")
     sys.exit(0 if ok else 1)
 

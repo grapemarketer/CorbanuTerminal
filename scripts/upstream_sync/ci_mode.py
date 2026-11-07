@@ -22,36 +22,52 @@ TAG = "# sync-ci-mode"
 RESTORE = "# sync-ci-mode-restore {}"
 HEAVY = ("bazel", "rust-ci", "sdk")
 SKIP_IF = "${{ !startsWith(github.base_ref, 'sync/') }}"
-OK_ENV = "${{ startsWith(github.base_ref, 'sync/') && '" + ",".join(HEAVY) + "' || '' }}"
+OK_ENV = (
+    "${{ startsWith(github.base_ref, 'sync/') && '" + ",".join(HEAVY) + "' || '' }}"
+)
 # Whole-workspace PR workflows that can't pass while the tree has markers. The security lanes
 # (credential-boundary-canary, security-ingress-contract, security-platform-contract, windows-security-probes)
 # and v8-canary keep running on sync PRs and can also be dispatched on the sync branch.
 PR_WORKFLOWS = ("orchestrate-tui-matrix.yml", "tmux-smoke.yml")
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEW_FILES = {".github/workflows/sync-package-ci.yml": os.path.join(HERE, "ci_mode", "sync-package-ci.yml")}
+NEW_FILES = {
+    ".github/workflows/sync-package-ci.yml": os.path.join(
+        HERE, "ci_mode", "sync-package-ci.yml"
+    )
+}
 CHECK_SCRIPT = ".github/scripts/check_ci_results.py"
 CHECK_OLD = '        if dependency["result"] != "success"\n'
-CHECK_NEW = ('        if dependency["result"] != "success"\n'
-             '        and not (dependency["result"] == "skipped" and name in os.environ.get("SYNC_SKIPPED_OK", "")'
-             '.split(","))  ' + TAG + "\n")
+CHECK_NEW = (
+    '        if dependency["result"] != "success"\n'
+    '        and not (dependency["result"] == "skipped" and name in os.environ.get("SYNC_SKIPPED_OK", "")'
+    '.split(","))  ' + TAG + "\n"
+)
 
 
 def edit(path, fn):
     text = open(path).read()
     new = fn(text)
     if new == text:
-        sys.exit(f"error: no change applied to {path}; update ci_mode.py for the resolved file")
+        sys.exit(
+            f"error: no change applied to {path}; update ci_mode.py for the resolved file"
+        )
     open(path, "w").write(new)
 
 
 def blocking(text):
     for job in HEAVY:
-        text, n = re.subn(rf"(?m)^(  {re.escape(job)}:\n    name: [^\n]*\n)",
-                          lambda m: m.group(1) + f"    if: {SKIP_IF}  {TAG}\n", text)
+        text, n = re.subn(
+            rf"(?m)^(  {re.escape(job)}:\n    name: [^\n]*\n)",
+            lambda m: m.group(1) + f"    if: {SKIP_IF}  {TAG}\n",
+            text,
+        )
         if n != 1:
             sys.exit(f"error: blocking-ci job {job} not found")
-    text, n = re.subn(r"(?m)^(        env:\n          NEEDS: \$\{\{ toJSON\(needs\) \}\}\n)",
-                      lambda m: m.group(1) + f"          SYNC_SKIPPED_OK: {OK_ENV}  {TAG}\n", text)
+    text, n = re.subn(
+        r"(?m)^(        env:\n          NEEDS: \$\{\{ toJSON\(needs\) \}\}\n)",
+        lambda m: m.group(1) + f"          SYNC_SKIPPED_OK: {OK_ENV}  {TAG}\n",
+        text,
+    )
     if n != 1:
         sys.exit("error: blocking-ci required-job env not found")
     return text
@@ -62,7 +78,7 @@ def pr_ignore(text):
     if not m:
         sys.exit("error: no pull_request trigger found")
     block = []
-    for line in text[m.end():].splitlines():
+    for line in text[m.end() :].splitlines():
         if line.strip() and not line.startswith("    "):
             break
         block.append(line)
@@ -70,8 +86,10 @@ def pr_ignore(text):
         return text  # already restricted to listed bases
     line = f'    branches-ignore: ["sync/**"]  {TAG}\n'
     if m.group("rest").strip() == "{}":
-        return text[:m.start()] + f"  pull_request:  {RESTORE}\n" + line + text[m.end():]
-    return text[:m.end()] + line + text[m.end():]
+        return (
+            text[: m.start()] + f"  pull_request:  {RESTORE}\n" + line + text[m.end() :]
+        )
+    return text[: m.end()] + line + text[m.end() :]
 
 
 def apply(wt):
@@ -95,8 +113,16 @@ def revert(wt):
             text = open(p).read()
             if TAG not in text or os.path.join(root, name) in NEW_FILES:
                 continue
-            out = [line for line in text.splitlines(keepends=True) if not line.rstrip("\n").endswith(TAG)]
-            open(p, "w").write("".join(out).replace(f"  pull_request:  {RESTORE}\n", "  pull_request: {}\n"))
+            out = [
+                line
+                for line in text.splitlines(keepends=True)
+                if not line.rstrip("\n").endswith(TAG)
+            ]
+            open(p, "w").write(
+                "".join(out).replace(
+                    f"  pull_request:  {RESTORE}\n", "  pull_request: {}\n"
+                )
+            )
     for dst in NEW_FILES:
         p = os.path.join(wt, dst)
         if os.path.exists(p):
@@ -125,13 +151,16 @@ def codeowners_pattern(spec):
     return f"/{spec}"
 
 
-CO_BEGIN = "# BEGIN sync-branch security owners (upstream sync; revert before the final PR)"
+CO_BEGIN = (
+    "# BEGIN sync-branch security owners (upstream sync; revert before the final PR)"
+)
 CO_END = "# END sync-branch security owners"
 
 
 def codeowners(action, wt, owner=None):
     sys.path.insert(0, HERE)
     import footprint
+
     p = os.path.join(wt, ".github", "CODEOWNERS")
     text = open(p).read() if os.path.exists(p) else ""
     start, end = text.find(CO_BEGIN), text.find(CO_END)
@@ -143,12 +172,18 @@ def codeowners(action, wt, owner=None):
         print("no CODEOWNERS block")
         return
     if start != -1:
-        text = text[:start].rstrip("\n") + "\n" + text[end + len(CO_END):].lstrip("\n")
+        text = text[:start].rstrip("\n") + "\n" + text[end + len(CO_END) :].lstrip("\n")
     if action == "apply":
-        if not owner or not re.fullmatch(r"@[A-Za-z0-9][A-Za-z0-9-]*(/[A-Za-z0-9._-]+)?", owner):
+        if not owner or not re.fullmatch(
+            r"@[A-Za-z0-9][A-Za-z0-9-]*(/[A-Za-z0-9._-]+)?", owner
+        ):
             sys.exit("error: codeowners apply needs an @owner")
         # Last matching pattern wins, so this block goes at the end.
-        block = [CO_BEGIN] + [f"{codeowners_pattern(spec)} {owner}" for spec in footprint.NAMED] + [CO_END]
+        block = (
+            [CO_BEGIN]
+            + [f"{codeowners_pattern(spec)} {owner}" for spec in footprint.NAMED]
+            + [CO_END]
+        )
         text = text.rstrip("\n") + "\n\n" + "\n".join(block) + "\n"
     open(p, "w").write(text)
     print(f"CODEOWNERS block {'added' if action == 'apply' else 'removed'}")

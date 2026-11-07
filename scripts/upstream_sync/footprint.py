@@ -25,12 +25,31 @@ import subprocess
 
 NAMED = [
     # S3a crates (Corbanu security crates included) and upstream's new sandbox crates.
-    *(f"codex-rs/{c}/" for c in (
-        "linux-sandbox", "windows-sandbox-rs", "network-proxy", "sandboxing", "execpolicy", "execpolicy-legacy",
-        "process-hardening", "linux-pidfd-spawn", "shell-escalation", "secret-broker", "secret-broker-service",
-        "secret-broker-fixture", "security-level", "security-policy", "security-audit", "protected-state",
-        "content-security", "browser-isolation", "mxc-sandbox", "windows-sandbox-service",
-    )),
+    *(
+        f"codex-rs/{c}/"
+        for c in (
+            "linux-sandbox",
+            "windows-sandbox-rs",
+            "network-proxy",
+            "sandboxing",
+            "execpolicy",
+            "execpolicy-legacy",
+            "process-hardening",
+            "linux-pidfd-spawn",
+            "shell-escalation",
+            "secret-broker",
+            "secret-broker-service",
+            "secret-broker-fixture",
+            "security-level",
+            "security-policy",
+            "security-audit",
+            "protected-state",
+            "content-security",
+            "browser-isolation",
+            "mxc-sandbox",
+            "windows-sandbox-service",
+        )
+    ),
     # S3a core paths.
     "codex-rs/core/src/unified_exec/",
     "codex-rs/core/src/security/",
@@ -50,10 +69,21 @@ NAMED = [
     "codex-rs/core/src/tools/handlers/unified_exec*",
     "codex-rs/core/src/tools/handlers/apply_patch*",
     "codex-rs/core/src/tools/handlers/request_permissions*",
-    *(f"codex-rs/core/tests/suite/{p}" for p in (
-        "*sandbox*", "exec_policy*", "approvals*", "unified_exec*", "shell*", "seatbelt*", "landlock*", "network*",
-        "security*", "permissions*",
-    )),
+    *(
+        f"codex-rs/core/tests/suite/{p}"
+        for p in (
+            "*sandbox*",
+            "exec_policy*",
+            "approvals*",
+            "unified_exec*",
+            "shell*",
+            "seatbelt*",
+            "landlock*",
+            "network*",
+            "security*",
+            "permissions*",
+        )
+    ),
     # Named paths owned by other slices (security owner approves); mirrors slices.SEC_ADJ.
     "codex-rs/protocol/src/permissions*",
     "codex-rs/app-server-protocol/*permissions*",
@@ -75,7 +105,9 @@ NAMED = [
     "codex-rs/tui/src/*windows_sandbox*",
 ]
 
-SEC_BRANCH = re.compile(r"^(sec|sbx|sf\d+|ss\d+|csec|secb|secf|sech|kc|pf84)[-_/]", re.I)
+SEC_BRANCH = re.compile(
+    r"^(sec|sbx|sf\d+|ss\d+|csec|secb|secf|sech|kc|pf84)[-_/]", re.I
+)
 SEC_TITLE = re.compile(
     r"\bPF-?(2[3-9]|3\d|4[01])\b|security|sandbox|seatbelt|landlock|bwrap|permission|classifier|taint|provenance"
     r"|secret.broker|credential|vault|approval|exec.?policy|network.proxy|protected.state|browser.isolation",
@@ -85,7 +117,9 @@ EXCLUDE = re.compile(r"(\.md$|(^|/)Cargo\.(toml|lock)$)")
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=True
+    ).stdout
 
 
 def main():
@@ -94,18 +128,47 @@ def main():
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--out-dir", default=os.path.dirname(os.path.abspath(__file__)))
     a = ap.parse_args()
-    prs = json.loads(subprocess.run(
-        ["gh", "pr", "list", "--repo", a.repo, "--state", "merged", "-L", "5000", "--base", "main",
-         "--json", "number,title,headRefName,mergeCommit"],
-        capture_output=True, text=True, check=True).stdout)
-    sel = sorted((p for p in prs if p.get("mergeCommit") and (
-        SEC_BRANCH.match(p["headRefName"]) or SEC_TITLE.search(p["title"]))), key=lambda p: p["number"])
+    prs = json.loads(
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                a.repo,
+                "--state",
+                "merged",
+                "-L",
+                "5000",
+                "--base",
+                "main",
+                "--json",
+                "number,title,headRefName,mergeCommit",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    sel = sorted(
+        (
+            p
+            for p in prs
+            if p.get("mergeCommit")
+            and (SEC_BRANCH.match(p["headRefName"]) or SEC_TITLE.search(p["title"]))
+        ),
+        key=lambda p: p["number"],
+    )
     present = set(git("ls-tree", "-r", "--full-tree", "--name-only", a.ref).split("\n"))
     files = set()
     for p in sel:
         m = p["mergeCommit"]["oid"]
         for f in git("diff", "--name-only", f"{m}^1", m).split("\n"):
-            if f.startswith(("codex-rs/", "scripts/")) and not EXCLUDE.search(f) and f in present:
+            if (
+                f.startswith(("codex-rs/", "scripts/"))
+                and not EXCLUDE.search(f)
+                and f in present
+            ):
                 files.add(f)
     named = list(dict.fromkeys(NAMED))
     with open(os.path.join(a.out_dir, "security_paths.txt"), "w") as out:
@@ -113,8 +176,12 @@ def main():
     with open(os.path.join(a.out_dir, "security_footprint_prs.tsv"), "w") as out:
         out.write("number\tbranch\ttitle\n")
         for p in sel:
-            out.write(f"{p['number']}\t{p['headRefName']}\t{p['title'].replace(chr(9), ' ')}\n")
-    print(f"named {len(named)} footprint files {len(files - set(named))} from {len(sel)} PRs")
+            out.write(
+                f"{p['number']}\t{p['headRefName']}\t{p['title'].replace(chr(9), ' ')}\n"
+            )
+    print(
+        f"named {len(named)} footprint files {len(files - set(named))} from {len(sel)} PRs"
+    )
 
 
 if __name__ == "__main__":

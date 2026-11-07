@@ -34,7 +34,11 @@ def cargo(rev):
 
 def bazel(rev):
     text = show(rev, "MODULE.bazel")
-    deps = dict(re.findall(r'bazel_dep\(\s*name\s*=\s*"([^"]+)",\s*version\s*=\s*"([^"]+)"', text))
+    deps = dict(
+        re.findall(
+            r'bazel_dep\(\s*name\s*=\s*"([^"]+)",\s*version\s*=\s*"([^"]+)"', text
+        )
+    )
     urls = set(re.findall(r'"(https?://[^"]+)"', text))
     remotes = set(re.findall(r'remote\s*=\s*"([^"]+)"', text))
     return deps, urls, remotes
@@ -56,27 +60,44 @@ def main():
     removed = sorted(n for n in old if n not in new)
     changed = sorted(n for n in new if n in old and new[n] != old[n])
     print(f"## Cargo.lock ({a.old[:12]} -> {a.new[:12]})")
-    print(f"third-party crates: {len(old)} -> {len(new)}; added {len(added)}, removed {len(removed)}, "
-          f"version/source changed {len(changed)}")
+    print(
+        f"third-party crates: {len(old)} -> {len(new)}; added {len(added)}, removed {len(removed)}, "
+        f"version/source changed {len(changed)}"
+    )
     old_src = {s for v in old.values() for _, s in v}
-    new_src = sorted({s.split("#")[0] for v in new.values() for _, s in v if s != REGISTRY} -
-                     {s.split("#")[0] for s in old_src})
+    new_src = sorted(
+        {s.split("#")[0] for v in new.values() for _, s in v if s != REGISTRY}
+        - {s.split("#")[0] for s in old_src}
+    )
     print("new non-registry sources:")
     for s in new_src:
-        users = sorted(n for n, v in new.items() if any(x.split("#")[0] == s for _, x in v))
+        users = sorted(
+            n for n, v in new.items() if any(x.split("#")[0] == s for _, x in v)
+        )
         print(f"  {s}  ({', '.join(users)})")
     print("added crates:")
     for n in added:
         print(f"  {n} {', '.join(sorted(v for v, _ in new[n]))}")
     print("changed crates:")
     for n in changed:
-        o = ", ".join(sorted(v + ("" if s == REGISTRY else " " + s.split("?")[0]) for v, s in old[n]))
-        w = ", ".join(sorted(v + ("" if s == REGISTRY else " " + s.split("?")[0]) for v, s in new[n]))
+        o = ", ".join(
+            sorted(
+                v + ("" if s == REGISTRY else " " + s.split("?")[0]) for v, s in old[n]
+            )
+        )
+        w = ", ".join(
+            sorted(
+                v + ("" if s == REGISTRY else " " + s.split("?")[0]) for v, s in new[n]
+            )
+        )
         print(f"  {n}: {o} -> {w}")
     print("removed crates:")
     for n in removed:
         print(f"  {n}")
-    (old_deps, old_urls, old_remotes), (new_deps, new_urls, new_remotes) = bazel(a.old), bazel(a.new)
+    (old_deps, old_urls, old_remotes), (new_deps, new_urls, new_remotes) = (
+        bazel(a.old),
+        bazel(a.new),
+    )
     print("## MODULE.bazel")
     for n in sorted(set(old_deps) | set(new_deps)):
         if old_deps.get(n) != new_deps.get(n):
@@ -86,7 +107,9 @@ def main():
     for u in sorted(new_remotes - old_remotes):
         print(f"  new git remote {u}")
     op, np_ = pnpm(a.old), pnpm(a.new)
-    print(f"## pnpm-lock.yaml: packages {len(op)} -> {len(np_)}; added {len(np_ - op)}, removed {len(op - np_)}")
+    print(
+        f"## pnpm-lock.yaml: packages {len(op)} -> {len(np_)}; added {len(np_ - op)}, removed {len(op - np_)}"
+    )
     for p in sorted(np_ - op):
         print(f"  + {p}")
     for p in sorted(op - np_):

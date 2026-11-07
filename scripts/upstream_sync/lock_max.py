@@ -47,8 +47,12 @@ def versions(text):
 def main():
     root, tag = sys.argv[1], sys.argv[2]
     dry = "--dry-run" in sys.argv
-    tag_lock = subprocess.run(["git", "-C", root, "show", f"{tag}:codex-rs/Cargo.lock"], capture_output=True,
-                              text=True, check=True).stdout
+    tag_lock = subprocess.run(
+        ["git", "-C", root, "show", f"{tag}:codex-rs/Cargo.lock"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
     theirs = versions(tag_lock)
     merged = versions(open(f"{root}/Cargo.lock").read())
     todo = []
@@ -58,18 +62,31 @@ def main():
             best = None
             for tv in theirs.get(name, ()):
                 tn, tp = parse(tv)
-                if line(tn) == line(cn) and not tp and (tn, tp) > (cn, cp) and tv not in cur_set:
+                if (
+                    line(tn) == line(cn)
+                    and not tp
+                    and (tn, tp) > (cn, cp)
+                    and tv not in cur_set
+                ):
                     best = tv if best is None or parse(tv) > parse(best) else best
             if best:
                 todo.append((name, cur, best))
     for name, cur, new in sorted(todo):
         print(f"{name} {cur} -> {new}")
         if not dry:
-            r = subprocess.run(["cargo", "update", "--quiet", "-p", f"{name}@{cur}", "--precise", new], cwd=root,
-                               capture_output=True, text=True)
+            r = subprocess.run(
+                ["cargo", "update", "--quiet", "-p", f"{name}@{cur}", "--precise", new],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
             if r.returncode:
-                print(f"  skipped: {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'cargo update failed'}")
-    print(f"{len(todo)} crates moved to the tag's version" + (" (dry run)" if dry else ""))
+                print(
+                    f"  skipped: {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'cargo update failed'}"
+                )
+    print(
+        f"{len(todo)} crates moved to the tag's version" + (" (dry run)" if dry else "")
+    )
 
 
 if __name__ == "__main__":
