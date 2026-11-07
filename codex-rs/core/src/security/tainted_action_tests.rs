@@ -11900,10 +11900,16 @@ fn issue1685_eval_trap_alias_text_is_judged_as_a_line() {
             "eval 'tee -a log < x'",
             "eval -- 'cp a b'",
             "noglob eval 'ls *.rs'",
-            "echo 'tee -a ~/.zshrc'",
         ] {
             assert_eq!(kind(&[shell, "-lc", script]), None, "{shell} {script:?}");
         }
+        // On Windows the Windows view (#1240) does not read `'` as a quote,
+        // as cmd does not, so it asks there, as on main.
+        assert_eq!(
+            kind(&[shell, "-lc", "echo 'tee -a ~/.zshrc'"]),
+            cfg!(windows).then_some(Persistence),
+            "{shell}"
+        );
     }
 }
 
@@ -11926,11 +11932,20 @@ fn issue1685_review1_forms_ask() {
             "X=1 LD_PRELOAD=./x.so ls",
             "eval 'X=1 LD_PRELOAD=./x.so ls'",
             "eval 'export GIT_PAGER=sh'",
-            "./env ls",
-            "eval './env ls'",
-            "trap './nice true' EXIT",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        // A program named by a path in that text is judged as the same
+        // program outside it. Windows path rules judge it only through
+        // their own reads (#1261), where a missing one asks nothing, as on
+        // main; elsewhere it asks.
+        for (script, plain) in [
+            ("./env ls", "./env ls"),
+            ("eval './env ls'", "./env ls"),
+            ("trap './nice true' EXIT", "./nice true"),
+        ] {
+            assert_eq!(line(script), line(plain), "{shell} {script:?}");
+            assert_eq!(line(script).is_some(), !cfg!(windows), "{shell} {script:?}");
         }
         for script in [
             "functions[f]='tee -a ~/.zshrc'; f",
@@ -12005,7 +12020,6 @@ fn issue1685_review2_forms_ask() {
         for script in [
             "trap 'echo \"done\"' EXIT",
             "eval \"x=1\"",
-            "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT; echo x > \"$tmp\"",
             "aliases[ll]='ls -l'",
             "ls -A functions",
             "set -- functions",
@@ -12015,6 +12029,14 @@ fn issue1685_review2_forms_ask() {
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
+        // A trap removing a `mktemp` path asks only as the line without it
+        // does: nothing, under POSIX path rules (D191); Windows path rules
+        // have no D191 scope, so the write to the temp path asks there, as
+        // on main.
+        let plain = "tmp=$(mktemp); echo x > \"$tmp\"";
+        let trapped = "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT; echo x > \"$tmp\"";
+        assert_eq!(line(trapped), line(plain), "{shell}");
+        assert_eq!(line(trapped).is_some(), cfg!(windows), "{shell}");
     }
 }
 
