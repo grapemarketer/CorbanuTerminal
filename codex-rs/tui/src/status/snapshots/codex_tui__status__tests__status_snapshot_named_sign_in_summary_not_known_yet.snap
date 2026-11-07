@@ -1,0 +1,24 @@
+---
+source: tui/src/status/tests.rs
+expression: unknown
+---
+/status
+
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Corbanu Terminal (v<V>)                                                            │
+│                                                                                        │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                          │
+│ information on rate limits and credits                                                 │
+│                                                                                        │
+│  Model:            gpt-5.5 (reasoning none, summaries auto)                            │
+│  Model provider:   OpenAI · account work                                               │
+│  Directory: [[workspace]]                                                              │
+│  Permissions:      Next turn: Custom (workspace with network access, Ask for approval) │
+│  Security:         Requested Permissive; effective protection unverified (/security)   │
+│  Agents.md:        <none>                                                              │
+│  Account:          account work                                                        │
+│                                                                                        │
+│  Token usage:      1.02K total  (1K input + 20 output)                                 │
+│  Account usage:    work · 1,000 input · 20 output                                      │
+│  Limits:           data not available yet                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────╯

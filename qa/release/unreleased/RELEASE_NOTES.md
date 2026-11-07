@@ -81,6 +81,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   as editing a later message already did: `/cost` lists it as "Reopen
   warm-up", Corbanu says once it has been sent, and `skip_reopen_warmup = true`
   skips it (#1038).
+- **Realtime-only threads can skip the warm-up.** `skip_startup_warmup = true`
+  (in `config.toml`, with `-c`, or in `thread/start`'s `config`) sends no
+  startup warm-up, new or reopened. App-server clients that start a thread
+  only for `thread/realtime/start` should set it: the warm-up on the default
+  model could cost several times the realtime session (#1045).
 - **Realtime sessions show their tokens.** A realtime WebSocket session now
   records the input, cached-input, output and total tokens OpenAI reports at
   the end of each response, and `/cost` shows them. Its cost stays unknown
@@ -232,6 +237,27 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
 
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.
+
+## Chat Completions and Anthropic: earlier MCP calls keep their own name
+
+- **An MCP tool's earlier calls no longer replay as a built-in's** (#688). On
+  providers without tool namespaces, a call recorded for an MCP tool that the
+  request no longer offers (its server was removed, or the 128-tool limit left
+  it out) used to replay under its bare name, such as `shell`, which a
+  built-in tool can share. It now replays under the MCP tool's flat name
+  (`mcp__server__tool`), or a hashed form if another tool has that name.
+
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
 - **WebSocket connections now honour IP-range entries in `NO_PROXY`** (#722,
@@ -239,6 +265,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   listed range now goes direct, as HTTP requests already did, instead of
   through `HTTP_PROXY`/`HTTPS_PROXY`. Host names are matched by name only (they
   are not resolved to check ranges), as before.
+
+## A timed-out network prompt for remote work closes
+
+- **The approval prompt for a remote network request now closes when the
+  request times out** (#722, D279). An unanswered request is still refused
+  after 10 minutes (plus the hook timeout) and the command still ends as
+  failed; before, its prompt stayed on screen and answering it did nothing.
+- **App-server clients:** the server resolves such a pending
+  `item/commandExecution/requestApproval` request itself and sends
+  `serverRequest/resolved`, as it already does when a turn ends. Any command
+  approval whose waiter in the core goes away unanswered is resolved the same
+  way.
 
 ## Interrupting a tool on a busy machine keeps its elapsed time
 

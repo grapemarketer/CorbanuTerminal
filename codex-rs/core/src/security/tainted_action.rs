@@ -2751,11 +2751,29 @@ impl Classifier {
             unknown_folder::elsewhere_at(words, self.sudo_unsure())
                 .is_some_and(|from| from < *index)
         });
+        // #1607: zsh's file after a `>!`, with the line's variables
+        // substituted as in the words.
+        let zsh_writes: Vec<String> = simple
+            .zsh_writes
+            .iter()
+            .filter_map(|&(at, joined)| {
+                let word = words.get(at)?;
+                Some(
+                    if joined {
+                        word.strip_prefix('!').unwrap_or(word)
+                    } else {
+                        word
+                    }
+                    .to_string(),
+                )
+            })
+            .collect();
         for file in outputs
             .iter()
             .flatten()
             .chain(&wrapper_outputs)
             .chain(modified_outputs.iter().flatten())
+            .chain(&zsh_writes)
         {
             work::step();
             if outputs::unseen_place(file) {
