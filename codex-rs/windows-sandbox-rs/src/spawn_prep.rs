@@ -542,8 +542,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
     acl_sids: LegacyAclSids<'_>,
     session: bool,
 ) -> Result<Option<IntegrityLease>> {
-    let AllowDenyPaths { allow, mut deny } =
-        compute_allow_paths_for_permissions(permissions, current_dir, env_map);
+    let allow = compute_allow_paths_for_permissions(permissions, current_dir, env_map).allow;
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
@@ -566,6 +565,10 @@ pub(crate) fn apply_legacy_session_acl_rules(
     {
         create_missing_carve_out(path, &canonical_allow)?;
     }
+    // Read after that: a folder made on the way to one (`.codex` for a
+    // read-only `.codex\hooks`, say), which the session then finds present,
+    // gets the protection of one that was there before (#1705 review).
+    let mut deny = compute_allow_paths_for_permissions(permissions, current_dir, env_map).deny;
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
         Some(crate::integrity_leases::acquire_watching(

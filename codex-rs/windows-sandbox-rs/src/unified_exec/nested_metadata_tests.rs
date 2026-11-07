@@ -404,9 +404,11 @@ fn legacy_workspace_stays_watched_when_temp_resolves_to_it() {
 /// A configured read-only `.codex`/`.agents` that doesn't exist yet, which
 /// the host makes before the command starts (#1686), isn't reported as
 /// planted: at the top of the command's root, deeper in it, and at the top of
-/// another writable root. The command can't write in them, and the folders
-/// it makes itself (at the top of the other root, and deeper in its own) are
-/// still reported. Before, the host made them after the session had
+/// another writable root. Nor is a top-level one the host makes on the way to
+/// a deeper read-only path; that one gets the protection of one that was
+/// there (#1705 review). The command can't write in any of them, and the
+/// folders it makes itself (at the top of a third root, and deeper in its
+/// own) are still reported. Before, the host made them after the session had
 /// recorded them as absent, so each was reported as possibly planted.
 #[test]
 fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
@@ -418,38 +420,37 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
     use codex_protocol::permissions::NetworkSandboxPolicy;
     let _guard = legacy_process_test_guard();
     let test_root = user_owned_test_root();
-    let workspace = test_root.path().join("workspace");
-    let other = test_root.path().join("other");
-    fs::create_dir_all(&workspace).expect("create workspace");
-    fs::create_dir_all(&other).expect("create other root");
-    let (workspace, other) = (canonical(&workspace), canonical(&other));
-    let made = [
+    let roots = ["workspace", "other", "third"].map(|name| {
+        let root = test_root.path().join(name);
+        fs::create_dir_all(&root).expect("create root");
+        canonical(&root)
+    });
+    let [workspace, other, third] = &roots;
+    let configured = [
         workspace.join(".agents"),
         workspace.join("sub\\.codex"),
         other.join(".codex"),
+        workspace.join(".codex\\hooks"),
+        other.join(".agents\\skills"),
     ];
+    // Made on the way to the last two.
+    let on_the_way = [workspace.join(".codex"), other.join(".agents")];
     let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
-    let mut entries = vec![
-        FileSystemSandboxEntry::new(
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::Root,
-            },
-            FileSystemAccessMode::Read,
-        ),
-        FileSystemSandboxEntry::new(
-            FileSystemPath::Path {
-                path: absolute(&workspace),
-            },
-            FileSystemAccessMode::Write,
-        ),
+    let mut entries = vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Read,
+    )];
+    entries.extend(roots.iter().map(|root| {
         FileSystemSandboxEntry::new(
             FileSystemPath::Path {
-                path: absolute(&other),
+                path: absolute(root),
             },
             FileSystemAccessMode::Write,
-        ),
-    ];
-    entries.extend(made.iter().map(|path| {
+        )
+    }));
+    entries.extend(configured.iter().map(|path| {
         FileSystemSandboxEntry::new(
             FileSystemPath::Path {
                 path: absolute(path),
@@ -461,34 +462,33 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         &FileSystemSandboxPolicy::restricted(entries),
         NetworkSandboxPolicy::Restricted,
     );
-    let started = super::carve_out_link::run_script(
-        &profile,
-        &workspace,
-        &[],
-        HashMap::from([
-            ("W".to_string(), workspace.to_string_lossy().into_owned()),
-            ("O".to_string(), other.to_string_lossy().into_owned()),
-        ]),
-        concat!(
-            "echo planted> \"%W%\\.agents\\x.md\"\r\n",
-            "echo planted> \"%W%\\sub\\.codex\\config.toml\"\r\n",
-            "echo planted> \"%O%\\.codex\\config.toml\"\r\n",
-            "mkdir \"%O%\\.agents\"\r\n",
-            "mkdir \"%W%\\deep\\.agents\"\r\n",
-        ),
-    );
-    let host_made: Vec<_> = made
+    let script: String = configured
         .iter()
+        .chain(&on_the_way)
+        .map(|path| format!("echo planted> \"{}\\config.toml\"\r\n", path.display()))
+        .chain([
+            format!("mkdir \"{}\"\r\n", third.join(".agents").display()),
+            format!(
+                "mkdir \"{}\"\r\n",
+                workspace.join("deep\\.agents").display()
+            ),
+        ])
+        .collect();
+    let started =
+        super::carve_out_link::run_script(&profile, workspace, &[], HashMap::new(), &script);
+    let host_made: Vec<_> = configured
+        .iter()
+        .chain(&on_the_way)
         .map(|path| {
             (
                 path.is_dir(),
-                fs::read_dir(path).map(|mut dir| dir.next().is_none()).ok(),
+                path.join("config.toml").exists(),
                 planted(path),
                 counts_now(path),
             )
         })
         .collect();
-    let command_made: Vec<_> = [other.join(".agents"), workspace.join("deep\\.agents")]
+    let command_made: Vec<_> = [third.join(".agents"), workspace.join("deep\\.agents")]
         .iter()
         .map(|path| (path.is_dir(), planted(path)))
         .collect();
@@ -497,7 +497,7 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         (started, host_made, command_made),
         (
             Ok(0),
-            vec![(true, Some(true), false, false); 3],
+            vec![(true, false, false, false); configured.len() + on_the_way.len()],
             vec![(true, true); 2],
         )
     );
