@@ -12,10 +12,12 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use std::os::windows::fs::MetadataExt as _;
 use std::path::Path;
 use std::path::PathBuf;
 
 const PROJECT_METADATA_NAMES: [&str; 2] = [".codex", ".agents"];
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 /// A nested `.codex`/`.agents` entry and the file it was. `identity` is
 /// `None` for a link (the sandbox may be able to point it elsewhere without
@@ -58,7 +60,15 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
         while let Some(dir) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                // Gone. A folder that is still there but says "not found"
+                // (a ProjFS or Cloud Files provider can) is unlistable.
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        && std::fs::symlink_metadata(&dir)
+                            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue;
+                }
                 Err(_) => {
                     found.unlistable.push(dir);
                     continue;
@@ -72,8 +82,17 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 };
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                // Not followed if it is a link.
-                let metadata = entry.metadata();
+                // Not followed if it is a link. A listing that shows a
+                // reparse point may not carry its tag, which tells links
+                // apart: then the entry itself is asked (#1672).
+                let metadata = match entry.metadata() {
+                    Ok(metadata)
+                        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 =>
+                    {
+                        std::fs::symlink_metadata(entry.path())
+                    }
+                    other => other,
+                };
                 if let Some((metadata_name, exact)) = metadata_name(&name) {
                     // The top-level ones are D262's.
                     if top && exact {

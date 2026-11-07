@@ -256,6 +256,11 @@ refused. Costs and limits:
   there).
 - A command doesn't start if those denies can't be written.
 - Sessions started by builds before D283 aren't watched for nested folders.
+- The walk lists ProjFS folders and exposed cloud placeholders through their
+  provider (#1672): a stalled provider stalls it, and one that fails a
+  listing makes that folder unlistable. Content a provider hasn't filled in
+  yet comes from the provider, not from writes the sandbox's denies govern,
+  as for such files in a plain `.codex`.
 
 The
 Everyone deny entries are visible in the folder's security settings while a
