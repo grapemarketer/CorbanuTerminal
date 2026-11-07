@@ -471,6 +471,7 @@ async fn tmux_noncurrent_deactivate_reactivate_restart_retains_request_credentia
     let first = tmux.new_session(fixture.session("pf54-retention-first"))?;
     let pane = first.primary_pane();
     wait_chat_ready(pane)?;
+    wait_session_configured(pane)?;
     configure_managed_provider(pane, fixture.home.path(), &canary)?;
     open_manager(pane)?;
     select_label(pane, "PF54 Managed")?;
@@ -489,6 +490,7 @@ async fn tmux_noncurrent_deactivate_reactivate_restart_retains_request_credentia
     let second = tmux.new_session(fixture.session("pf54-retention-reactivate"))?;
     let pane = second.primary_pane();
     wait_chat_ready(pane)?;
+    wait_session_configured(pane)?;
     open_manager(pane)?;
     inspect_provider(pane, "PF54 Managed", "Inactive")?;
     open_model_picker(pane)?;
@@ -883,8 +885,9 @@ fn wait_chat_ready(pane: &TmuxPane<'_>) -> Result<()> {
 
 /// The footer `wait_chat_ready` accepts is drawn before the session is configured, and a
 /// `/model` entered in that window is either refused ("disabled until startup completes") or
-/// queued, depending on keystroke timing. Wait for the configured header, which is visible
-/// right after startup, before the first `/model`.
+/// queued, depending on keystroke timing (#1748). Before the first `/model`, wait for the
+/// header to show the configured model; call this right after startup, while the header is
+/// still in the viewport.
 fn wait_session_configured(pane: &TmuxPane<'_>) -> Result<()> {
     pane.wait_stable_until(
         "configured session header",
