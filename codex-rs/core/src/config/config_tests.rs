@@ -533,6 +533,11 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
         let codex_home = tempdir()?;
         let config_toml = toml::from_str::<ConfigToml>(&config_contents)
             .expect("TOML deserialization should succeed");
+        // A pending write sees the same rejection before the config is built.
+        let clashes = non_prefixed_mcp_server_name_clashes_in_config_toml(
+            &config_toml,
+            &ConfigRequirements::default(),
+        )?;
         let err = Config::load_from_base_config_with_overrides(
             config_toml,
             ConfigOverrides::default(),
@@ -542,6 +547,7 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
         .expect_err(&config_contents);
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains(expected), "{err}");
+        assert_eq!(clashes.first(), Some(&err.to_string()), "{config_contents}");
     }
 
     let accepted = [
@@ -558,6 +564,14 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
         let codex_home = tempdir()?;
         let config_toml = toml::from_str::<ConfigToml>(&config_contents)
             .expect("TOML deserialization should succeed");
+        assert_eq!(
+            non_prefixed_mcp_server_name_clashes_in_config_toml(
+                &config_toml,
+                &ConfigRequirements::default(),
+            )?,
+            Vec::<String>::new(),
+            "{config_contents}"
+        );
         let config = Config::load_from_base_config_with_overrides(
             config_toml,
             ConfigOverrides::default(),
