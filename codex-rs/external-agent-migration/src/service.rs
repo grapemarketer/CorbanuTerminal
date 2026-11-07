@@ -59,6 +59,9 @@ const EXTERNAL_AGENT_CONFIG_MD: &str = crate::ClaSource::CONFIG_MD;
 
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
 
+/// MCP servers an import skipped, as `(name, reason)`.
+type SkippedMcpServers = Vec<(String, String)>;
+
 #[derive(Clone)]
 pub struct ExternalAgentConfigService {
     pub(super) codex_home: PathBuf,
@@ -600,7 +603,7 @@ impl ExternalAgentConfigService {
         &self,
         cwd: Option<&Path>,
         name_clash: impl Fn(&str) -> Option<String>,
-    ) -> io::Result<(Vec<String>, Vec<(String, String)>)> {
+    ) -> io::Result<(Vec<String>, SkippedMcpServers)> {
         let Some(scope) = MigrationScope::from_cwd(cwd)? else {
             return Ok(Default::default());
         };
