@@ -565,6 +565,12 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
         )
         .await?;
         assert_eq!(config.non_prefixed_mcp_server_name_clash("web_mcp"), None);
+        if config_contents.contains("non_prefixed_mcp_tool_names = true") {
+            let message = config
+                .non_prefixed_mcp_server_name_clash("image.gen")
+                .expect("image.gen clashes");
+            assert!(message.contains("`image_gen_mcp`"), "{message}");
+        }
     }
     Ok(())
 }

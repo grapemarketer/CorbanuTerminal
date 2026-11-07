@@ -118,8 +118,10 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         if servers.contains_key(&name) {
             continue;
         }
-        if let Some(message) = config.non_prefixed_mcp_server_name_clash(&name) {
-            let message = format!("Skipped installing a skill's MCP dependency. {message}");
+        if config.non_prefixed_mcp_server_name_clash(&name).is_some() {
+            let message = format!(
+                "Skipped installing the skill's MCP server `{name}`: without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`) it would take a built-in tool namespace. To install it, turn that feature off or limit it with `features.non_prefixed_mcp_tool_names.server_names`."
+            );
             warn!("{message}");
             sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
                 .await;

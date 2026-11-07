@@ -266,6 +266,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   multi-agent namespace) is now rejected when the config loads and by
   `corbanu mcp add`, with a message saying how to rename it. Skill dependency
   install skips such a server, and plugin servers keep the `mcp__` prefix.
+  This includes servers from a trusted project's `.codex/config.toml`: with the
+  feature on, such a project's config doesn't load until the server is renamed
+  or left out of `server_names`. Disabled servers are skipped unless they are
+  listed in `server_names`.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 

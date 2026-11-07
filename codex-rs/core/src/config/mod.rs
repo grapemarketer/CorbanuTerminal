@@ -2206,8 +2206,20 @@ impl Config {
         } else {
             "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
         };
+        // The suggested name must itself be a valid server name and TOML key.
+        let suggested: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .chain("_mcp".chars())
+            .collect();
         Some(format!(
-            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{name}_mcp` (`[mcp_servers.{name}_mcp]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {name}_mcp ...`)."
+            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{suggested}` (`[mcp_servers.{suggested}]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {suggested} ...`)."
         ))
     }
 
