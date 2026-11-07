@@ -1118,17 +1118,29 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
 #[test]
 fn test_unprefixed_mcp_namespace_is_builtin() {
     for name in BUILTIN_TOOL_NAMESPACES {
-        assert!(unprefixed_mcp_namespace_is_builtin(name, None), "{name}");
+        assert!(
+            unprefixed_mcp_namespace_is_builtin(name, /*multi_agent_v2_tool_namespace*/ None),
+            "{name}"
+        );
     }
-    assert!(unprefixed_mcp_namespace_is_builtin("image.gen", None));
+    assert!(unprefixed_mcp_namespace_is_builtin(
+        "image.gen",
+        /*multi_agent_v2_tool_namespace*/ None
+    ));
     assert!(unprefixed_mcp_namespace_is_builtin("a.b", Some("a_b")));
     assert!(!unprefixed_mcp_namespace_is_builtin(
         "my-team",
         Some("my-team")
     ));
-    assert!(!unprefixed_mcp_namespace_is_builtin("mcp__web", None));
-    assert!(!unprefixed_mcp_namespace_is_builtin("web_mcp", None));
-    assert!(!unprefixed_mcp_namespace_is_builtin("Web", None));
+    assert!(!unprefixed_mcp_namespace_is_builtin(
+        "mcp__web", /*multi_agent_v2_tool_namespace*/ None
+    ));
+    assert!(!unprefixed_mcp_namespace_is_builtin(
+        "web_mcp", /*multi_agent_v2_tool_namespace*/ None
+    ));
+    assert!(!unprefixed_mcp_namespace_is_builtin(
+        "Web", /*multi_agent_v2_tool_namespace*/ None
+    ));
 }
 
 #[test]
