@@ -401,6 +401,75 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
     command_word(&masked).is_some_and(|(at, _)| command.operated.contains(&at))
 }
 
+/// #1482 item 2: whether the word read as the command is a redirection's
+/// target (`>log ./run.sh`, `sudo -R >log -C sub ./run.sh`), which the
+/// shell removes from the words it runs, and without the targets the
+/// command is one this reading judges by its file: a program named by a
+/// path or a shell or interpreter. The words keep the targets, so that
+/// command is never judged. `2>/dev/null git status` is read as before.
+pub(super) fn redirect_hides_command(command: &SimpleCommand, words: &[String]) -> bool {
+    let target = |at: usize| {
+        work::step();
+        command.writes_to.contains(&at)
+            || command.stdin_from == Some(at)
+            || command.here_string == Some(at)
+    };
+    if !command_word(words).is_some_and(|(at, _)| target(at)) {
+        return false;
+    }
+    let runs: Vec<String> = words
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !target(*at))
+        .map(|(_, word)| word.clone())
+        .collect();
+    command_word(&runs).is_some_and(|(at, _)| runs[at].contains('/')) || invocation(&runs).is_some()
+}
+
+/// #1482 item 4: whether a sudo among the programs of these words runs an
+/// askpass helper or an editor named by the environment (`sudo -A`, `sudo
+/// -e`, `--askpass`, `--edit`, `sudoedit`): code the words do not name.
+/// `sudo -i` (the target user's home) is a folder option of
+/// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
+pub(super) fn sudo_runs_helper(words: &[String]) -> bool {
+    let values: String = WRAPPERS
+        .iter()
+        .find(|(wrapper, _, _)| *wrapper == "sudo")
+        .map_or(&[][..], |(_, options, _)| *options)
+        .iter()
+        .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
+        .chain(["R"])
+        .collect();
+    let helper = |option: &String| {
+        work::step();
+        if let Some(long) = option.strip_prefix("--") {
+            let name = long.split_once('=').map_or(long, |(name, _)| name);
+            return !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
+        }
+        let Some(letters) = option.strip_prefix('-') else {
+            return false;
+        };
+        for letter in letters.chars() {
+            work::step();
+            if matches!(letter, 'A' | 'e') {
+                return true;
+            }
+            // The rest of the word is this letter's value.
+            if values.contains(letter) {
+                return false;
+            }
+        }
+        false
+    };
+    let programs = programs(words);
+    programs.iter().enumerate().any(|(n, at)| {
+        work::step();
+        let name = basename(&words[*at]).to_lowercase();
+        let end = programs.get(n + 1).copied().unwrap_or(words.len());
+        name == "sudoedit" || (name == "sudo" && words[at + 1..end].iter().any(&helper))
+    })
+}
+
 /// The invocation a simple command makes, if it runs a shell or interpreter.
 pub(super) fn invocation(words: &[String]) -> Option<Invocation<'_>> {
     let (index, name) = command_word(words)?;

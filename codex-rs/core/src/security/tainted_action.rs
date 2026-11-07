@@ -658,6 +658,19 @@ impl Classifier {
         }
         self.homes.allow_lookups_under(cwd);
         self.path(cwd);
+        // #1482 item 5: each element of the action's argv is one word. A
+        // program element that holds a space or a shell operator (`["true
+        // ./x"]`) runs one file of that whole name, which the lexer below
+        // would read as several words: it asks. A shell's `-c` script is
+        // never a program element. Windows program paths hold spaces.
+        if !self.homes.windows_paths()
+            && indirect::programs(command).into_iter().any(|at| {
+                work::step();
+                command[at].contains(|ch: char| ch.is_whitespace() || ";&|<>()".contains(ch))
+            })
+        {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         self.command(command, cwd, /*depth*/ 0);
     }
 }
@@ -2238,6 +2251,9 @@ impl Classifier {
         if self.rebuilt == 0 && indirect::misread_command(simple, words) {
             self.note(ProtectedActionKind::UnseenCode);
         }
+        if indirect::redirect_hides_command(simple, words) || indirect::sudo_runs_helper(words) {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         // #1436: as the quote-aware reading reads them, when set.
         folders.searched |= unknown_folder::sets_search(words, command.as_ref());
         if let Some((index, name)) = &command {
@@ -2795,6 +2811,14 @@ impl Classifier {
         }
         self.scripts_of(simple, words, unseen, command.as_ref(), &cwd, depth);
         self.path_programs(words, command.as_ref(), &cwd, depth);
+        // #1482 item 3: `eval` runs its operands as a line (`eval 'sudo -C
+        // 3 ./run.sh'`), whose programs named by a path get the same
+        // wrapper-folder check and reading as the line without `eval`.
+        if let Some((index, name)) = &command
+            && name == "eval"
+        {
+            self.path_programs(&words[index + 1..], None, &cwd, depth);
+        }
         self.unseen_folder = outer_unseen_folder;
     }
 

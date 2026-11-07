@@ -7021,6 +7021,104 @@ fn issue_1482_unknown_cluster_letters_keep_one_word() {
     assert_eq!(quiet, Vec::<&str>::new(), "should ask");
 }
 
+/// #1482 items 2-5: a redirection's target read as the command (`sudo -R
+/// >log -C sub ./run.sh`, `>log ./x`), `eval` text without the
+/// wrapper-folder check (`eval 'sudo -C 3 ./run.sh'`), sudo running code the
+/// words do not name (`-i` from the target user's home, `-A` an askpass
+/// helper, `-e` an editor) and one argv element holding a space (`["true
+/// ./x"]`, one file of that name) ask. The lines around them stay as they
+/// were.
+#[cfg(unix)]
+#[test]
+fn issue_1482_items_2_to_5_ask() {
+    let evil = "echo x >> ~/.zshenv\n";
+    let x_evil: &[(&str, &str)] = &[("x", evil)];
+    let x_ok: &[(&str, &str)] = &[("x", "true\n")];
+    let sub_evil: &[(&str, &str)] = &[("run.sh", "true\n"), ("sub/run.sh", evil)];
+    let three_evil: &[(&str, &str)] = &[("run.sh", "true\n"), ("3/run.sh", evil)];
+    let mut wrong = Vec::new();
+    for (files, line) in [
+        // Item 2.
+        (sub_evil, "sudo -R >log -C sub ./run.sh"),
+        (x_evil, ">log ./x"),
+        (x_evil, "sudo >log ./x"),
+        (x_evil, "env >log ./x"),
+        (x_evil, "2>log sh x"),
+        (x_evil, "<log sh x"),
+        // Item 3.
+        (three_evil, "eval 'sudo -C 3 ./run.sh'"),
+        (three_evil, "eval sudo -C 3 ./run.sh"),
+        (sub_evil, "eval 'sudo -D sub ./run.sh'"),
+        (x_evil, "eval ./x"),
+        // Item 4.
+        (x_ok, "sudo -i ./x"),
+        (x_ok, "sudo -iu root ./x"),
+        (x_ok, "sudo -A ./x"),
+        (x_ok, "sudo -nA ./x"),
+        (x_ok, "sudo --askpass ./x"),
+        (x_ok, "sudo -e ./x"),
+        (x_ok, "sudo -u root -e ./x"),
+        (x_ok, "sudo --edit ./x"),
+        (x_ok, "sudoedit ./x"),
+    ] {
+        if in_workspace(files, line).is_none() {
+            wrong.push(line);
+        }
+    }
+    assert_eq!(wrong, Vec::<&str>::new(), "should ask");
+    for (files, line) in [
+        (x_ok, "ls >log"),
+        (x_ok, "2>/dev/null ls"),
+        (x_ok, "sudo ./x >log"),
+        (x_ok, "eval ./x"),
+        (x_ok, "eval true"),
+        (x_ok, "sudo -u root ./x"),
+        (x_ok, "sudo -E ./x"),
+        (x_ok, "sudo -u e ./x"),
+        (x_ok, "sudo -p A ./x"),
+        // #1309: `-s` runs `$SHELL`, read as before.
+        (x_ok, "sudo -s ./x"),
+        // D217: sudo's own `-C N` names no folder.
+        (three_evil, "sudo -C 3 ./run.sh"),
+    ] {
+        if in_workspace(files, line).is_some() {
+            wrong.push(line);
+        }
+    }
+    assert_eq!(wrong, Vec::<&str>::new(), "should be quiet");
+    // Item 5: each argv element is one word.
+    let root = tempfile::tempdir().expect("tempdir");
+    std::fs::write(root.path().join("x"), "true\n").expect("x");
+    let cwd = root.path().to_string_lossy().into_owned();
+    let argv = |command: &[&str]| {
+        classify_with(&shell_in(&cwd, command), &fixture(HOME), Some(root.path()))
+    };
+    let mut wrong = Vec::new();
+    for command in [
+        &["true ./x"][..],
+        &["env", "true ./x"],
+        &["sudo", "-u", "root", "true ./x"],
+        &["true;./x"],
+    ] {
+        if argv(command).is_none() {
+            wrong.push(command);
+        }
+    }
+    assert_eq!(wrong, Vec::<&[&str]>::new(), "should ask");
+    for command in [
+        &["true", "./x"][..],
+        &["./x"],
+        &["echo", "a b"],
+        &["bash", "-lc", "true ./x"],
+        &["sudo", "sh", "-c", "true ./x"],
+    ] {
+        if argv(command).is_some() {
+            wrong.push(command);
+        }
+    }
+    assert_eq!(wrong, Vec::<&[&str]>::new(), "should be quiet");
+}
+
 /// #1302 follow-up: programs named by a path, behind a wrapper's folder,
 /// are judged in linear work.
 #[cfg(unix)]
