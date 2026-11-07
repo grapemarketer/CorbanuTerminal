@@ -145,8 +145,8 @@ token counts are shown: no prices and no cost records.
   Memory extraction outside a turn shows with the next count.
 
 `corbanu exec --json` reports usage differently. Its `turn.completed` usage
-adds the descendants it observed, and is `null` when any of them copied the
-parent's history. Default MultiAgentV2 spawns do (`fork_turns: "all"`), so
+adds the descendants it observed, and is `null`, for example when any of them
+copied the parent's history. Default MultiAgentV2 spawns do (`fork_turns: "all"`), so
 default multi-agent runs report `usage: null` (#1601; see [exec.md](exec.md)).
 The Account usage line still counts each spawned agent toward its own account.
 

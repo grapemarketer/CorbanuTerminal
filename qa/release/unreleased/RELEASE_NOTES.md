@@ -14,9 +14,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
 - **Usage includes observed descendant work** (#290, #1601, thanks to
-  @white-guy-01). Repeated cumulative
-  reports are counted once. Every history-forked descendant makes the total
-  `null`, as do a descendant with no report,
+  @white-guy-01). Repeated cumulative reports are counted once. Every
+  history-forked descendant makes the total `null`, as do a descendant with no
+  report,
   a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
   thread's own totals are not a difference from the start of the invocation.
   Detached children can incur further usage after this snapshot.
@@ -132,8 +132,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   server only under Permissive (#1047).
 - **Revoking there no longer offers a restart that is refused.** After "Revoke
   all active authority" or a kill-switch change in such a window, the grants
-  and kill-switch view no longer offers `r restart now`; the explanation is
-  unchanged (#1284, #1094, thanks to @citadelculture).
+  and kill-switch view no longer offers `r restart now`, and says why:
+  `Restart now is not offered: this window's sessions run in an app server
+  outside this Corbanu Terminal.` (#1284, #1094, thanks to @citadelculture).
 
 ## Aggressive: contained Claude panes and the macOS keychain
 
@@ -172,8 +173,8 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   ChatGPT sign-in account (kind, email hint, plan) is now read in the
   background and cached. Until it is known, `/status` shows just
   `account <name>` and doesn't treat the account as removed. A sign-in change
-  made by another process
-  shows on the `/status` after the one that starts the refresh (#1572, #1251).
+  made by another process shows on the next `/status` (each one starts a
+  refresh) (#1572, #1251).
 
 ## `corbanu login status`
 
@@ -372,7 +373,8 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - **A full context window is shown as context, not as the thread's cost.**
   When the window is exceeded, `Context` shows the full window and
   `Thread total` stays the provider-reported usage, computed from the
-  provider's counters, which the fill now keeps (#1583). After compaction,
+  provider's counters, which the fill now keeps (#1583; #1586, thanks to
+  @sendoeth). After compaction,
   `Context` shows the new, smaller estimate rather than a full window, and
   `/new` starts the new thread without the previous thread's total.
 
@@ -394,15 +396,15 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   call and fail with `malformed function-call JSON as assistant text`, then be
   retried, even after it had been shown. Only JSON whose top-level `type` is
   `function_call` or `custom_tool_call` counts as a call.
-- **A reply that opens with JSON and goes on in prose is a message too**
+- **A reply that opens with such JSON and goes on in prose is a message**
   (#1659, #1654). It used to fail with `trailing characters` after five
   retries.
 - **Text already shown stays a message** (#1656, #1608, thanks to
   @bradsbots), even if it turns out to parse as a tool call.
 - **A `null` usage counter no longer drops its chunk** (#1589, #1588, thanks
-  to @bradsbots). On the final chunk that lost the last text, the finish reason
-  and the usage, so a reply cut off at the output limit ended as if it had
-  finished normally. A `null` counter now reads as 0 for display.
+  to @bradsbots). When that chunk was the last one, the reply lost its last
+  text, its finish reason and its usage, so a reply cut off at the output limit
+  ended as if it had finished normally. A `null` counter now reads as 0 for display.
 
 ## Vercel GLM 5.3 output caps
 
@@ -439,17 +441,19 @@ asking and now ask first:
   #1651, #1606, when an option value spelled `git` comes before the wrapper's
   folder option).
 - `git grep -O<pager>` and `--open-files-in-pager`, which run a program on the
-  matching files (#1525, #1516). On Windows, also git named by its full path
-  and git's dashed helpers (`git-grep.exe`, `git-clone.exe`) (#1525, #1598).
-- `-O`, `-u` and `--open-files-in-pager` after a git subcommand that isn't one
-  of git's own commands, since an alias or an autocorrected typo can be
-  `grep` or `clone` (#1598, #1528, thanks to @Holic101, with parts of
+  matching files (#1527, #1516). On Windows, also git named by its full path
+  (#1527) and git's dashed helpers (`git-grep.exe`, `git-clone.exe`) (#1598,
+  #1528).
+- `-O`, `-u`, `-c`, `--open-files-in-pager`, `--exec`, `--template` and
+  `--config` after a git subcommand that isn't one of git's own commands,
+  since an alias or an autocorrected typo can be `grep`, `clone`, `init` or
+  `push` (#1598, #1528, thanks to @Holic101, with parts of
   @wizbubba1's #1597), and program-running options after built-ins that older
   gits don't have, such as `refs` or `hook` (#1647, #1635).
 - git commands cut short by an unquoted bracket the shell reads as text
   (`git -C { -c core.pager=sh log`; #1525, #1515), and git options that brace
   expansion produces (`git clone r d {-q,--upload-pack=./x}`; #1644, #1636).
-- zsh's `>!` and `>>!` clobber redirections, read as writes
+- zsh's `>!`, `>>!`, `&>!` and `>&!` clobber redirections, read as writes
   (`echo x >! ~/.zshrc`; #1640, #1607).
 
 One line asks less: `git add src/{a,b}.rs && git commit -m "msg"` no longer
@@ -476,11 +480,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   #1542; #1670, #1667). A command doesn't start when a configured read-only
   path, or a folder above it, is a link (junction, symbolic link or mount
   point) inside a writable folder, which a command could replace; the message
-  says to configure the link's target instead. A
-  read-only path spelled through a linked writable folder now gets the same
-  protection, and cloud placeholder folders (OneDrive) get the same
-  protection as plain folders (#1671, #1668).
+  says to configure the link's target instead. A read-only path spelled
+  through a writable folder's link gets the same denies (#1645). Cloud
+  placeholder folders (OneDrive) at or above a read-only path, or as one, now
+  get the same denies as plain folders, and a writable root that is a
+  placeholder gets its label back (#1671, #1668).
 - **Non-admin sandbox commands start faster in large workspaces** (#1612,
-  D285). Their delete protections are now written without re-walking the whole
-  folder tree; in the PR's measurement on a 101,000-file repository, a command
-  took about 20 s instead of 31 s.
+  D285). Their delete protections are now written without rewriting the
+  permissions of every file below (each is still checked, and anything
+  unexpected falls back to the old method). In the PR's measurement on a
+  101,000-file repository, a command took about 20 s instead of 31 s.
