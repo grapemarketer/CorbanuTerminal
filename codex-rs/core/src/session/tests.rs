@@ -248,6 +248,7 @@ impl StepContext {
 
 mod guardian_tests;
 mod hard_abort_tool_output_tests;
+mod mcp_skill_dependency_tests;
 mod panicking_task_tests;
 
 struct InstructionsTestCase {

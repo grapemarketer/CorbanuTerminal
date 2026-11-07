@@ -528,6 +528,15 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
             ),
             "`team` is the multi-agent tool namespace",
         ),
+        (
+            format!("[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.python]\n{server}"),
+            "`python` is a tool namespace reserved by the Responses API",
+        ),
+        (
+            "[features.non_prefixed_mcp_tool_names]\nenabled = true\nserver_names = [\"functions\"]\n"
+                .to_string(),
+            "`functions` is a tool namespace reserved by the Responses API",
+        ),
     ];
     for (config_contents, expected) in rejected {
         let codex_home = tempdir()?;
@@ -582,10 +591,57 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
         if config_contents.contains("non_prefixed_mcp_tool_names = true") {
             let message = config
                 .non_prefixed_mcp_server_name_clash("image.gen")
-                .expect("image.gen clashes");
+                .expect("image.gen clashes")
+                .to_string();
             assert!(message.contains("`image_gen_mcp`"), "{message}");
         }
     }
+    Ok(())
+}
+
+/// #1679, #1666: `corbanu mcp add` and skill dependency install word the
+/// clash for a server that isn't configured yet.
+#[tokio::test]
+async fn non_prefixed_mcp_server_name_clash_messages_fit_each_entry_point() -> std::io::Result<()> {
+    let load = |contents: &str| {
+        let config_toml =
+            toml::from_str::<ConfigToml>(contents).expect("TOML deserialization should succeed");
+        async move {
+            let codex_home = tempdir()?;
+            Config::load_from_base_config_with_overrides(
+                config_toml,
+                ConfigOverrides::default(),
+                codex_home.abs(),
+            )
+            .await
+        }
+    };
+
+    let config = load(
+        "[features]\nnon_prefixed_mcp_tool_names = true\nmulti_agent_v2 = { enabled = true, tool_namespace = \"team\" }\n",
+    )
+    .await?;
+    let web = config
+        .non_prefixed_mcp_server_name_clash("web")
+        .expect("web clashes");
+    assert_eq!(
+        web.mcp_add_message(),
+        "MCP server `web` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `web` is a built-in tool namespace. Choose another name, such as `corbanu mcp add web_mcp ...`."
+    );
+    let team = config
+        .non_prefixed_mcp_server_name_clash("team")
+        .expect("team clashes");
+    assert_eq!(
+        team.skill_dependency_message(),
+        "Skipped installing the skill's MCP server `team`: without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), it would take the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`). To install it, list only other servers in `features.non_prefixed_mcp_tool_names.server_names`, or change `features.multi_agent_v2.tool_namespace`, or turn `features.non_prefixed_mcp_tool_names` off."
+    );
+    // Config load keeps its wording.
+    assert!(
+        web.to_string().ends_with(
+            "for the global config, `corbanu mcp remove web` then `corbanu mcp add web_mcp ...`)."
+        ),
+        "{web}"
+    );
     Ok(())
 }
 

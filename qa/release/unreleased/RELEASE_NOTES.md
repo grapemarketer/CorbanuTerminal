@@ -274,6 +274,15 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   feature on, such a project's config doesn't load until the server is renamed
   or left out of `server_names`. Disabled servers are skipped unless they are
   listed in `server_names`.
+- **Nor can they take a namespace the Responses API reserves** (#1666). The
+  same check now also refuses `api_tool`, `browser`, `computer`, `container`,
+  `file_search`, `functions`, `multi_tool_use`, `python`,
+  `python_user_visible`, `submodel_delegator`, `terminal` and `tool_search`,
+  the names `features.multi_agent_v2.tool_namespace` already can't use.
+  App-server config writes and MCP imports from other agents apply it too.
+  `corbanu mcp add` now suggests another name to add (#1679) instead of
+  `corbanu mcp remove` for a server that isn't configured, and the warning for
+  a skipped skill dependency names the namespace it would take.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
