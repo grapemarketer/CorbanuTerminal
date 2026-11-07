@@ -39,6 +39,7 @@ const TARGET_ENV: &str = "CODEX_D259_TARGET";
 const CHILD_ENV: &str = "CODEX_D259_CHILD";
 const HOLD_ENV: &str = "CODEX_D259_HOLD";
 const FILE_ENV: &str = "CODEX_D259_FILE";
+const OUT_ENV: &str = "CODEX_D259_OUT";
 const RESULT: &str = "d259: ";
 
 /// Process rights that are write rights for a write-restricted token (in the
@@ -299,7 +300,9 @@ fn command_identity_child_entry() {
 /// command's. `borrow`: whether it can write `CODEX_D259_FILE` with that
 /// process's token. `peer_parent`/`borrow_parent`: the same for that
 /// process's parent (an elevated command's runner). `peer_console`/
-/// `borrow_console`: the same for that runner's ConPTY console host. `race`:
+/// `borrow_console`: the same for each of that runner's console hosts.
+/// `peer_command_console`: `peer` for each console host of that process
+/// itself. `race`:
 /// see [`race_report`] (`CODEX_D259_CHILD` names its folder). `self`: what it may do
 /// to its own child and token, and that it can end the child. Prints one
 /// `d259: ` line. Does nothing otherwise.
@@ -327,11 +330,12 @@ fn command_identity_probe_entry() {
         let (parent, image) = parent_of(target());
         format!("parent={image} {}", borrow_report(parent, &file()))
     } else if mode == "peer_console" {
-        let (host, image) = console_host_of(target());
-        format!("host={image} {}", access_report(host))
+        console_report(target(), access_report)
+    } else if mode == "peer_command_console" {
+        hosts_report(console_hosts_started_by(target()), access_report)
     } else if mode == "borrow_console" {
-        let (host, image) = console_host_of(target());
-        format!("host={image} {}", borrow_report(host, &file()))
+        let file = file();
+        console_report(target(), |host| borrow_report(host, &file))
     } else if mode == "race" {
         race_report(&PathBuf::from(
             std::env::var_os(CHILD_ENV).expect("race dir"),
@@ -367,6 +371,10 @@ fn command_identity_probe_entry() {
         let _ = child.wait();
         format!("{access} own_token_adjust_default={own} {child_report} ended_child={ended}")
     };
+    // A ConPTY wraps long lines: tests read this file instead.
+    if let Some(out) = std::env::var_os(OUT_ENV) {
+        fs::write(out, &line).expect("write probe result");
+    }
     println!("\n{RESULT}{line}");
 }
 
@@ -421,18 +429,100 @@ fn parent_of(pid: u32) -> (u32, String) {
     (parent, image)
 }
 
-/// The ConPTY console host (`conhost.exe` or `OpenConsole.exe`) that process
-/// `pid`'s parent, an elevated command's runner, started.
-fn console_host_of(pid: u32) -> (u32, String) {
+/// Every console host (`conhost.exe` or `OpenConsole.exe`) that process
+/// `pid`'s parent, an elevated command's runner, started: its own console's
+/// and a ConPTY's.
+fn console_hosts_of(pid: u32) -> Vec<(u32, String)> {
     let (runner, _) = parent_of(pid);
+    console_hosts_started_by(runner)
+}
+
+/// Every console host whose parent is process `parent`.
+fn console_hosts_started_by(parent_pid: u32) -> Vec<(u32, String)> {
+    let runner = parent_pid;
     process_entries()
         .into_iter()
-        .find(|(_, parent, image)| {
+        .filter(|(_, parent, image)| {
             let image = image.to_lowercase();
             *parent == runner && (image == "conhost.exe" || image == "openconsole.exe")
         })
         .map(|(id, _, image)| (id, image))
-        .expect("the runner's console host is listed")
+        .collect()
+}
+
+/// Process `pid`'s DACL as SDDL, or `err<code>`.
+fn process_dacl_sddl(pid: u32) -> String {
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
+    use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
+    use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    // SAFETY: every handle and buffer is checked and freed here.
+    unsafe {
+        let process = windows_sys::Win32::System::Threading::OpenProcess(0x0002_0000, 0, pid);
+        if process == 0 {
+            return format!("err{}", GetLastError());
+        }
+        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
+        let status = GetSecurityInfo(
+            process,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sd,
+        );
+        CloseHandle(process);
+        if status != 0 {
+            return format!("err{status}");
+        }
+        let mut text: *mut u16 = std::ptr::null_mut();
+        let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd,
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION,
+            &mut text,
+            std::ptr::null_mut(),
+        ) != 0;
+        let sddl = if converted {
+            let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+            let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+            LocalFree(text as HLOCAL);
+            sddl
+        } else {
+            format!("convert_err{}", GetLastError())
+        };
+        LocalFree(sd as HLOCAL);
+        sddl
+    }
+}
+
+/// `report` for each console host of process `pid`'s runner, joined by
+/// ` | `, each starting `host=<image>`; `hosts=0` if there is none.
+fn console_report(pid: u32, report: impl Fn(u32) -> String) -> String {
+    hosts_report(console_hosts_of(pid), report)
+}
+
+/// `report` for each of `hosts`, as [`console_report`] formats it.
+fn hosts_report(hosts: Vec<(u32, String)>, report: impl Fn(u32) -> String) -> String {
+    if hosts.is_empty() {
+        return "hosts=0".to_string();
+    }
+    hosts
+        .into_iter()
+        .map(|(host, image)| {
+            format!(
+                "host={image} dacl={} {}",
+                process_dacl_sddl(host),
+                report(host)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Polls for elevated command runners other than this command's own until

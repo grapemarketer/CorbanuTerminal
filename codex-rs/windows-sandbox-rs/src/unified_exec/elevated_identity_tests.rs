@@ -235,11 +235,9 @@ fn sec_win_1648_elevated_command_cannot_write_to_another_workspaces_process() {
     let holder_root = user_owned_test_root();
     let root = user_owned_test_root();
     let runtime = current_thread_runtime();
-    let (stdout, exit_code) = runtime.block_on(with_elevated_holder(
-        holder_root.path(),
-        codex_home.path(),
-        async |holder_pid| {
-            run_elevated(
+    let ((stdout, exit_code), (console_stdout, console_exit)) = runtime.block_on(
+        with_elevated_holder(holder_root.path(), codex_home.path(), async |holder_pid| {
+            let peer = run_elevated(
                 root.path(),
                 codex_home.path(),
                 probe_argv(PROBE_ENTRY),
@@ -249,16 +247,39 @@ fn sec_win_1648_elevated_command_cannot_write_to_another_workspaces_process() {
                 ],
                 /*tty*/ false,
             )
-            .await
-        },
-    ));
+            .await;
+            // The holding command's own console's host, if it has one.
+            let console = run_elevated(
+                root.path(),
+                codex_home.path(),
+                probe_argv(PROBE_ENTRY),
+                &[
+                    (PROBE_ENV, "peer_command_console".to_string()),
+                    (TARGET_ENV, holder_pid.to_string()),
+                ],
+                /*tty*/ false,
+            )
+            .await;
+            (peer, console)
+        }),
+    );
     record_setup(codex_home.path());
     let line = expect_line(&stdout, codex_home.path());
-    println!("\nd324 peer: exit={exit_code} {line:?}");
+    let console_line = expect_line(&console_stdout, codex_home.path());
+    println!(
+        "\nd324 peer: exit={exit_code} {line:?}\nd324 peer command console: exit={console_exit} {console_line:?}"
+    );
     let missing = missing_parts(&line);
     assert!(
         missing.is_empty(),
         "another elevated command's process is open to writes: {line}\nmissing={missing:?}"
+    );
+    assert!(
+        console_line == "hosts=0"
+            || console_line
+                .split(" | ")
+                .all(|host| missing_parts(host).is_empty()),
+        "another elevated command's console host is open to writes: {console_line}"
     );
 }
 
@@ -445,11 +466,12 @@ fn sec_win_1648_elevated_command_cannot_borrow_another_workspaces_command_token(
     );
 }
 
-/// D324 review (#1717): nor the ConPTY console host another workspace's
-/// runner started. It runs with the runner's unrestricted token, so its
-/// process must refuse every write right, and its token `TOKEN_DUPLICATE`
-/// (not a write right, so the normal check alone decides it): a command
-/// holding the token could impersonate it or start a process with it.
+/// D324 review (#1717): nor the console hosts a runner started, its own
+/// console's and a ConPTY's, another workspace's or its own command's. They
+/// run with the runner's unrestricted token, so their processes must refuse
+/// every write right (a child started under one leaves the command's job
+/// and restricted token), and their tokens `TOKEN_DUPLICATE` (not a write
+/// right, so the normal check alone decides it).
 #[test]
 fn sec_win_1648_elevated_command_cannot_write_to_or_borrow_a_console_host() {
     let Some(codex_home) = elevated_home("d324-console") else {
@@ -460,8 +482,9 @@ fn sec_win_1648_elevated_command_cannot_write_to_or_borrow_a_console_host() {
     let root = user_owned_test_root();
     let outside = authenticated_users_folder();
     let target = outside.path().join("console-host.txt");
+    let own_out = root.path().join("own-console.txt");
     let runtime = current_thread_runtime();
-    let (peer, borrow) = runtime.block_on(with_elevated_holder_tty(
+    let (peer, borrow, own) = runtime.block_on(with_elevated_holder_tty(
         holder_root.path(),
         codex_home.path(),
         /*tty*/ true,
@@ -489,27 +512,52 @@ fn sec_win_1648_elevated_command_cannot_write_to_or_borrow_a_console_host() {
                 /*tty*/ false,
             )
             .await;
-            (peer, borrow)
+            // In a ConPTY of its own, so its runner has one too.
+            let own = run_elevated(
+                root.path(),
+                codex_home.path(),
+                probe_argv(PROBE_ENTRY),
+                &[
+                    (PROBE_ENV, "peer_console".to_string()),
+                    (TARGET_ENV, "self".to_string()),
+                    (OUT_ENV, own_out.display().to_string()),
+                ],
+                /*tty*/ true,
+            )
+            .await;
+            (peer, borrow, own)
         },
     ));
     record_setup(codex_home.path());
     let peer_line = expect_line(&peer.0, codex_home.path());
     let borrow_line = expect_line(&borrow.0, codex_home.path());
+    let own_line = fs::read_to_string(&own_out).unwrap_or_else(|err| {
+        panic!(
+            "no own console probe result ({err}): exit={} stdout={:?}\n{}",
+            own.1,
+            own.0,
+            sandbox_log(codex_home.path())
+        )
+    });
     println!(
-        "\nd324 console peer: exit={} {peer_line:?}\nd324 console borrow: exit={} {borrow_line:?} wrote={}",
+        "\nd324 console peer: exit={} {peer_line:?}\nd324 console borrow: exit={} {borrow_line:?} wrote={}\nd324 own console peer: exit={} {own_line:?}",
         peer.1,
         borrow.1,
-        target.exists()
+        target.exists(),
+        own.1
     );
-    let missing = missing_parts(&peer_line);
+    let closed = |line: &str| {
+        line.starts_with("host=") && line.split(" | ").all(|host| missing_parts(host).is_empty())
+    };
     assert!(
-        peer_line.starts_with("host=") && missing.is_empty(),
-        "a console host is open to writes: {peer_line}\nmissing={missing:?}"
+        closed(&peer_line) && closed(&own_line),
+        "a console host is open to writes:\nother: {peer_line}\nown: {own_line}"
     );
     assert!(
         borrow_line.starts_with("host=")
-            && borrow_line.contains(" own_write=err")
-            && borrow_line.contains("borrow=open_token_err5")
+            && borrow_line.split(" | ").all(|host| {
+                host.contains(" own_write=err") && host.contains("borrow=open_token_err5")
+            })
             && !target.exists(),
         "a command opened a console host's token: {borrow_line}"
     );

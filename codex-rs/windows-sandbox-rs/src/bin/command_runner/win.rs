@@ -66,6 +66,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
+use windows_sys::Win32::System::Console::FreeConsole;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
@@ -253,6 +254,13 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// Returns the token the command's token is made from, opened first: the
 /// runner can't open its own token for that afterwards.
 fn harden_runner() -> Result<OwnedWinHandle> {
+    // The console Core starts the runner with (`CREATE_NO_WINDOW`) has a
+    // console host the runner started, with its unrestricted token, before
+    // any of this: it gives the sandbox account full access, so a command
+    // could start a child under it. The runner needs no console (its
+    // commands get their own or a ConPTY), so it detaches and the host exits.
+    // SAFETY: no arguments; a failure means there was no console.
+    unsafe { FreeConsole() };
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     codex_process_hardening::restrict_current_process_access()
         .context("restrict access to the runner's process and threads")?;
