@@ -47,7 +47,8 @@ pub(crate) struct Found {
 
 /// The `.codex`/`.agents` entries below the top of `roots` (canonical), of
 /// any kind (a link counts), recorded under the name Core opens. Links are
-/// never followed, and the walk doesn't descend into `.git` folders or into
+/// never followed; other reparse points, such as ProjFS folders or cloud
+/// placeholders, are walked like plain folders (#1672). The walk doesn't descend into `.git` folders or into
 /// the entries it reports: the sandbox can't write inside a protected one,
 /// and Core doesn't run from inside `.git`. Names match the way NTFS
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
@@ -59,7 +60,15 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
         while let Some(dir) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                // Gone. A folder that is still there but says "not found"
+                // (a ProjFS or Cloud Files provider can) is unlistable.
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        && std::fs::symlink_metadata(&dir)
+                            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue;
+                }
                 Err(_) => {
                     found.unlistable.push(dir);
                     continue;
@@ -73,8 +82,17 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 };
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                // Not followed if it is a link.
-                let metadata = entry.metadata();
+                // Not followed if it is a link. A listing that shows a
+                // reparse point may not carry its tag, which tells links
+                // apart: then the entry itself is asked (#1672).
+                let metadata = match entry.metadata() {
+                    Ok(metadata)
+                        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 =>
+                    {
+                        std::fs::symlink_metadata(entry.path())
+                    }
+                    other => other,
+                };
                 if let Some((metadata_name, exact)) = metadata_name(&name) {
                     // The top-level ones are D262's.
                     if top && exact {
@@ -95,8 +113,8 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                     found.unlistable.push(entry.path());
                     continue;
                 };
+                // `is_dir` is false for links.
                 if metadata.is_dir()
-                    && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
                     // ASCII only: skipping a folded name (`.gıt`) would
                     // leave an ordinary folder unwatched.
                     && !name.eq_ignore_ascii_case(".git")
@@ -205,11 +223,11 @@ pub(crate) fn identity(path: &Path) -> Option<FileIdentity> {
     Some(FileIdentity { volume, id })
 }
 
-/// A link or other reparse point; unknown counts as one.
+/// A link (a name-surrogate reparse point); unknown counts as one. Other
+/// reparse points, such as ProjFS folders or cloud placeholders, are the
+/// folder itself (#1672).
 fn is_link(metadata: Result<&std::fs::Metadata, &std::io::Error>) -> bool {
-    metadata.map_or(true, |metadata| {
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    })
+    metadata.map_or(true, |metadata| metadata.file_type().is_symlink())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {

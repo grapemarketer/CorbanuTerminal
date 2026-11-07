@@ -131,6 +131,7 @@ env:
     carve_out_link::legacy_top_level_project_metadata_link_stops_the_command
     cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
     cloud_placeholder::legacy_cloud_placeholder_root_gets_its_label_back
+    cloud_placeholder::legacy_nested_project_metadata_in_cloud_placeholders_is_watched
 
 jobs:
   probes:
