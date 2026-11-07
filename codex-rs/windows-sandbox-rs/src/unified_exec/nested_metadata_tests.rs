@@ -335,3 +335,68 @@ fn legacy_temp_root_is_not_watched_for_nested_metadata() {
         (0, true, false, false, true)
     );
 }
+
+/// A workspace stays watched when the temp folder setting resolves to it
+/// (here through a junction a command could have swapped in).
+#[test]
+fn legacy_workspace_stays_watched_when_temp_resolves_to_it() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    let temp = workspace.join(".tmp");
+    let status = std::process::Command::new(system32_exe("cmd.exe"))
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&temp)
+        .arg(&workspace)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("mklink");
+    assert!(status.success(), "mklink /J failed");
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-nested-temp-alias");
+        let script_path = codex_home.path().join("nested-temp-alias.cmd");
+        fs::write(
+            &script_path,
+            "@echo off\r\nmkdir \"%WORKSPACE%\\sub\\.codex\"\r\nexit /b 0\r\n",
+        )
+        .expect("write script");
+        let env_map = HashMap::from([
+            ("TEMP".to_string(), temp.to_string_lossy().into_owned()),
+            ("TMP".to_string(), temp.to_string_lossy().into_owned()),
+            (
+                "WORKSPACE".to_string(),
+                workspace.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script_path.display().to_string(),
+            ],
+            &workspace,
+            env_map,
+            /*timeout_ms*/ Some(10_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
+            .await
+            .1
+    });
+    let planted_here = planted(&canonical(&workspace).join("sub\\.codex"));
+    let _ = fs::remove_dir(&temp);
+
+    assert_eq!((exit_code, planted_here), (0, true));
+}

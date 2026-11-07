@@ -310,29 +310,25 @@ unsafe fn deny_moving_ancestors_below_roots(
 }
 
 /// D283: the writable roots watched for nested `.codex`/`.agents` folders:
-/// all but `%TEMP%`/`%TMP%`. Every program shares those and creates folders
-/// there at any time, so while any legacy command ran, each project folder
-/// made there would count as planted; Core doesn't run projects from there.
+/// all but those that come only from the temp folder setting (`%TEMP%`/
+/// `%TMP%`). Every program creates folders there at any time, so while any
+/// legacy command ran, each project folder made there would count as
+/// planted. A root that is also a workspace or configured root stays
+/// watched even if the temp folder resolves to it.
 fn nested_metadata_roots(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    current_dir: &Path,
     allow: &HashSet<PathBuf>,
-    env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let temp: Vec<PathBuf> = ["TEMP", "TMP"]
-        .iter()
-        .flat_map(|name| {
-            [
-                env_map.get(*name).map(PathBuf::from),
-                std::env::var_os(name).map(PathBuf::from),
-            ]
-        })
-        .flatten()
-        .map(|dir| canonicalize_path(&dir))
+    let mut roots: Vec<PathBuf> = permissions
+        .writable_roots_other_than_temp_for_cwd(current_dir)
+        .into_iter()
+        .map(|root| canonicalize_path(&root.root))
+        .filter(|root| allow.contains(root))
         .collect();
-    allow
-        .iter()
-        .filter(|root| !temp.contains(&canonicalize_path(root)))
-        .cloned()
-        .collect()
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 /// D283: keeps each nested `.codex`/`.agents` folder in `found` (and every
@@ -433,7 +429,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
-    let nested_roots = nested_metadata_roots(&allow, env_map);
+    let nested_roots = nested_metadata_roots(permissions, current_dir, &allow);
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
         Some(crate::integrity_leases::acquire_watching(
