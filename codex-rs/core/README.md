@@ -200,17 +200,25 @@ carries its own identity SID too, and its default DACL grants full access
 only to SYSTEM, the sandbox users' group (every elevated token holds it as a
 normal group, never as a restricting SID, so it can't pass the write check)
 and that SID; the logon SID, the sandbox account, `OWNER RIGHTS`, Everyone
-and the capability SIDs get read and execute. Each runner also limits its
-process, threads, token and default DACL so that the sandbox account, which
-all elevated commands share, can only query them. Measured on CI, elevated
-and in a normal session: an elevated command can no longer open another
-elevated command's process, or its own or another command's runner, for any
-of the 8 write rights, adjust their tokens, or open a runner's token; it
-keeps full access to its own processes; a cmd pipeline, PowerShell (with and
-without ConPTY), `git init` and `git status` still work. It can still end
-another elevated command's processes (D292), and still borrow another
-elevated command's token through the group's `TOKEN_DUPLICATE` and write in
-that command's writable roots, as legacy commands can (#1560). So the docs
+and the capability SIDs get read and execute. As its first step, each
+runner also limits what the sandbox account, which all elevated commands
+share, may do to it: query its process and threads (and wait for them),
+query its token, and nothing on the objects it creates without explicit
+security, such as its pipes and the ConPTY console host, which get full
+access for SYSTEM and read, write and execute (no `TOKEN_DUPLICATE`) for the
+sandbox users' group. Measured on CI, elevated and in a normal session: an
+elevated command can no longer open another elevated command's process, its
+own or another command's runner, or a runner's console host for any of the 8
+write rights, adjust their tokens, or open a runner's or console host's
+token; it keeps full access to its own processes; a cmd pipeline,
+PowerShell (with and without ConPTY), `git init` and `git status` still
+work. Not closed: a runner is open to the sandbox account from the moment
+the secondary logon service starts it until that first step, so a command
+racing a runner's start-up can still get it (#1721). Elevated commands can
+still read each other's processes, as before (reads aren't restricted), end
+them (D292), and borrow another elevated command's token through the
+group's `TOKEN_DUPLICATE` and write in that command's writable roots, as
+legacy commands can (#1560). So the docs
 still say neither backend keeps concurrent projects apart. Closing the
 borrowing for both backends, after the #1560 token measurement, is D324's
 second step. Killing

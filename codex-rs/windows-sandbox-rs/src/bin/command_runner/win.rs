@@ -245,20 +245,18 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// token, or write the runner's memory, threads or token. Afterwards the
 /// account may only query this process and its threads (and wait for
 /// them) and query its token, and objects the runner creates without
-/// explicit security (threads Windows starts in it, console hosts) give the
-/// commands no write right either. Returns the token the command's token is
-/// made from, opened first: the runner can't open its own token for that
-/// afterwards.
-fn harden_runner(log_dir: &Path) -> Result<OwnedWinHandle> {
+/// explicit security (threads Windows starts in it, pipes, the console
+/// host) give the commands no write right and no `TOKEN_DUPLICATE` either.
+/// Runs first thing in `main`: the secondary logon service starts the
+/// runner running, with the logon's DACLs, so until here any elevated
+/// command could open it. That startup window is not closed (#1721).
+/// Returns the token the command's token is made from, opened first: the
+/// runner can't open its own token for that afterwards.
+fn harden_runner() -> Result<OwnedWinHandle> {
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     codex_process_hardening::restrict_current_process_access()
         .context("restrict access to the runner's process and threads")?;
-    if !restrict_current_default_dacl().context("restrict the runner's default DACL")? {
-        log_note(
-            "runner: not in the sandbox users' group; its default DACL is unchanged",
-            Some(log_dir),
-        );
-    }
+    restrict_current_default_dacl().context("restrict the runner's default DACL")?;
     restrict_current_token_access().context("restrict access to the runner's token")?;
     Ok(base)
 }
@@ -587,6 +585,8 @@ pub fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some(codex_windows_sandbox::WINDOW_ACCESS_REAPER_ARG) {
         return codex_windows_sandbox::run_window_access_reaper();
     }
+    // Before anything else (see `harden_runner`).
+    let base = harden_runner();
     // Core gave this logon its desktop access; the runner can't change it.
     codex_windows_sandbox::mark_as_command_runner();
     let mut pipe_in = None;
@@ -629,9 +629,7 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let ipc_spawn = match harden_runner(req.codex_home.as_path())
-        .and_then(|base| spawn_ipc_process(&req, &base))
-    {
+    let ipc_spawn = match base.and_then(|base| spawn_ipc_process(&req, &base)) {
         Ok(value) => value,
         Err(err) => {
             let _ = send_error(

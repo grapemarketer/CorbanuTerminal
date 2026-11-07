@@ -151,9 +151,70 @@ fn write_result(path: &Path) -> String {
     }
 }
 
+/// Whether `token` (opened for `TOKEN_DUPLICATE`) can be the primary token
+/// of a new process this one starts: `ok`, or the failing step and error.
+///
+/// # Safety
+/// `token` must be a token handle with `TOKEN_DUPLICATE`.
+unsafe fn primary_result(token: HANDLE) -> String {
+    use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
+    use windows_sys::Win32::Security::TokenPrimary;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
+    use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+    use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    // SAFETY: per the caller; every handle is closed below and every pointer
+    // refers to a live buffer.
+    unsafe {
+        let mut primary: HANDLE = 0;
+        if DuplicateTokenEx(
+            token,
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+            std::ptr::null(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        ) == 0
+        {
+            return format!("duplicate_err{}", GetLastError());
+        }
+        let mut command_line = crate::winutil::to_wide(format!(
+            "\"{}\" /d /c exit 0",
+            system32_exe("cmd.exe").display()
+        ));
+        let mut startup: STARTUPINFOW = std::mem::zeroed();
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+        let started = CreateProcessAsUserW(
+            primary,
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            /*binherithandles*/ 0,
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut info,
+        ) != 0;
+        let error = GetLastError();
+        CloseHandle(primary);
+        if !started {
+            return format!("err{error}");
+        }
+        WaitForSingleObject(info.hProcess, /*dwmilliseconds*/ 10_000);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        "ok".to_string()
+    }
+}
+
 /// Tries to write `path` while impersonating process `pid`'s token (which a
 /// write-restricted token opens for `TOKEN_DUPLICATE` through the user SID:
-/// that right isn't a write right), and without it.
+/// that right isn't a write right), and without it; and to start a process
+/// with a primary copy of that token.
 fn borrow_report(pid: u32, path: &Path) -> String {
     let own = write_result(path);
     // SAFETY: every handle is closed below; the thread reverts before returning.
@@ -173,6 +234,7 @@ fn borrow_report(pid: u32, path: &Path) -> String {
         if !opened {
             return format!("own_write={own} borrow=open_token_err{error}");
         }
+        let primary = primary_result(token);
         let mut duplicate: HANDLE = 0;
         let duplicated = DuplicateTokenEx(
             token,
@@ -185,21 +247,23 @@ fn borrow_report(pid: u32, path: &Path) -> String {
         let error = GetLastError();
         CloseHandle(token);
         if !duplicated {
-            return format!("own_write={own} borrow=duplicate_err{error}");
+            return format!("own_write={own} primary={primary} borrow=duplicate_err{error}");
         }
         let impersonating = SetThreadToken(std::ptr::null(), duplicate) != 0;
         let error = GetLastError();
         CloseHandle(duplicate);
         if !impersonating {
-            return format!("own_write={own} borrow=impersonate_err{error}");
+            return format!("own_write={own} primary={primary} borrow=impersonate_err{error}");
         }
         let write = write_result(path);
         // With the other command's identity, its processes are writable too.
         let create_process = open_result(pid, 0x0080);
         RevertToSelf();
-        format!("impersonated write={write} create_process={create_process}")
+        format!(
+            "primary={primary} borrow=impersonated write={write} create_process={create_process}"
+        )
     };
-    format!("own_write={own} borrow={borrowed}")
+    format!("own_write={own} {borrowed}")
 }
 
 /// Waits (up to a minute) in a legacy session for its release file, so a
@@ -234,7 +298,9 @@ fn command_identity_child_entry() {
 /// process in `CODEX_D259_TARGET` (`self` names this process), another
 /// command's. `borrow`: whether it can write `CODEX_D259_FILE` with that
 /// process's token. `peer_parent`/`borrow_parent`: the same for that
-/// process's parent (an elevated command's runner). `self`: what it may do
+/// process's parent (an elevated command's runner). `peer_console`/
+/// `borrow_console`: the same for that runner's ConPTY console host. `race`:
+/// see [`race_report`] (`CODEX_D259_CHILD` names its folder). `self`: what it may do
 /// to its own child and token, and that it can end the child. Prints one
 /// `d259: ` line. Does nothing otherwise.
 #[test]
@@ -260,6 +326,16 @@ fn command_identity_probe_entry() {
     } else if mode == "borrow_parent" {
         let (parent, image) = parent_of(target());
         format!("parent={image} {}", borrow_report(parent, &file()))
+    } else if mode == "peer_console" {
+        let (host, image) = console_host_of(target());
+        format!("host={image} {}", access_report(host))
+    } else if mode == "borrow_console" {
+        let (host, image) = console_host_of(target());
+        format!("host={image} {}", borrow_report(host, &file()))
+    } else if mode == "race" {
+        race_report(&PathBuf::from(
+            std::env::var_os(CHILD_ENV).expect("race dir"),
+        ))
     } else {
         let dir = PathBuf::from(std::env::var_os(CHILD_ENV).expect("child dir"));
         let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
@@ -294,8 +370,8 @@ fn command_identity_probe_entry() {
     println!("\n{RESULT}{line}");
 }
 
-/// The parent process id and image name of process `pid`.
-fn parent_of(pid: u32) -> (u32, String) {
+/// Every process as (id, parent id, image name).
+fn process_entries() -> Vec<(u32, u32, String)> {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W;
@@ -326,6 +402,12 @@ fn parent_of(pid: u32) -> (u32, String) {
         }
         CloseHandle(snapshot);
     }
+    entries
+}
+
+/// The parent process id and image name of process `pid`.
+fn parent_of(pid: u32) -> (u32, String) {
+    let entries = process_entries();
     let parent = entries
         .iter()
         .find(|(id, _, _)| *id == pid)
@@ -337,6 +419,83 @@ fn parent_of(pid: u32) -> (u32, String) {
         .map(|(_, _, image)| image.clone())
         .unwrap_or_default();
     (parent, image)
+}
+
+/// The ConPTY console host (`conhost.exe` or `OpenConsole.exe`) that process
+/// `pid`'s parent, an elevated command's runner, started.
+fn console_host_of(pid: u32) -> (u32, String) {
+    let (runner, _) = parent_of(pid);
+    process_entries()
+        .into_iter()
+        .find(|(_, parent, image)| {
+            let image = image.to_lowercase();
+            *parent == runner && (image == "conhost.exe" || image == "openconsole.exe")
+        })
+        .map(|(id, _, image)| (id, image))
+        .expect("the runner's console host is listed")
+}
+
+/// Polls for elevated command runners other than this command's own until
+/// `dir/race.stop` appears (or two minutes pass), and tries to open each new
+/// one for `PROCESS_CREATE_PROCESS` and its token for
+/// `TOKEN_ADJUST_DEFAULT` until both are refused: what a command racing a
+/// runner's start-up gets (#1721).
+fn race_report(dir: &Path) -> String {
+    use std::collections::HashSet;
+    let (own_runner, _) = parent_of(std::process::id());
+    let mut seen = HashSet::new();
+    let mut open = HashSet::new();
+    let mut process_won = HashSet::new();
+    let mut token_won = HashSet::new();
+    fs::write(dir.join("race.ready"), "ready").expect("write race ready");
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 120);
+    while !dir.join("race.stop").exists() && Instant::now() < deadline {
+        for (pid, _, image) in process_entries() {
+            if pid == own_runner || !image.to_lowercase().starts_with("codex-command-runner") {
+                continue;
+            }
+            if seen.insert(pid) {
+                open.insert(pid);
+            }
+            if !open.contains(&pid) {
+                continue;
+            }
+            let process = open_result(pid, 0x0080) == "ok";
+            // SAFETY: the handle is closed right away.
+            let token = unsafe {
+                let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    pid,
+                );
+                let mut token: HANDLE = 0;
+                let opened =
+                    handle != 0 && OpenProcessToken(handle, TOKEN_ADJUST_DEFAULT, &mut token) != 0;
+                if opened {
+                    CloseHandle(token);
+                }
+                if handle != 0 {
+                    CloseHandle(handle);
+                }
+                opened
+            };
+            if process {
+                process_won.insert(pid);
+            }
+            if token {
+                token_won.insert(pid);
+            }
+            if !process && !token {
+                open.remove(&pid);
+            }
+        }
+    }
+    format!(
+        "race seen={} process_won={} token_won={}",
+        seen.len(),
+        process_won.len(),
+        token_won.len()
+    )
 }
 
 fn probe_argv(entry: &str) -> Vec<String> {

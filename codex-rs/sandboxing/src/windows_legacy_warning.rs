@@ -9,7 +9,7 @@
 //! only proxy and tool settings, some process-launch routes leave the
 //! command's job (#1507), and concurrent commands of different projects can
 //! borrow each other's token (#1560, D291; the elevated backend too, #1648:
-//! D324 closed its other process routes, not this one).
+//! D324 closed most of its other process routes, not this one).
 //! The elevated backend protects more, so the warning tells users how to
 //! switch to it. It never changes how commands are
 //! sandboxed.

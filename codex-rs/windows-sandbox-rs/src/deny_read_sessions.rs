@@ -393,7 +393,7 @@ fn current_user_sid() -> Result<String> {
     use windows_sys::Win32::Foundation::CloseHandle;
     // SAFETY: the token is closed right after reading its user.
     let sid = unsafe {
-        let token = crate::token::get_current_token_for_restriction()?;
+        let token = crate::token::get_current_token_for_query()?;
         let sid = crate::token::get_user_sid_bytes(token);
         CloseHandle(token);
         sid?

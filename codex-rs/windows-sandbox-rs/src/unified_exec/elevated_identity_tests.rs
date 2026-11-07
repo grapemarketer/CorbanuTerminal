@@ -130,6 +130,16 @@ async fn with_elevated_holder<T>(
     codex_home: &Path,
     probe: impl AsyncFnOnce(u32) -> T,
 ) -> T {
+    with_elevated_holder_tty(root, codex_home, /*tty*/ false, probe).await
+}
+
+/// [`with_elevated_holder`], the holding command in a ConPTY when `tty`.
+async fn with_elevated_holder_tty<T>(
+    root: &Path,
+    codex_home: &Path,
+    tty: bool,
+    probe: impl AsyncFnOnce(u32) -> T,
+) -> T {
     let hold_dir = root.join("hold");
     fs::create_dir_all(&hold_dir).expect("create hold dir");
     let release = Release(hold_dir.join("hold.release"));
@@ -138,7 +148,7 @@ async fn with_elevated_holder<T>(
         codex_home,
         probe_argv(HOLD_ENTRY),
         &[(HOLD_ENV, hold_dir.display().to_string())],
-        /*tty*/ false,
+        tty,
     )
     .await;
     let pid_path = hold_dir.join("hold.pid");
@@ -376,7 +386,11 @@ fn sec_win_1648_elevated_command_cannot_borrow_a_runner_token() {
         other.1,
         other_target.exists()
     );
-    let refused = |line: &str| line.contains(" own_write=err") && !line.contains("write=ok");
+    let refused = |line: &str| {
+        line.contains(" own_write=err")
+            && !line.contains("write=ok")
+            && !line.contains("primary=ok")
+    };
     assert!(
         refused(&own_line)
             && refused(&other_line)
@@ -425,9 +439,146 @@ fn sec_win_1648_elevated_command_cannot_borrow_another_workspaces_command_token(
     assert!(
         line.starts_with("own_write=err")
             && !target.exists()
-            && !line.contains("create_process=ok"),
+            && !line.contains("create_process=ok")
+            && !line.contains("primary=ok"),
         "an elevated command wrote another workspace through its command's token: {line}"
     );
+}
+
+/// D324 review (#1717): nor the ConPTY console host another workspace's
+/// runner started. It runs with the runner's unrestricted token, so its
+/// process must refuse every write right, and its token `TOKEN_DUPLICATE`
+/// (not a write right, so the normal check alone decides it): a command
+/// holding the token could impersonate it or start a process with it.
+#[test]
+fn sec_win_1648_elevated_command_cannot_write_to_or_borrow_a_console_host() {
+    let Some(codex_home) = elevated_home("d324-console") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let holder_root = user_owned_test_root();
+    let root = user_owned_test_root();
+    let outside = authenticated_users_folder();
+    let target = outside.path().join("console-host.txt");
+    let runtime = current_thread_runtime();
+    let (peer, borrow) = runtime.block_on(with_elevated_holder_tty(
+        holder_root.path(),
+        codex_home.path(),
+        /*tty*/ true,
+        async |holder_pid| {
+            let peer = run_elevated(
+                root.path(),
+                codex_home.path(),
+                probe_argv(PROBE_ENTRY),
+                &[
+                    (PROBE_ENV, "peer_console".to_string()),
+                    (TARGET_ENV, holder_pid.to_string()),
+                ],
+                /*tty*/ false,
+            )
+            .await;
+            let borrow = run_elevated(
+                root.path(),
+                codex_home.path(),
+                probe_argv(PROBE_ENTRY),
+                &[
+                    (PROBE_ENV, "borrow_console".to_string()),
+                    (TARGET_ENV, holder_pid.to_string()),
+                    (FILE_ENV, target.display().to_string()),
+                ],
+                /*tty*/ false,
+            )
+            .await;
+            (peer, borrow)
+        },
+    ));
+    record_setup(codex_home.path());
+    let peer_line = expect_line(&peer.0, codex_home.path());
+    let borrow_line = expect_line(&borrow.0, codex_home.path());
+    println!(
+        "\nd324 console peer: exit={} {peer_line:?}\nd324 console borrow: exit={} {borrow_line:?} wrote={}",
+        peer.1,
+        borrow.1,
+        target.exists()
+    );
+    let missing = missing_parts(&peer_line);
+    assert!(
+        peer_line.starts_with("host=") && missing.is_empty(),
+        "a console host is open to writes: {peer_line}\nmissing={missing:?}"
+    );
+    assert!(
+        borrow_line.starts_with("host=")
+            && borrow_line.contains(" own_write=err")
+            && borrow_line.contains("borrow=open_token_err5")
+            && !target.exists(),
+        "a command opened a console host's token: {borrow_line}"
+    );
+}
+
+/// Measurement for #1721, not a gate: a command racing the start-up of 20
+/// other elevated commands' runners, counting runners it opened for
+/// `PROCESS_CREATE_PROCESS` or whose token it opened for
+/// `TOKEN_ADJUST_DEFAULT` before they restricted themselves.
+#[test]
+#[ignore = "#1721: measures the runner start-up window D324 leaves open; run with --include-ignored"]
+fn sec_win_1648_measure_runner_startup_race() {
+    let Some(codex_home) = elevated_home("d324-race") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let racer_root = user_owned_test_root();
+    let root = user_owned_test_root();
+    let race_dir = racer_root.path().join("race");
+    fs::create_dir_all(&race_dir).expect("create race dir");
+    let runtime = current_thread_runtime();
+    let (line, exit_code) = runtime.block_on(async {
+        let racer = spawn_elevated(
+            racer_root.path(),
+            codex_home.path(),
+            probe_argv(PROBE_ENTRY),
+            &[
+                (PROBE_ENV, "race".to_string()),
+                (CHILD_ENV, race_dir.display().to_string()),
+            ],
+            /*tty*/ false,
+        )
+        .await;
+        assert!(
+            wait_for_path(
+                &race_dir.join("race.ready"),
+                Duration::from_secs(/*secs*/ 60)
+            ),
+            "racing command never started\n{}",
+            sandbox_log(codex_home.path())
+        );
+        let started = Instant::now();
+        let cmd = system32_exe("cmd.exe").display().to_string();
+        for _ in 0..20 {
+            run_elevated(
+                root.path(),
+                codex_home.path(),
+                vec![
+                    cmd.clone(),
+                    "/d".to_string(),
+                    "/c".to_string(),
+                    "exit 0".to_string(),
+                ],
+                &[],
+                /*tty*/ false,
+            )
+            .await;
+        }
+        println!("\nd324 race: 20 commands in {:?}", started.elapsed());
+        fs::write(race_dir.join("race.stop"), "stop").expect("write race stop");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(racer, codex_home.path(), Duration::from_secs(/*secs*/ 120))
+                .await;
+        (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
+    });
+    record_setup(codex_home.path());
+    let line = expect_line(&line, codex_home.path());
+    println!("\nd324 race: exit={exit_code} {line:?}");
+    assert!(line.starts_with("race seen="), "{line}");
 }
 
 /// D324 keeps what an elevated command may do to itself: open its own child

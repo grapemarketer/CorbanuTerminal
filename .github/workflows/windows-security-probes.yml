@@ -331,15 +331,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 40
+            Assert-Tests $sandbox 'sec_win_' 42
             & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
             # D324 (#1648): the elevated backend from a normal session. Each test
             # reuses the setup an elevated run recorded right before it.
-            # The ignored #1560 borrow test runs only on request.
+            # The ignored #1560 borrow test and #1721 measurement run only on request.
             $d324Ignored = @(& $sandbox --list --ignored --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' })
             $d324 = @(& $sandbox --list --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' } | Where-Object { $d324Ignored -notcontains $_ })
-            if ($d324.Count -ne 6) { throw "expected 6 D324 tests, found $($d324.Count)" }
+            if ($d324.Count -ne 7) { throw "expected 7 D324 tests, found $($d324.Count)" }
             New-Item -ItemType Directory -Force $env:CODEX_PF27S06_SETUP_SEED | Out-Null
             foreach ($t in $d324) {
               & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null

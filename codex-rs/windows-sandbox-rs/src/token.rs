@@ -1,4 +1,5 @@
 use crate::winutil::to_wide;
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use std::ffi::c_void;
@@ -54,6 +55,7 @@ const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const WIN_LOCAL_SYSTEM_SID: i32 = 22;
 const WIN_CREATOR_OWNER_RIGHTS_SID: i32 = 71;
@@ -191,27 +193,37 @@ unsafe fn token_has_enabled_group(token: HANDLE, sid: *mut c_void) -> Result<boo
         .any(|entry| entry.Attributes & SE_GROUP_ENABLED != 0 && EqualSid(entry.Sid, sid) != 0))
 }
 
-/// The sandbox users' group SID if `token` (the elevated runner's, opened
-/// with `TOKEN_QUERY`) is in it: it is, unless its setup predates the group.
-unsafe fn sandbox_users_group_of(token: HANDLE) -> Result<Option<Vec<u8>>> {
-    // A setup older than the group never created it.
-    let Ok(mut group) = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP) else {
-        return Ok(None);
-    };
-    let member = token_has_enabled_group(token, group.as_mut_ptr() as *mut c_void)?;
-    Ok(member.then_some(group))
+/// The sandbox users' group SID; fails unless `token` (the elevated
+/// runner's, opened with `TOKEN_QUERY`) holds it enabled. Setup creates the
+/// group and adds both sandbox accounts (upstream #8483), and every setup
+/// version Core accepts has, so a runner without it fails closed rather than
+/// fall back to a default DACL that doesn't keep its commands apart.
+unsafe fn sandbox_users_group_of(token: HANDLE) -> Result<Vec<u8>> {
+    let mut group = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP)
+        .with_context(|| format!("resolve the {SANDBOX_USERS_GROUP} group; rerun sandbox setup"))?;
+    if !token_has_enabled_group(token, group.as_mut_ptr() as *mut c_void)? {
+        return Err(anyhow!(
+            "the sandbox account isn't in the {SANDBOX_USERS_GROUP} group; rerun sandbox setup"
+        ));
+    }
+    Ok(group)
 }
 
 /// D324 (#1648): gives objects the elevated runner creates from now on
-/// without explicit security (the threads Windows starts in it, pipes,
-/// console hosts) a default DACL of `GENERIC_ALL` for SYSTEM and the
-/// sandbox users' group, and `READ_CONTROL` for `OWNER RIGHTS`. The runner
-/// is unrestricted, so the group gives it full access; its commands, and
-/// every other elevated command, have the group only as a normal group, not
-/// as a restricting SID, so they get no write right. Before, they got full
-/// access through the sandbox account. Returns false, changing nothing, if
-/// this process isn't in the group (a setup older than the group).
-pub fn restrict_current_default_dacl() -> Result<bool> {
+/// without explicit security (the threads Windows starts in it, pipes, job
+/// objects, the ConPTY console host) a default DACL of `GENERIC_ALL` for
+/// SYSTEM, `GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE` for the sandbox
+/// users' group, and `READ_CONTROL` for `OWNER RIGHTS`; the sandbox account
+/// itself gets nothing. The runner is unrestricted, so the group gives it
+/// what it needs on them. Its commands, and every other elevated command,
+/// hold the group only as a normal group, not as a restricting SID, so they
+/// get no write right. Rights outside the generic read, write and execute
+/// mappings, such as `TOKEN_DUPLICATE`, aren't write rights, so the normal
+/// check alone decides them; as the group has no `GENERIC_ALL`, they don't
+/// get those either, so they can't borrow the console host's unrestricted
+/// token. Before, they got full access through the sandbox account. Fails if
+/// the runner isn't in the group.
+pub fn restrict_current_default_dacl() -> Result<()> {
     // SAFETY: the SID buffers outlive every call; the token handle is
     // closed below.
     unsafe {
@@ -224,21 +236,21 @@ pub fn restrict_current_default_dacl() -> Result<bool> {
         {
             return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
         }
-        let result = (|| -> Result<bool> {
-            let Some(mut group) = sandbox_users_group_of(token)? else {
-                return Ok(false);
-            };
+        let result = (|| -> Result<()> {
+            let mut group = sandbox_users_group_of(token)?;
             let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
             let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
             set_default_dacl_grants(
                 token,
                 &[
                     (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
-                    (group.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+                    (
+                        group.as_mut_ptr() as *mut c_void,
+                        GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+                    ),
                     (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
                 ],
-            )?;
-            Ok(true)
+            )
         })();
         CloseHandle(token);
         result
@@ -670,8 +682,7 @@ pub unsafe fn create_readonly_token_with_caps_and_user_from(
 /// legacy): `TOKEN_DUPLICATE` isn't a write right, so the group still lets
 /// another elevated command impersonate this command's token.
 ///
-/// If the runner isn't in the sandbox users' group (a setup older than the
-/// group), the token keeps the pre-D324 default DACL.
+/// Fails if the runner isn't in the sandbox users' group.
 unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
@@ -682,14 +693,7 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
-    let Some(mut group) = sandbox_users_group_of(base_token)? else {
-        return create_token(
-            base_token,
-            psid_capabilities,
-            &extra_restricting_sids,
-            DefaultDacl::Shared,
-        );
-    };
+    let mut group = sandbox_users_group_of(base_token)?;
     // The token copies the SID, so it can go once the token exists.
     let command = LocalSid::from_string(&crate::cap::new_command_identity_sid_string())?;
     extra_restricting_sids.push(command.as_ptr());
