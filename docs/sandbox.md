@@ -27,8 +27,8 @@ using at that moment.
 - Two commands running at the same time in different projects (or with
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
-  other runs (#1560). If you work on several projects at once, use the
-  default sandbox.
+  other runs (#1560). The default sandbox doesn't prevent this yet either
+  (#1648), so avoid running commands in several projects at once.
 - Drives without Windows permissions, such as FAT or exFAT USB drives: neither
   sandbox can protect files there.
 

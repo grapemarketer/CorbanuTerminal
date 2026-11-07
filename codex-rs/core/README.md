@@ -184,11 +184,14 @@ through the parent-process route, and write in its writable roots while it
 runs (#1560). The boundary D259 draws between legacy commands holds only once
 #1560 is closed. This matters only while two legacy commands run at the same
 time with different writable roots (different projects, or different extra
-writable folders): either can write in the other's. Accepted for now (D291,
-Travis 2026-11-06): the non-admin warning and `docs/sandbox.md` tell people
-who work on several projects at once to use the elevated backend, whose
-commands run as a separate sandbox account (not measured for this route). A
-redesigned legacy token that closes it is to be measured separately. Killing
+writable folders): either can write in the other's. Documented for now
+(D291, Travis 2026-11-06) in the non-admin warning and `docs/sandbox.md`. D291
+also pointed people who work on several projects at once to the elevated
+backend, but measured since, its commands can do the same to each other and
+more: they share one sandbox account and get full access to each other's
+processes even without borrowing a token (#1648, awaiting a decision). So the
+docs say neither backend keeps concurrent projects apart. A redesigned legacy
+token that closes the borrowing is to be measured separately. Killing
 another command's processes stays possible on purpose (D292). Two routes
 still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child
