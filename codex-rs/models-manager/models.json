@@ -1865,9 +1865,10 @@
       "default_reasoning_summary": "none",
       "slug": "tencent/hy3:free",
       "orchestration": {
-        "status": "eligible",
+        "status": "disabled",
         "provider_id": "openrouter",
         "capability": "fast",
+        "reason": "retired upstream: OpenRouter lists no endpoints for this ID (checked 2026-11-07); kept so a saved ID resolves to its own row, never to another model",
         "billing": {
           "kind": "metered",
           "input_milli_usd_per_million_tokens": 0,
@@ -1875,7 +1876,7 @@
         }
       },
       "display_name": "OpenRouter Tencent Hy3 Free",
-      "description": "OpenRouter: Tencent Hy3 Free - $0/M input, $0/M output.",
+      "description": "OpenRouter: Tencent Hy3 Free - $0/M input, $0/M output. Retired: OpenRouter no longer serves this model, so requests fail; choose another model with /model.",
       "default_reasoning_level": "none",
       "supported_reasoning_levels": [
         {
@@ -1892,7 +1893,7 @@
         }
       ],
       "shell_type": "shell_command",
-      "visibility": "list",
+      "visibility": "hide",
       "supported_in_api": true,
       "availability_nux": null,
       "upgrade": null,
