@@ -11,4 +11,10 @@ codex_rust_crate(
         ":codex-command-runner",
         ":codex-windows-sandbox-setup",
     ],
+    # #1786: the legacy-session tests share one lock (they must not overlap,
+    # so Bazel sharding would break them) and several launch-path probes wait
+    # 30 s by design for a child that must never report from outside the
+    # session. Together they need more than the default 300 s on hosted
+    # windows-2022 runners (about 190 s on 10-29, over 300 s on 11-07).
+    unit_test_timeout = "long",
 )
