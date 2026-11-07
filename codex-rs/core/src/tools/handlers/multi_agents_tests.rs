@@ -7507,3 +7507,132 @@ async fn spawned_children_inherit_the_parent_account_even_with_a_role() {
         );
     }
 }
+
+/// D334 (#1702), D335: after untrusted content under Moderate or Aggressive
+/// with approvals off, a follow-up task to a running agent goes ahead; once
+/// the agent has finished, a follow-up would start a new turn, so it is
+/// refused as a restart, through both follow-up tool names.
+#[tokio::test]
+async fn d334_followup_task_to_a_finished_agent_asks_like_a_restart() {
+    use crate::security::protected_surface::ToolOrigin;
+    use crate::security::protected_surface::check_dispatch;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseItem;
+    use codex_security_policy::SecurityLevel;
+
+    for level in [SecurityLevel::Moderate, SecurityLevel::Aggressive] {
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        let mut config = turn.config.as_ref().clone();
+        let _ = config.features.enable(Feature::MultiAgentV2);
+        set_turn_config(&mut turn, config);
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("approval policy");
+        let root = manager
+            .start_thread(StartThreadOptions::new((*turn.config).clone()))
+            .await
+            .expect("root thread should start");
+        root.thread.session.new_default_turn().await;
+        session.services.agent_control = manager.agent_control();
+        session.thread_id = root.thread_id;
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+
+        SpawnAgentHandlerV2::default()
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "spawn_agent",
+                function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+            ))
+            .await
+            .expect("spawn worker");
+        let agent_id = session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+            .await
+            .expect("worker should resolve");
+
+        let client = (*session.services.model_client())
+            .clone()
+            .with_ingress_level(level)
+            .with_source_envelopes(/*enabled*/ true);
+        client.note_recorded_for_taint(&[ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-read".into(),
+            output: FunctionCallOutputPayload::from_text("README".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }]);
+        session.services.replace_model_client(client);
+
+        let dispatch = |tool_name: &str, target: String| {
+            let invocation = invocation(
+                session.clone(),
+                turn.clone(),
+                tool_name,
+                function_payload(json!({"target": target, "message": "continue"})),
+            );
+            async move { check_dispatch(&invocation, ToolOrigin::Builtin).await }
+        };
+        let tools = ["followup_task", "followup_task_plaintext"];
+        let targets = [format!("thread:{agent_id}"), "worker".to_string()];
+
+        let running = manager.agent_control().get_status(agent_id).await;
+        assert!(
+            matches!(running, AgentStatus::PendingInit | AgentStatus::Running),
+            "{running:?}"
+        );
+        for tool in tools {
+            for target in &targets {
+                assert_eq!(
+                    dispatch(tool, target.clone()).await,
+                    Ok(()),
+                    "{level:?} {tool} {target}"
+                );
+            }
+        }
+
+        let thread = manager
+            .get_thread(agent_id)
+            .await
+            .expect("worker thread should exist");
+        let first_turn = thread.session.new_default_turn().await;
+        thread
+            .session
+            .send_event(
+                first_turn.as_ref(),
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: first_turn.sub_id.clone(),
+                    started_at: None,
+                    last_agent_message: Some("first done".to_string()),
+                    error: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                }),
+            )
+            .await;
+        let finished = manager.agent_control().get_status(agent_id).await;
+        assert!(
+            matches!(finished, AgentStatus::Completed(_)),
+            "{finished:?}"
+        );
+        let restart = format!(
+            "Not run: Security level {level:?}: this is a request to restart a finished agent \
+             after untrusted content entered the session, so it needs your approval, and \
+             approvals are off (approval_policy = never)."
+        );
+        for tool in tools {
+            // An unknown target counts as not running.
+            for target in targets.iter().cloned().chain(["nobody".to_string()]) {
+                let refusal = dispatch(tool, target.clone()).await.expect_err("asks");
+                assert!(
+                    refusal.starts_with(&restart),
+                    "{level:?} {tool} {target}: {refusal}"
+                );
+            }
+        }
+    }
+}

@@ -93,35 +93,171 @@ async fn pf_23_s01_every_builtin_tool_route_is_classified() {
     assert_eq!(unclassified, Vec::<String>::new());
 }
 
-/// D320 (#1653): on a provider without namespace tools (Z.AI, Chat
-/// Completions and Claude-style), `spawn_agent_v1` and `wait_agent_v1` are
-/// classified. D320 decided only waiting and starting; the other `_v1`
-/// aliases still ask as unclassified tools after untrusted content.
+/// D320 (#1653), D334 (#1702): on a provider without namespace tools (Z.AI,
+/// Chat Completions and Claude-style), every `_v1` agent-tool alias is
+/// classified like the Responses name it stands for.
 #[tokio::test]
-async fn d320_agent_tool_aliases_are_classified_without_namespace_tools() {
-    let (names, mut unclassified) = builtin_tools(/*zai*/ true).await;
-    for alias in ["spawn_agent_v1", "wait_agent_v1"] {
+async fn d334_agent_tool_aliases_are_classified_without_namespace_tools() {
+    let (names, unclassified) = builtin_tools(/*zai*/ true).await;
+    let plain = ToolName::plain;
+    let v1 = |name| ToolName::namespaced("multi_agent_v1", name);
+    for (alias, responses) in [
+        ("spawn_agent_v1", "spawn_agent"),
+        ("send_input_v1", "send_input"),
+        ("wait_agent_v1", "wait_agent"),
+        ("close_agent_v1", "close_agent"),
+        ("resume_agent_v1", "resume_agent"),
+    ] {
         assert!(names.iter().any(|name| name == alias), "{alias}: {names:?}");
+        assert_eq!(
+            coverage(ToolOrigin::Builtin, &plain(alias)),
+            coverage(ToolOrigin::Builtin, &v1(responses)),
+            "{alias}"
+        );
     }
-    unclassified.sort();
-    assert_eq!(
-        unclassified,
-        vec!["close_agent_v1", "resume_agent_v1", "send_input_v1"]
-    );
+    assert_eq!(unclassified, Vec::<String>::new());
 }
 
-/// D320 (#1653): after untrusted content under Moderate with approvals off,
-/// waiting on an agent goes ahead on every route; starting one is refused,
-/// and the refusal says it starts an agent rather than calling it a tool the
-/// security level has not classified.
+/// D320 (#1653), D334 (#1702), D335: after untrusted content under Moderate
+/// or Aggressive with approvals off, waiting on, messaging and closing an
+/// agent go ahead on every route; starting one is refused as an agent launch
+/// and resuming one as a restart, never as a tool the security level has not
+/// classified.
 #[tokio::test]
-async fn d320_agent_wait_goes_ahead_and_agent_launch_asks_after_untrusted_content() {
+async fn d334_agent_tools_after_untrusted_content_on_every_route() {
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolPayload;
     use crate::tools::router::ToolCallSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_security_policy::SecurityLevel;
+
+    for level in [SecurityLevel::Moderate, SecurityLevel::Aggressive] {
+        let (session, mut turn) = crate::session::tests::make_session_and_context().await;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("approval policy");
+        let client = (*session.services.model_client())
+            .clone()
+            .with_ingress_level(level)
+            .with_source_envelopes(/*enabled*/ true);
+        client.note_recorded_for_taint(&[ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "call-read".into(),
+            output: FunctionCallOutputPayload::from_text("README".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }]);
+        session.services.replace_model_client(client);
+        let state = session
+            .services
+            .model_client()
+            .post_taint_state()
+            .expect("checks apply");
+        assert!(state.taint_generation > 0, "tainted");
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let dispatch = |tool_name: ToolName, origin: ToolOrigin| {
+            let invocation = ToolInvocation {
+                session: Arc::clone(&session),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn: Arc::clone(&turn),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-agent".to_string(),
+                tool_name,
+                source: ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: r#"{"id":"agent","target":"agent"}"#.to_string(),
+                },
+            };
+            async move { check_dispatch(&invocation, origin).await }
+        };
+        let refusal = |what: &str| {
+            format!(
+                "Not run: Security level {level:?}: this is {what} after untrusted content \
+                 entered the session, so it needs your approval, and approvals are off \
+                 (approval_policy = never)."
+            )
+        };
+        let launch = refusal("a request to start a new agent");
+        let restart = refusal("a request to restart a finished agent");
+        let unclassified = format!(
+            "Not run: Security level {level:?}: this is a tool the security level has not \
+             classified after untrusted content entered the session"
+        );
+        fn plain(name: &str) -> ToolName {
+            ToolName::plain(name)
+        }
+        // Responses (namespaced V1), the plain names, the `_v1` aliases of
+        // Z.AI / Chat Completions / Claude-style, and V2 (`collaboration`).
+        let routes = |name: &str| {
+            vec![
+                ToolName::namespaced("multi_agent_v1", name),
+                plain(name),
+                plain(&format!("{name}_v1")),
+                ToolName::namespaced("collaboration", name),
+            ]
+        };
+        let mut go_ahead: Vec<ToolName> = ["wait_agent", "send_input", "close_agent"]
+            .into_iter()
+            .flat_map(routes)
+            .collect();
+        go_ahead.extend(
+            [
+                "send_message",
+                "send_message_plaintext",
+                "interrupt_agent",
+                "list_agents",
+            ]
+            .map(plain),
+        );
+        for name in go_ahead {
+            assert_eq!(
+                dispatch(name.clone(), ToolOrigin::Builtin).await,
+                Ok(()),
+                "{level:?} {name}"
+            );
+        }
+        let mut asks: Vec<(ToolName, &str)> = routes("spawn_agent")
+            .into_iter()
+            .chain([plain("spawn_agent_plaintext")])
+            .map(|name| (name, launch.as_str()))
+            .collect();
+        asks.extend(
+            routes("resume_agent")
+                .into_iter()
+                .map(|name| (name, restart.as_str())),
+        );
+        for (name, expected) in asks {
+            let refusal = dispatch(name.clone(), ToolOrigin::Builtin)
+                .await
+                .expect_err("asks");
+            assert!(refusal.starts_with(expected), "{level:?} {name}: {refusal}");
+        }
+        // A client or MCP tool cannot borrow an agent tool's name.
+        for alias in ["wait_agent_v1", "send_input_v1", "close_agent_v1"] {
+            let refusal = dispatch(plain(alias), ToolOrigin::Dynamic)
+                .await
+                .expect_err("asks");
+            assert!(
+                refusal.starts_with(&unclassified),
+                "{level:?} {alias}: {refusal}"
+            );
+            assert_eq!(coverage(ToolOrigin::Mcp, &plain(alias)), Coverage::OwnCheck);
+        }
+    }
+}
+
+/// D334: before untrusted content nothing about the agent tools changes.
+#[tokio::test]
+async fn d334_agent_restart_does_not_ask_before_untrusted_content() {
+    use crate::tools::context::ToolInvocation;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::router::ToolCallSource;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::protocol::AskForApproval;
     use codex_security_policy::SecurityLevel;
 
@@ -133,23 +269,15 @@ async fn d320_agent_wait_goes_ahead_and_agent_launch_asks_after_untrusted_conten
         .clone()
         .with_ingress_level(SecurityLevel::Moderate)
         .with_source_envelopes(/*enabled*/ true);
-    client.note_recorded_for_taint(&[ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: "call-read".into(),
-        output: FunctionCallOutputPayload::from_text("README".into()),
-        internal_chat_message_metadata_passthrough: None,
-    }]);
     session.services.replace_model_client(client);
-    let state = session
-        .services
-        .model_client()
-        .post_taint_state()
-        .expect("checks apply");
-    assert!(state.taint_generation > 0, "tainted");
-
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let dispatch = |tool_name: ToolName, origin: ToolOrigin| {
+    for name in [
+        "resume_agent",
+        "resume_agent_v1",
+        "followup_task",
+        "followup_task_plaintext",
+    ] {
         let invocation = ToolInvocation {
             session: Arc::clone(&session),
             step_context: StepContext::for_test(Arc::clone(&turn)),
@@ -157,53 +285,18 @@ async fn d320_agent_wait_goes_ahead_and_agent_launch_asks_after_untrusted_conten
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "call-agent".to_string(),
-            tool_name,
+            tool_name: ToolName::plain(name),
             source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
+                arguments: r#"{"id":"agent","target":"agent"}"#.to_string(),
             },
         };
-        async move { check_dispatch(&invocation, origin).await }
-    };
-    let launch = "Not run: Security level Moderate: this is a request to start a new agent after \
-                  untrusted content entered the session, so it needs your approval, and approvals \
-                  are off (approval_policy = never).";
-    let unclassified = "Not run: Security level Moderate: this is a tool the security level has \
-                        not classified after untrusted content entered the session";
-    let plain = ToolName::plain;
-    let v1 = |name| ToolName::namespaced("multi_agent_v1", name);
-    for name in [
-        plain("wait_agent_v1"),
-        v1("wait_agent"),
-        plain("wait_agent"),
-    ] {
         assert_eq!(
-            dispatch(name.clone(), ToolOrigin::Builtin).await,
+            check_dispatch(&invocation, ToolOrigin::Builtin).await,
             Ok(()),
             "{name}"
         );
     }
-    for name in [
-        plain("spawn_agent_v1"),
-        v1("spawn_agent"),
-        plain("spawn_agent"),
-        plain("spawn_agent_plaintext"),
-    ] {
-        let refusal = dispatch(name.clone(), ToolOrigin::Builtin)
-            .await
-            .expect_err("asks");
-        assert!(refusal.starts_with(launch), "{name}: {refusal}");
-    }
-    // Unchanged: an unlisted alias still asks as unclassified.
-    let refusal = dispatch(plain("send_input_v1"), ToolOrigin::Builtin)
-        .await
-        .expect_err("asks");
-    assert!(refusal.starts_with(unclassified), "{refusal}");
-    // A client tool cannot borrow the wait tool's name.
-    let refusal = dispatch(plain("wait_agent_v1"), ToolOrigin::Dynamic)
-        .await
-        .expect_err("asks");
-    assert!(refusal.starts_with(unclassified), "{refusal}");
 }
 
 #[test]
@@ -258,6 +351,36 @@ fn pf_23_s01_route_matrix() {
         (
             ToolOrigin::Builtin,
             plain("send_input_v1"),
+            Coverage::ChildAgent,
+        ),
+        (
+            ToolOrigin::Builtin,
+            plain("close_agent_v1"),
+            Coverage::ChildAgent,
+        ),
+        (
+            ToolOrigin::Builtin,
+            plain("resume_agent_v1"),
+            Coverage::AgentRestart,
+        ),
+        (
+            ToolOrigin::Builtin,
+            ToolName::namespaced("multi_agent_v1", "resume_agent"),
+            Coverage::AgentRestart,
+        ),
+        (
+            ToolOrigin::Builtin,
+            plain("followup_task"),
+            Coverage::AgentFollowup,
+        ),
+        (
+            ToolOrigin::Builtin,
+            plain("followup_task_plaintext"),
+            Coverage::AgentFollowup,
+        ),
+        (
+            ToolOrigin::Dynamic,
+            plain("resume_agent_v1"),
             Coverage::Unclassified,
         ),
         (

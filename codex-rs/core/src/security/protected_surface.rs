@@ -74,6 +74,13 @@ pub(crate) enum Coverage {
     /// Starts a new agent: asks the human after untrusted content, naming it
     /// as an agent launch (D320, #1653).
     AgentLaunch,
+    /// Restarts a finished agent: asks the human after untrusted content,
+    /// the same way as starting one (D334, #1702).
+    AgentRestart,
+    /// Wakes an agent with a follow-up task: goes ahead while the agent is
+    /// running, and asks like [`Coverage::AgentRestart`] otherwise, since it
+    /// then starts a new turn (D334, #1702).
+    AgentFollowup,
     /// Changes what the agent may do (permissions, plugins): asks the human
     /// itself unless an automatic reviewer would answer.
     PolicyRequest,
@@ -95,19 +102,22 @@ const APPROVAL_SEAM: &[&str] = &[
 /// plain-function alias for providers without namespace tools (Chat
 /// Completions, Claude-style).
 const AGENT_LAUNCH: &[&str] = &["spawn_agent", "spawn_agent_plaintext", "spawn_agent_v1"];
+/// D334 (#1702): resuming a closed agent asks like starting one, on every
+/// route.
+const AGENT_RESTART: &[&str] = &["resume_agent", "resume_agent_v1"];
+const AGENT_FOLLOWUP: &[&str] = &["followup_task", "followup_task_plaintext"];
+/// The `_v1` names are the plain-function aliases of the Responses names
+/// (D320, D334): each is treated like the name it stands for.
 const CHILD_AGENT: &[&str] = &[
     "send_input",
+    "send_input_v1",
     "send_message",
     "send_message_plaintext",
-    "followup_task",
-    "followup_task_plaintext",
     "close_agent",
-    "resume_agent",
+    "close_agent_v1",
     "interrupt_agent",
     "list_agents",
     "wait_agent",
-    // D320 (#1653): waiting on an agent is always allowed, also through the
-    // plain-function alias.
     "wait_agent_v1",
 ];
 const NO_PROTECTED_EFFECT: &[&str] = &[
@@ -164,6 +174,8 @@ pub(crate) fn coverage(origin: ToolOrigin, name: &ToolName) -> Coverage {
             "exec" | "wait" => Coverage::NestedCallsOnly,
             "request_permissions" | "request_plugin_install" => Coverage::PolicyRequest,
             _ if AGENT_LAUNCH.contains(&plain) => Coverage::AgentLaunch,
+            _ if AGENT_RESTART.contains(&plain) => Coverage::AgentRestart,
+            _ if AGENT_FOLLOWUP.contains(&plain) => Coverage::AgentFollowup,
             _ if CHILD_AGENT.contains(&plain) => Coverage::ChildAgent,
             _ if NO_PROTECTED_EFFECT.contains(&plain) => Coverage::NoProtectedEffect,
             _ => Coverage::Unclassified,

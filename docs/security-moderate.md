@@ -42,8 +42,10 @@ without them Corbanu refuses every model request under Moderate, so
   model labelled untrusted. After it, protected actions need your fresh
   approval: the vault, credentials (a project's `.env` files included),
   Corbanu's own files and security settings, disclosure, value transfer, code
-  you haven't seen, MCP calls that change or send data, starting an agent,
-  and tools Corbanu hasn't classified (waiting on an agent never asks).
+  you haven't seen, MCP calls that change or send data, starting an agent or
+  restarting a finished one (resuming it, or a follow-up task to an agent that
+  isn't running), and tools Corbanu hasn't classified (waiting on, messaging
+  or closing an agent never asks, under any of the agent tools' names).
   Where approving can't unlock a file, the prompt names it and says what it
   is: under `secretless_agent_launch`, Corbanu's own
   files (such as its sign-in, vault, config and history), CLI tokens (`~/.aws/credentials`, `~/.netrc`,
