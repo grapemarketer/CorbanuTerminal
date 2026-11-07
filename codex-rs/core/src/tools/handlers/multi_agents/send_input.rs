@@ -42,6 +42,8 @@ impl Handler {
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = parse_agent_id_target(&args.target)?;
         let input_items = parse_collab_input(args.message, args.items)?;
+        // #1756: only the caller's own agents (and theirs) take input.
+        ensure_own_agent(&session, "send_input", receiver_thread_id).await?;
         let prompt = render_input_preview(&input_items);
         let receiver_agent = session
             .services
@@ -55,6 +57,8 @@ impl Handler {
                 .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+            // Loading may have brought in a thread that is not the caller's.
+            ensure_own_agent(&session, "send_input", receiver_thread_id).await?;
         }
         let receiver_agent = receiver_agent.unwrap_or_default();
         if args.interrupt {

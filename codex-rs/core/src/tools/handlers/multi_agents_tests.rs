@@ -2490,6 +2490,85 @@ async fn multi_agent_v2_list_agents_returns_completed_status() {
     assert_eq!(success, Some(true));
 }
 
+/// #1756: V2 `list_agents` lists only the caller and its own agents, not
+/// another root thread's agent with its results.
+#[tokio::test]
+async fn multi_agent_v2_list_agents_lists_only_the_callers_agents() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    let other_root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("other root should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            vec![UserInput::Text {
+                text: "foreign task".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: other_root.thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/foreign").expect("agent path")),
+                agent_nickname: None,
+                agent_role: None,
+                agent_class: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("foreign agent should spawn");
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let spawn_output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "test_process"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let _ = expect_text_output(spawn_output);
+    let output = ListAgentsHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "list_agents",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("list_agents should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+    let names: Vec<&str> = result["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .filter_map(|agent| agent["agent_name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["/root", "/root/test_process"], "{content}");
+}
+
 #[tokio::test]
 async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
     let (mut session, mut turn) = make_session_and_context().await;
@@ -4256,10 +4335,13 @@ async fn send_input_interrupts_before_prompt() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1756: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -4298,10 +4380,13 @@ async fn send_input_accepts_structured_items() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1756: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let invocation = invocation(
         Arc::new(session),
@@ -6612,16 +6697,135 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
     );
 }
 
+/// #1756 (as #1701 for `wait_agent`): V1 `close_agent` and `send_input`
+/// refuse a loaded thread the caller did not spawn (another root, or that
+/// root's child) and leave it running.
+#[tokio::test]
+async fn close_agent_and_send_input_refuse_threads_the_caller_did_not_spawn() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let caller = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("caller root should start");
+    session.thread_id = caller.thread_id;
+    let other_root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("other root should start");
+    let other_child = start_own_child(&manager, config.clone(), other_root.thread_id).await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    for target in [other_root.thread_id, other_child.thread_id] {
+        let err = CloseAgentHandler
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "close_agent",
+                function_payload(json!({"target": target.to_string()})),
+            ))
+            .await
+            .err()
+            .expect("close_agent on another thread's agent should be refused");
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(format!(
+                "close_agent can only target agents spawned by this agent or by its sub-agents; `{target}` is not one of them"
+            ))
+        );
+        let err = SendInputHandler
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "send_input",
+                function_payload(
+                    json!({"target": target.to_string(), "message": "hi", "interrupt": true}),
+                ),
+            ))
+            .await
+            .err()
+            .expect("send_input to another thread's agent should be refused");
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(format!(
+                "send_input can only target agents spawned by this agent or by its sub-agents; `{target}` is not one of them"
+            ))
+        );
+    }
+    // Nothing reached the other threads: no shutdown, input or interrupt.
+    let ops = manager.captured_ops();
+    for target in [other_root.thread_id, other_child.thread_id] {
+        assert!(
+            !ops.iter().any(|(id, _)| *id == target),
+            "no op should reach {target}: {ops:?}"
+        );
+    }
+    for thread in [&caller, &other_root, &other_child] {
+        let _ = thread.thread.submit(Op::Shutdown {}).await;
+    }
+}
+
+/// #1756 control: V1 `send_input` and `close_agent` still act on the
+/// caller's grandchild.
+#[tokio::test]
+async fn close_agent_and_send_input_act_on_the_callers_descendants() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    let child = start_own_child(&manager, config.clone(), root.thread_id).await;
+    let grandchild = start_own_child(&manager, config.clone(), child.thread_id).await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SendInputHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_input",
+            function_payload(json!({"target": grandchild.thread_id.to_string(), "message": "hi"})),
+        ))
+        .await
+        .expect("send_input to a descendant should succeed");
+    CloseAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "close_agent",
+            function_payload(json!({"target": grandchild.thread_id.to_string()})),
+        ))
+        .await
+        .expect("close_agent on a descendant should succeed");
+    let ops = manager.captured_ops();
+    assert!(
+        ops.iter()
+            .any(|(id, op)| *id == grandchild.thread_id && matches!(op, Op::Shutdown)),
+        "{ops:?}"
+    );
+    for thread in [&root, &child] {
+        let _ = thread.thread.submit(Op::Shutdown {}).await;
+    }
+}
+
 #[tokio::test]
 async fn close_agent_submits_shutdown_and_returns_previous_status() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
+    let root = manager
         .start_thread(StartThreadOptions::new(config.clone()))
         .await
-        .expect("start thread");
+        .expect("root thread should start");
+    session.thread_id = root.thread_id;
+    // #1756: a target must be the caller's own agent.
+    let thread = start_own_child(&manager, config.clone(), session.thread_id).await;
     let agent_id = thread.thread_id;
     let status_before = manager.agent_control().get_status(agent_id).await;
 

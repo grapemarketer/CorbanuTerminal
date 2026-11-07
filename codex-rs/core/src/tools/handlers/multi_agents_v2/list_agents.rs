@@ -37,12 +37,28 @@ impl Handler {
             .services
             .agent_control
             .register_session_root(session.thread_id, turn.parent_thread_id);
-        let agents = session
+        let mut agents = session
             .services
             .agent_control
             .list_agents(&turn.session_source, args.path_prefix.as_deref())
             .await
             .map_err(collab_spawn_error)?;
+        // #1756 (as #1701 for `wait_agent`): list only the caller itself and
+        // its own agents (and theirs), not other loaded threads and their
+        // results.
+        let mut own_agents = session
+            .services
+            .agent_control
+            .own_agent_names(session.thread_id)
+            .await
+            .unwrap_or_default();
+        own_agents.push(
+            turn.session_source
+                .get_agent_path()
+                .unwrap_or_else(AgentPath::root)
+                .to_string(),
+        );
+        agents.retain(|agent| own_agents.contains(&agent.agent_name));
 
         Ok(boxed_tool_output(ListAgentsResult { agents }))
     }

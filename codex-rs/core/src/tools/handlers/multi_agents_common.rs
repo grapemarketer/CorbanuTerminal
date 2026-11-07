@@ -654,3 +654,26 @@ fn validate_spawn_agent_reasoning_effort(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     )))
 }
+
+/// #1756 (as #1701 for `wait_agent`): agent tools act only on the caller's
+/// own agents, spawned by it or by its agents. A loaded thread the caller
+/// did not spawn is refused; an id that is not loaded is left to the tool
+/// (it reports it as not found). The registry not being readable refuses.
+pub(crate) async fn ensure_own_agent(
+    session: &Session,
+    tool: &str,
+    agent_id: ThreadId,
+) -> Result<(), FunctionCallError> {
+    if session
+        .services
+        .agent_control
+        .is_foreign_loaded_thread(session.thread_id, agent_id)
+        .await
+        .unwrap_or(true)
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool} can only target agents spawned by this agent or by its sub-agents; `{agent_id}` is not one of them"
+        )));
+    }
+    Ok(())
+}
