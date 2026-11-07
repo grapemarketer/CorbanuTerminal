@@ -709,3 +709,67 @@ fn legacy_read_only_path_under_temp_root_is_protected() {
         ))
     );
 }
+
+/// D331: what the non-admin backend enforces today for a writable folder
+/// inside a read-only one (`docs` read-only, `docs\out` writable, in a
+/// writable workspace), given the profile alone, as the agent's commands
+/// (the shell tool, unified exec) pass it. `command/exec` and the default
+/// sandbox refuse this shape; this records what the backend itself does,
+/// which those refusals and the agent path's (D331) don't change.
+#[test]
+fn legacy_writable_folder_inside_read_only_one_with_the_profile_alone() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let (docs, out) = (workspace.join("docs"), workspace.join("docs\\out"));
+    fs::create_dir_all(&out).expect("create docs\\out");
+    fs::write(docs.join("keep.txt"), "kept").expect("seed docs");
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let entry = |path: &Path, access| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(path),
+            },
+            access,
+        )
+    };
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            entry(&workspace, FileSystemAccessMode::Write),
+            entry(&docs, FileSystemAccessMode::Read),
+            entry(&out, FileSystemAccessMode::Write),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let started = run_script(
+        &profile,
+        &workspace,
+        &[],
+        HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
+        concat!(
+            "echo a> \"%W%\\a.txt\"\r\n",
+            "echo x> \"%W%\\docs\\x.txt\"\r\n",
+            "mkdir \"%W%\\docs\\new\"\r\n",
+            "del /f /q \"%W%\\docs\\keep.txt\"\r\n",
+            "echo y> \"%W%\\docs\\out\\y.txt\"\r\n",
+        ),
+    );
+
+    assert_eq!(
+        (
+            started,
+            workspace.join("a.txt").exists(),
+            docs.join("x.txt").exists(),
+            docs.join("new").exists(),
+            docs.join("keep.txt").exists(),
+            out.join("y.txt").exists(),
+        ),
+        (Ok(0), true, false, false, true, true)
+    );
+}
