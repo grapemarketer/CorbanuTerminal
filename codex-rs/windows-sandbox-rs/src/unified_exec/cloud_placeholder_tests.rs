@@ -200,7 +200,8 @@ fn is_placeholder(path: &Path) -> bool {
 /// A command can't move a placeholder folder above an explicit read-only
 /// path (the sync root itself, or one inside it), nor a placeholder that is
 /// the read-only path, and recreate the read-only path. Before, D263 skipped
-/// every reparse point, so placeholders got none of its denies.
+/// every reparse point, so placeholders got none of its denies. As for plain
+/// folders, the session's Everyone denies are removed once it ends.
 #[test]
 fn legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved() {
     let _guard = legacy_process_test_guard();
@@ -243,6 +244,16 @@ fn legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved() {
         .collect();
     let kept =
         ["a\\b\\c\\keep.txt", "p\\keep.txt"].map(|file| fs::read_to_string(cloud.join(file)).ok());
+    // The session's Everyone delete-child denies there are gone again.
+    let denies_left: Vec<PathBuf> = [
+        (cloud.clone(), false),
+        (cloud.join("a"), false),
+        (cloud.join("p"), true),
+    ]
+    .into_iter()
+    .filter(|(path, inherit)| path.exists() && has_everyone_delete_child_deny(path, *inherit))
+    .map(|(path, _)| path)
+    .collect();
     drop(sync_root);
 
     assert_eq!(
@@ -251,12 +262,14 @@ fn legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved() {
             moved,
             kept,
             fs::read_to_string(cloud.join("a\\other.txt")).ok(),
+            denies_left,
         ),
         (
             Ok(0),
             Vec::<&str>::new(),
             [Some("original".to_string()), Some("original".to_string())],
             Some("after\r\n".to_string()),
+            Vec::<PathBuf>::new(),
         )
     );
 }
