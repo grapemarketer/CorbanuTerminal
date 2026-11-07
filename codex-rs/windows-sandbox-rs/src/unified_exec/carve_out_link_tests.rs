@@ -1,5 +1,6 @@
-//! D293 (#1542 items 1 and 2): links above an explicit read-only path
-//! nested in a writable root, and such a path spelled through a linked root.
+//! D293 (#1542 items 1 and 2, #1667): links at or above an explicit
+//! read-only path nested in a writable root, and such a path spelled through
+//! a linked root.
 
 use super::*;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -119,6 +120,70 @@ fn legacy_link_above_read_only_path_stops_the_command() {
     );
 }
 
+/// #1667: a configured read-only path that is itself a junction in the
+/// writable root stops the command. Before, its denies landed on the
+/// junction's target, and the command could remove the junction and create a
+/// writable folder in its place.
+#[test]
+fn legacy_read_only_path_that_is_a_link_stops_the_command() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let real = workspace.join("real");
+    fs::create_dir_all(&real).expect("create target");
+    fs::write(real.join("keep.txt"), "original").expect("seed target file");
+    let link = workspace.join("ro");
+    junction(&link, &real);
+    let absolute = |path: PathBuf| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(workspace.clone()),
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(link.clone()),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let started = run_script(
+        &profile,
+        &workspace,
+        &[],
+        HashMap::from([("L".to_string(), link.to_string_lossy().into_owned())]),
+        concat!(
+            "rmdir \"%L%\"\r\n",
+            "mkdir \"%L%\"\r\n",
+            "echo planted> \"%L%\\keep.txt\"\r\n",
+        ),
+    );
+
+    assert_eq!(
+        (
+            started
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.contains("is itself a link")),
+            crate::workspace_acl::is_reparse_point(&link),
+            fs::read_to_string(link.join("keep.txt")).ok(),
+        ),
+        (true, true, Some("original".to_string())),
+        "{started:?}"
+    );
+}
+
 /// Item 2: an explicit read-only path configured through a writable root
 /// that is itself a junction at the top of a drive (so it is listed against
 /// the root's resolved path) keeps D263's protection: the command can't move the folder above
@@ -200,8 +265,8 @@ fn legacy_read_only_path_through_a_linked_root_keeps_its_ancestors() {
     );
 }
 
-/// Item 1: which links count: any above the read-only path whose folder
-/// lies inside a writable root (so a command can replace it), also on the
+/// Item 1 and #1667: which links count: the read-only path itself or any
+/// link above it whose folder lies inside a writable root (so a command can replace it), also on the
 /// way to a link's target; not a root spelled through a link from outside
 /// the roots.
 #[test]
@@ -242,6 +307,13 @@ fn link_above_carve_out_finds_links_below_the_root() {
             find(&root.join("out\\b\\c")),
             // A link outside the roots pointing at a junction inside one.
             find(&alias_outside.join("b\\c")),
+            // #1667: the read-only path itself is a junction inside a root,
+            find(&root.join("a")),
+            // or leads to one,
+            find(&alias_outside),
+            // but not a plain folder, nor a root.
+            find(&root.join("plain")),
+            find(&linked_root),
         ),
         (
             None,
@@ -252,6 +324,10 @@ fn link_above_carve_out_finds_links_below_the_root() {
             Some(root.join("inner")),
             Some(root.join("out")),
             Some(root.join("a")),
+            Some(root.join("a")),
+            Some(root.join("a")),
+            None,
+            None,
         )
     );
 }
