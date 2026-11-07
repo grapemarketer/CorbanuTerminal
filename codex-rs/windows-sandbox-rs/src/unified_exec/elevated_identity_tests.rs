@@ -796,12 +796,6 @@ fn sec_win_1648_elevated_tools_work_with_command_identity() {
 /// so only the next command was kept out. The workspace stays writable.
 #[test]
 fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
-    use codex_protocol::permissions::FileSystemAccessMode;
-    use codex_protocol::permissions::FileSystemPath;
-    use codex_protocol::permissions::FileSystemSandboxEntry;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::FileSystemSpecialPath;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
     let Some(codex_home) = elevated_home("sec-1758") else {
         return;
     };
@@ -811,29 +805,10 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
     let git = workspace.join(".git");
     let hooks = git.join("hooks");
     let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
-    let profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                FileSystemAccessMode::Read,
-            ),
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Path {
-                    path: absolute(&workspace),
-                },
-                FileSystemAccessMode::Write,
-            ),
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Path {
-                    path: absolute(&hooks),
-                },
-                FileSystemAccessMode::Read,
-            ),
-        ]),
-        NetworkSandboxPolicy::Restricted,
-    );
+    // The workspace profile the other elevated tests use (a profile built
+    // from entries alone couldn't write its workspace here); the configured
+    // `.git\hooks` arrives as Core passes it to this backend.
+    let profile = PermissionProfile::workspace_write();
     let cmd = system32_exe("cmd.exe").display().to_string();
     let script = format!(
         "(echo planted> \"{config}\") & (echo planted> \"{hook}\") & (mkdir \"{objects}\") & (echo ok> \"{allowed}\")",
