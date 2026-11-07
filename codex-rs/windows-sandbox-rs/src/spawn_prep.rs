@@ -642,6 +642,14 @@ pub(crate) fn apply_legacy_session_acl_rules(
             deny.insert(path.clone());
             explicit_carve_outs.insert(path.clone());
         }
+        // #1720: as `create_missing_carve_out` does, the link check comes
+        // before any write, so a link above an explicit read-only path stops
+        // the command without the host writing ACEs or labels first.
+        for p in &explicit_carve_outs {
+            if p.exists() {
+                refuse_link_above_carve_out(p, &canonical_allow)?;
+            }
+        }
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             for p in &allow {
                 let _ = add_allow_ace(p, readonly_sid.as_ptr());
@@ -655,6 +663,11 @@ pub(crate) fn apply_legacy_session_acl_rules(
             }
         }
         for p in &deny {
+            // #1720: again right before this path's own writes (the root ACEs
+            // above may have taken a while).
+            if p.exists() && explicit_carve_outs.contains(p) {
+                refuse_link_above_carve_out(p, &canonical_allow)?;
+            }
             // #158: keep the writable root's Low label off protected paths, so
             // other Low-integrity programs can't write them either.
             // Only where a Low label can be inherited (canonically inside a
