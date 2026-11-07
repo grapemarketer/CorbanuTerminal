@@ -53,7 +53,7 @@ deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. Commands can't change, move
 or delete the ones that existed when they started, or the folders above
 them. A folder the sandbox can't list counts as planted. Folders inside
-`.git` aren't checked.
+`.git` and the temporary folder (`%TEMP%`) aren't checked.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

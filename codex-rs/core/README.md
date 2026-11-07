@@ -218,7 +218,10 @@ folder while a session runs is reported, including the user.
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too
 (#1541, D283). When a session starts, it lists every one below the top of
-its writable roots, with its file identity; it doesn't look inside `.git`
+its writable roots (except `%TEMP%`/`%TMP%`: every program creates folders
+there, so each project folder made there while any legacy command ran would
+count as planted, and Core doesn't run projects from there), with its file
+identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
 100,000-file workspace). Names are compared the way NTFS compares them, so
 a name such as `.agentſ` counts (and is never trusted). Each one it finds

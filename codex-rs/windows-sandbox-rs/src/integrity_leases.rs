@@ -121,6 +121,9 @@ struct SessionRecord {
     /// builds before D283).
     #[serde(default)]
     nested_metadata: Option<Vec<NestedMetadata>>,
+    /// D283: the roots it watches for them (not `%TEMP%`/`%TMP%`).
+    #[serde(default)]
+    nested_roots: Vec<PathBuf>,
 }
 
 /// D262: project metadata folders that appeared while a session ran, and
@@ -138,7 +141,7 @@ pub(crate) struct IntegrityLease {
     session: Option<(File, PathBuf)>,
     log_dir: Option<PathBuf>,
     absent_metadata: Vec<PathBuf>,
-    roots: Vec<PathBuf>,
+    nested_roots: Vec<PathBuf>,
     nested_metadata: Vec<NestedMetadata>,
 }
 
@@ -175,17 +178,27 @@ fn local_app_data() -> Option<PathBuf> {
 /// Labels `roots` (canonical paths) Low for a session, until the lease is
 /// dropped. A root another live session already holds keeps its label.
 pub(crate) fn acquire(roots: &[PathBuf], log_dir: Option<&Path>) -> Result<IntegrityLease> {
+    acquire_watching(roots, roots, log_dir)
+}
+
+/// As [`acquire`]; D283 watches `nested_roots` (some of `roots`) for nested
+/// `.codex`/`.agents` folders.
+pub(crate) fn acquire_watching(
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+    log_dir: Option<&Path>,
+) -> Result<IntegrityLease> {
     let registry = ensure_registry()?;
     // Outside the lock: the walk can take a while. Whatever appears from
     // here on counts as planted.
-    let nested_metadata = crate::nested_metadata::find(roots).entries;
+    let nested_metadata = crate::nested_metadata::find(nested_roots).entries;
     let lock = lock(&registry)?;
     let mut lease = IntegrityLease {
         registry,
         session: None,
         log_dir: log_dir.map(Path::to_path_buf),
         absent_metadata: absent_project_metadata(roots),
-        roots: roots.to_vec(),
+        nested_roots: nested_roots.to_vec(),
         nested_metadata,
     };
     let wanted: BTreeSet<PathBuf> = roots.iter().cloned().collect();
@@ -209,6 +222,7 @@ fn acquire_locked(lease: &mut IntegrityLease, wanted: &BTreeSet<PathBuf>) -> Res
         &lease.registry,
         wanted,
         &lease.absent_metadata,
+        &lease.nested_roots,
         &lease.nested_metadata,
     )?);
     let mut labels = load_labels(&lease.registry)?;
@@ -290,7 +304,7 @@ impl IntegrityLease {
         };
         // D283: the command's processes are gone; walked before the lock (it
         // can take a while) while the session file still counts as live.
-        let nested_now = crate::nested_metadata::find(&self.roots);
+        let nested_now = crate::nested_metadata::find(&self.nested_roots);
         // If the lock can't be had, the closed session file is stale and
         // the next sweep puts the labels back.
         let lock = lock(&self.registry)?;
@@ -420,7 +434,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 && record_nested_planted(
                     registry,
                     nested,
-                    crate::nested_metadata::find(&record.roots),
+                    crate::nested_metadata::find(&record.nested_roots),
                     log_dir,
                 )
                 .is_ok();
@@ -614,7 +628,7 @@ pub fn project_metadata_counts_as_planted(folder: &Path) -> Result<bool> {
     // its file goes.
     let live = session_records(&registry)?.iter().any(|record| {
         record.nested_metadata.as_ref().is_some_and(|nested| {
-            crate::nested_metadata::appeared_in_session(&record.roots, nested, folder)
+            crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, folder)
         })
     });
     if live {
@@ -676,7 +690,7 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
     for record in session_records(&registry)? {
         if record.absent_metadata.iter().any(|absent| absent == path)
             || record.nested_metadata.as_ref().is_some_and(|nested| {
-                crate::nested_metadata::appeared_in_session(&record.roots, nested, path)
+                crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, path)
             })
         {
             anyhow::bail!(
@@ -1011,6 +1025,7 @@ fn create_session(
     registry: &Path,
     roots: &BTreeSet<PathBuf>,
     absent_metadata: &[PathBuf],
+    nested_roots: &[PathBuf],
     nested_metadata: &[NestedMetadata],
 ) -> Result<(File, PathBuf)> {
     let mut rng = SmallRng::from_entropy();
@@ -1033,6 +1048,7 @@ fn create_session(
         roots: roots.iter().cloned().collect(),
         absent_metadata: absent_metadata.to_vec(),
         nested_metadata: Some(nested_metadata.to_vec()),
+        nested_roots: nested_roots.to_vec(),
     };
     file.write_all(&serde_json::to_vec(&record)?)?;
     file.flush()?;

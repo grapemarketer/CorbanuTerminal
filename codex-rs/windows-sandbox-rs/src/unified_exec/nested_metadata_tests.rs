@@ -267,3 +267,71 @@ fn legacy_unlistable_folder_counts_as_planted() {
         (false, true, true, true)
     );
 }
+
+/// `%TEMP%` (a writable root of every workspace-write session) isn't
+/// watched for nested folders: every program creates folders there. The
+/// workspace still is.
+#[test]
+fn legacy_temp_root_is_not_watched_for_nested_metadata() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let temp = test_root.path().join("temp");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&temp).expect("create temp");
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-nested-temp");
+        let script_path = temp.join("nested-temp.cmd");
+        fs::write(
+            &script_path,
+            "@echo off\r\nmkdir \"%TEMP%\\proj\\.codex\"\r\nmkdir \"%WORKSPACE%\\sub\\.codex\"\r\nexit /b 0\r\n",
+        )
+        .expect("write script");
+        let env_map = HashMap::from([
+            ("TEMP".to_string(), temp.to_string_lossy().into_owned()),
+            ("TMP".to_string(), temp.to_string_lossy().into_owned()),
+            (
+                "WORKSPACE".to_string(),
+                workspace.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script_path.display().to_string(),
+            ],
+            &workspace,
+            env_map,
+            /*timeout_ms*/ Some(10_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
+            .await
+            .1
+    });
+    let in_temp = canonical(&temp).join("proj\\.codex");
+    let in_workspace = canonical(&workspace).join("sub\\.codex");
+
+    assert_eq!(
+        (
+            exit_code,
+            in_temp.is_dir(),
+            planted(&in_temp),
+            counts_now(&in_temp),
+            planted(&in_workspace),
+        ),
+        (0, true, false, false, true)
+    );
+}

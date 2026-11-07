@@ -309,6 +309,32 @@ unsafe fn deny_moving_ancestors_below_roots(
     })
 }
 
+/// D283: the writable roots watched for nested `.codex`/`.agents` folders:
+/// all but `%TEMP%`/`%TMP%`. Every program shares those and creates folders
+/// there at any time, so while any legacy command ran, each project folder
+/// made there would count as planted; Core doesn't run projects from there.
+fn nested_metadata_roots(
+    allow: &HashSet<PathBuf>,
+    env_map: &HashMap<String, String>,
+) -> Vec<PathBuf> {
+    let temp: Vec<PathBuf> = ["TEMP", "TMP"]
+        .iter()
+        .flat_map(|name| {
+            [
+                env_map.get(*name).map(PathBuf::from),
+                std::env::var_os(name).map(PathBuf::from),
+            ]
+        })
+        .flatten()
+        .map(|dir| canonicalize_path(&dir))
+        .collect();
+    allow
+        .iter()
+        .filter(|root| !temp.contains(&canonicalize_path(root)))
+        .cloned()
+        .collect()
+}
+
 /// D283: keeps each nested `.codex`/`.agents` folder in `found` (and every
 /// folder between it and its writable root) from being moved, renamed or
 /// replaced by a link, as D263 does above explicit read-only paths, then
@@ -407,10 +433,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
+    let nested_roots = nested_metadata_roots(&allow, env_map);
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
-        Some(crate::integrity_leases::acquire(
+        Some(crate::integrity_leases::acquire_watching(
             &roots,
+            &nested_roots,
             Some(log_dir.as_path()),
         )?)
     } else {
@@ -431,8 +459,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
         Some(lease) => lease.nested_metadata_to_protect(),
         None if allow.is_empty() => Vec::new(),
         None => {
-            let roots: Vec<PathBuf> = allow.iter().cloned().collect();
-            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&roots).entries)
+            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&nested_roots).entries)
         }
     };
     let nested_metadata: HashSet<PathBuf> = nested_found
