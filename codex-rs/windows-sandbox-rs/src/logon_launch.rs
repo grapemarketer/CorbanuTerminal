@@ -907,9 +907,9 @@ fn create_process_with_logon_here(
             /*dwlogonflags*/ 0,
             application.as_ptr(),
             command_line.as_mut_ptr(),
-            // The service refuses `DETACHED_PROCESS` (87), so the runner
-            // starts with a console, and its host, which the runner leaves
-            // first thing (D324, #1721).
+            // The service refuses `DETACHED_PROCESS` (87); the runner is a
+            // GUI-subsystem binary, so it gets no console or console host
+            // anyway (D324, #1721).
             CREATE_NO_WINDOW
                 | CREATE_UNICODE_ENVIRONMENT
                 | if suspended { CREATE_SUSPENDED } else { 0 },

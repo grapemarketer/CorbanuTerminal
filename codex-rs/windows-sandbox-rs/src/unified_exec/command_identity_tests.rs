@@ -570,6 +570,7 @@ fn race_report(dir: &Path) -> String {
     let mut process_won = HashSet::new();
     let mut token_won = HashSet::new();
     let mut thread_won = HashSet::new();
+    let mut main_thread_won = HashSet::new();
     let mut host_won = HashSet::new();
     fs::write(dir.join("race.ready"), "ready").expect("write race ready");
     let deadline = Instant::now() + Duration::from_secs(/*secs*/ 120);
@@ -609,7 +610,10 @@ fn race_report(dir: &Path) -> String {
                 token_won.insert(*pid);
             }
         }
+        let mut first_thread_seen = HashSet::new();
         for (thread, pid) in threads_of(&runners) {
+            // The snapshot lists a process's threads oldest first.
+            let is_main = first_thread_seen.insert(pid);
             // SAFETY: the handle is closed right away.
             let opened = unsafe {
                 let handle = windows_sys::Win32::System::Threading::OpenThread(0x0010, 0, thread);
@@ -620,6 +624,9 @@ fn race_report(dir: &Path) -> String {
             };
             if opened {
                 thread_won.insert(pid);
+                if is_main {
+                    main_thread_won.insert(pid);
+                }
             }
         }
         for (host, parent, image) in &entries {
@@ -633,11 +640,12 @@ fn race_report(dir: &Path) -> String {
         }
     }
     format!(
-        "race seen={} process_won={} token_won={} thread_won={} hosts_seen={} host_won={}",
+        "race seen={} process_won={} token_won={} thread_won={} main_thread_won={} hosts_seen={} host_won={}",
         seen.len(),
         process_won.len(),
         token_won.len(),
         thread_won.len(),
+        main_thread_won.len(),
         hosts_seen.len(),
         host_won.len()
     )
