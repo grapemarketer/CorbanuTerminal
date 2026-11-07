@@ -10,6 +10,7 @@
 use super::super::MUTANT;
 use super::super::Mutant;
 use super::*;
+use pretty_assertions::assert_eq;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
