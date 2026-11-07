@@ -409,6 +409,9 @@ jobs:
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
             }
             # #1758: the elevated backend's first command, from a normal session.
+            # Only this run catches the bug: in the elevated step the one-time
+            # setup makes .git before the per-command refresh, which then
+            # finds it. Here, as for users, the setup is already recorded.
             $t1758 = 'unified_exec::tests::command_identity::elevated::sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks'
             Assert-Tests $sandbox $t1758 1
             & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null

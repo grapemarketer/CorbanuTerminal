@@ -1172,7 +1172,7 @@ fn build_payload_deny_write_paths(
         request.command_cwd,
         request.env_map,
     );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
+    let deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()
         .map(|path| canonicalize_path(&path))
@@ -1180,14 +1180,17 @@ fn build_payload_deny_write_paths(
     // #1758: the setup helper makes missing ones before the command starts;
     // a `.git` it makes on the way (for `.git\hooks`) is protected from that
     // command on, as it is from the next (and in the non-admin sandbox, #1705).
-    let made_on_the_way = protected_metadata_made_on_the_way(
+    // Listed first, so the helper protects it right after making it, before
+    // making the path below it (narrowing the gap for a command already
+    // running).
+    let mut made_on_the_way = protected_metadata_made_on_the_way(
         request.permissions,
         request.command_cwd,
         &deny_write_paths,
     );
-    deny_write_paths.extend(made_on_the_way);
-    deny_write_paths.extend(allow_deny_paths.deny);
-    deny_write_paths
+    made_on_the_way.extend(deny_write_paths);
+    made_on_the_way.extend(allow_deny_paths.deny);
+    made_on_the_way
 }
 
 /// #323: a launch with deny-read rules registers this process as a session
