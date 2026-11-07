@@ -40,6 +40,8 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -96,8 +98,12 @@ const SACL_BITS: u16 = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_PRES
 /// # Safety
 /// `sacl` must be a valid ACL; calls Win32 security APIs on `path`.
 pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
-    let Some(parent_path) = path.parent() else {
-        bail!("{} has no parent", path.display());
+    // The parent by name, as `SetNamedSecurityInfoW` finds it: only for a
+    // path ending in a plain name (not `..` or a root).
+    let (Some(parent_path), Some(std::path::Component::Normal(_))) =
+        (path.parent(), path.components().next_back())
+    else {
+        bail!("{} has no plain parent", path.display());
     };
     // By name, as `SetNamedSecurityInfoW` finds the parent.
     let parent =
@@ -143,8 +149,9 @@ pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
     }
     let computed = compute(parent.ptr(), pcreator, is_dir)?;
     let computed_state = label_state(computed.ptr())?;
+    let writes = AtomicUsize::new(0);
     if computed_state != current_state {
-        write_label(root.0, &computed, &computed_state)?;
+        write_label(root.0, &computed, &computed_state, &writes)?;
     }
     if !is_dir {
         return Ok(());
@@ -159,7 +166,7 @@ pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
         label_threads(),
         |folder: Folder, found: &mut Vec<Folder>| {
             set_mutant(mutant);
-            label_folder(folder, found)
+            label_folder(folder, &writes, found)
         },
     )
 }
@@ -182,7 +189,11 @@ enum Place {
 
 /// Labels the entries of `folder` from its descriptor, adding its
 /// subfolders (not links) to `found`.
-unsafe fn label_folder(folder: Folder, found: &mut Vec<Folder>) -> Result<()> {
+unsafe fn label_folder(
+    folder: Folder,
+    writes: &AtomicUsize,
+    found: &mut Vec<Folder>,
+) -> Result<()> {
     let dir = Arc::new(match folder.at {
         Place::Open(handle) => handle,
         Place::Below(subfolder) => subfolder.reopen(READ_CONTROL)?,
@@ -213,7 +224,7 @@ unsafe fn label_folder(folder: Folder, found: &mut Vec<Folder>) -> Result<()> {
         }
         let (computed, computed_state) = &computed_for[&key];
         if *computed_state != state && !(is_mutant(Mutant::FilesUnwritten) && !is_dir) {
-            write_label(child.0, computed, computed_state)?;
+            write_label(child.0, computed, computed_state, writes)?;
         }
         if walk_into && !is_mutant(Mutant::SubfoldersUnwalked) {
             let at = if follow {
@@ -363,7 +374,10 @@ unsafe fn computation_key(child: &Sd, state: &LabelState, is_dir: bool) -> Resul
             key.extend_from_slice(std::slice::from_raw_parts(sid as *const u8, len));
         }
     }
-    let protected = state.control & SE_SACL_PROTECTED != 0;
+    // A protected SACL inherits nothing; one without the auto-inherited flag
+    // may be treated whole: all its entries count then.
+    let protected =
+        state.control & SE_SACL_PROTECTED != 0 || state.control & SE_SACL_AUTO_INHERITED == 0;
     for ace in &state.aces {
         if protected || u32::from(ace[1]) & INHERITED_ACE == 0 {
             key.extend_from_slice(&(ace.len() as u32).to_le_bytes());
@@ -397,7 +411,16 @@ unsafe fn compute(parent: *mut c_void, current: *mut c_void, is_dir: bool) -> Re
 
 /// Writes the label SACL of `computed` (and its protection and
 /// auto-inherited bits, `state`'s) to `handle`.
-unsafe fn write_label(handle: HANDLE, computed: &Sd, state: &LabelState) -> Result<()> {
+unsafe fn write_label(
+    handle: HANDLE,
+    computed: &Sd,
+    state: &LabelState,
+    writes: &AtomicUsize,
+) -> Result<()> {
+    // The broken version that stops partway, after some labels are written.
+    if is_mutant(Mutant::FailsPartway) && writes.load(Ordering::SeqCst) >= FAIL_AFTER_WRITES {
+        bail!("failing partway (test)");
+    }
     let mut sd: SECURITY_DESCRIPTOR = std::mem::zeroed();
     let psd = &mut sd as *mut SECURITY_DESCRIPTOR as *mut c_void;
     let sacl = sacl_of(computed.ptr())?;
@@ -425,6 +448,7 @@ unsafe fn write_label(handle: HANDLE, computed: &Sd, state: &LabelState) -> Resu
     if SetKernelObjectSecurity(handle, LABEL_SECURITY_INFORMATION, psd) == 0 {
         bail!("SetKernelObjectSecurity(label) failed: {}", GetLastError());
     }
+    writes.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
 
@@ -443,6 +467,8 @@ pub(crate) enum Mutant {
     AutoInheritDropped,
     /// Links to folders are followed (and labelled through).
     LinksFollowed,
+    /// Fails after a few labels are written (the caller then falls back).
+    FailsPartway,
     /// Not broken: Windows' walk only (the reference side).
     WindowsWalk,
 }
@@ -473,4 +499,19 @@ fn set_mutant(_mutant: Option<Mutant>) {}
 
 pub(super) fn is_mutant(which: Mutant) -> bool {
     mutant() == Some(which)
+}
+
+/// Labels [`Mutant::FailsPartway`] writes before it fails.
+const FAIL_AFTER_WRITES: usize = 5;
+
+#[cfg(test)]
+thread_local! {
+    /// How often our walk failed and the caller fell back, on this thread.
+    pub(crate) static FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Notes that our walk failed and Windows' walk is used (counted in tests).
+pub(super) fn note_fallback() {
+    #[cfg(test)]
+    FALLBACKS.with(|count| count.set(count.get() + 1));
 }
