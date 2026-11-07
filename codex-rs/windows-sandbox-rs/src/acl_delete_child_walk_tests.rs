@@ -544,7 +544,7 @@ impl Drop for Broken {
 /// different from the walk's in the case that exercises it.
 #[test]
 fn d311_broken_versions_are_caught() {
-    let mutants: [(Mutant, &str, Setup); 5] = [
+    let mutants: [(Mutant, &str, Setup); 6] = [
         (
             Mutant::FilesUnchecked,
             "1-file-moved-into-git",
@@ -562,6 +562,7 @@ fn d311_broken_versions_are_caught() {
             "5-root-itself-stale",
             root_itself_stale,
         ),
+        (Mutant::ListingTruncated, SIZE_CASES[3].0, SIZE_CASES[3].1),
     ];
     let mut missed = Vec::new();
     for (mutant, name, setup) in mutants {
