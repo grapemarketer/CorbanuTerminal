@@ -243,9 +243,11 @@ async fn tmux_configure_many_preserves_first_default_restart_and_request() -> Re
         "Provider: PF53 Loopback PF53_LOOPBACK_API_KEY",
         &loopback_canary,
     )?;
-    pane.wait_stable_contains("Configured · active · ready", READY_TIMEOUT)?;
+    // A configured provider's setup row becomes a row named after the provider.
+    wait_provider_ready(pane, "Provider: PF53 Loopback")?;
     configure_api_key(pane, "Provider: Z.AI API Key", &zai_canary)?;
-    pane.wait_stable_contains("Configured · active · ready", READY_TIMEOUT)?;
+    // The loopback row already reads "Configured · active · ready", so check Z.AI's own row.
+    wait_provider_ready(pane, "Provider: Z.AI")?;
     select_label(pane, "Done")?;
     // The provider list itself reads "... for Corbanu Terminal", so wait for the
     // chat header instead: the TUI persists the onboarding selection before it
@@ -784,6 +786,55 @@ fn configure_api_key(pane: &TmuxPane<'_>, label: &str, secret: &str) -> Result<(
     pane.send_key(TmuxKey::Enter)?;
     pane.wait_stable_contains("Choose a provider account", READY_TIMEOUT)?;
     Ok(())
+}
+
+fn wait_provider_ready(pane: &TmuxPane<'_>, label: &str) -> Result<()> {
+    pane.wait_stable_until(
+        &format!("{label} row reading \"Configured · active · ready\""),
+        READY_TIMEOUT,
+        |capture| provider_row_description(capture, label) == Some("Configured · active · ready"),
+    )?;
+    Ok(())
+}
+
+/// The provider list draws each row as a numbered title line followed by an indented
+/// description line; returns the description under `label`'s title.
+fn provider_row_description<'a>(capture: &'a str, label: &str) -> Option<&'a str> {
+    let mut lines = capture.lines();
+    while let Some(line) = lines.next() {
+        let row = strip_selection_cursor(line).unwrap_or_else(|| line.trim());
+        if let Some((number, title)) = row.split_once(". ")
+            && !number.is_empty()
+            && number.chars().all(|character| character.is_ascii_digit())
+            && title.trim() == label
+        {
+            return lines.next().map(str::trim);
+        }
+    }
+    None
+}
+
+#[test]
+fn provider_row_description_reads_only_the_named_row() {
+    let capture = "\
+  1. Provider: OpenAI Codex Account
+     Sign in with device code
+
+> 2. Provider: PF53 Loopback PF53_LOOPBACK_API_KEY
+     Configured · active · ready
+
+  3. Provider: Z.AI API Key
+     Use a key stored as ZAI_API_KEY
+";
+    assert_eq!(
+        provider_row_description(capture, "Provider: PF53 Loopback PF53_LOOPBACK_API_KEY"),
+        Some("Configured · active · ready")
+    );
+    assert_eq!(
+        provider_row_description(capture, "Provider: Z.AI API Key"),
+        Some("Use a key stored as ZAI_API_KEY")
+    );
+    assert_eq!(provider_row_description(capture, "Provider: Z.AI"), None);
 }
 
 fn select_label(pane: &TmuxPane<'_>, label: &str) -> Result<()> {
