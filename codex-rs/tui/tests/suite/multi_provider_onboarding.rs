@@ -243,10 +243,11 @@ async fn tmux_configure_many_preserves_first_default_restart_and_request() -> Re
         "Provider: PF53 Loopback PF53_LOOPBACK_API_KEY",
         &loopback_canary,
     )?;
-    wait_provider_ready(pane, "Provider: PF53 Loopback PF53_LOOPBACK_API_KEY")?;
+    // A configured provider's setup row becomes a row named after the provider.
+    wait_provider_ready(pane, "Provider: PF53 Loopback")?;
     configure_api_key(pane, "Provider: Z.AI API Key", &zai_canary)?;
     // The loopback row already reads "Configured · active · ready", so check Z.AI's own row.
-    wait_provider_ready(pane, "Provider: Z.AI API Key")?;
+    wait_provider_ready(pane, "Provider: Z.AI")?;
     select_label(pane, "Done")?;
     // The provider list itself reads "... for Corbanu Terminal", so wait for the
     // chat header instead: the TUI persists the onboarding selection before it
