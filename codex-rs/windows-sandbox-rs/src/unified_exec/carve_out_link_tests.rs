@@ -517,7 +517,8 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
 /// from the temp folder setting is protected when it reaches the backend only
 /// through the profile (the shell tool, unified exec), as when it is also
 /// passed as an extra deny-write path. The rest of the temp folder stays
-/// writable.
+/// writable. Only the profile-only case failed before #1708; the other was
+/// already protected and is kept as the reference.
 #[test]
 fn legacy_read_only_path_under_temp_root_is_protected() {
     let _guard = legacy_process_test_guard();

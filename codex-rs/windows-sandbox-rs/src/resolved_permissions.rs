@@ -324,9 +324,9 @@ mod tests {
     }
 
     /// #1708: a temp root carries the explicit read-only and deny paths
-    /// inside it (missing ones too, also when the configured spelling only
-    /// matches with links followed), but not the default `.git`/`.codex`/
-    /// `.agents` protections nor paths outside it.
+    /// inside it (missing ones too; spelled like the root, in another case,
+    /// or matching only once both are resolved), but not the root itself, the
+    /// default `.git`/`.codex`/`.agents` protections, nor paths outside it.
     #[test]
     fn temp_root_carries_explicit_read_only_paths_inside_it() {
         let tmp = TempDir::new().expect("tempdir");
@@ -335,8 +335,9 @@ mod tests {
         let temp_dir = base.join("temp");
         std::fs::create_dir_all(&cwd).expect("create cwd");
         std::fs::create_dir_all(temp_dir.join("keep")).expect("create keep");
+        std::fs::create_dir_all(temp_dir.join("cased")).expect("create cased");
         std::fs::create_dir_all(temp_dir.join(".git")).expect("create .git");
-        // The temp root as the environment spells it, through `.`, which
+        // `TMP` spells the temp root as configured; `TEMP` through `..`, which
         // only matches the configured paths once both are resolved.
         let temp_env = base.join("workspace").join("..").join("temp");
         let absolute = |path: PathBuf| AbsolutePathBuf::from_absolute_path(path).expect("abs");
@@ -365,7 +366,9 @@ mod tests {
                         access: FileSystemAccessMode::Write,
                         missing_path_behavior: None,
                     },
+                    entry(temp_dir.clone(), FileSystemAccessMode::Read),
                     entry(temp_dir.join("keep"), FileSystemAccessMode::Read),
+                    entry(base.join("TEMP").join("CASED"), FileSystemAccessMode::Read),
                     entry(temp_dir.join("missing"), FileSystemAccessMode::Read),
                     entry(temp_dir.join("secret"), FileSystemAccessMode::Deny),
                     entry(base.join("elsewhere"), FileSystemAccessMode::Read),
@@ -382,13 +385,13 @@ mod tests {
             .expect("managed permission profile");
         let env_map = HashMap::from([
             ("TEMP".to_string(), temp_env.to_string_lossy().into_owned()),
-            ("TMP".to_string(), temp_env.to_string_lossy().into_owned()),
+            ("TMP".to_string(), temp_dir.to_string_lossy().into_owned()),
         ]);
 
         let temp_roots: Vec<Vec<PathBuf>> = permissions
             .writable_roots_for_cwd(&cwd, &env_map)
             .into_iter()
-            .filter(|root| root.root == temp_env)
+            .filter(|root| root.root == temp_env || root.root == temp_dir)
             .map(|root| {
                 let mut subpaths = root.read_only_subpaths;
                 subpaths.sort();
@@ -396,11 +399,13 @@ mod tests {
             })
             .collect();
 
-        let expected = vec![
+        let mut expected = vec![
+            base.join("TEMP").join("CASED"),
             temp_dir.join("keep"),
             temp_dir.join("missing"),
             temp_dir.join("secret"),
         ];
+        expected.sort();
         assert_eq!(temp_roots, vec![expected.clone(), expected]);
     }
 
