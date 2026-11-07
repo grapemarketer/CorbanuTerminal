@@ -402,27 +402,49 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
 }
 
 /// #1482 item 2: whether the word read as the command, in the words from
-/// `from` on, is part of a redirection: its file (`>log ./run.sh`, `sudo -R
-/// >log -C sub ./run.sh`), a descriptor (`2>log sh x`, `2>&1 ./x`, `>&2
-/// ./x`), a `{fd}` name (`{fd}>log ./x`) or a here-document's delimiter
-/// (`<<EOF ./x`). The shell runs none of them, so the command it runs is
-/// never the one judged, whatever it is: it asks (`2>/dev/null ls` too;
-/// `ls 2>/dev/null` is read as before). `&>log` is read as `&` and `>log`,
-/// so the words after it start with its file. `from`: the operands of
-/// `eval`.
+/// `from` on, is part of a redirection: its file (`>log ./run.sh`, `sudo
+/// -R >log -C sub ./run.sh`), a descriptor (`2>log sh x`, `2>&1 ./x`,
+/// `>&2 ./x`), a `{fd}` name (`{fd}>log ./x`) or a here-document's
+/// delimiter (`<<EOF ./x`), while the words without those run a command
+/// this reading would judge by more than its name: a program named by a
+/// path, a shell or interpreter, `eval`, `source`, `.` or `trap` (`>log
+/// eval ./x`), or a word starting with `-` (`&>log` is lexed as `&` and
+/// `>log`, so `sudo &>log -u root ./x` leaves `-u root ./x`). The shell
+/// removes the redirection's words, so that command is never judged.
+/// `2>/dev/null git status`, `exec >out` and foreign text read as shell
+/// (`<?php echo 1;`) are read as before. `from`: the operands of `eval`.
 pub(super) fn redirect_hides_command(
     command: &SimpleCommand,
     words: &[String],
     from: usize,
 ) -> bool {
-    let Some((at, _)) = words.get(from..).and_then(command_word) else {
+    let held = |at: usize| {
+        command.writes_to.contains(&at)
+            || command.redirect_words.contains(&at)
+            || command.stdin_from == Some(at)
+            || command.here_string == Some(at)
+    };
+    let Some(words) = words.get(from..) else {
         return false;
     };
-    let at = from + at;
-    command.writes_to.contains(&at)
-        || command.redirect_words.contains(&at)
-        || command.stdin_from == Some(at)
-        || command.here_string == Some(at)
+    if !command_word(words).is_some_and(|(at, _)| held(from + at)) {
+        return false;
+    }
+    // One pass over the words, once per simple command.
+    let runs: Vec<String> = words
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| {
+            work::step();
+            !held(from + at)
+        })
+        .map(|(_, word)| word.clone())
+        .collect();
+    command_word(&runs).is_some_and(|(at, name)| {
+        runs[at].contains('/')
+            || runs[at].starts_with('-')
+            || matches!(name.as_str(), "eval" | "source" | "." | "trap")
+    }) || invocation(&runs).is_some()
 }
 
 /// #1482 item 4: whether a sudo among the programs of these words runs an

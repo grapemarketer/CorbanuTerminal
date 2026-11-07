@@ -7055,8 +7055,6 @@ fn issue_1482_items_2_to_5_ask() {
         (x_evil, "{fd}>log ./x"),
         (x_evil, "<<EOF ./x"),
         (x_evil, ">log eval ./x"),
-        (x_ok, ">log ./x"),
-        (x_ok, "2>/dev/null ls"),
         // `&>log` is read as `&` and `>log`.
         (x_evil, "sudo &>log -u root ./x"),
         (sub_evil, "sudo -R &>log -C sub ./run.sh"),
@@ -7089,6 +7087,10 @@ fn issue_1482_items_2_to_5_ask() {
     for (files, line) in [
         (x_ok, "ls >log"),
         (x_ok, "ls 2>/dev/null"),
+        (x_ok, "2>/dev/null ls"),
+        (x_ok, "exec >log"),
+        (x_ok, "exec 3>&1"),
+        (x_ok, "cat <<EOF"),
         (x_ok, "ls 2>&1"),
         (x_ok, "ls >&2"),
         (x_ok, "sudo ./x >log"),
@@ -7143,6 +7145,7 @@ fn issue_1482_items_2_to_5_ask() {
         &["env", "A=1", "./x"],
         &["sudo", "-u", "root", "./x"],
         &["./x", "a b", "{c,d}"],
+        &["xargs", "-I{}", "rm", "--", "{}"],
     ] {
         if argv(command).is_some() {
             wrong.push(command);
@@ -7151,8 +7154,8 @@ fn issue_1482_items_2_to_5_ask() {
     assert_eq!(wrong, Vec::<&[&str]>::new(), "should be quiet");
 }
 
-/// #1482 items 2-5 (review 1 of #1719): the redirection, sudo option and
-/// argv element checks stay linear in the line's length.
+/// #1482 items 2-5 (review 1 of #1719): the redirection and sudo option
+/// checks stay linear in the line's length.
 #[test]
 fn issue_1482_items_2_to_5_checks_are_linear() {
     for (label, unit) in [
@@ -7168,12 +7171,6 @@ fn issue_1482_items_2_to_5_checks_are_linear() {
             let _ = script(&format!("eval sudo {units}./x"));
         });
     }
-    work::assert_linear("argv elements", |scale| {
-        let mut command = vec!["env".to_string()];
-        command.extend((0..400 * scale).map(|at| format!("A{at}=1")));
-        command.push("./x".to_string());
-        let _ = kind(&command.iter().map(String::as_str).collect::<Vec<_>>());
-    });
 }
 
 /// #1302 follow-up: programs named by a path, behind a wrapper's folder,

@@ -155,10 +155,11 @@ pub(super) fn simple_commands(command: &[String]) -> Lexed {
     }
 }
 
-/// #1482 item 5: whether `text`, read as a line, is one word spelled as it
-/// is written. An argv element is one word whatever it holds; one that the
-/// lexer reads otherwise (`A=1 ./y`, `./{x,y}`, ``true`./x` ``, `it's`) is
-/// not the word the classifier judges. Empty text runs nothing.
+/// #1482 item 5: whether `text`, read as a line, is one word. An argv
+/// element is one word whatever it holds; one that the lexer reads as
+/// several words or commands (`A=1 ./y`, `./{x,y}`, ``true`./x` ``) is not
+/// the word the classifier judges. Quotes and braces the lexer drops in one
+/// word (`-I{}`) are read as before. Empty text runs nothing.
 pub(super) fn one_word(text: &str) -> bool {
     if text.is_empty() {
         return true;
@@ -168,7 +169,7 @@ pub(super) fn one_word(text: &str) -> bool {
         && !lexed.too_deep
         && matches!(
             lexed.commands.as_slice(),
-            [only] if only.fed_by.is_empty() && only.words.len() == 1 && only.words[0] == text
+            [only] if only.fed_by.is_empty() && only.words.len() == 1
         )
 }
 
