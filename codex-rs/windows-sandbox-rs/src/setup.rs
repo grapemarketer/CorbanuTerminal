@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::allow::protected_metadata_made_on_the_way;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::identity::sandbox_setup_is_complete;
@@ -1176,6 +1177,15 @@ fn build_payload_deny_write_paths(
         .into_iter()
         .map(|path| canonicalize_path(&path))
         .collect();
+    // #1758: the setup helper makes missing ones before the command starts;
+    // a `.git` it makes on the way (for `.git\hooks`) is protected from that
+    // command on, as it is from the next (and in the non-admin sandbox, #1705).
+    let made_on_the_way = protected_metadata_made_on_the_way(
+        request.permissions,
+        request.command_cwd,
+        &deny_write_paths,
+    );
+    deny_write_paths.extend(made_on_the_way);
     deny_write_paths.extend(allow_deny_paths.deny);
     deny_write_paths
 }

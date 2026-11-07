@@ -1,4 +1,6 @@
+use crate::path_normalization::canonical_path_key;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
 use dunce::canonicalize;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -39,6 +41,47 @@ pub(crate) fn compute_allow_paths_for_permissions(
     }
 
     AllowDenyPaths { allow, deny }
+}
+
+/// #1758: the top-level `.git`/`.codex`/`.agents` folders that making the
+/// missing `paths` would create on the way (`.git` for `.git\hooks`), in the
+/// writable roots that get those folders' default protection (not the temp
+/// roots, D283). Once made, each is protected like one that was there before;
+/// listing it up front keeps the command that caused it from writing it.
+pub(crate) fn protected_metadata_made_on_the_way(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    command_cwd: &Path,
+    paths: &[PathBuf],
+) -> Vec<PathBuf> {
+    let root_keys: HashSet<String> = permissions
+        .writable_roots_other_than_temp_for_cwd(command_cwd)
+        .iter()
+        .map(|root| canonical_path_key(&root.root))
+        .collect();
+    let mut made = Vec::new();
+    for path in paths.iter().filter(|path| !path.exists()) {
+        for folder in path.ancestors().skip(1) {
+            if folder.exists() {
+                break;
+            }
+            let is_protected_name = folder.file_name().is_some_and(|name| {
+                PROTECTED_METADATA_PATH_NAMES
+                    .iter()
+                    .any(|protected| name.eq_ignore_ascii_case(protected))
+            });
+            // A folder that is itself a writable root keeps its own access.
+            if is_protected_name
+                && folder
+                    .parent()
+                    .is_some_and(|parent| root_keys.contains(&canonical_path_key(parent)))
+                && !root_keys.contains(&canonical_path_key(folder))
+                && !made.iter().any(|known: &PathBuf| known == folder)
+            {
+                made.push(folder.to_path_buf());
+            }
+        }
+    }
+    made
 }
 
 #[cfg(test)]
@@ -376,5 +419,41 @@ mod tests {
             paths.deny.is_empty(),
             "no deny when protected dirs are absent"
         );
+    }
+
+    /// #1758: a protected folder that is itself a writable root keeps its own
+    /// access, and one that exists already is left to the deny set.
+    #[test]
+    fn metadata_made_on_the_way_skips_writable_and_existing_folders() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = dunce::canonicalize(tmp.path()).expect("canonical tempdir");
+        let writable_git = command_cwd.join(".git");
+        fs::create_dir_all(command_cwd.join(".agents")).expect("create .agents");
+        let writable_roots =
+            vec![AbsolutePathBuf::from_absolute_path(&writable_git).expect("absolute .git")];
+        let permission_profile = workspace_write_profile(
+            &writable_roots,
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                workspace_roots.as_slice(),
+            )
+            .expect("managed permission profile");
+
+        let made = protected_metadata_made_on_the_way(
+            &permissions,
+            &command_cwd,
+            &[
+                writable_git.join("hooks"),
+                command_cwd.join(".agents\\skills"),
+                command_cwd.join(".codex\\hooks"),
+            ],
+        );
+
+        assert_eq!(made, vec![command_cwd.join(".codex")]);
     }
 }
