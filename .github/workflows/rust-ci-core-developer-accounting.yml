@@ -71,7 +71,7 @@ jobs:
           echo "lockhash=$(cat Cargo.lock rust-toolchain.toml | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Restore sccache cache
         id: sccache_restore
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: sccache-core-devacct-${{ steps.sccache_config.outputs.lockhash }}-${{ github.run_id }}
@@ -117,7 +117,7 @@ jobs:
       - name: Save sccache cache
         if: always() && !cancelled() && github.ref == 'refs/heads/main'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: sccache-core-devacct-${{ steps.sccache_config.outputs.lockhash }}-${{ github.run_id }}
