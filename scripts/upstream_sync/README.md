@@ -72,6 +72,19 @@ they build still have conflict markers; a red security lane on a slice PR whose 
 real failure. Package CI tests exactly the packages listed;
 to cover "codex-core and its dependencies", list them.
 
+Skipping `rust-ci` also skips its `rust-ci-core-security` job on sync PRs. Until the workspace compiles, S2 runs
+the `codex-core` tests (security tests included) through package CI. The lane itself can be dispatched directly:
+`gh workflow run rust-ci-core-security.yml --ref sync/upstream-<tag> -f runner=ubuntu-24.04 -f
+target=x86_64-unknown-linux-gnu` (and `macos-15` / `aarch64-apple-darwin`); it must be green before SG2 (plan §6,
+S3). A full `rust-ci.yml` dispatch needs `-f cold_bazel=false` to skip the 180-minute cold Bazel lints.
+`corbanu-terminal-ci` runs on every branch push, `sync/**` and `sync-ci/**` included, and stays red until the
+workspace compiles.
+
+The CODEOWNERS block lists the named security paths plus the dependency-policy files (`codex-rs/Cargo.toml`,
+`Cargo.lock`, `deny.toml`, `.cargo/audit.toml`, `MODULE.bazel`, `MODULE.bazel.lock`, `pnpm-lock.yaml`,
+`cargo-deny.yml`). Per-crate `Cargo.toml` files aren't listed; a new third-party crate still changes a lockfile, and
+the S5 SG1 re-run is the backstop.
+
 ## Security paths
 
 `security_paths.txt` is one git pathspec per line, so `git diff A B -- $(cat scripts/upstream_sync/security_paths.txt)`

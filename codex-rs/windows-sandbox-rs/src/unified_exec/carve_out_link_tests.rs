@@ -332,6 +332,100 @@ fn link_above_carve_out_finds_links_below_the_root() {
     );
 }
 
+/// #1686: a configured read-only path that doesn't exist yet is created
+/// before the command starts and protected like one that exists, whether it
+/// comes as an extra deny-write path (as `command/exec` passes it) or only
+/// in the profile (as the shell tool and unified exec do): the command can't
+/// write in it, nor move it or the folder above it away and recreate it.
+/// Before, a path that came only in the profile was dropped while missing.
+#[test]
+fn legacy_missing_read_only_path_is_created_and_protected() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [true, false]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            let read_only = workspace.join("a\\ro");
+            missing_read_only_path_outcome(&workspace, &read_only, as_deny_write_path)
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [true, false].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            true,
+            false,
+            false,
+            Some("after\r\n".to_string())
+        ))
+    );
+}
+
+/// Runs the #1686 script with `read_only` configured read-only (and, with
+/// `as_deny_write_path`, also passed as an extra deny-write path).
+fn missing_read_only_path_outcome(
+    workspace: &Path,
+    read_only: &Path,
+    as_deny_write_path: bool,
+) -> (bool, Result<i32, String>, bool, bool, bool, Option<String>) {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(workspace),
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(read_only),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+        vec![absolute(read_only)]
+    } else {
+        Vec::new()
+    };
+    let started = run_script(
+        &profile,
+        workspace,
+        &carve_outs,
+        HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
+        concat!(
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "rmdir \"%W%\\a\\ro\"\r\n",
+            "ren \"%W%\\a\" a-moved\r\n",
+            "mkdir \"%W%\\a\\ro\"\r\n",
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "echo after> \"%W%\\a\\other.txt\"\r\n",
+        ),
+    );
+
+    (
+        as_deny_write_path,
+        started,
+        read_only.is_dir(),
+        read_only.join("config.toml").exists(),
+        workspace.join("a-moved").exists(),
+        fs::read_to_string(workspace.join("a\\other.txt")).ok(),
+    )
+}
+
 /// #1682: a writable root's top-level `.codex` or `.agents` that is a
 /// junction stops the command. Before, its protections landed on the
 /// junction's target, so the command could remove the junction and make a
