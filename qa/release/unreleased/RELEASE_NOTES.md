@@ -105,6 +105,22 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   collection off. A home with no ledger yet gets none: its `/cost` already
   shows as unavailable (#314, D228).
 
+## Moderate: waiting on and starting agents after untrusted content
+
+- **Waiting on an agent never asks** (D320, #1653). On Z.AI and other
+  providers without namespace tools, `wait_agent_v1` used to ask (or, with
+  approvals off as in `corbanu exec`, was refused) as "a tool the security
+  level has not classified" once untrusted content had entered the session,
+  so a parent couldn't wait for its child. It now goes ahead, as `wait_agent`
+  already did.
+- **Starting an agent asks, on every route.** After untrusted content under
+  Moderate (and Aggressive), `spawn_agent` (and `spawn_agent_v1`,
+  `spawn_agent_plaintext`) asks for your approval, and the prompt says it is
+  "a request to start a new agent". With approvals off it is refused. This is
+  new on the OpenAI Responses route, where `spawn_agent` used to go ahead.
+  The other `_v1` agent aliases (`send_input_v1`, `close_agent_v1`,
+  `resume_agent_v1`) still ask as unclassified tools.
+
 ## `/security` wording
 
 - **Revoke all names its real scope.** After "Revoke all active authority",
