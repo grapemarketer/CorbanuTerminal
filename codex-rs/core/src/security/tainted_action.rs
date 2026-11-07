@@ -32,6 +32,7 @@ mod aliases;
 mod arithmetic;
 mod braces;
 mod certain_cd;
+mod code_tables;
 mod code_variables;
 mod git_config;
 mod git_helpers;
@@ -1978,7 +1979,9 @@ impl Classifier {
             );
             // #1422: an alias the line defines runs text neither reading
             // reads as the shell does (`alias b=bash` then `b run.sh`).
-            if aliases.read(&words) {
+            // #1704: so does a command writing such a table by name, its
+            // name known from a value (`t=functions; zparseopts -a $t`).
+            if aliases.read(&words) || code_tables::writes_table(&words) {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(

@@ -11944,6 +11944,8 @@ fn issue1685_review2_forms_ask() {
             "set -- -f 'tee -a ~/.zshrc'; zparseopts -A functions -- f:; -f",
             ": ${(AA)=functions::=f print\\ -r\\ --\\ ~/.zshrc}; f",
             ": ${functions::=x}",
+            // #1704: any writer naming a table fails closed.
+            "read -r functions < x",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
         }
@@ -11954,7 +11956,6 @@ fn issue1685_review2_forms_ask() {
             "aliases[ll]='ls -l'",
             "ls -A functions",
             "set -- functions",
-            "read -r functions < x",
             "firebase deploy --only=functions",
             "grep -rn functions src",
             "jq '.functions[0]' f.json",
@@ -12034,6 +12035,92 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
             "alias b='bash'",
         ] {
             assert_eq!(kind(&[shell, "-lc", script]), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1704: a command writing variables named by its operands (zparseopts,
+/// zstyle, zsh modules, `read`, `set -A`, declarations, `printf -v`) asks
+/// when a word names a table of code run by name (zsh's `functions`, alias
+/// tables, `commands`, bash's `BASH_ALIASES`/`BASH_CMDS`), however the name
+/// is given; so does a write to one in an expansion. The review-6 forms
+/// (each ran its payload in zsh 5.9) and the class. Only adds prompts.
+#[test]
+fn issue1704_code_table_writers_fail_closed() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // Review 6.
+            "set -- -f 'tee -a ~/.zshrc'; zparseopts -a functions -- f:; -f",
+            "set -- --x 'tee -a ~/.zshrc'; zparseopts -- -x:=functions; --x",
+            "zstyle :x y f 'tee -a ~/.zshrc'; zstyle -a :x y functions; f",
+            // Attached, among other options, other specs and writers.
+            "zparseopts -afunctions -- f:",
+            "zparseopts -E -D -a functions -- f:",
+            "zparseopts -D -- f:=functions",
+            "zparseopts -A aliases -- f:",
+            "zparseopts -a dis_functions -- f:",
+            "zstyle -g functions :x y",
+            "zstyle -ga :x y aliases",
+            "pcre_match -a functions x y",
+            "zformat -a functions : x:y",
+            "zregexparse i p functions x",
+            "zselect -A functions 0",
+            "getopts f: functions",
+            "vared functions",
+            "let 'functions[f]=1'",
+            "read -A galiases < x",
+            "mapfile -t BASH_ALIASES < x",
+            "set -A saliases sh 'tee -a ~/.zshrc'",
+            "set -A commands ls ./x",
+            "printf -v functions %s x",
+            "print -v 'aliases[x]' 'tee -a ~/.zshrc'",
+            "typeset -A functions=(f 'tee -a ~/.zshrc')",
+            "local -A aliases=(x y)",
+            "declare -n r=BASH_CMDS",
+            "typeset -n r=aliases",
+            // Behind modifiers, wrappers, `eval`, `trap`, `repeat`.
+            "noglob zparseopts -a functions -- f:",
+            "builtin zstyle -a :x y functions",
+            "IFS=: noglob builtin read -A functions < x",
+            "eval 'zparseopts -a functions -- f:'",
+            "eval -- zstyle -a :x y functions",
+            "trap 'zparseopts -a functions -- f:' EXIT",
+            "repeat 1 zparseopts -a functions -- f:",
+            "alias z='zparseopts -a functions -- f:'",
+            // The name from a value.
+            "t=functions; zparseopts -a $t -- f:",
+            "t=aliases; set -A \"$t\" x 'tee -a ~/.zshrc'",
+            // In expansions, and tables of programs.
+            ": ${(AA)=aliases::=x 'tee -a ~/.zshrc'}",
+            ": ${BASH_ALIASES[x]:='tee -a ~/.zshrc'}",
+            ": ${commands[ls]::=./x}; ls",
+            ": ${BASH_CMDS[ls]:=./x}; ls",
+            "commands[ls]=./x; ls",
+            "BASH_CMDS[ls]=./x; ls",
+            "commands=(ls ./x)",
+            // A value naming a table may name it later.
+            "x=commands; eval \"$x[ls]=./x\"; ls",
+            "local x=functions",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "firebase deploy --only=functions",
+            "ls -A functions",
+            "set -- functions",
+            "grep -rn functions src",
+            "jq '.functions[0]' f.json",
+            "zparseopts -D -E -a opts -- f: -x:=xs",
+            "zstyle ':completion:*:functions' ignored-patterns '_*'",
+            "read -r myfunctions < x",
+            "printf '%s\\n' functions",
+            "stat functions/index.js",
+            "echo ${commands[git]}",
+            "(( $+commands[git] )) && echo yes",
+            "aliases[ll]='ls -l'",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
         }
     }
 }

@@ -18,6 +18,7 @@ use super::ProtectedActionKind;
 use super::WRITERS;
 use super::braces;
 use super::certain_cd;
+use super::code_tables;
 use super::code_variables;
 use super::git_config;
 use super::git_helpers;
@@ -606,26 +607,16 @@ impl Classifier {
             // by name later (`functions[f]='tee -a ~/.zshrc'; f`): a line of
             // its own too, within the same budget.
             let mut tables = 0;
-            // An array form (`aliases+=(x '…')`) is not read: it fails
-            // closed.
-            let array_setter = sets_arrays(&texts);
-            // In `set`/`read`/`zparseopts` (also behind zsh's precommand
-            // modifiers): an option holding `A` (`-A`, `+A`, `-rA`) was
-            // given; `--` ends them.
-            let mut array_option = false;
-            let mut options_end = false;
+            // An array form (`aliases+=(x '…')`) is not read, nor is a
+            // command writing a table by name (`zparseopts -a functions`,
+            // `set -A aliases …`), nor any other write to one: they fail
+            // closed (#1704).
+            found.unreadable |= code_tables::writes_table(&texts);
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
-                let option = array_setter && !options_end && text.starts_with(['-', '+']);
-                options_end |= text == "--";
-                // `set -Afunctions …`, `-xAfunctions`: the name attached.
-                let attached = option && text.contains("Afunctions");
-                array_option |= option && text != "--" && text.contains('A');
-                found.unreadable |= array
-                    || attached
-                    || (array_setter && array_option && text == "functions")
-                    || sets_functions_otherwise(text);
+                found.unreadable |=
+                    array || code_tables::sets_table_otherwise(text, !values.is_empty());
                 for value in values {
                     work::step();
                     tables += 1;
@@ -2241,51 +2232,6 @@ fn code_table_values(text: &str) -> (Vec<&str>, bool) {
         })
         .collect();
     (values, false)
-}
-
-/// #1685: whether the command is `set`, `read` or `zparseopts`, which set
-/// an array named after an `A` option, also behind zsh's precommand
-/// modifiers and assignments (`IFS=: noglob read -A functions`).
-fn sets_arrays(texts: &[String]) -> bool {
-    let mut from = 0;
-    while let Some((at, name)) = indirect::command_word(&texts[from..]) {
-        work::step();
-        if !unknown_folder::MODIFIERS.contains(&name.as_str()) {
-            return matches!(name.as_str(), "set" | "read" | "zparseopts");
-        }
-        from += at + 1;
-    }
-    false
-}
-
-/// #1685: whether a word may set zsh's `functions` table other than by an
-/// assignment to an entry ([`code_table_values`]): a subscript named
-/// elsewhere (`printf -v 'functions[f]' …`, `${functions[f]::=…}`, `read
-/// 'functions[f]'`), a whole-table assignment (`${(AA)=functions::=…}`)
-/// or a reference (`typeset -n r=functions`). (The table
-/// after an array option, `set -A functions f …`, is found by the caller;
-/// alias tables by `aliases.rs`.)
-fn sets_functions_otherwise(text: &str) -> bool {
-    const TABLE: &str = "functions";
-    text.match_indices(TABLE).any(|(at, _)| {
-        work::step();
-        let rest = &text[at + TABLE.len()..];
-        let before = text[..at].chars().next_back();
-        let option = text.starts_with('-') && before == Some('v');
-        if !option && !matches!(before, None | Some('{' | '$' | '!' | '#' | '=' | ')')) {
-            return false;
-        }
-        if at == 0 && !code_table_values(text).0.is_empty() {
-            return false;
-        }
-        // A whole-table assignment in an expansion (`${(AA)=functions::=…}`,
-        // `${functions:=…}`) too.
-        rest.starts_with('[')
-            || rest.starts_with('=')
-            || rest.starts_with(":=")
-            || rest.starts_with("::=")
-            || (before == Some('=') && rest.is_empty() && !text.starts_with('-'))
-    })
 }
 
 /// #1620: see [`code_writes_zsh_program`].
