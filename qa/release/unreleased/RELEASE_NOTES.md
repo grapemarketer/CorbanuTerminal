@@ -13,7 +13,8 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   resumed thread, if this turn's response reports no usage, `usage` still
   holds the thread's earlier totals. When only some of a turn's requests report
   usage, the totals include only those.
-- **Usage includes observed descendant work** (#290). Repeated cumulative
+- **Usage includes observed descendant work** (#290, #1601, thanks to
+  @white-guy-01). Repeated cumulative
   reports are counted once. Every history-forked descendant makes the total
   `null`, as do a descendant with no report,
   a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
@@ -129,6 +130,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   that server only if it runs on this Corbanu home, and the level picker
   doesn't offer "restart now", since Corbanu Terminal starts against such a
   server only under Permissive (#1047).
+- **Revoking there no longer offers a restart that is refused.** After "Revoke
+  all active authority" or a kill-switch change in such a window, the grants
+  and kill-switch view no longer offers `r restart now`; the explanation is
+  unchanged (#1284, #1094, thanks to @citadelculture).
 
 ## Aggressive: contained Claude panes and the macOS keychain
 
@@ -163,6 +168,12 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   "Z.AI · account default") in every home. It now names the account only when
   that provider has a named account in the home, or the session is on or used
   one; otherwise the line is what it was without the feature (D86).
+- **`/status` no longer reads the vault itself.** The summary of a named
+  ChatGPT sign-in account (kind, email hint, plan) is now read in the
+  background and cached. Until it is known, `/status` shows just
+  `account <name>` and doesn't treat the account as removed. A sign-in change
+  made by another process
+  shows on the `/status` after the one that starts the refresh (#1572, #1251).
 
 ## `corbanu login status`
 
@@ -336,6 +347,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   to open an OpenAI-worded key prompt that ended in
   `Provider API-key selection is no longer available`. The list now starts on
   **Corbanu API**, whose wallet and API-key setup runs after **Done**.
+- **The same holds with `forced_login_method = "api"`.** With Corbanu Plan as
+  the provider, setup now opens on the **Corbanu API** row (only that row and
+  **Done**) instead of the OpenAI key prompt (#1584, #1571, thanks to
+  @bradsbots).
 
 ## A force-stopped turn still reports its file changes
 
@@ -353,10 +368,119 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   compaction or rollback on a thread whose provider never reported usage, it
   said `Thread total: 0 tokens (0 in, 0 out)`. It now says
   `Thread total: not reported by the provider`, and `Context` shows the token
-  estimate (#1570).
+  estimate (#1570, #1586, thanks to @sendoeth).
 - **A full context window is shown as context, not as the thread's cost.**
   When the window is exceeded, `Context` shows the full window and
   `Thread total` stays the provider-reported usage, computed from the
   provider's counters, which the fill now keeps (#1583). After compaction,
   `Context` shows the new, smaller estimate rather than a full window, and
   `/new` starts the new thread without the previous thread's total.
+
+## Usage totals survive a full context window
+
+- **A full context window no longer resets the thread's usage totals**
+  (#1583, #1577, thanks to @bradsbots). When a request or a compaction hit the
+  context window, the thread's input, cached-input, cache-write, output and
+  reasoning counters were reset to zero, so `corbanu exec --json` usage, the
+  TUI's `/status` and the app server's `thread/tokenUsage/updated` totals then
+  counted only usage after the fill. They now keep the earlier reports. The
+  total token count is still set to the full window at a fill, and the context
+  indicator is unchanged.
+
+## Chat Completions: replies stay messages
+
+- **A JSON answer that mentions `"function_call"` is a message** (#1582,
+  #1581, thanks to @bradsbots). Such a reply used to be read as a broken tool
+  call and fail with `malformed function-call JSON as assistant text`, then be
+  retried, even after it had been shown. Only JSON whose top-level `type` is
+  `function_call` or `custom_tool_call` counts as a call.
+- **A reply that opens with JSON and goes on in prose is a message too**
+  (#1659, #1654). It used to fail with `trailing characters` after five
+  retries.
+- **Text already shown stays a message** (#1656, #1608, thanks to
+  @bradsbots), even if it turns out to parse as a tool call.
+- **A `null` usage counter no longer drops its chunk** (#1589, #1588, thanks
+  to @bradsbots). On the final chunk that lost the last text, the finish reason
+  and the usage, so a reply cut off at the output limit ended as if it had
+  finished normally. A `null` counter now reads as 0 for display.
+
+## Vercel GLM 5.3 output caps
+
+- **`zai/glm-5.3` and `zai/glm-5.3-flash` on Vercel now cap output at
+  128,000 tokens**, Z.AI's documented maximum, as the Z.AI and OpenRouter rows
+  already do (#1585, #1567, thanks to @bradsbots). They were 1,000,000 and
+  131,000.
+
+## Agents and reviews
+
+- **A message handed to a running agent is delivered once** (#1579, #1545,
+  thanks to @bradsbots). If recovery ran just after a live sender handed a
+  message over, it could send the same message again.
+- **A review cancelled before it starts stays cancelled** (#1574). A `/review`
+  or automatic approval review whose cancellation came before its session
+  started could still start it.
+
+## Moderate and Aggressive: more command lines ask after untrusted content
+
+After the agent has read untrusted content, these lines used to run without
+asking and now ask first:
+
+- `rg --hostname-bin=PROG`, which runs a program (#1600, #1573, thanks to
+  @bradsbots).
+- zsh's `=name`, which names the program `name` on `PATH`, as a redirection
+  target (`echo x >> =mytool`; #1602, #1573, thanks to @citadelculture), and
+  as a writer's operand (`tee -a =mytool`) or in `eval`, `trap` and `alias`
+  text (#1651, #1620).
+- Writes to a relative file such as `git log --output=.zshenv` or
+  `git config -f .zshenv …` when the folder it lands in can't be known: after
+  `cd "$X"` or another `cd` the check can't follow, after a wrapper's folder
+  option (`sudo -D ~`, `env -C ~`, `docker exec -w ~`), or in a function, trap
+  or loop that runs after a later `cd` (#1599, #1309, thanks to @bradsbots;
+  #1651, #1606, when an option value spelled `git` comes before the wrapper's
+  folder option).
+- `git grep -O<pager>` and `--open-files-in-pager`, which run a program on the
+  matching files (#1525, #1516). On Windows, also git named by its full path
+  and git's dashed helpers (`git-grep.exe`, `git-clone.exe`) (#1525, #1598).
+- `-O`, `-u` and `--open-files-in-pager` after a git subcommand that isn't one
+  of git's own commands, since an alias or an autocorrected typo can be
+  `grep` or `clone` (#1598, #1528, thanks to @Holic101, with parts of
+  @wizbubba1's #1597), and program-running options after built-ins that older
+  gits don't have, such as `refs` or `hook` (#1647, #1635).
+- git commands cut short by an unquoted bracket the shell reads as text
+  (`git -C { -c core.pager=sh log`; #1525, #1515), and git options that brace
+  expansion produces (`git clone r d {-q,--upload-pack=./x}`; #1644, #1636).
+- zsh's `>!` and `>>!` clobber redirections, read as writes
+  (`echo x >! ~/.zshrc`; #1640, #1607).
+
+One line asks less: `git add src/{a,b}.rs && git commit -m "msg"` no longer
+asks just because a quoted message follows the brace word (#1580, #1514,
+thanks to @grapemarketer). A line with many `sed` commands and long output
+names is now checked within a fixed size budget; past it, its output files
+count as one unknown file, the cautious reading (#1587, #1132, thanks to
+@0xzoz).
+
+## Windows sandbox
+
+- **The default (elevated) sandbox's commands can't break away from their
+  job** (#1639, D256, #1507). Cancelling or a timeout now ends every process
+  they start in their job; a program that asks to break away gets "access
+  denied" unless it retries without the flag. The non-admin sandbox already
+  worked this way.
+- **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
+  (#1642, D283, #1541). One that appears or is replaced deeper in your
+  workspace while a command runs isn't loaded until you confirm it, like one
+  at the top. Commands can't rename, move or delete existing ones or the
+  folders above them, so a `git checkout` or `npm ci` that does is refused
+  there.
+- **Non-admin sandbox: links can't undo a read-only path** (#1645, D293,
+  #1542; #1670, #1667). A command doesn't start when a configured read-only
+  path, or a folder above it, is a link (junction, symbolic link or mount
+  point) inside a writable folder, which a command could replace; the message
+  says to configure the link's target instead. A
+  read-only path spelled through a linked writable folder now gets the same
+  protection, and cloud placeholder folders (OneDrive) get the same
+  protection as plain folders (#1671, #1668).
+- **Non-admin sandbox commands start faster in large workspaces** (#1612,
+  D285). Their delete protections are now written without re-walking the whole
+  folder tree; in the PR's measurement on a 101,000-file repository, a command
+  took about 20 s instead of 31 s.

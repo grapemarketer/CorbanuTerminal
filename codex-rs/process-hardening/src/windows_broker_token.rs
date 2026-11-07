@@ -28,6 +28,10 @@
 //! restriction does not cover `FILE_DELETE_CHILD`, so in a folder at low
 //! integrity that grants the user full control (`LocalLow`, `Temp\Low`) the
 //! broker can delete a file, though not create, change or rename one.
+//! The same holds in `%TEMP%` (and any other writable root) while a legacy
+//! sandbox session holds it at Low integrity (#158 option (b), the sandbox's
+//! `integrity_leases`), until its label is put back once no session uses it
+//! (#1610).
 //! Only a restricted version of the caller's own token, so starting a process
 //! with it needs no privilege.
 
