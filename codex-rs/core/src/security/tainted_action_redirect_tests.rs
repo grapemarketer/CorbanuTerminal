@@ -42,16 +42,21 @@ fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKin
     classify_with(&action, Path::new(HOME), Some(work))
 }
 
+/// One command as the lexer reads it: words, stdin files, here-strings,
+/// files written, other words a redirection holds.
+type Read = (Vec<String>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
+
 /// The words and redirection positions the lexer reads, per command.
-fn lexed(line: &str) -> Vec<(Vec<String>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>)> {
+fn lexed(line: &str) -> Vec<Read> {
     shell::simple_commands(&["bash", "-lc", line].map(str::to_string))
         .commands
         .into_iter()
         .map(|command| {
             (
                 command.words,
-                command.stdin_from,
-                command.here_string,
+                // `iter()`: also on main, where each was an `Option`.
+                command.stdin_from.iter().copied().collect(),
+                command.here_string.iter().copied().collect(),
                 command.writes_to,
                 command.redirect_words,
             )
