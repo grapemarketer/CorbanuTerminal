@@ -414,8 +414,9 @@ pub(super) fn mapfile_callback(simple: &SimpleCommand, words: &[String], unseen:
         work::step();
         let raw = simple.words.get(at).map_or(word.as_str(), String::as_str);
         let built = super::may_be_built(raw) || unseen.get(at).is_some_and(|unseen| *unseen);
-        let target =
-            simple.stdin_from == Some(at) || simple.here_string == Some(at) || writes.contains(&at);
+        let target = simple.stdin_from.binary_search(&at).is_ok()
+            || simple.here_string.binary_search(&at).is_ok()
+            || writes.contains(&at);
         let after_option = at
             .checked_sub(1)
             .and_then(|before| simple.words.get(before))

@@ -1998,8 +1998,8 @@ impl Classifier {
                     simple.after
                 },
                 &simple.words,
-                simple.stdin_from.is_some()
-                    || simple.here_string.is_some()
+                !simple.stdin_from.is_empty()
+                    || !simple.here_string.is_empty()
                     || !simple.writes_to.is_empty(),
             );
             // #1422: an alias the line defines runs text neither reading
@@ -2674,8 +2674,9 @@ impl Classifier {
                 }
             }
         }
-        let stdin_fed =
-            simple.pipe_from.is_some() || simple.stdin_from.is_some() || simple.reads_outer_output;
+        let stdin_fed = simple.pipe_from.is_some()
+            || !simple.stdin_from.is_empty()
+            || simple.reads_outer_output;
         // #1685: and the command `eval` or `trap` text runs.
         for (index, _) in command.iter().chain(&carried) {
             work::step();
@@ -2755,8 +2756,8 @@ impl Classifier {
         }
         if !self.interactive_shell {
             let fed = simple.pipe_from.is_some()
-                || simple.stdin_from.is_some()
-                || simple.here_string.is_some()
+                || !simple.stdin_from.is_empty()
+                || !simple.here_string.is_empty()
                 || simple.reads_outer_output;
             self.interactive_shell = loader_variables::starts_interactive_shell(&lower, fed);
         }
@@ -2862,8 +2863,8 @@ impl Classifier {
             // cannot see (`tee "$(cat f)"`, `> $(cat f)`) may be any file.
             if (simple.writes_to.contains(&position)
                 || (path_writer.is_some_and(|index| position > index)
-                    && simple.stdin_from != Some(position)
-                    && simple.here_string != Some(position)))
+                    && simple.stdin_from.binary_search(&position).is_err()
+                    && simple.here_string.binary_search(&position).is_err()))
                 && outputs::unseen_place(word)
             {
                 self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(word));
@@ -3266,13 +3267,14 @@ impl Classifier {
                 }
             }
             Code::Stdin => {
-                // #1436: the file the shell opens, in its folder.
-                if let Some(at) = simple.stdin_from
+                // #1436: the file the shell opens, in its folder (the
+                // last `<` is its stdin: `bash <a <b` reads `b`).
+                if let Some(&at) = simple.stdin_from.last()
                     && !self.runs_elsewhere(/*from*/ None, at, &words[at])
                 {
                     self.required_script(&words[at], cwd, depth, shell);
                 }
-                if simple.here_string.is_some_and(|at| unseen[at]) {
+                if simple.here_string.iter().any(|at| unseen[*at]) {
                     self.note(ProtectedActionKind::UnseenCode);
                 }
             }
@@ -3743,3 +3745,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
 mod tainted_action_refusal_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_redirect_tests.rs"]
+mod tainted_action_redirect_tests;

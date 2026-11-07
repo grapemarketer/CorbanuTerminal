@@ -438,11 +438,7 @@ pub(super) fn redirect_hides_command(
 /// (`redirect_hides_command`). The lexer adds the indexes in ascending
 /// order, so each lookup is a binary search, not a scan of the line.
 fn held(command: &SimpleCommand, at: usize) -> bool {
-    work::step();
-    command.writes_to.binary_search(&at).is_ok()
-        || command.redirect_words.binary_search(&at).is_ok()
-        || command.stdin_from == Some(at)
-        || command.here_string == Some(at)
+    command.held(at)
 }
 
 /// #1482 items 2 and 4: the words from `from` on without those a
