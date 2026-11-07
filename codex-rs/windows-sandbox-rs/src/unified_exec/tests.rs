@@ -720,9 +720,10 @@ struct LegacyDeleteOutcome {
     linked_file_exists: bool,
     /// The workspace's own label is back and no longer recorded.
     workspace_label_restored: bool,
-    /// A Low-labelled folder outside the roots that a planted `.agents`
-    /// junction points at keeps its label: the host relabels only inside
-    /// writable roots.
+    /// A Low-labelled folder outside the roots that a planted `.git`
+    /// junction in `TEMP` points at keeps its label: the host relabels only
+    /// inside writable roots. (A top-level `.codex`/`.agents` junction stops
+    /// the command, #1682.)
     low_can_write_junction_target: bool,
 }
 
@@ -859,7 +860,7 @@ fn run_legacy_delete_fixture(
         }
         let output = std::process::Command::new(system32_exe("cmd.exe"))
             .args(["/d", "/c", "mklink", "/J"])
-            .arg(workspace.join(".agents"))
+            .arg(temp_root.join(".git"))
             .arg(&junction_target)
             .output()
             .expect("run mklink");
