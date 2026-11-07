@@ -551,30 +551,35 @@ asking and now ask first:
   expansion produces (`git clone r d {-q,--upload-pack=./x}`; #1644, #1636).
 - zsh's `>!`, `>>!`, `&>!` and `>&!` clobber redirections, read as writes
   (`echo x >! ~/.zshrc`; #1640, #1607).
-- Commands in `eval`, `trap` and `alias` text now get every check the same
-  command gets on a line of its own (D341, #1698, #1685): writes to shell
-  start-up files (`trap 'tee -a ~/.zshrc' EXIT`, `eval 'tee -a ~/.zshrc'`),
-  output options (`curl -o`, `time -o`), sending a file (`curl -d @f`),
-  recursive reads of your home, scripts it runs (`./x.sh`, `source`,
-  `python3 x.py`), a wrapper's folder option, and, in an alias, git
-  settings that run code. Before, only some of these were checked there.
-  A `cd` in such text isn't followed: the folder it leaves counts as
-  unknown. Ordinary lines such as `trap 'rm -f "$tmp"' EXIT` or
-  `alias ll='ls -l'` stay quiet.
+- Commands in `eval`, `trap` and `alias` text, which now get every check
+  the same command gets on a line of its own (D341, #1698, #1685): writes
+  to shell start-up files (`trap 'tee -a ~/.zshrc' EXIT`,
+  `eval 'tee -a ~/.zshrc'`), output options (`curl -o`, `time -o`), sending
+  a file (`curl -d @f`), recursive reads of your home, scripts it runs
+  (`./x.sh`, `source`, `python3 x.py`), a wrapper's folder option
+  (`eval 'sudo -D sub ./run.sh'`), and, in an alias, git settings that run
+  code. Before, only some of these were checked there. A `cd` in such text
+  isn't followed: the folder it leaves counts as unknown. Ordinary text such
+  as `trap 'rm -f x' EXIT` or `alias ll='ls -l'` stays quiet.
+- Variables and environment settings made in such text
+  (`eval 'F=~/.zshrc'; tee -a "$F"`, `eval 'export GIT_PAGER=sh'`), and
+  writes to the shells' tables of code run by name (zsh's `functions`,
+  `commands` and alias tables, bash's `BASH_CMDS`; for example
+  `functions[f]='tee -a ~/.zshrc'; f`) (D341, #1698, #1685).
 - A program named by a path, or a shell or interpreter, run after a leading
-  redirection (`>log ./x`, `2>log sh x`, `sudo >log ./x`, `env >log ./x`),
+  redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
+  `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
   where the check used to read the redirection as the command (#1719,
   #1482, thanks to @darkmatter-sudo). `ls >log` and `2>/dev/null ls` are
   read as before.
-- A workspace script run through `eval`, directly or after a wrapper's
-  folder option (`eval ./x`, `eval 'sudo -C 3 ./run.sh'`), now gets the
-  check it gets without `eval` (#1719, #1482, thanks to @darkmatter-sudo).
 - `sudo -A`/`--askpass`, `sudo -e`/`--edit` and `sudoedit`, which run a
-  helper or editor named by the environment (#1719, #1482, thanks to
-  @darkmatter-sudo).
-- A command given as an argument list whose program element holds spaces or
-  a shell operator (`["true ./x"]`, `["true;./x"]`) (#1719, #1482, thanks
-  to @darkmatter-sudo). A shell's `-c` script is read as before.
+  helper or editor named by the environment, also in `eval` text
+  (`eval sudo -A ./x`) (#1719, #1482, thanks to @darkmatter-sudo).
+- A command given as an argument list whose elements up to the program
+  don't each read as one word (`["true ./x"]`, `["true;./x"]`,
+  `["env", "A=1 ./y", "./x"]`) (#1719, #1482, thanks to @darkmatter-sudo).
+  A shell's `-c` script is read as before. This doesn't apply under Windows
+  path rules, where program paths hold spaces.
 
 One line asks less: `git add src/{a,b}.rs && git commit -m "msg"` no longer
 asks just because a quoted message follows the brace word (#1580, #1514,
@@ -596,18 +601,22 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   to each other's processes or the helper processes that start them, or
   start programs under them. Projects are still not fully kept apart: a
   command can still borrow another command's access and write in its
-  folders (#1560), or race another command's start-up (#1721), and can
-  still read and end the other's processes. So still avoid running commands
+  folders (#1560), or, by racing another command's start-up, run code
+  outside its own sandbox restrictions (#1721), and can still read and end
+  the other's processes. So still avoid running commands
   in several projects at once (see `docs/sandbox.md`).
 - **Refused permission profiles say why** (D331, #1762). A profile with a
   writable folder inside a read-only one is now refused for the agent's
   commands in the non-admin sandbox too, as it already was in the default
-  sandbox and for app-server `command/exec`; this is new only under
-  Permissive. On both sandboxes the message now names both folders and says
-  to change the profile so that no writable folder lies in a read-only one.
-  In the non-admin sandbox, `command/exec` (and the exec server) now refuse
-  a profile that blocks reading files with a clear "can't block reading"
-  message instead of an unclear error from the sandbox.
+  sandbox and for app-server `command/exec`; in our measurements this
+  changes the outcome only under Permissive. On both sandboxes the message
+  now names both folders, notes that the protected `.git`, `.codex` and
+  `.agents` folders count as read-only, and says to change the profile so
+  that no writable folder lies in a read-only one. In the non-admin
+  sandbox, `command/exec` (and the exec server) now refuse a profile that
+  blocks or limits reading files with a clear message that says how to
+  switch to the default sandbox, instead of an unclear error from the
+  sandbox.
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
