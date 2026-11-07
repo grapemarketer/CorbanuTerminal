@@ -411,7 +411,7 @@ print_bazel_server_log_tails() {
     echo "::group::Bazel server log tail: ${server_log}"
     # java.log records the command line; never echo header values (API keys).
     tail -n 200 "$server_log" 2>&1 \
-      | sed -E "s#(--[a-z_]*header=)[^ ,\"']*#\1<redacted>#g; s#([Aa][Pp][Ii][-_][Kk][Ee][Yy][=:] ?)[^ ,\"']*#\1<redacted>#g" \
+      | sed -E "s#(--[a-z_]*header=[\"']?)[^ ,\"']*#\1<redacted>#g; s#([Aa][Pp][Ii][-_][Kk][Ee][Yy] ?[=:] ?[\"']?)[^ ,\"']*#\1<redacted>#g" \
       || true
     echo "::endgroup::"
   done

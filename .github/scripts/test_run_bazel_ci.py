@@ -170,7 +170,9 @@ Path(os.environ["BAZEL_ARGS_CAPTURE"]).write_text(
             jvm_out.write_text("jvm.out: server stderr\n", encoding="utf-8")
             (temp_path / "o" / "java.log").write_text(
                 "java.log: NullPointerException at Example.java:1\n"
-                "args: --remote_header=x-buildbuddy-api-key=SECRET123 --config=ci\n",
+                "args: --remote_header=x-buildbuddy-api-key=SECRET123 --config=ci\n"
+                "args: --remote_header x-buildbuddy-api-key=SECRET456\n"
+                "env: --client_env=BUILDBUDDY_API_KEY=\"SECRET789\"\n",
                 encoding="utf-8",
             )
             fake_bazel = temp_path / "bazel"
@@ -220,7 +222,8 @@ sys.exit(code)
         self.assertIn("java.log: NullPointerException", result.stderr)
         self.assertIn("retrying once", result.stderr)
         self.assertNotIn("java.log", result.stdout)
-        self.assertNotIn("SECRET123", result.stdout + result.stderr)
+        for secret in ["SECRET123", "SECRET456", "SECRET789"]:
+            self.assertNotIn(secret, result.stdout + result.stderr)
         self.assertIn("--remote_header=<redacted>", result.stderr)
 
     def test_a_second_bazel_server_crash_fails(self) -> None:
@@ -233,10 +236,11 @@ sys.exit(code)
 
     def test_build_and_test_failures_are_not_retried(self) -> None:
         for code in [1, 3]:
-            result, calls = self.run_with_exit_codes([code, 0])
+            with self.subTest(code=code):
+                result, calls = self.run_with_exit_codes([code, 0])
 
-            self.assertEqual(result.returncode, code)
-            self.assertEqual(calls, 1)
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(calls, 1)
 
 
 if __name__ == "__main__":
