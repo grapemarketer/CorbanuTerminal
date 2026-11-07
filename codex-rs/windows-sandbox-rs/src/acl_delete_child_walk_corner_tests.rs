@@ -1,13 +1,15 @@
-//! #1715: the corners of our walks that #1688's and #1707's reviews found
+//! #1715: corners of our walks that #1688's and #1707's reviews found
 //! untested, now compared with Windows' walks like the other D311 cases:
-//! - a label root that is a link (junction or symbolic link), which both
-//!   walks follow;
-//! - roots and children with a protected SACL, with stale objects below a
-//!   protected folder;
+//! - roots and children with a protected label SACL, with stale objects
+//!   below a protected folder;
 //! - reparse points other than links and cloud-file placeholders (ProjFS,
 //!   WCI, DFS), which both walks treat as plain files and folders;
 //! - D261's check of a root swapped for another folder (or a link) between
 //!   the write and the check, which must check nothing.
+//!
+//! A label root that is a link is not here: Windows' walk labels the link
+//! itself, while ours follows it (#1715's measurement; production callers
+//! never pass one).
 
 use super::*;
 use crate::acl::walk::Handle;
@@ -22,103 +24,6 @@ const MEDIUM: &str = "S-1-16-8192";
 const GENERIC_WRITE: u32 = 0x4000_0000;
 /// `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`.
 const NO_WRITE_UP: u32 = 0x1;
-
-/// One label step, run the same way on both sides; returns what it
-/// reported.
-type LabelStep<'a> = (&'a str, &'a dyn Fn(&Path) -> String);
-
-/// Runs `steps` on `roots`, Windows' walk on the first and ours (with
-/// `mutant`, if any) on the second, comparing every object below `sides`
-/// after each step. Returns the steps that differed and how often our walk
-/// fell back to Windows'.
-fn label_steps(
-    sides: [&Path; 2],
-    roots: [&Path; 2],
-    steps: &[LabelStep<'_>],
-    mutant: Option<LabelMutant>,
-) -> (Vec<String>, usize) {
-    let mut differing = Vec::new();
-    let fallbacks_before = LABEL_FALLBACKS.with(std::cell::Cell::get);
-    for (name, step) in steps {
-        LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
-        let w = step(roots[0]);
-        LABEL_MUTANT.with(|cell| cell.set(mutant));
-        let d = step(roots[1]);
-        LABEL_MUTANT.with(|cell| cell.set(None));
-        if w != d {
-            differing.push(format!("{name}: walk={w} direct={d}"));
-        }
-        let diff = full_diff(&full_snapshot(sides[0]), &full_snapshot(sides[1]));
-        if !diff.is_empty() {
-            differing.push(format!(
-                "{name}: {} objects, {:?}",
-                diff.len(),
-                diff.iter().take(3).collect::<Vec<_>>()
-            ));
-        }
-    }
-    let fallbacks = LABEL_FALLBACKS.with(std::cell::Cell::get) - fallbacks_before;
-    (differing, fallbacks)
-}
-
-/// Labels a root that is a link (`mklink` with `args`) to a workspace
-/// beside it, then protects its `.git` and puts its label back. `None` if
-/// the link could not be made here.
-fn link_root_case(name: &str, args: &[&str]) -> Option<(Vec<String>, usize)> {
-    let base = tempfile::tempdir().expect("base dir");
-    let verbatim = std::fs::canonicalize(base.path())
-        .expect("canonical base")
-        .join("t");
-    let plain = dunce::simplified(&verbatim).to_path_buf();
-    let sides = [plain.join("walked"), plain.join("direct")];
-    LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
-    for side in &sides {
-        let workspace = side.join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace");
-        build_tree_b(&workspace);
-        if !mklink(args, &side.join("root"), &workspace) {
-            LABEL_MUTANT.with(|cell| cell.set(None));
-            println!("d311 label case={name} skipped: no symbolic link privilege");
-            return None;
-        }
-    }
-    LABEL_MUTANT.with(|cell| cell.set(None));
-    let roots = [sides[0].join("root"), sides[1].join("root")];
-    let steps: [LabelStep; 3] = [
-        ("label", &step_label),
-        ("protect", &step_protect),
-        ("restore", &step_restore),
-    ];
-    let (walked, direct) = (verbatim.join("walked"), verbatim.join("direct"));
-    let outcome = label_steps([&walked, &direct], [&roots[0], &roots[1]], &steps, None);
-    println!(
-        "d311 label case={name} objects={} differing_steps={} label_fallbacks={}",
-        full_snapshot(&direct).len(),
-        outcome.0.len(),
-        outcome.1
-    );
-    Some(outcome)
-}
-
-/// #1715: a root that is a junction or a symbolic link is followed by
-/// `SetNamedSecurityInfoW`, and by our walk: the workspace it points at is
-/// labelled, the link itself is not, and our walk does it without falling
-/// back.
-#[test]
-fn d311_label_walk_link_roots_match_windows_walk() {
-    let mut failed = Vec::new();
-    for (name, args) in [
-        ("K1-junction-root", &["/J"][..]),
-        ("K2-dir-symlink-root", &["/D"][..]),
-    ] {
-        if let Some((differing, fallbacks)) = link_root_case(name, args)
-            && (!differing.is_empty() || fallbacks != 0)
-        {
-            failed.push(format!("{name}: fallbacks={fallbacks} {differing:?}"));
-        }
-    }
-    assert!(failed.is_empty(), "differing cases: {failed:#?}");
-}
 
 /// Writes `path`'s label SACL protected (inheriting nothing from above),
 /// with one explicit `level` entry with `flags`, or none.

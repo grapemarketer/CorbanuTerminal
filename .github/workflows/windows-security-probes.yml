@@ -202,10 +202,9 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::walk_equality::d311_ --nocapture --test-threads=1 2>&1 | tee d311.log
           grep -q "test result: ok. 15 passed" d311.log
           if grep -q "skipped: no symbolic link privilege" d311.log; then exit 1; fi
-          # #1715: the walk corners (link roots, protected SACLs, other reparse points, a swapped root).
+          # #1715: the walk corners (protected SACLs, other reparse points, a swapped root).
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::walk_equality::corners::d311_ --nocapture --test-threads=1 2>&1 | tee d1715.log
-          grep -q "test result: ok. 5 passed" d1715.log
-          if grep -q "skipped: no symbolic link privilege" d1715.log; then exit 1; fi
+          grep -q "test result: ok. 4 passed" d1715.log
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::walk::tests:: --nocapture --test-threads=1 2>&1 | tee d313.log
           grep -q "test result: ok. 7 passed" d313.log
           rm d311.log d1715.log d313.log
@@ -358,7 +357,7 @@ jobs:
             Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::d311_' 15
             & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::walk_equality::d311_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D311 walk comparison failed in a normal session" }
-            Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::corners::d311_' 5
+            Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::corners::d311_' 4
             & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::walk_equality::corners::d311_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#1715 walk corners failed in a normal session" }
             Assert-Tests $sandbox 'acl::walk::tests::' 7

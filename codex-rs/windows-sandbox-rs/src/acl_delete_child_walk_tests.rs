@@ -20,9 +20,26 @@ use crate::integrity::walk::FALLBACKS as LABEL_FALLBACKS;
 use crate::integrity::walk::MUTANT as LABEL_MUTANT;
 use crate::integrity::walk::Mutant as LabelMutant;
 use pretty_assertions::assert_eq;
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+use windows_sys::Win32::Storage::FileSystem::ExtendedFileIdType;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_128;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_DESCRIPTOR;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_DESCRIPTOR_0;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_EXTD_DIR_INFO;
+use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
+use windows_sys::Win32::Storage::FileSystem::FileIdExtdDirectoryInfo;
+use windows_sys::Win32::Storage::FileSystem::FileIdExtdDirectoryRestartInfo;
+use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandleEx;
+use windows_sys::Win32::Storage::FileSystem::OpenFileById;
+use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
 
 /// Stands in for another writable root's capability SID.
 const OTHER_CAPABILITY: &str = "S-1-5-21-2718281828-3141592653-1618033988-1002";
@@ -175,23 +192,27 @@ fn full_diff(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> Vec<
 }
 
 /// Every object's owner, group, DACL and label below `base` (and `base`),
-/// links not followed, by relative path.
+/// links not followed, by relative path. #1715: each entry is opened by its
+/// file ID from its folder's listing, never by a path through a folder: a
+/// folder whose reparse tag no filter handles (DFS, say) can't be listed or
+/// passed through by path.
 fn full_snapshot(base: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let mut pending = vec![base.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let meta = std::fs::symlink_metadata(&path).expect("metadata");
-        if meta.is_dir() {
-            for entry in std::fs::read_dir(&path).expect("read dir") {
-                pending.push(entry.expect("entry").path());
+    let root = SnapshotHandle::open(base, /*folder*/ true);
+    out.insert(String::new(), root.sddl(base));
+    let mut pending = vec![(PathBuf::new(), root)];
+    while let Some((relative, dir)) = pending.pop() {
+        for (name, attributes, tag, id) in dir.entries(&relative) {
+            let path = relative.join(OsString::from_wide(&name));
+            // A folder that is not a link (a name surrogate).
+            let walk_into = attributes & FILE_ATTRIBUTE_DIRECTORY != 0
+                && (attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 || tag & 0x2000_0000 == 0);
+            let entry = dir.open_by_id(id, walk_into, &path);
+            out.insert(path.display().to_string(), entry.sddl(&path));
+            if walk_into {
+                pending.push((path, entry));
             }
         }
-        let relative = path
-            .strip_prefix(base)
-            .expect("below")
-            .display()
-            .to_string();
-        out.insert(relative, full_sddl(&path));
     }
     out
 }
@@ -199,49 +220,168 @@ fn full_snapshot(base: &Path) -> BTreeMap<String, String> {
 /// Owner, group, DACL and label of the object at `path` itself (a link's
 /// own), as SDDL.
 fn full_sddl(path: &Path) -> String {
-    let info = OWNER_SECURITY_INFORMATION
-        | GROUP_SECURITY_INFORMATION
-        | DACL_SECURITY_INFORMATION
-        | LABEL_SECURITY_INFORMATION;
-    // SAFETY: valid path and out pointers; the handle and buffers are freed.
-    unsafe {
-        let handle = CreateFileW(
-            to_wide(path).as_ptr(),
-            READ_CONTROL,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            0,
-        );
+    SnapshotHandle::open(path, /*folder*/ false).sddl(path)
+}
+
+/// A handle [`full_snapshot`] reads an object (and lists a folder) through,
+/// closed on drop.
+struct SnapshotHandle(HANDLE);
+
+impl SnapshotHandle {
+    /// `path` itself (a link's own), for listing too if `folder`.
+    fn open(path: &Path, folder: bool) -> Self {
+        let access = if folder {
+            READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE
+        } else {
+            READ_CONTROL
+        };
+        // SAFETY: a valid path; the handle is closed on drop.
+        let handle = unsafe {
+            CreateFileW(
+                to_wide(path).as_ptr(),
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                0,
+            )
+        };
         assert_ne!(handle, INVALID_HANDLE_VALUE, "open {}", path.display());
-        let mut sd: *mut c_void = std::ptr::null_mut();
-        let code = GetSecurityInfo(
+        Self(handle)
+    }
+
+    /// The entry with file ID `id` on this folder's volume, itself (a
+    /// link's own), for listing too if `folder`.
+    fn open_by_id(&self, id: FILE_ID_128, folder: bool, path: &Path) -> Self {
+        let descriptor = FILE_ID_DESCRIPTOR {
+            dwSize: std::mem::size_of::<FILE_ID_DESCRIPTOR>() as u32,
+            Type: ExtendedFileIdType,
+            Anonymous: FILE_ID_DESCRIPTOR_0 { ExtendedFileId: id },
+        };
+        let access = if folder {
+            READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE
+        } else {
+            READ_CONTROL
+        };
+        // SAFETY: a valid descriptor; the handle is closed on drop.
+        let handle = unsafe {
+            OpenFileById(
+                self.0,
+                &descriptor,
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            )
+        };
+        assert_ne!(
             handle,
-            SE_FILE_OBJECT,
-            info,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut sd,
+            INVALID_HANDLE_VALUE,
+            "open {} by ID: {}",
+            path.display(),
+            std::io::Error::last_os_error()
         );
-        CloseHandle(handle);
-        assert_eq!(code, ERROR_SUCCESS, "GetSecurityInfo {}", path.display());
-        let mut text: *mut u16 = std::ptr::null_mut();
-        let ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            sd,
-            SDDL_REVISION_1,
-            info,
-            &mut text,
-            std::ptr::null_mut(),
-        );
-        LocalFree(sd as HLOCAL);
-        assert_ne!(ok, 0, "SDDL {}", path.display());
-        let len = (0..).take_while(|&i| *text.add(i) != 0).count();
-        let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
-        LocalFree(text as HLOCAL);
-        sddl
+        Self(handle)
+    }
+
+    /// The folder's entries without `.` and `..`: name, attributes, reparse
+    /// tag and file ID.
+    fn entries(&self, path: &Path) -> Vec<(Vec<u16>, u32, u32, FILE_ID_128)> {
+        let mut out = Vec::new();
+        let mut buffer = vec![0_u64; 8192];
+        let mut class = FileIdExtdDirectoryRestartInfo;
+        loop {
+            // SAFETY: a folder handle and a buffer of the size given.
+            let ok = unsafe {
+                GetFileInformationByHandleEx(
+                    self.0,
+                    class,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    (buffer.len() * 8) as u32,
+                )
+            };
+            if ok == 0 {
+                let err = std::io::Error::last_os_error();
+                assert_eq!(
+                    err.raw_os_error(),
+                    Some(ERROR_NO_MORE_FILES as i32),
+                    "list {}: {err}",
+                    path.display()
+                );
+                return out;
+            }
+            class = FileIdExtdDirectoryInfo;
+            let mut offset = 0_usize;
+            loop {
+                // SAFETY: entries the call wrote, read unaligned.
+                let (info, name) = unsafe {
+                    let entry = (buffer.as_ptr() as *const u8).add(offset);
+                    let info = std::ptr::read_unaligned(entry as *const FILE_ID_EXTD_DIR_INFO);
+                    let name = entry.add(std::mem::offset_of!(FILE_ID_EXTD_DIR_INFO, FileName))
+                        as *const u16;
+                    let name: Vec<u16> = (0..info.FileNameLength as usize / 2)
+                        .map(|i| std::ptr::read_unaligned(name.add(i)))
+                        .collect();
+                    (info, name)
+                };
+                let dot = u16::from(b'.');
+                if name != [dot] && name != [dot, dot] {
+                    out.push((name, info.FileAttributes, info.ReparsePointTag, info.FileId));
+                }
+                if info.NextEntryOffset == 0 {
+                    break;
+                }
+                offset += info.NextEntryOffset as usize;
+            }
+        }
+    }
+
+    /// The object's owner, group, DACL and label, as SDDL.
+    fn sddl(&self, path: &Path) -> String {
+        let info = OWNER_SECURITY_INFORMATION
+            | GROUP_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION
+            | LABEL_SECURITY_INFORMATION;
+        // SAFETY: an open handle and valid out pointers; the buffers are
+        // freed.
+        unsafe {
+            let mut sd: *mut c_void = std::ptr::null_mut();
+            let code = GetSecurityInfo(
+                self.0,
+                SE_FILE_OBJECT,
+                info,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(code, ERROR_SUCCESS, "GetSecurityInfo {}", path.display());
+            let mut text: *mut u16 = std::ptr::null_mut();
+            let ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd,
+                SDDL_REVISION_1,
+                info,
+                &mut text,
+                std::ptr::null_mut(),
+            );
+            LocalFree(sd as HLOCAL);
+            assert_ne!(ok, 0, "SDDL {}", path.display());
+            let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+            let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+            LocalFree(text as HLOCAL);
+            sddl
+        }
+    }
+}
+
+impl Drop for SnapshotHandle {
+    fn drop(&mut self) {
+        // SAFETY: a handle this type opened.
+        unsafe {
+            CloseHandle(self.0);
+        }
     }
 }
 
