@@ -978,3 +978,61 @@ fn d311_label_walk_private_folder_and_earlier_label_match_windows_walk() {
         "our walk did the work"
     );
 }
+
+/// #1707 review r2: the order a legacy command uses (the root labelled Low
+/// first, then its protected paths Medium below it), a protected path that
+/// is a file (a worktree's `.git`) and a root nested in a Low root, as
+/// Windows' walk leaves them.
+#[test]
+fn d311_label_walk_production_order_and_file_roots_match_windows_walk() {
+    let base = tempfile::tempdir().expect("base dir");
+    let verbatim = std::fs::canonicalize(base.path())
+        .expect("canonical base")
+        .join("t");
+    let plain = dunce::simplified(&verbatim).to_path_buf();
+    let roots = [plain.join("walked\\root"), plain.join("direct\\root")];
+    LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
+    for root in &roots {
+        std::fs::create_dir_all(root.join("wt\\src")).expect("worktree");
+        build_tree_b(root);
+        std::fs::write(root.join("wt\\.git"), b"gitdir: ../.git/worktrees/wt\n")
+            .expect(".git file");
+        std::fs::write(root.join("wt\\src\\w.rs"), b"w").expect("file");
+    }
+    LABEL_MUTANT.with(|cell| cell.set(None));
+    let (walked, direct) = (verbatim.join("walked"), verbatim.join("direct"));
+    let steps: [(&str, CommandStep); 5] = [
+        ("label", step_label),
+        ("protect", step_protect),
+        ("protect-file", |root| {
+            // SAFETY: an existing file.
+            let result =
+                unsafe { crate::integrity::label_protected_path_medium(&root.join("wt\\.git")) };
+            format!("{:?}", result.map_err(|err| err.to_string()))
+        }),
+        ("nested-root", |root| step_label(&root.join("wt"))),
+        ("restore", step_restore),
+    ];
+    let mut differing = Vec::new();
+    let fallbacks_before = LABEL_FALLBACKS.with(std::cell::Cell::get);
+    for (name, step) in steps {
+        LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
+        let w = step(&roots[0]);
+        LABEL_MUTANT.with(|cell| cell.set(None));
+        let d = step(&roots[1]);
+        assert_eq!(w, d, "{name}");
+        let diff = full_diff(&full_snapshot(&walked), &full_snapshot(&direct));
+        if !diff.is_empty() {
+            differing.push(format!(
+                "{name}: {:?}",
+                diff.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+    }
+    assert!(differing.is_empty(), "{differing:#?}");
+    assert_eq!(
+        LABEL_FALLBACKS.with(std::cell::Cell::get) - fallbacks_before,
+        0,
+        "our walk did the work"
+    );
+}
