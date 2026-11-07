@@ -1984,3 +1984,69 @@ fn issue290_interleaved_usage_keeps_latest_totals_for_each_thread() {
         );
     }
 }
+
+fn synthetic_usage_update(
+    thread_id: &str,
+    turn_id: &str,
+    info: codex_protocol::protocol::TokenUsageInfo,
+) -> ServerNotification {
+    ServerNotification::ThreadTokenUsageUpdated(
+        codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            token_usage: ThreadTokenUsage::from(info),
+            account_usage: None,
+        },
+    )
+}
+
+#[test]
+fn issue1570_context_window_fill_keeps_last_reported_usage() {
+    use codex_protocol::protocol::TokenUsageInfo;
+
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let _ = processor.collect_thread_events(usage_update(
+        "thread-1", "turn-1", /*input_tokens*/ 4_200,
+    ));
+    // `set_total_tokens_full` replaces the totals with zero counters.
+    let _ = processor.collect_thread_events(synthetic_usage_update(
+        "thread-1",
+        "turn-1",
+        TokenUsageInfo::full_context_window(/*context_window*/ 200_000),
+    ));
+
+    let completed = processor.collect_thread_events(completed_turn("thread-1", "turn-1"));
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Some(Usage {
+                    input_tokens: 4_200,
+                    cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                }),
+            })],
+            status: CodexStatus::InitiateShutdown,
+        }
+    );
+}
+
+#[test]
+fn issue1570_provider_reported_zero_usage_is_still_reported() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let _ = processor
+        .collect_thread_events(usage_update("thread-1", "turn-1", /*input_tokens*/ 0));
+
+    let completed = processor.collect_thread_events(completed_turn("thread-1", "turn-1"));
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Some(Usage::default()),
+            })],
+            status: CodexStatus::InitiateShutdown,
+        }
+    );
+}
