@@ -803,6 +803,23 @@ mod thread_processor_behavior_tests {
         (request, config_snapshot)
     }
 
+    /// #1637: a loaded thread that is not on disk yet (so `thread/read` falls
+    /// back to its config snapshot) still reports the thread it was forked from.
+    #[test]
+    fn build_thread_from_snapshot_keeps_forked_from_id() {
+        let (_, mut config_snapshot) = resume_mismatch_fixture();
+        let forked_from = ThreadId::new();
+        config_snapshot.forked_from_thread_id = Some(forked_from);
+        let thread = build_thread_from_snapshot(
+            ThreadId::new(),
+            "session-1".to_string(),
+            /*multi_agent_version*/ None,
+            &config_snapshot,
+            /*path*/ None,
+        );
+        assert_eq!(thread.forked_from_id, Some(forked_from.to_string()));
+    }
+
     #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {
         let (request, config_snapshot) = resume_mismatch_fixture();

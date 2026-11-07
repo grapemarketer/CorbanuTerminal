@@ -28,7 +28,10 @@ using at that moment.
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
   other runs (#1560). The default sandbox doesn't prevent this yet either
-  (#1648), so avoid running commands in several projects at once.
+  (#1560, #1648), so avoid running commands in several projects at once.
+  In the default sandbox, a command that races another command's start-up
+  can also run code with the sandbox account's full access, outside its own
+  restrictions (#1721).
 - Drives without Windows permissions, such as FAT or exFAT USB drives: neither
   sandbox can protect files there.
 
@@ -55,10 +58,35 @@ doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
 has ended). Check its contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
-when the command ends is treated the same way. Commands can't change, move
-or delete the ones that existed when they started, or the folders above
-them. A folder the sandbox can't list counts as planted. Folders inside
+when the command ends is treated the same way. A read-only `.codex` or
+`.agents` folder your permission profile names that doesn't exist yet (or
+one on the way to a read-only folder inside it) is created by Corbanu
+Terminal before the command starts, so that command doesn't count it as
+planted; another command that was already running still does. Commands
+can't change, move or delete the ones that existed when they started, or
+the folders above them. A folder the sandbox can't list counts as planted. Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
+
+**Read-only paths that don't exist yet.** If your permission profile marks a
+path inside a writable folder read-only and that path doesn't exist when a
+sandboxed command starts, Corbanu Terminal creates it as an empty folder and
+protects it, so the command can't create it and fill it. Both Windows
+sandboxes do this. It has two side effects:
+
+- A path meant to be a file, such as `.env`, becomes an empty folder wherever
+  it's missing, and tools that expect a file there may fail to read it. To
+  keep a file there, create the file before you start a session. If the
+  folder has already been made, delete it while no session is running, then
+  create the file.
+- A read-only path inside `.git`, such as `.git\hooks`, in a folder that
+  isn't a git repository yet creates a `.git` there that holds only an empty
+  `hooks` folder. The non-admin sandbox protects that `.git` at once. The
+  default sandbox protects only `hooks` for the command that made it, and the
+  whole `.git` from the next command on (#1758). Git doesn't treat such a
+  `.git` as a repository, so git commands in that folder report "not a git
+  repository" or use a repository in a folder above it. Run `git init` there
+  yourself, or remove the entry and then delete that `.git` folder while no
+  session is running.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

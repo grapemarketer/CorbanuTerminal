@@ -191,11 +191,47 @@ time with different writable roots (different projects, or different extra
 writable folders): either can write in the other's. Documented for now
 (D291, Travis 2026-11-06) in the non-admin warning and `docs/sandbox.md`. D291
 also pointed people who work on several projects at once to the elevated
-backend, but measured since, its commands can do the same to each other and
-more: they share one sandbox account and get full access to each other's
-processes even without borrowing a token (#1648, awaiting a decision). So the
-docs say neither backend keeps concurrent projects apart. A redesigned legacy
-token that closes the borrowing is to be measured separately. Killing
+backend, but measured since, its commands could do the same to each other and
+more: they share one sandbox account (a restricting SID of every elevated
+token) and the logon SID of the session that starts their runners, and had
+full access to each other's processes and runners even without borrowing a
+token (#1648). Since D324 (Travis 2026-11-07) each elevated command's token
+carries its own identity SID too, and its default DACL grants full access
+only to SYSTEM, the sandbox users' group (every elevated token holds it as a
+normal group, never as a restricting SID, so it can't pass the write check)
+and that SID; the logon SID, the sandbox account, `OWNER RIGHTS`, Everyone
+and the capability SIDs get read and execute. As its first step, each
+runner also limits what the sandbox account, which all elevated commands
+share, may do to it: query its process and threads (and wait for them),
+query its token, and nothing on the objects it creates without explicit
+security, such as its pipes and the ConPTY console host, which get full
+access for SYSTEM and read, write and execute for the sandbox users' group. Measured on CI, elevated and in a normal session: an
+elevated command can no longer open another elevated command's process, its
+own or another command's runner, or a runner's console host for any of the 8
+write rights, adjust their tokens, or open a runner's token; a ConPTY
+console host's token still opens for `TOKEN_DUPLICATE`, but a command
+impersonating it gets identification level only and can't write or start
+processes as it (measured); it keeps full access to its own processes; a cmd pipeline,
+PowerShell (with and without ConPTY), `git init` and `git status` still
+work. Core starts each runner suspended and, before it runs, limits its
+process and main thread to SYSTEM; the runner has no console, so no console
+host starts before its first step. Not closed: the threads Windows' loader
+starts in a runner before that first step get the logon's default DACL,
+which gives the sandbox account full access, so a command racing a
+runner's start-up can still open one for write rights (10 to 16 of 20
+start-ups on CI, #1721). Such a thread lets the command run code in the
+unrestricted runner, outside its restricted token and job, so this
+start-up race is the remaining route out of the elevated sandbox that D324
+didn't close; a CI test keeps the other start-up routes closed. Elevated
+commands can still read each other's processes, including their ConPTY
+console hosts (another workspace's terminal output), as before (reads
+aren't restricted), end them (D292), and borrow another elevated command's
+token through the group's `TOKEN_DUPLICATE` and write in that command's
+writable roots, as legacy commands can (#1560); impersonating another
+command's threads may be a second borrowing route (unmeasured, #1560). So the docs
+still say neither backend keeps concurrent projects apart. Closing the
+borrowing for both backends, after the #1560 token measurement, is D324's
+second step. Killing
 another command's processes stays possible on purpose (D292). Two routes
 still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child
@@ -212,7 +248,24 @@ unsandboxed. For an explicitly configured read-only path nested deeper in a
 writable root (`w\a\b`, say), each folder between the root and it (`w\a`)
 also denies the sandbox `DELETE`, and that folder's parent denies Everyone
 `FILE_DELETE_CHILD`, so a command can't move or rename the folder away and
-recreate the read-only path (#1506 item 3, D263). Commands can still write
+recreate the read-only path (#1506 item 3, D263). An explicitly configured
+read-only path that doesn't exist yet is created (as a folder) before the
+command starts and protected the same way, whether it comes from the
+profile alone (the shell tool, unified exec, `codex sandbox`) or as an extra
+deny-write path (#1686); a link a command could replace on the way to it
+stops the command first. A path meant to be a file (`.env`, say) thus becomes an empty
+folder in each writable root that lacks it, which tools that read it may
+reject. Such a path is created before the session records which `.codex`/`.agents`
+folders exist (D262, D283 below), so a configured read-only `.agents` (or a
+nested `.codex`) the sandbox makes isn't reported as planted (a session that
+started before it was made, and saw it absent, still reports it, except one
+whose only root containing it is a `%TEMP%` one, which isn't watched). A
+top-level `.codex`, `.agents` or `.git` made on the way to a deeper
+read-only path (`.codex\hooks`, `.git\hooks`) is then protected as one
+that was there. A
+skip-missing entry applies only to a path that exists, a path in
+a writable root that doesn't exist is left alone, and the command root's
+top-level `.codex` is covered by D262 below. Commands can still write
 inside those folders but can't delete or rename the folders themselves; the
 default `.git`, `.codex` and `.agents` protections sit directly in the root
 and don't add these. A `.codex` or `.agents` folder at the top of a writable
@@ -228,7 +281,18 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user.
+folder while a session runs is reported, including the user. A top-level
+`.codex` or `.agents` that is itself a link (a junction, symbolic link or
+mount point), or can't be inspected, stops the command: its protections
+would land on the link's target, and a command could replace the link with
+a writable folder that D262 doesn't report, since something was there when
+the session started (#1682). Replace the link with a folder. This applies
+to the roots D283 watches (not those that come only from `%TEMP%`/`%TMP%`)
+that hold their own write capability; the user profile folder doesn't
+(only its children do), so a linked `~\.codex` there doesn't stop the
+command. Other reparse points, such as cloud placeholders, aren't links
+(#1668). A top-level `.git` link isn't refused: `.git` may be missing and
+then created by a command anyway, and some tools (Google's `repo`) link it.
 
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too

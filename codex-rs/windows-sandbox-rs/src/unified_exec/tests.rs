@@ -47,7 +47,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
+pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
     LEGACY_PROCESS_TEST_LOCK
         .lock()
         .expect("legacy Windows sandbox process test lock poisoned")
@@ -720,9 +720,10 @@ struct LegacyDeleteOutcome {
     linked_file_exists: bool,
     /// The workspace's own label is back and no longer recorded.
     workspace_label_restored: bool,
-    /// A Low-labelled folder outside the roots that a planted `.agents`
-    /// junction points at keeps its label: the host relabels only inside
-    /// writable roots.
+    /// A Low-labelled folder outside the roots that a planted `.git`
+    /// junction in a second workspace root points at keeps its label: the
+    /// host relabels only inside writable roots, never through a link. (A
+    /// top-level `.codex`/`.agents` junction stops the command, #1682.)
     low_can_write_junction_target: bool,
 }
 
@@ -827,7 +828,14 @@ fn run_legacy_delete_fixture(
         let temp_root = test_root.path().join("temp");
         let tmp_root = test_root.path().join("tmp");
         let outside_root = test_root.path().join("outside");
-        for directory in [&workspace, &temp_root, &tmp_root, &outside_root] {
+        let second_root = test_root.path().join("second");
+        for directory in [
+            &workspace,
+            &temp_root,
+            &tmp_root,
+            &outside_root,
+            &second_root,
+        ] {
             fs::create_dir_all(directory).expect("create legacy delete test directory");
         }
         let protected_git_dir = workspace.join(".git");
@@ -859,7 +867,7 @@ fn run_legacy_delete_fixture(
         }
         let output = std::process::Command::new(system32_exe("cmd.exe"))
             .args(["/d", "/c", "mklink", "/J"])
-            .arg(workspace.join(".agents"))
+            .arg(second_root.join(".git"))
             .arg(&junction_target)
             .output()
             .expect("run mklink");
@@ -970,7 +978,8 @@ fn run_legacy_delete_fixture(
 
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            workspace_roots_for(workspace.as_path()).as_slice(),
+            &[workspace.as_path(), second_root.as_path()]
+                .map(|root| AbsolutePathBuf::from_absolute_path(root).expect("absolute root")),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -2989,4 +2998,4 @@ mod carve_out_link;
 
 /// #1668: cloud-file placeholder folders at or above read-only paths.
 #[path = "cloud_placeholder_tests.rs"]
-mod cloud_placeholder;
+pub(crate) mod cloud_placeholder;

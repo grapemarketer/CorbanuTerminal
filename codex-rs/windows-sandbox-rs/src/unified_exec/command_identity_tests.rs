@@ -39,6 +39,7 @@ const TARGET_ENV: &str = "CODEX_D259_TARGET";
 const CHILD_ENV: &str = "CODEX_D259_CHILD";
 const HOLD_ENV: &str = "CODEX_D259_HOLD";
 const FILE_ENV: &str = "CODEX_D259_FILE";
+const OUT_ENV: &str = "CODEX_D259_OUT";
 const RESULT: &str = "d259: ";
 
 /// Process rights that are write rights for a write-restricted token (in the
@@ -151,9 +152,70 @@ fn write_result(path: &Path) -> String {
     }
 }
 
+/// Whether `token` (opened for `TOKEN_DUPLICATE`) can be the primary token
+/// of a new process this one starts: `ok`, or the failing step and error.
+///
+/// # Safety
+/// `token` must be a token handle with `TOKEN_DUPLICATE`.
+unsafe fn primary_result(token: HANDLE) -> String {
+    use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
+    use windows_sys::Win32::Security::TokenPrimary;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
+    use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+    use windows_sys::Win32::System::Threading::STARTUPINFOW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    // SAFETY: per the caller; every handle is closed below and every pointer
+    // refers to a live buffer.
+    unsafe {
+        let mut primary: HANDLE = 0;
+        if DuplicateTokenEx(
+            token,
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+            std::ptr::null(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        ) == 0
+        {
+            return format!("duplicate_err{}", GetLastError());
+        }
+        let mut command_line = crate::winutil::to_wide(format!(
+            "\"{}\" /d /c exit 0",
+            system32_exe("cmd.exe").display()
+        ));
+        let mut startup: STARTUPINFOW = std::mem::zeroed();
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+        let started = CreateProcessAsUserW(
+            primary,
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            /*binherithandles*/ 0,
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut info,
+        ) != 0;
+        let error = GetLastError();
+        CloseHandle(primary);
+        if !started {
+            return format!("err{error}");
+        }
+        WaitForSingleObject(info.hProcess, /*dwmilliseconds*/ 10_000);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        "ok".to_string()
+    }
+}
+
 /// Tries to write `path` while impersonating process `pid`'s token (which a
 /// write-restricted token opens for `TOKEN_DUPLICATE` through the user SID:
-/// that right isn't a write right), and without it.
+/// that right isn't a write right), and without it; and to start a process
+/// with a primary copy of that token.
 fn borrow_report(pid: u32, path: &Path) -> String {
     let own = write_result(path);
     // SAFETY: every handle is closed below; the thread reverts before returning.
@@ -173,6 +235,7 @@ fn borrow_report(pid: u32, path: &Path) -> String {
         if !opened {
             return format!("own_write={own} borrow=open_token_err{error}");
         }
+        let primary = primary_result(token);
         let mut duplicate: HANDLE = 0;
         let duplicated = DuplicateTokenEx(
             token,
@@ -185,21 +248,23 @@ fn borrow_report(pid: u32, path: &Path) -> String {
         let error = GetLastError();
         CloseHandle(token);
         if !duplicated {
-            return format!("own_write={own} borrow=duplicate_err{error}");
+            return format!("own_write={own} primary={primary} borrow=duplicate_err{error}");
         }
         let impersonating = SetThreadToken(std::ptr::null(), duplicate) != 0;
         let error = GetLastError();
         CloseHandle(duplicate);
         if !impersonating {
-            return format!("own_write={own} borrow=impersonate_err{error}");
+            return format!("own_write={own} primary={primary} borrow=impersonate_err{error}");
         }
         let write = write_result(path);
         // With the other command's identity, its processes are writable too.
         let create_process = open_result(pid, 0x0080);
         RevertToSelf();
-        format!("impersonated write={write} create_process={create_process}")
+        format!(
+            "primary={primary} borrow=impersonated write={write} create_process={create_process}"
+        )
     };
-    format!("own_write={own} borrow={borrowed}")
+    format!("own_write={own} {borrowed}")
 }
 
 /// Waits (up to a minute) in a legacy session for its release file, so a
@@ -230,27 +295,51 @@ fn command_identity_child_entry() {
     std::thread::sleep(Duration::from_secs(/*secs*/ 60));
 }
 
-/// Inside a legacy session. `peer`: what this command may do to the process
-/// in `CODEX_D259_TARGET`, another legacy command's. `borrow`: whether it
-/// can write `CODEX_D259_FILE` with that process's token. `self`: what it
-/// may do to its own child and token, and that it can end the child. Prints
-/// one `d259: ` line. Does nothing otherwise.
+/// Inside a sandboxed session. `peer`: what this command may do to the
+/// process in `CODEX_D259_TARGET` (`self` names this process), another
+/// command's. `borrow`: whether it can write `CODEX_D259_FILE` with that
+/// process's token. `peer_parent`/`borrow_parent`: the same for that
+/// process's parent (an elevated command's runner). `peer_console`/
+/// `borrow_console`: the same for each of that runner's console hosts.
+/// `peer_command_console`: `peer` for each console host of that process
+/// itself. `race`:
+/// see [`race_report`] (`CODEX_D259_CHILD` names its folder). `self`: what it may do
+/// to its own child and token, and that it can end the child. Prints one
+/// `d259: ` line. Does nothing otherwise.
 #[test]
 fn command_identity_probe_entry() {
     let Some(mode) = std::env::var_os(PROBE_ENV) else {
         return;
     };
     let target = || -> u32 {
-        std::env::var(TARGET_ENV)
-            .expect("target pid")
-            .parse()
-            .expect("numeric target pid")
+        let target = std::env::var(TARGET_ENV).expect("target pid");
+        if target == "self" {
+            return std::process::id();
+        }
+        target.parse().expect("numeric target pid")
     };
+    let file = || PathBuf::from(std::env::var_os(FILE_ENV).expect("target file"));
     let line = if mode == "peer" {
         access_report(target())
     } else if mode == "borrow" {
-        let file = PathBuf::from(std::env::var_os(FILE_ENV).expect("target file"));
-        borrow_report(target(), &file)
+        borrow_report(target(), &file())
+    } else if mode == "peer_parent" {
+        let (parent, image) = parent_of(target());
+        format!("parent={image} {}", access_report(parent))
+    } else if mode == "borrow_parent" {
+        let (parent, image) = parent_of(target());
+        format!("parent={image} {}", borrow_report(parent, &file()))
+    } else if mode == "peer_console" {
+        console_report(target(), access_report)
+    } else if mode == "peer_command_console" {
+        hosts_report(console_hosts_started_by(target()), access_report)
+    } else if mode == "borrow_console" {
+        let file = file();
+        console_report(target(), |host| borrow_report(host, &file))
+    } else if mode == "race" {
+        race_report(&PathBuf::from(
+            std::env::var_os(CHILD_ENV).expect("race dir"),
+        ))
     } else {
         let dir = PathBuf::from(std::env::var_os(CHILD_ENV).expect("child dir"));
         let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
@@ -282,7 +371,284 @@ fn command_identity_probe_entry() {
         let _ = child.wait();
         format!("{access} own_token_adjust_default={own} {child_report} ended_child={ended}")
     };
+    // A ConPTY wraps long lines: tests read this file instead.
+    if let Some(out) = std::env::var_os(OUT_ENV) {
+        fs::write(out, &line).expect("write probe result");
+    }
     println!("\n{RESULT}{line}");
+}
+
+/// Every process as (id, parent id, image name).
+fn process_entries() -> Vec<(u32, u32, String)> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Process32FirstW;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Process32NextW;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS;
+    let mut entries = Vec::new();
+    // SAFETY: the snapshot handle is checked and closed here; the entry is
+    // sized as the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        assert!(snapshot != INVALID_HANDLE_VALUE, "process snapshot");
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            entries.push((
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                String::from_utf16_lossy(&entry.szExeFile[..len]),
+            ));
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    entries
+}
+
+/// The parent process id and image name of process `pid`.
+fn parent_of(pid: u32) -> (u32, String) {
+    let entries = process_entries();
+    let parent = entries
+        .iter()
+        .find(|(id, _, _)| *id == pid)
+        .map(|(_, parent, _)| *parent)
+        .expect("target process listed");
+    let image = entries
+        .iter()
+        .find(|(id, _, _)| *id == parent)
+        .map(|(_, _, image)| image.clone())
+        .unwrap_or_default();
+    (parent, image)
+}
+
+/// Every console host (`conhost.exe` or `OpenConsole.exe`) that process
+/// `pid`'s parent, an elevated command's runner, started: its own console's
+/// and a ConPTY's.
+fn console_hosts_of(pid: u32) -> Vec<(u32, String)> {
+    let (runner, _) = parent_of(pid);
+    console_hosts_started_by(runner)
+}
+
+/// Every console host whose parent is process `parent`.
+fn console_hosts_started_by(parent_pid: u32) -> Vec<(u32, String)> {
+    let runner = parent_pid;
+    process_entries()
+        .into_iter()
+        .filter(|(_, parent, image)| {
+            let image = image.to_lowercase();
+            *parent == runner && (image == "conhost.exe" || image == "openconsole.exe")
+        })
+        .map(|(id, _, image)| (id, image))
+        .collect()
+}
+
+/// Process `pid`'s DACL as SDDL, or `err<code>`.
+fn process_dacl_sddl(pid: u32) -> String {
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
+    use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
+    use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    // SAFETY: every handle and buffer is checked and freed here.
+    unsafe {
+        let process = windows_sys::Win32::System::Threading::OpenProcess(0x0002_0000, 0, pid);
+        if process == 0 {
+            return format!("err{}", GetLastError());
+        }
+        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
+        let status = GetSecurityInfo(
+            process,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sd,
+        );
+        CloseHandle(process);
+        if status != 0 {
+            return format!("err{status}");
+        }
+        let mut text: *mut u16 = std::ptr::null_mut();
+        let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd,
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION,
+            &mut text,
+            std::ptr::null_mut(),
+        ) != 0;
+        let sddl = if converted {
+            let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+            let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+            LocalFree(text as HLOCAL);
+            sddl
+        } else {
+            format!("convert_err{}", GetLastError())
+        };
+        LocalFree(sd as HLOCAL);
+        sddl
+    }
+}
+
+/// `report` for each console host of process `pid`'s runner, joined by
+/// ` | `, each starting `host=<image>`; `hosts=0` if there is none.
+fn console_report(pid: u32, report: impl Fn(u32) -> String) -> String {
+    hosts_report(console_hosts_of(pid), report)
+}
+
+/// `report` for each of `hosts`, as [`console_report`] formats it.
+fn hosts_report(hosts: Vec<(u32, String)>, report: impl Fn(u32) -> String) -> String {
+    if hosts.is_empty() {
+        return "hosts=0".to_string();
+    }
+    hosts
+        .into_iter()
+        .map(|(host, image)| {
+            format!(
+                "host={image} dacl={} {}",
+                process_dacl_sddl(host),
+                report(host)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// The ids of every thread of the processes in `pids`, with their process.
+fn threads_of(pids: &std::collections::HashSet<u32>) -> Vec<(u32, u32)> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPTHREAD;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::THREADENTRY32;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Thread32First;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Thread32Next;
+    let mut threads = Vec::new();
+    // SAFETY: the snapshot handle is checked and closed here; the entry is
+    // sized as the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return threads;
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut more = Thread32First(snapshot, &mut entry) != 0;
+        while more {
+            if pids.contains(&entry.th32OwnerProcessID) {
+                threads.push((entry.th32ThreadID, entry.th32OwnerProcessID));
+            }
+            more = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    threads
+}
+
+/// Polls for elevated command runners other than this command's own until
+/// `dir/race.stop` appears (or two minutes pass), and tries to open each new
+/// one for `PROCESS_CREATE_PROCESS`, its token for `TOKEN_ADJUST_DEFAULT`,
+/// its threads for `THREAD_SET_CONTEXT`, and the console hosts it starts for
+/// `PROCESS_CREATE_PROCESS`, until it exits: what a command racing a runner's
+/// start-up gets (#1721). Counts runners (and console hosts) won at least
+/// once.
+fn race_report(dir: &Path) -> String {
+    use std::collections::HashSet;
+    let (own_runner, _) = parent_of(std::process::id());
+    let mut seen = HashSet::new();
+    let mut hosts_seen = HashSet::new();
+    let mut process_won = HashSet::new();
+    let mut token_won = HashSet::new();
+    let mut thread_won = HashSet::new();
+    let mut main_thread_won = HashSet::new();
+    let mut host_won = HashSet::new();
+    fs::write(dir.join("race.ready"), "ready").expect("write race ready");
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 120);
+    while !dir.join("race.stop").exists() && Instant::now() < deadline {
+        let entries = process_entries();
+        let runners: HashSet<u32> = entries
+            .iter()
+            .filter(|(pid, _, image)| {
+                *pid != own_runner && image.to_lowercase().starts_with("codex-command-runner")
+            })
+            .map(|(pid, _, _)| *pid)
+            .collect();
+        for pid in &runners {
+            seen.insert(*pid);
+            if open_result(*pid, 0x0080) == "ok" {
+                process_won.insert(*pid);
+            }
+            // SAFETY: the handles are closed right away.
+            let token = unsafe {
+                let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    *pid,
+                );
+                let mut token: HANDLE = 0;
+                let opened =
+                    handle != 0 && OpenProcessToken(handle, TOKEN_ADJUST_DEFAULT, &mut token) != 0;
+                if opened {
+                    CloseHandle(token);
+                }
+                if handle != 0 {
+                    CloseHandle(handle);
+                }
+                opened
+            };
+            if token {
+                token_won.insert(*pid);
+            }
+        }
+        let mut first_thread_seen = HashSet::new();
+        for (thread, pid) in threads_of(&runners) {
+            // The snapshot lists a process's threads oldest first.
+            let is_main = first_thread_seen.insert(pid);
+            // SAFETY: the handle is closed right away.
+            let opened = unsafe {
+                let handle = windows_sys::Win32::System::Threading::OpenThread(0x0010, 0, thread);
+                if handle != 0 {
+                    CloseHandle(handle);
+                }
+                handle != 0
+            };
+            if opened {
+                thread_won.insert(pid);
+                if is_main {
+                    main_thread_won.insert(pid);
+                }
+            }
+        }
+        for (host, parent, image) in &entries {
+            let image = image.to_lowercase();
+            if runners.contains(parent) && (image == "conhost.exe" || image == "openconsole.exe") {
+                hosts_seen.insert(*host);
+                if open_result(*host, 0x0080) == "ok" {
+                    host_won.insert(*host);
+                }
+            }
+        }
+    }
+    format!(
+        "race seen={} process_won={} token_won={} thread_won={} main_thread_won={} hosts_seen={} host_won={}",
+        seen.len(),
+        process_won.len(),
+        token_won.len(),
+        thread_won.len(),
+        main_thread_won.len(),
+        hosts_seen.len(),
+        host_won.len()
+    )
 }
 
 fn probe_argv(entry: &str) -> Vec<String> {
@@ -545,7 +911,8 @@ pub(super) fn git_for_windows(relative: &str) -> Option<PathBuf> {
         return Some(path);
     }
     assert!(
-        std::env::var_os("GITHUB_ACTIONS").is_none(),
+        std::env::var_os("GITHUB_ACTIONS").is_none()
+            && std::env::var_os("CODEX_SEC_WIN_1648_REQUIRE").is_none(),
         "{} is missing on CI",
         path.display()
     );
@@ -634,3 +1001,6 @@ fn legacy_command_tools_work_with_command_identity() {
         sandbox_log(home)
     );
 }
+
+#[path = "elevated_identity_tests.rs"]
+mod elevated;

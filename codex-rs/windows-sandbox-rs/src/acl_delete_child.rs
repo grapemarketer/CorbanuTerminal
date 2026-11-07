@@ -21,28 +21,36 @@
 //!   which walks, repairs and undoes any partial direct write.
 //!
 //! Reading is about three times cheaper than the walk's rewrite. Links are
-//! checked but not followed, as the walk does.
+//! checked but not followed, as the walk does. D311/D313: the reading runs on
+//! several threads, and each entry is opened through its folder's open
+//! handle rather than by path (`acl_walk.rs`).
 
 use super::DenyAceKind;
 use super::FILE_MAPPING;
 use super::INHERITED_ACE;
-use super::comparable_path;
-use super::final_path;
 use super::is_exact_delete_child_deny;
+use super::walk::Handle;
+use super::walk::Kind;
+use super::walk::Subfolder;
+use super::walk::check_threads;
+use super::walk::list;
+use super::walk::open_relative;
+use super::walk::par_walk;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::ffi::c_void;
+use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
-use windows_sys::Win32::Foundation::CloseHandle;
+use std::sync::Arc;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::ACL;
@@ -86,19 +94,11 @@ use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
 use windows_sys::Win32::Security::SetSecurityDescriptorGroup;
 use windows_sys::Win32::Security::SetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
-use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
-use windows_sys::Win32::Storage::FileSystem::CreateFileW;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
-use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
-use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
@@ -134,9 +134,9 @@ pub(super) unsafe fn set_delete_child_deny(
 ) -> Result<Written> {
     let kind = DenyAceKind::DeleteChild { inherit_to_subdirs };
     let is_entry = |ace: *const c_void| is_exact_delete_child_deny(ace, psid, inherit_to_subdirs);
-    // Follows a link at `path` itself, as `SetNamedSecurityInfoW` does;
-    // callers never pass one.
-    let opened = Handle::open_with(path, READ_CONTROL | WRITE_DAC, FILE_FLAG_BACKUP_SEMANTICS)
+    // A `path` that is itself a link is refused (D352, #1722) and goes to
+    // the #1549 calls, which write the link itself, not what it points at.
+    let opened = Handle::open_root(path, READ_CONTROL | WRITE_DAC)
         .and_then(|handle| Descriptor::read(handle.0).map(|current| (handle, current)));
     let Ok((handle, current)) = opened else {
         // Nothing written yet: the #1549 calls as they were.
@@ -176,9 +176,11 @@ pub(super) unsafe fn set_delete_child_deny(
         if !same_aces_except(current.dacl, new_dacl.as_ptr(), is_entry)? {
             bail!("the new DACL changes more than the delete-child entry");
         }
-        check_against_parent(path, &current, new_dacl.as_ptr())?;
+        if !is_mutant(Mutant::TargetUnchecked) {
+            check_against_parent(path, &current, new_dacl.as_ptr())?;
+        }
         write_and_check(handle.0, &current, new_dacl.as_ptr())?;
-        sync_below(path, psid)
+        sync_below(path, &handle, psid)
     })();
     drop(handle);
     if direct.is_ok() {
@@ -261,12 +263,58 @@ unsafe fn walk(
 }
 
 /// Checks every object below `root` (whose DACL was just written) against
-/// the DACL Windows computes from its parent's, depth first, as the tree walk
-/// would rewrite it. Writes the subfolders that differ only in the Everyone
+/// the DACL Windows computes from its parent's, as the tree walk would
+/// rewrite it. Writes the subfolders that differ only in the Everyone
 /// delete-child copies; fails on any other difference, on a link that would
 /// change and on any error, so the caller walks instead. Links are not
 /// followed.
-unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
+///
+/// D311: folders are checked on several threads; D313: each is held open
+/// while its entries are listed and opened through its handle
+/// ([`open_relative`]), so what is checked and written is always an
+/// entry of the folder whose descriptor was read. A subfolder still to walk
+/// is opened again through its folder later and must be the same folder
+/// ([`Subfolder`]); `root` must be the folder `written` (whose DACL was just
+/// written).
+unsafe fn sync_below(root: &Path, written: &Handle, psid: *mut c_void) -> Result<()> {
+    // The folder itself, not a link, and the one whose DACL was written.
+    let handle = Handle::open(root, READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE)?;
+    if handle.kind()?.kind() != Kind::Folder || handle.identity()? != written.identity()? {
+        bail!("{} is not the folder written", root.display());
+    }
+    // The SID outlives the walk, which ends before this returns.
+    let sid = psid as usize;
+    let mutant = mutant();
+    par_walk(
+        vec![Folder {
+            at: Place::Open(handle),
+            path: root.to_path_buf(),
+        }],
+        check_threads(),
+        |folder: Folder, found: &mut Vec<Folder>| {
+            set_mutant(mutant);
+            sync_folder(folder, sid as *mut c_void, found)
+        },
+    )
+}
+
+/// A folder [`sync_below`] still has to check the entries of.
+struct Folder {
+    at: Place,
+    /// For messages only; never opened.
+    path: PathBuf,
+}
+
+enum Place {
+    /// The folder below which the walk starts, held open.
+    Open(Handle),
+    /// A subfolder, opened again through its folder when walked.
+    Below(Subfolder),
+}
+
+/// One folder of [`sync_below`]: checks (and writes) its entries, adding its
+/// plain subfolders to `found`.
+unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>) -> Result<()> {
     let is_copy = |ace: *const c_void| is_inherited_delete_child_copy(ace, psid);
     let without_copies = |aces: &[Vec<u8>]| -> Vec<Vec<u8>> {
         aces.iter()
@@ -275,87 +323,137 @@ unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
             .collect()
     };
     let flags = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
-    let kind_bits = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
-    let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        let dir_handle = Handle::open(&dir, READ_CONTROL)?;
-        if dir_handle.attributes()? & kind_bits != FILE_ATTRIBUTE_DIRECTORY {
-            bail!("{} is not a plain folder", dir.display());
+    let dir = Arc::new(match folder.at {
+        Place::Open(handle) => handle,
+        Place::Below(subfolder) => subfolder.reopen(READ_CONTROL)?,
+    });
+    let parent = Descriptor::read(dir.0)?;
+    // What Windows computes depends only on the parent's descriptor and the
+    // object's kind, owner, group, flags and explicit entries; most objects
+    // in a folder share those.
+    let mut computed_for: HashMap<Vec<u8>, (Vec<Vec<u8>>, u16)> = HashMap::new();
+    let mut entries = list(dir.0)?;
+    if is_mutant(Mutant::ListingTruncated) {
+        entries.truncate(600);
+    }
+    for (name, listed) in entries {
+        let path = folder.path.join(OsString::from_wide(&name));
+        let is_dir = listed.is_dir();
+        // A folder, not a link: written if needed and walked.
+        let is_plain_dir = listed.kind() == Kind::Folder;
+        if !is_dir && is_mutant(Mutant::FilesUnchecked) {
+            continue;
         }
-        let parent = Descriptor::read(dir_handle.0)?;
-        // What Windows computes depends only on the parent's descriptor and
-        // the object's kind, owner, group, flags and explicit entries; most
-        // objects in a folder share those.
-        let mut computed_for: HashMap<Vec<u8>, (Vec<Vec<u8>>, u16)> = HashMap::new();
-        let mut dir_final: Option<String> = None;
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            use std::os::windows::fs::MetadataExt;
-            // The entry's own attributes; links are not followed.
-            let listed = entry.metadata()?.file_attributes();
-            let is_dir = listed & FILE_ATTRIBUTE_DIRECTORY != 0;
-            let is_plain_dir = listed & kind_bits == FILE_ATTRIBUTE_DIRECTORY;
-            // Only a plain folder may need writing.
-            let handle = if is_plain_dir {
-                let handle = Handle::open(&path, READ_CONTROL | WRITE_DAC)?;
-                if handle.attributes()? & kind_bits != FILE_ATTRIBUTE_DIRECTORY {
-                    bail!("{} changed while being checked", path.display());
-                }
-                handle
-            } else {
-                // Checked only.
-                let handle = Handle::open(&path, READ_CONTROL)?;
-                if handle.attributes()? & kind_bits != listed & kind_bits {
-                    bail!("{} changed while being checked", path.display());
-                }
-                handle
-            };
-            let child = Descriptor::read(handle.0)?;
-            let aces = ace_bytes(child.dacl, &|_| false)?;
-            let key = computation_key(&child, &aces, is_dir)?;
-            let (computed, control) = match computed_for.get(&key) {
-                Some(found) => found,
-                None => {
-                    let computed = Computed::new(parent.sd, child.sd, is_dir)?;
-                    let value = (
-                        ace_bytes(computed.dacl()?, &|_| false)?,
-                        computed.control()?,
-                    );
-                    computed_for.entry(key).or_insert(value)
-                }
-            };
-            if control & flags != child.control & flags {
-                bail!("{} would change protection or inheritance", path.display());
+        // Only a plain folder may need writing (and walking).
+        let access = if is_plain_dir {
+            READ_CONTROL | WRITE_DAC
+        } else {
+            READ_CONTROL
+        };
+        // The entry itself, links not followed.
+        let handle = open_relative(dir.0, &name, access)?;
+        if !handle.kind()?.same_kind(listed) {
+            bail!("{} changed while being checked", path.display());
+        }
+        let child = Descriptor::read(handle.0)?;
+        let aces = ace_bytes(child.dacl, &|_| false)?;
+        let key = computation_key(&child, &aces, is_dir)?;
+        let (computed, control) = match computed_for.get(&key) {
+            Some(found) => found,
+            None => {
+                let computed = Computed::new(parent.sd, child.sd, is_dir)?;
+                let value = (
+                    ace_bytes(computed.dacl()?, &|_| false)?,
+                    computed.control()?,
+                );
+                computed_for.entry(key).or_insert(value)
             }
-            if aces == *computed {
-                if is_plain_dir {
-                    pending.push(path);
-                }
+        };
+        if control & flags != child.control & flags {
+            bail!("{} would change protection or inheritance", path.display());
+        }
+        let walk_into = is_plain_dir && !is_mutant(Mutant::SubfoldersUnwalked);
+        if aces == *computed {
+            if walk_into {
+                found.push(Folder {
+                    at: Place::Below(Subfolder::new(&dir, name, &handle)?),
+                    path,
+                });
+            }
+            continue;
+        }
+        if !is_plain_dir || without_copies(&aces) != without_copies(computed) {
+            if is_mutant(Mutant::StaleIgnored) {
                 continue;
             }
-            if !is_plain_dir || without_copies(&aces) != without_copies(computed) {
-                bail!(
-                    "{} would change more than the delete-child copies",
-                    path.display()
-                );
-            }
-            // Writes only inside the folder whose DACL was read: a folder
-            // swapped for a link meanwhile would resolve elsewhere.
-            let dir_final = match &dir_final {
-                Some(path) => path,
-                None => dir_final.insert(comparable_path(&final_path(dir_handle.0)?)),
-            };
-            let expected = format!(r"{dir_final}\{}", entry.file_name().to_string_lossy());
-            if comparable_path(&final_path(handle.0)?) != comparable_path(&expected) {
-                bail!("{} is not where it was listed", path.display());
-            }
+            bail!(
+                "{} would change more than the delete-child copies",
+                path.display()
+            );
+        }
+        if !is_mutant(Mutant::CopiesUnwritten) {
             let computed = Computed::new(parent.sd, child.sd, is_dir)?;
             write_and_check(handle.0, &child, computed.dacl()?)?;
-            pending.push(path);
+        }
+        if walk_into {
+            found.push(Folder {
+                at: Place::Below(Subfolder::new(&dir, name, &handle)?),
+                path,
+            });
         }
     }
     Ok(())
+}
+
+/// Deliberately broken versions of the direct write, which the regression
+/// tests must catch (D311). Set per calling thread, so tests running in
+/// parallel are unaffected; never set outside tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) enum Mutant {
+    /// Files below the folder are not checked.
+    FilesUnchecked,
+    /// Subfolders are not walked.
+    SubfoldersUnwalked,
+    /// Objects that differ by more than the delete-child copies are left as
+    /// they are instead of falling back to the walk.
+    StaleIgnored,
+    /// Subfolders that differ only in the delete-child copies are walked
+    /// but not written.
+    CopiesUnwritten,
+    /// The folder itself is not checked against its parent.
+    TargetUnchecked,
+    /// Only a folder's first 600 entries (about one listing buffer) are
+    /// checked.
+    ListingTruncated,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static MUTANT: std::cell::Cell<Option<Mutant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn mutant() -> Option<Mutant> {
+    MUTANT.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+fn mutant() -> Option<Mutant> {
+    None
+}
+
+#[cfg(test)]
+fn set_mutant(mutant: Option<Mutant>) {
+    MUTANT.with(|cell| cell.set(mutant));
+}
+
+#[cfg(not(test))]
+fn set_mutant(_mutant: Option<Mutant>) {}
+
+fn is_mutant(which: Mutant) -> bool {
+    mutant() == Some(which)
 }
 
 /// The inputs besides the parent's descriptor that decide what
@@ -532,54 +630,6 @@ unsafe fn ace_count(acl: *const ACL) -> Result<u32> {
         bail!("GetAclInformation failed: {}", GetLastError());
     }
     Ok(info.AceCount)
-}
-
-/// A handle to a file or folder.
-struct Handle(HANDLE);
-
-impl Handle {
-    /// Opens `path` with `access`, the link itself if it is one.
-    unsafe fn open(path: &Path, access: u32) -> Result<Self> {
-        Self::open_with(
-            path,
-            access,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-        )
-    }
-
-    unsafe fn open_with(path: &Path, access: u32, flags: u32) -> Result<Self> {
-        let handle = CreateFileW(
-            to_wide(path).as_ptr(),
-            access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            flags,
-            0,
-        );
-        if handle == INVALID_HANDLE_VALUE {
-            let err = std::io::Error::last_os_error();
-            bail!("open {}: {err}", path.display());
-        }
-        Ok(Self(handle))
-    }
-
-    unsafe fn attributes(&self) -> Result<u32> {
-        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-        if GetFileInformationByHandle(self.0, &mut info) == 0 {
-            bail!("GetFileInformationByHandle failed: {}", GetLastError());
-        }
-        Ok(info.dwFileAttributes)
-    }
-}
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        // SAFETY: a handle this type opened.
-        unsafe {
-            CloseHandle(self.0);
-        }
-    }
 }
 
 /// An object's owner, group and DACL as `GetSecurityInfo` returns them.

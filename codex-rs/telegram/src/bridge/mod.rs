@@ -437,8 +437,9 @@ struct BridgeRuntime {
     last_errors: HashMap<ConversationKey, String>,
     // A Telegram chat has no natural session boundary: every message resumes the
     // same thread until someone runs `/new`. The server already reports usage per
-    // turn, so keep the latest report to give `/status` the running cost of a
-    // thread that would otherwise grow unobserved.
+    // turn, so fold each update into `StatusTokenUsage` (context occupancy and the
+    // provider-reported total) to give `/status` the running cost of a thread that
+    // would otherwise grow unobserved.
     last_token_usage: HashMap<ConversationKey, status::StatusTokenUsage>,
 }
 
