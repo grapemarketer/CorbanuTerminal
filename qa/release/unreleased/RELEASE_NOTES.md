@@ -75,6 +75,16 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   `thread/items/list` and `thread/turns/items/list` fail with "failed to
   deserialize stored thread item"). Newer builds read older history unchanged.
 
+## Slash commands typed while the session starts
+
+- **A slash command entered during startup always waits for it** (D376,
+  #1748). While the header still reads `model: loading`, a command such as
+  `/model` is queued and runs once startup completes, like an ordinary prompt.
+  Before, it was queued only when its keys arrived in one quick burst; typed
+  a little more slowly (so the command list opened before Enter), it ran at
+  once and was refused with "Model selection is disabled until startup
+  completes."
+
 ## `/cost`
 
 - **Codex Auto Review is named as unpriced.** On an OpenAI API key, requests
