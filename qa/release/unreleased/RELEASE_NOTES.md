@@ -161,6 +161,14 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   tightening of D320. `close_agent` and `send_input` (and their `_v1`
   aliases) likewise refuse an agent the caller didn't start, directly or
   through its own agents.
+- **`wait_agent` waits only for the caller's own agents** (#1744, #1701,
+  thanks to @citadelculture). `wait_agent` (and `wait_agent_v1`) could wait
+  for any loaded agent, including another root thread's, and return its final
+  status. It now refuses an agent the caller didn't start, directly or
+  through its own agents, with "wait_agent can only wait for agents spawned
+  by this agent or by its sub-agents". With MultiAgentV2, `wait_agent` used
+  to report every live agent with its last result; it now reports only the
+  caller's agents.
 
 ## `/security` wording
 
@@ -543,6 +551,30 @@ asking and now ask first:
   expansion produces (`git clone r d {-q,--upload-pack=./x}`; #1644, #1636).
 - zsh's `>!`, `>>!`, `&>!` and `>&!` clobber redirections, read as writes
   (`echo x >! ~/.zshrc`; #1640, #1607).
+- Commands in `eval`, `trap` and `alias` text now get every check the same
+  command gets on a line of its own (D341, #1698, #1685): writes to shell
+  start-up files (`trap 'tee -a ~/.zshrc' EXIT`, `eval 'tee -a ~/.zshrc'`),
+  output options (`curl -o`, `time -o`), sending a file (`curl -d @f`),
+  recursive reads of your home, scripts it runs (`./x.sh`, `source`,
+  `python3 x.py`), a wrapper's folder option, and, in an alias, git
+  settings that run code. Before, only some of these were checked there.
+  A `cd` in such text isn't followed: the folder it leaves counts as
+  unknown. Ordinary lines such as `trap 'rm -f "$tmp"' EXIT` or
+  `alias ll='ls -l'` stay quiet.
+- A program named by a path, or a shell or interpreter, run after a leading
+  redirection (`>log ./x`, `2>log sh x`, `sudo >log ./x`, `env >log ./x`),
+  where the check used to read the redirection as the command (#1719,
+  #1482, thanks to @darkmatter-sudo). `ls >log` and `2>/dev/null ls` are
+  read as before.
+- A workspace script run through `eval`, directly or after a wrapper's
+  folder option (`eval ./x`, `eval 'sudo -C 3 ./run.sh'`), now gets the
+  check it gets without `eval` (#1719, #1482, thanks to @darkmatter-sudo).
+- `sudo -A`/`--askpass`, `sudo -e`/`--edit` and `sudoedit`, which run a
+  helper or editor named by the environment (#1719, #1482, thanks to
+  @darkmatter-sudo).
+- A command given as an argument list whose program element holds spaces or
+  a shell operator (`["true ./x"]`, `["true;./x"]`) (#1719, #1482, thanks
+  to @darkmatter-sudo). A shell's `-c` script is read as before.
 
 One line asks less: `git add src/{a,b}.rs && git commit -m "msg"` no longer
 asks just because a quoted message follows the brace word (#1580, #1514,
@@ -558,6 +590,24 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   they start in their job; a program that asks to break away gets "access
   denied" unless it retries without the flag. The non-admin sandbox already
   worked this way.
+- **Default (elevated) sandbox: each command gets its own identity** (D324,
+  #1717, #1648), as non-admin sandbox commands already do. Commands running
+  at the same time, for example in different projects, can no longer write
+  to each other's processes or the helper processes that start them, or
+  start programs under them. Projects are still not fully kept apart: a
+  command can still borrow another command's access and write in its
+  folders (#1560), or race another command's start-up (#1721), and can
+  still read and end the other's processes. So still avoid running commands
+  in several projects at once (see `docs/sandbox.md`).
+- **Refused permission profiles say why** (D331, #1762). A profile with a
+  writable folder inside a read-only one is now refused for the agent's
+  commands in the non-admin sandbox too, as it already was in the default
+  sandbox and for app-server `command/exec`; this is new only under
+  Permissive. On both sandboxes the message now names both folders and says
+  to change the profile so that no writable folder lies in a read-only one.
+  In the non-admin sandbox, `command/exec` (and the exec server) now refuse
+  a profile that blocks reading files with a clear "can't block reading"
+  message instead of an unclear error from the sandbox.
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
@@ -594,3 +644,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   permissions of every file below (each is still checked, and anything
   unexpected falls back to the old method). In the PR's measurement on a
   101,000-file repository, a command took about 20 s instead of 31 s.
+- **Non-admin sandbox: the faster protection walks don't start at a link**
+  (D352, #1754, #1722). When the folder a walk starts at is itself a
+  junction or symbolic link, or is swapped for one as the walk starts, it
+  now leaves that folder to Windows' own walk, so the result always matches
+  what Windows does. Corbanu doesn't normally start a walk at a link, so
+  nothing changes in normal use.
