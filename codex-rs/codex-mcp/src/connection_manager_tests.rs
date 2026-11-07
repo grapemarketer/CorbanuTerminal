@@ -95,6 +95,7 @@ impl McpConnectionSet {
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers: Vec::new(),
+            multi_agent_v2_tool_namespace: None,
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.get().clone(),
@@ -981,8 +982,12 @@ fn test_normalize_tools_short_non_duplicated_names() {
         create_test_tool("server1", "tool2"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(
         model_tool_names(&model_tools),
@@ -1005,6 +1010,7 @@ fn test_normalize_tools_omits_prefix_only_for_selected_servers() {
         tools,
         /*prefix_mcp_tool_names*/ true,
         &["history".to_string(), "notes".to_string()],
+        /*multi_agent_v2_tool_namespace*/ None,
     );
 
     assert_eq!(
@@ -1026,6 +1032,7 @@ fn test_normalize_tools_selects_raw_server_name() {
         vec![tool],
         /*prefix_mcp_tool_names*/ true,
         &["codex_apps".to_string()],
+        /*multi_agent_v2_tool_namespace*/ None,
     );
 
     assert_eq!(
@@ -1045,6 +1052,7 @@ fn test_normalize_tools_global_feature_omits_prefix_for_every_server() {
         tools,
         /*prefix_mcp_tool_names*/ false,
         &["history".to_string()],
+        /*multi_agent_v2_tool_namespace*/ None,
     );
 
     assert_eq!(
@@ -1061,6 +1069,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
     let tools = vec![
         create_test_tool("web", "search"),
         create_test_tool("image.gen", "draw"),
+        create_test_tool("team", "spawn"),
         create_test_tool("history", "search"),
     ];
 
@@ -1071,6 +1080,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
             vec![
                 "web".to_string(),
                 "image.gen".to_string(),
+                "team".to_string(),
                 "history".to_string(),
             ],
         ),
@@ -1079,6 +1089,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
             tools.clone(),
             prefix_mcp_tool_names,
             &non_prefixed,
+            /*multi_agent_v2_tool_namespace*/ Some("team"),
         );
 
         assert_eq!(
@@ -1086,21 +1097,38 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
             HashSet::from([
                 ToolName::namespaced("mcp__web", "search"),
                 ToolName::namespaced("mcp__image_gen", "draw"),
+                ToolName::namespaced("mcp__team", "spawn"),
                 ToolName::namespaced("history", "search"),
             ])
         );
     }
+
+    let model_tools = normalize_tools_for_model_with_prefix(
+        vec![create_test_tool("team", "spawn")],
+        /*prefix_mcp_tool_names*/ false,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
+    assert_eq!(
+        model_tool_names(&model_tools),
+        HashSet::from([ToolName::namespaced("team", "spawn")])
+    );
 }
 
 #[test]
 fn test_unprefixed_mcp_namespace_is_builtin() {
     for name in BUILTIN_TOOL_NAMESPACES {
-        assert!(unprefixed_mcp_namespace_is_builtin(name), "{name}");
+        assert!(unprefixed_mcp_namespace_is_builtin(name, None), "{name}");
     }
-    assert!(unprefixed_mcp_namespace_is_builtin("image.gen"));
-    assert!(!unprefixed_mcp_namespace_is_builtin("mcp__web"));
-    assert!(!unprefixed_mcp_namespace_is_builtin("web_mcp"));
-    assert!(!unprefixed_mcp_namespace_is_builtin("Web"));
+    assert!(unprefixed_mcp_namespace_is_builtin("image.gen", None));
+    assert!(unprefixed_mcp_namespace_is_builtin("a.b", Some("a_b")));
+    assert!(!unprefixed_mcp_namespace_is_builtin(
+        "my-team",
+        Some("my-team")
+    ));
+    assert!(!unprefixed_mcp_namespace_is_builtin("mcp__web", None));
+    assert!(!unprefixed_mcp_namespace_is_builtin("web_mcp", None));
+    assert!(!unprefixed_mcp_namespace_is_builtin("Web", None));
 }
 
 #[test]
@@ -1110,8 +1138,12 @@ fn test_normalize_tools_duplicated_names_skipped() {
         create_test_tool("server1", "duplicate_tool"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     // Only the first tool should remain, the second is skipped
     assert_eq!(
@@ -1135,8 +1167,12 @@ fn test_normalize_tools_long_names_same_server() {
         ),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(model_tools.len(), 2);
 
@@ -1158,8 +1194,12 @@ fn test_normalize_tools_long_names_same_server() {
 fn test_normalize_tools_sanitizes_invalid_characters() {
     let tools = vec![create_test_tool("server.one", "tool.two-three")];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
@@ -1189,8 +1229,12 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
 fn test_normalize_tools_keeps_hyphenated_mcp_tools_callable() {
     let tools = vec![create_test_tool("music-studio", "get-strudel-guide")];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
@@ -1210,8 +1254,12 @@ fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
         create_test_tool("basic_server", "query"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(model_tools.len(), 2);
     let mut namespaces = model_tools
@@ -1241,8 +1289,12 @@ fn test_normalize_tools_disambiguates_sanitized_tool_name_collisions() {
         create_test_tool("server", "tool_name"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true, &[]);
+    let model_tools = normalize_tools_for_model_with_prefix(
+        tools,
+        /*prefix_mcp_tool_names*/ true,
+        &[],
+        /*multi_agent_v2_tool_namespace*/ None,
+    );
 
     assert_eq!(model_tools.len(), 2);
     let raw_tool_names = model_tools

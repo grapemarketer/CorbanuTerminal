@@ -2153,6 +2153,7 @@ impl Config {
             } else {
                 Vec::new()
             },
+            multi_agent_v2_tool_namespace: self.multi_agent_v2.tool_namespace.clone(),
             protocol_mode: self.mcp_protocol_mode(),
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability::new()
@@ -2188,11 +2189,16 @@ impl Config {
             return None;
         }
         let multi_agent_v2_namespace = self.multi_agent_v2.tool_namespace.as_deref();
-        if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name)
-            && multi_agent_v2_namespace != Some(name)
-        {
+        if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name, multi_agent_v2_namespace) {
             return None;
         }
+        let taken = if codex_mcp::unprefixed_mcp_namespace_is_builtin(
+            name, /*multi_agent_v2_tool_namespace*/ None,
+        ) {
+            "a built-in tool namespace"
+        } else {
+            "the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`)"
+        };
         let fix = if listed.is_some() {
             format!(
                 "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
@@ -2201,12 +2207,19 @@ impl Config {
             "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
         };
         Some(format!(
-            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is a built-in tool namespace. To fix it, {fix}. To rename, use a name such as `{name}_mcp` (`[mcp_servers.{name}_mcp]` in config.toml, or `corbanu mcp remove {name}` and `corbanu mcp add {name}_mcp ...`)."
+            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{name}_mcp` (`[mcp_servers.{name}_mcp]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {name}_mcp ...`)."
         ))
     }
 
+    /// Rejects enabled configured servers, and `server_names` entries, that
+    /// would take a built-in tool namespace without the `mcp__` prefix.
     fn validate_non_prefixed_mcp_server_names(&self) -> std::io::Result<()> {
-        let configured = self.mcp_servers.get().keys();
+        let configured = self
+            .mcp_servers
+            .get()
+            .iter()
+            .filter(|(_, server)| server.enabled)
+            .map(|(name, _)| name);
         let listed = self.non_prefixed_mcp_tool_servers.iter().flatten();
         let mut names: Vec<&String> = configured.chain(listed).collect();
         names.sort();

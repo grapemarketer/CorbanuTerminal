@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use codex_config::McpServerConfig;
 use codex_protocol::ToolName;
@@ -37,9 +39,29 @@ pub const BUILTIN_TOOL_NAMESPACES: &[&str] = &[
 ];
 
 /// Whether an MCP server named `server_name` would take a built-in tool
-/// namespace if its tools were exposed without the `mcp__` prefix.
-pub fn unprefixed_mcp_namespace_is_builtin(server_name: &str) -> bool {
-    BUILTIN_TOOL_NAMESPACES.contains(&sanitize_responses_api_tool_name(server_name).as_str())
+/// namespace, or the configured multi-agent V2 one, if its tools were exposed
+/// without the `mcp__` prefix.
+pub fn unprefixed_mcp_namespace_is_builtin(
+    server_name: &str,
+    multi_agent_v2_tool_namespace: Option<&str>,
+) -> bool {
+    let namespace = sanitize_responses_api_tool_name(server_name);
+    BUILTIN_TOOL_NAMESPACES.contains(&namespace.as_str())
+        || multi_agent_v2_tool_namespace == Some(namespace.as_str())
+}
+
+/// Warns once per process for each server that keeps its prefix.
+fn warn_forced_prefix(server_name: &str, namespace: &str) {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut warned = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if warned.insert(server_name.to_string()) {
+        warn!(
+            "MCP server `{server_name}` keeps the `mcp__` prefix: `{namespace}` is a built-in tool namespace; rename the server to expose it without the prefix"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,16 +153,17 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
 ///
 /// When `prefix_mcp_tool_names` is true, the historical `mcp__` namespace
 /// prefix is added except for tools from `non_prefixed_mcp_tool_servers`.
+/// A namespace that would be a built-in's keeps the prefix either way.
 pub(crate) fn normalize_tools_for_model_with_prefix<I>(
     tools: I,
     prefix_mcp_tool_names: bool,
     non_prefixed_mcp_tool_servers: &[String],
+    multi_agent_v2_tool_namespace: Option<&str>,
 ) -> Vec<ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
     let mut seen_raw_names = HashSet::new();
-    let mut forced_prefix_servers = HashSet::new();
     let mut candidates = Vec::new();
     for tool in tools {
         let raw_namespace_identity = format!(
@@ -161,16 +184,13 @@ where
         let namespace = sanitize_responses_api_tool_name(&tool.callable_namespace);
         let mut prefixed =
             prefix_mcp_tool_names && !non_prefixed_mcp_tool_servers.contains(&tool.server_name);
-        if !prefixed && BUILTIN_TOOL_NAMESPACES.contains(&namespace.as_str()) {
+        if !prefixed
+            && unprefixed_mcp_namespace_is_builtin(&namespace, multi_agent_v2_tool_namespace)
+        {
             // Config load rejects configured servers like this; servers from
             // other sources (plugins, skill dependencies) keep the prefix.
             prefixed = true;
-            if forced_prefix_servers.insert(tool.server_name.clone()) {
-                warn!(
-                    "MCP server `{}` keeps the `mcp__` prefix: `{namespace}` is a built-in tool namespace; rename the server to expose it without the prefix",
-                    tool.server_name
-                );
-            }
+            warn_forced_prefix(&tool.server_name, &namespace);
         }
         let callable_namespace = callable_namespace_with_prefix(&namespace, prefixed);
 

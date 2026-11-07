@@ -128,6 +128,7 @@ impl McpConnectionSet {
             tools,
             self.prefix_mcp_tool_names,
             &self.non_prefixed_mcp_tool_servers,
+            self.multi_agent_v2_tool_namespace.as_deref(),
         );
         trace!(
             available_server_count,
@@ -253,6 +254,7 @@ impl McpConnectionSet {
             listed_tools,
             self.prefix_mcp_tool_names,
             &self.non_prefixed_mcp_tool_servers,
+            self.multi_agent_v2_tool_namespace.as_deref(),
         );
         let mut tools = Vec::with_capacity(listed_tools.len());
         let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
@@ -385,6 +387,7 @@ impl McpConnectionSet {
             tools,
             self.prefix_mcp_tool_names,
             &self.non_prefixed_mcp_tool_servers,
+            self.multi_agent_v2_tool_namespace.as_deref(),
         );
         emit_duration(
             CODEX_APPS_REFRESH_DURATION_METRIC,

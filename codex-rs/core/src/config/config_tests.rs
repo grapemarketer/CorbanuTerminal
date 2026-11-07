@@ -526,7 +526,7 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
             format!(
                 "[features]\nnon_prefixed_mcp_tool_names = true\nmulti_agent_v2 = {{ enabled = true, tool_namespace = \"team\" }}\n[mcp_servers.team]\n{server}"
             ),
-            "`team` is a built-in tool namespace",
+            "`team` is the multi-agent tool namespace",
         ),
     ];
     for (config_contents, expected) in rejected {
@@ -550,6 +550,9 @@ async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> s
             "[features.non_prefixed_mcp_tool_names]\nenabled = true\nserver_names = [\"history\"]\n[mcp_servers.web]\n{server}"
         ),
         format!("[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.web_mcp]\n{server}"),
+        format!(
+            "[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.web]\nenabled = false\n{server}"
+        ),
     ];
     for config_contents in accepted {
         let codex_home = tempdir()?;

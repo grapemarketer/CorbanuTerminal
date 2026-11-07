@@ -8,6 +8,8 @@ use codex_config::McpServerTransportConfig;
 use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
 use codex_login::default_client::originator;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -117,7 +119,10 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             continue;
         }
         if let Some(message) = config.non_prefixed_mcp_server_name_clash(&name) {
-            warn!("not installing MCP dependency for mentioned skills: {message}");
+            let message = format!("Skipped installing a skill's MCP dependency. {message}");
+            warn!("{message}");
+            sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
             continue;
         }
         servers.insert(name.clone(), server_config.clone());
