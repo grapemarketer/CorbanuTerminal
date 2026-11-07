@@ -12098,7 +12098,7 @@ fn issue1704_code_table_writers_fail_closed() {
             "zstyle :x y f 'tee -a ~/.zshrc'; zstyle -a :x y \"$(printf %s func tions)\"; f",
             "n=$(printf %s com mands); set -A $n ls ./x; ls",
             "zparseopts -a ${:-func}tions -- f:",
-            "touch functions; zparseopts -a functio[n]s -- f:",
+            "touch functions; zparseopts -a function[s] -- f:",
             "zparseopts -D -- \"f:=$n\"",
             "zparseopts -a functi{on,}s -- f:",
             "zstyle -g $n :x y",

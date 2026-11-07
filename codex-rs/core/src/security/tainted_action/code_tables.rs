@@ -8,7 +8,7 @@
 //! functions`, `zstyle -a ctx style functions`, `read -A aliases`), and a
 //! write in an expansion or a reference ([`sets_table_otherwise`]:
 //! `${(AA)=aliases::=…}`, `typeset -n r=BASH_ALIASES` too).
-//! A name the classifier cannot see (`zparseopts -a $n`, `functio[n]s`)
+//! A name the classifier cannot see (`zparseopts -a $n`, `function[s]`)
 //! fails closed where such a command takes the name it writes.
 
 use super::indirect;
@@ -163,7 +163,7 @@ enum Operands {
 /// Whether the command `name` with `args` (and `raw`, as written) takes a
 /// name it writes from a word the classifier cannot see: an expansion, a
 /// command's output, or a word the shell may glob or brace-expand into a
-/// table's name (`touch functions; zparseopts -a functio[n]s`). Its other
+/// table's name (`touch functions; zparseopts -a function[s]`). Its other
 /// words (`set -- "$@"`, `zstyle ':x' y "$v"`) are not names.
 fn hides_name(name: &str, args: &[String], raw: &[String]) -> bool {
     let hidden = |at: usize| {
