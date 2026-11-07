@@ -23,6 +23,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (#1637). A history-forked subagent that is not saved to disk yet is now also
   recognized as a fork (the app server's `thread/read` returns its
   `forkedFromId`), so it too makes the total `null` (#1637).
+  A resumed (non-fork) descendant whose first report carries in earlier usage
+  (its total differs from its last request) makes the total `null` too
+  (#1637, #1750, thanks to @citadelculture).
   Detached children can incur further usage after this snapshot.
 - **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
   defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
@@ -326,6 +329,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   `corbanu mcp remove` for a server that isn't configured. The warning for a
   skipped skill dependency now says which kind of reserved namespace it would
   take and no longer suggests "limiting" `server_names`.
+  An MCP import from another agent that skips such a server now says it was
+  not imported and suggests adding it under another name, instead of
+  `corbanu mcp remove` (#1681, #1738, thanks to @citadelculture).
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
