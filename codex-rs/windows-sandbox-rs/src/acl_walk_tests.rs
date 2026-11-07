@@ -192,3 +192,47 @@ fn open_relative_reaches_past_max_path() {
     let leaf = unsafe { open_relative(handle.0, &wide("leaf"), FILE_READ_DATA) }.expect("leaf");
     assert_eq!(read_all(&leaf), "deep");
 }
+
+/// Listing goes past the first buffer (64 KiB: about 600 such names), and
+/// odd names are refused rather than opened as paths or streams.
+#[test]
+fn list_returns_every_entry_and_open_relative_takes_plain_names_only() {
+    let base = tempfile::tempdir().expect("base");
+    let written: Vec<String> = (0..3000)
+        .map(|i| format!("a-file-with-a-rather-longer-name-than-usual-{i:05}.txt"))
+        .collect();
+    for name in &written {
+        std::fs::write(base.path().join(name), b"x").expect("file");
+    }
+    std::fs::create_dir_all(base.path().join("sub")).expect("sub");
+    let handle = open_dir(base.path());
+    let mut expected = written.clone();
+    expected.push("sub".to_string());
+    expected.sort();
+    assert_eq!(names(&handle), expected);
+    for odd in ["", "sub\\x", "sub/x", "a:stream", "nul\u{0}x"] {
+        // SAFETY: the open folder; the name is checked first.
+        let opened = unsafe { open_relative(handle.0, &wide(odd), READ_CONTROL) };
+        let err = opened.err().expect("refused").to_string();
+        assert!(err.contains("not a plain name"), "{odd:?}: {err}");
+    }
+}
+
+/// A subfolder opened again through its folder must still be the folder
+/// that was found.
+#[test]
+fn subfolder_reopen_refuses_a_replaced_folder() {
+    let base = tempfile::tempdir().expect("base");
+    std::fs::create_dir_all(base.path().join("sub")).expect("sub");
+    let parent = std::sync::Arc::new(open_dir(base.path()));
+    // SAFETY: entries of the open folder.
+    unsafe {
+        let opened = open_relative(parent.0, &wide("sub"), READ_CONTROL).expect("open");
+        let found = Subfolder::new(&parent, wide("sub"), &opened).expect("subfolder");
+        drop(opened);
+        found.reopen(READ_CONTROL).expect("the same folder");
+        std::fs::rename(base.path().join("sub"), base.path().join("old")).expect("move away");
+        std::fs::create_dir_all(base.path().join("sub")).expect("another sub");
+        assert!(found.reopen(READ_CONTROL).is_err(), "a different folder");
+    }
+}

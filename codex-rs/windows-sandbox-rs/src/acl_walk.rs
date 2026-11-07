@@ -13,6 +13,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -23,8 +24,11 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
@@ -121,8 +125,15 @@ pub(crate) fn par_walk<T: Send>(
 /// move between the walk's threads.
 pub(crate) struct Handle(pub(crate) HANDLE);
 
-// SAFETY: a kernel handle may be used from any thread.
+// SAFETY: a kernel handle may be used from any thread. Shared folder
+// handles ([`Subfolder`]) are only used to open entries relative to them,
+// which is safe concurrently; a folder is listed only by the one thread
+// walking it.
 unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}
+
+/// Volume serial number and 128-bit file ID.
+pub(crate) type FileId = (u64, [u8; 16]);
 
 impl Handle {
     /// Opens `path` with `access`, the link itself if it is one.
@@ -151,6 +162,10 @@ impl Handle {
         Ok(Self(handle))
     }
 
+    pub(crate) unsafe fn identity(&self) -> Result<FileId> {
+        super::file_identity(self.0).map_err(|err| anyhow!("reading a file ID failed: {err}"))
+    }
+
     pub(crate) unsafe fn attributes(&self) -> Result<u32> {
         let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
         if GetFileInformationByHandle(self.0, &mut info) == 0 {
@@ -166,6 +181,46 @@ impl Drop for Handle {
         unsafe {
             CloseHandle(self.0);
         }
+    }
+}
+
+/// A plain subfolder a walk found and still has to walk, not held open (a
+/// folder with many subfolders would otherwise hold a handle for each): the
+/// folder it was listed in (held, shared), its name and its identity.
+pub(crate) struct Subfolder {
+    parent: Arc<Handle>,
+    name: Vec<u16>,
+    identity: FileId,
+}
+
+impl Subfolder {
+    /// `name` in `parent`, as `opened` (its handle) is now.
+    pub(crate) unsafe fn new(
+        parent: &Arc<Handle>,
+        name: Vec<u16>,
+        opened: &Handle,
+    ) -> Result<Self> {
+        Ok(Self {
+            parent: Arc::clone(parent),
+            name,
+            identity: opened.identity()?,
+        })
+    }
+
+    /// Opens it again through its folder for listing (plus `access`),
+    /// failing unless it is still the same plain folder.
+    pub(crate) unsafe fn reopen(&self, access: u32) -> Result<Handle> {
+        let handle = open_relative(self.parent.0, &self.name, access | FILE_LIST_DIRECTORY)?;
+        if handle.attributes()? & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+            != FILE_ATTRIBUTE_DIRECTORY
+            || handle.identity()? != self.identity
+        {
+            bail!(
+                "{} changed while being walked",
+                String::from_utf16_lossy(&self.name)
+            );
+        }
+        Ok(handle)
     }
 }
 
@@ -215,6 +270,11 @@ const FILE_FULL_DIRECTORY_RESTART_INFO: i32 = 15;
 /// attribute reads and synchronous I/O), the entry itself if it is a link.
 /// The name is matched exactly, as [`list`] returned it.
 pub(crate) unsafe fn open_relative(dir: HANDLE, name: &[u16], access: u32) -> Result<Handle> {
+    // One plain name: never empty, a path or a stream (`name:stream`).
+    let separators = [u16::from(b'\\'), u16::from(b'/'), u16::from(b':')];
+    if name.is_empty() || name.iter().any(|c| *c == 0 || separators.contains(c)) {
+        bail!("{:?} is not a plain name", String::from_utf16_lossy(name));
+    }
     let bytes = u16::try_from(std::mem::size_of_val(name))
         .map_err(|_| anyhow!("a name of {} characters is too long", name.len()))?;
     let mut name_buf = name.to_vec();
@@ -244,7 +304,10 @@ pub(crate) unsafe fn open_relative(dir: HANDLE, name: &[u16], access: u32) -> Re
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT,
     );
-    if status < 0 {
+    if status != 0 || handle == 0 {
+        if handle != 0 {
+            CloseHandle(handle);
+        }
         bail!(
             "opening {} failed: {status:#x}",
             String::from_utf16_lossy(name)

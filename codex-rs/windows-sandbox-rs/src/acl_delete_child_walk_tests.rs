@@ -435,9 +435,30 @@ const LABEL_CASES: [(&str, Setup); 4] = [
     }),
 ];
 
+fn wide_tree(root: &Path) -> bool {
+    let wide = root.join("src\\wide");
+    std::fs::create_dir_all(&wide).expect("dir");
+    for f in 0..3000 {
+        std::fs::write(
+            wide.join(format!("file-with-a-longer-name-{f:05}.rs")),
+            b"w",
+        )
+        .expect("file");
+    }
+    for d in 0..300 {
+        let dir = root.join(format!("src\\many\\d{d:03}"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        for f in 0..10 {
+            std::fs::write(dir.join(format!("f{f}.rs")), b"w").expect("file");
+        }
+    }
+    true
+}
+
 /// Deep and wide trees: D313's handle-relative opens must not fall back on
-/// paths past `MAX_PATH`.
-const SIZE_CASES: [(&str, Setup); 3] = [
+/// paths past `MAX_PATH`; a stale file listed after 3,000 others (past the
+/// first listing buffer) must still be found.
+const SIZE_CASES: [(&str, Setup); 4] = [
     ("D1-deep-100", |root, _| {
         deep_chain(root, 100, "d");
         true
@@ -446,8 +467,12 @@ const SIZE_CASES: [(&str, Setup); 3] = [
         deep_chain(root, 300, "dddddd");
         true
     }),
-    ("W1-wide-3000-files-300-folders", |root, _| {
-        let wide = root.join("src\\wide");
+    ("W1-wide-3000-files-300-folders", wide_tree),
+    ("W2-stale-file-after-3000-names", |root, _| {
+        // Created in place, so inherited as they should be; then one stale
+        // file moved in, which sorts (upper-cased, "Z" after "F") after the
+        // 3,000 others.
+        let wide = root.join(".git\\objects\\wide");
         std::fs::create_dir_all(&wide).expect("dir");
         for f in 0..3000 {
             std::fs::write(
@@ -456,13 +481,7 @@ const SIZE_CASES: [(&str, Setup); 3] = [
             )
             .expect("file");
         }
-        for d in 0..300 {
-            let dir = root.join(format!("src\\many\\d{d:03}"));
-            std::fs::create_dir_all(&dir).expect("dir");
-            for f in 0..10 {
-                std::fs::write(dir.join(format!("f{f}.rs")), b"w").expect("file");
-            }
-        }
+        rename(&root.join("src\\m\\g.rs"), &wide.join("zzzz-stale.rs"));
         true
     }),
 ];
@@ -487,8 +506,37 @@ fn d311_label_cases_match_the_tree_walk() {
 #[test]
 fn d311_deep_and_wide_cases_match_the_tree_walk_without_falling_back() {
     let written = assert_equal(&SIZE_CASES);
-    for (name, how) in &written {
-        assert_eq!(how, &vec![Written::Direct; SESSION_B.len()], "{name}");
+    for name in [
+        "D1-deep-100",
+        "D2-deep-300-past-max-path",
+        "W1-wide-3000-files-300-folders",
+    ] {
+        assert_eq!(
+            written[name],
+            vec![Written::Direct; SESSION_B.len()],
+            "{name}"
+        );
+    }
+    // The moved-in file is stale: found at the first step, which walks.
+    assert_eq!(
+        written["W2-stale-file-after-3000-names"][0],
+        Written::Walked
+    );
+}
+
+/// Breaks the direct write on this thread until dropped.
+struct Broken;
+
+impl Broken {
+    fn set(mutant: Mutant) -> Self {
+        MUTANT.with(|cell| cell.set(Some(mutant)));
+        Self
+    }
+}
+
+impl Drop for Broken {
+    fn drop(&mut self) {
+        MUTANT.with(|cell| cell.set(None));
     }
 }
 
@@ -517,9 +565,10 @@ fn d311_broken_versions_are_caught() {
     ];
     let mut missed = Vec::new();
     for (mutant, name, setup) in mutants {
-        MUTANT.with(|cell| cell.set(Some(mutant)));
-        let outcome = equality_case(&format!("{mutant:?}/{name}"), setup);
-        MUTANT.with(|cell| cell.set(None));
+        let outcome = {
+            let _broken = Broken::set(mutant);
+            equality_case(&format!("{mutant:?}/{name}"), setup)
+        };
         let outcome = outcome.expect("the case runs everywhere");
         if outcome.differing.is_empty() {
             missed.push(mutant);
