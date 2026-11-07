@@ -922,7 +922,12 @@ fn overlapping_flag_arguments_are_read_once() {
 
 /// `flags_unsafe` as it was before #1111's single reading, judging each
 /// argument on its own: the reference the current one must agree with.
-fn flags_unsafe_reference(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bool {
+/// With `ascii_only`, only arguments with ASCII delimiters are judged.
+fn flags_unsafe_reference(
+    region: &str,
+    unsafe_in: &impl Fn(&str) -> bool,
+    ascii_only: bool,
+) -> bool {
     let body = &region[3..];
     let Some(close) = body.find(')') else {
         return unsafe_in(&unquoted(region));
@@ -942,6 +947,9 @@ fn flags_unsafe_reference(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bo
         let Some(delimiter) = rest.chars().next().filter(|ch| !ch.is_ascii_alphanumeric()) else {
             return false;
         };
+        if ascii_only && !delimiter.is_ascii() {
+            return false;
+        }
         let start = at + flag.len_utf8() + delimiter.len_utf8();
         let end = flags[start..]
             .find(delimiter)
@@ -981,7 +989,7 @@ fn hashed_unsafe(seed: u64, modulus: u64) -> impl Fn(&str) -> bool {
 const PIECES: &[&str] = &[
     "l", "r", "I", "a", "b", "_", "1", "9", "$", "{", "}", "(", "`", "#", "@", "*", "\"", "'",
     "\\", ":", "|", " ", "中", "丁", "é", "l中", "r丁", "Ié", "l:", "l|", "$(", "$((", "${", "a_b",
-    "P", "e", "x",
+    "P", "e", "x", "😀", "l😀",
 ];
 
 /// #1111: on generated flags (quotes, substitutions, every kind of
@@ -990,23 +998,40 @@ const PIECES: &[&str] = &[
 #[test]
 fn flags_unsafe_matches_judging_each_argument() {
     let mut pieces = Pieces(0x1111_2026_1106_0001);
+    // A rare `)` ends the flags early.
+    let with_close: Vec<&str> = PIECES.iter().copied().chain([")"]).collect();
     let (mut unsafe_count, mut safe_count) = (0, 0);
+    // Cases only a non-ASCII argument makes unsafe, and safe cases with one.
+    let (mut by_non_ascii, mut safe_non_ascii) = (0, 0);
     for case in 0..60_000_u64 {
-        let region = format!("${{({})x}}", pieces.text(PIECES, 24));
+        let text = pieces.text(&with_close, 24);
+        let region = format!("${{({text})x}}");
         let unsafe_name = hashed_unsafe(case, 2 + case % 6);
-        let expected = flags_unsafe_reference(&region, &|text: &str| {
-            names(&without_substitutions(text)).any(&unsafe_name)
-        });
+        let unsafe_in = |text: &str| names(&without_substitutions(text)).any(&unsafe_name);
+        let expected = flags_unsafe_reference(&region, &unsafe_in, /*ascii_only*/ false);
         assert_eq!(flags_unsafe(&region, &unsafe_name), expected, "{region}");
+        let flags = text.split(')').next().unwrap_or_default();
+        let non_ascii = !flags.contains(['P', 'e'])
+            && flag_arguments(flags)
+                .iter()
+                .any(|(delimiter, _)| !delimiter.is_ascii());
         if expected {
             unsafe_count += 1;
+            by_non_ascii += usize::from(!flags_unsafe_reference(
+                &region, &unsafe_in, /*ascii_only*/ true,
+            ));
         } else {
             safe_count += 1;
+            safe_non_ascii += usize::from(non_ascii);
         }
     }
     assert!(
         unsafe_count > 10_000 && safe_count > 10_000,
         "{unsafe_count} {safe_count}"
+    );
+    assert!(
+        by_non_ascii > 2_000 && safe_non_ascii > 2_000,
+        "{by_non_ascii} {safe_non_ascii}"
     );
 }
 
