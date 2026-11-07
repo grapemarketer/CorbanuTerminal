@@ -11219,6 +11219,10 @@ fn issue1635_alias_prefixes_old_builtins_and_windows_helpers_ask() {
             wrong.push(format!("powershell: {line}"));
         }
     }
+    // As before: a word that names no helper by its command name.
+    if cmd("git-.cmd ^--upload-pack=x") != Some(UnseenCode) {
+        wrong.push("cmd: git-.cmd ^--upload-pack=x".to_string());
+    }
     // git's own commands, and older built-ins, read as before.
     for command in [
         "git status -uno",
