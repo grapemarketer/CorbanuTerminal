@@ -450,22 +450,6 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
     const DYNAMIC_TOOL_NAMESPACE_DESCRIPTION_MAX_LEN: usize = 1024;
     const DYNAMIC_TOOL_IDENTIFIER_PATTERN: &str = "^[a-zA-Z0-9_-]+$";
-    const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
-        "api_tool",
-        "browser",
-        "computer",
-        "container",
-        "file_search",
-        "functions",
-        "image_gen",
-        "multi_tool_use",
-        "python",
-        "python_user_visible",
-        "submodel_delegator",
-        "terminal",
-        "tool_search",
-        "web",
-    ];
 
     fn escape_identifier_for_error(value: &str) -> String {
         value.escape_default().to_string()
@@ -568,7 +552,7 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
                 if name == "mcp" || name.starts_with("mcp__") {
                     return Err(format!("dynamic tool namespace is reserved: {name}"));
                 }
-                if RESERVED_RESPONSES_NAMESPACES.contains(&name) {
+                if codex_mcp::RESPONSES_RESERVED_NAMESPACES.contains(&name) {
                     return Err(format!(
                         "dynamic tool namespace collides with a reserved Responses API namespace: {name}",
                     ));

@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::load_global_mcp_servers;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -406,7 +407,20 @@ async fn add_rejects_unprefixed_builtin_namespace() -> Result<()> {
         .assert()
         .failure()
         .stderr(contains("`web` is a built-in tool namespace"))
-        .stderr(contains("`web_mcp`"));
+        .stderr(contains(
+            "Choose another name, such as `corbanu mcp add web_mcp ...`.",
+        ))
+        .stderr(contains("corbanu mcp remove").not());
+
+    let mut add_reserved_cmd = codex_command(codex_home.path())?;
+    add_reserved_cmd
+        .args(["mcp", "add", "functions", "--", "echo", "hello"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "`functions` is a tool namespace reserved by the Responses API",
+        ))
+        .stderr(contains("`corbanu mcp add functions_mcp ...`"));
 
     let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
