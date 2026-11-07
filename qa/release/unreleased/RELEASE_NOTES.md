@@ -237,6 +237,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
 
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.
+
 ## Chat Completions and Anthropic: earlier MCP calls keep their own name
 
 - **An MCP tool's earlier calls no longer replay as a built-in's** (#688). On

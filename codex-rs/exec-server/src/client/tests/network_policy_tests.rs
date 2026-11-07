@@ -143,7 +143,9 @@ async fn abandoned_process_start_unregisters_and_cleans_up() {
             network_proxy: None,
         };
         start_client
-            .start_process(params, /*network_policy_decider*/ None)
+            .start_process(
+                params, /*network_policy_decider*/ None, /*network_denial_observer*/ None,
+            )
             .await
     });
     start_seen_rx.await.expect("start should be observed");
@@ -343,4 +345,101 @@ async fn policy_requests_use_process_decider_and_cancel_on_unregister() {
         .await
         .expect("policy routing should finish")
         .expect("server task should finish");
+}
+
+fn denied_notification(process_id: ProcessId, host: &str, reason: &str) -> JSONRPCMessage {
+    JSONRPCMessage::Notification(codex_exec_server_protocol::JSONRPCNotification {
+        method: crate::protocol::NETWORK_DENIED_METHOD.to_string(),
+        params: Some(
+            serde_json::to_value(crate::protocol::NetworkDeniedNotification {
+                process_id,
+                protocol: "http".to_string(),
+                host: host.to_string(),
+                port: Some(80),
+                reason: reason.to_string(),
+            })
+            .expect("denial should serialize"),
+        ),
+    })
+}
+
+/// #722 (D278): the executor's own denials reach the process's observer as
+/// denials, with untrusted strings neutralized; other processes' are ignored.
+#[tokio::test]
+async fn executor_denials_reach_the_process_observer() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let process_id = ProcessId::from("denied-process");
+    let server_process_id = process_id.clone();
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut websocket = accept_websocket(&listener).await;
+        complete_websocket_initialize(&mut websocket, "denials", Default::default()).await;
+        ready_rx.await.expect("process should be registered");
+        for message in [
+            denied_notification(ProcessId::from("other-process"), "other.example", "denied"),
+            denied_notification(server_process_id.clone(), "blocked.example", "denied"),
+            denied_notification(server_process_id, "bad host\u{1b}[2J", "bad reason!"),
+        ] {
+            write_jsonrpc_websocket(&mut websocket, message).await;
+        }
+        // Keep the connection open until the client is done.
+        let _ = read_jsonrpc_websocket(&mut websocket).await;
+    });
+
+    let client = LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(websocket_url, Duration::from_secs(1)),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .get()
+    .await
+    .expect("client should connect");
+    let session = client
+        .register_session(&process_id)
+        .await
+        .expect("session should register");
+    let (denied_tx, mut denied_rx) = mpsc::unbounded_channel();
+    let observer: Arc<dyn codex_network_proxy::BlockedRequestObserver> =
+        Arc::new(move |blocked: codex_network_proxy::BlockedRequest| {
+            let denied_tx = denied_tx.clone();
+            async move {
+                let _ = denied_tx.send(blocked);
+            }
+        });
+    session.state.network_denial_observer.store(Some(Arc::new(
+        super::super::NetworkDenialObserver(observer),
+    )));
+    ready_tx.send(()).expect("server should be waiting");
+
+    let mut denials = Vec::new();
+    for _ in 0..2 {
+        let blocked = timeout(Duration::from_secs(5), denied_rx.recv())
+            .await
+            .expect("denial should arrive")
+            .expect("observer channel open");
+        denials.push((blocked.host, blocked.reason, blocked.decision, blocked.port));
+    }
+    assert_eq!(
+        denials,
+        vec![
+            (
+                "blocked.example".to_string(),
+                "denied".to_string(),
+                Some("deny".to_string()),
+                Some(80),
+            ),
+            (
+                String::new(),
+                "executor_denied".to_string(),
+                Some("deny".to_string()),
+                Some(80),
+            ),
+        ]
+    );
+    assert!(denied_rx.try_recv().is_err(), "other processes are ignored");
+    session.unregister().await;
+    drop(client);
+    server.abort();
 }
