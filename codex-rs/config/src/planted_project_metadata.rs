@@ -16,6 +16,17 @@ use std::path::PathBuf;
 pub const PLANTED_PROJECT_METADATA_WARNING_PREFIX: &str =
     "Possibly planted project folder not loaded: ";
 
+/// D332 (#1682): start of the warning for a writable folder's top-level
+/// `.git` that appeared or changed while a non-admin sandbox command ran.
+pub const PLANTED_GIT_WARNING_PREFIX: &str = "Possibly planted git folder: ";
+
+/// Whether `path` is a `.git` entry (D332's records hold only top-level
+/// ones).
+pub fn is_git_dir(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+}
+
 /// The planted folders not confirmed yet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlantedProjectMetadata {
@@ -45,6 +56,22 @@ impl PlantedProjectMetadata {
                 planted.iter().any(|entry| is_at_or_below(&folder, entry))
                     || counts_as_planted_now(&folder)
             }
+        }
+    }
+
+    /// D332: the warning for `git_dir` (a folder's `.git`) if it counts as
+    /// planted: nothing stops git from running its hooks and config, so the
+    /// person is told instead. Records that can't be read add none: the
+    /// project folder warning already says so.
+    pub fn git_warning(&self, git_dir: &Path) -> Option<String> {
+        match self {
+            Self::Unreadable(_) => None,
+            Self::Known(_) => self.contains(git_dir).then(|| {
+                format!(
+                    "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder. Check its hooks and config, then open Corbanu Terminal in this folder and confirm it.",
+                    git_dir.display()
+                )
+            }),
         }
     }
 

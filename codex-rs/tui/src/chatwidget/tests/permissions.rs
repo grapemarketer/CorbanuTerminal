@@ -1390,3 +1390,25 @@ async fn planted_project_metadata_prompt_snapshot() {
         render_bottom_popup(&chat, /*width*/ 100)
     );
 }
+
+/// D332 (#1682): the same prompt for a `.git` that appeared or changed, alone
+/// and next to project folders.
+#[tokio::test]
+async fn planted_git_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_planted_project_metadata_prompt(vec![PathBuf::from("project/.git")]);
+    assert_chatwidget_snapshot!(
+        "planted_git_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_planted_project_metadata_prompt(vec![
+        PathBuf::from("project/.codex"),
+        PathBuf::from("project/.git"),
+    ]);
+    assert_chatwidget_snapshot!(
+        "planted_git_and_project_folder_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}

@@ -56,8 +56,12 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. Such folders
-deeper in your workspace are covered too. One that is new, or was replaced,
+has ended). Check its contents before you choose to load it. A `.git` at
+the top of such a folder that appears or changes while a command runs is
+flagged too (D332): Corbanu Terminal warns you at startup and asks in the TUI
+whether you have checked it, because git runs a `.git`'s hooks and config
+outside the sandbox whenever you run git there. A `.git` that is a link
+(junction or symbolic link) is flagged after every command. Such folders deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. A read-only `.codex` or
 `.agents` folder your permission profile names that doesn't exist yet (or
 one on the way to a read-only folder inside it) is created by Corbanu

@@ -63,3 +63,31 @@ fn planted_junction_is_not_followed() {
         (true, false)
     );
 }
+
+/// D332: a recorded `.git` gets its own warning; one not recorded, and any
+/// when the records can't be read (the project folder warning says so),
+/// gets none.
+#[test]
+fn planted_git_gets_a_warning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let dot_git = root.join(".git");
+    std::fs::create_dir(&dot_git).expect("create .git");
+    let warning = PlantedProjectMetadata::Known(vec![dot_git.clone()]).git_warning(&dot_git);
+    assert_eq!(
+        (
+            warning.as_deref().map(|warning| {
+                warning.starts_with(&format!(
+                    "{PLANTED_GIT_WARNING_PREFIX}{}.",
+                    dot_git.display()
+                ))
+            }),
+            PlantedProjectMetadata::Known(Vec::new()).git_warning(&dot_git),
+            PlantedProjectMetadata::Unreadable("damaged".to_string()).git_warning(&dot_git),
+            is_git_dir(&dot_git),
+            is_git_dir(&root.join(".GIT")),
+            is_git_dir(&root.join(".codex")),
+        ),
+        (Some(true), None, None, true, true, false)
+    );
+}

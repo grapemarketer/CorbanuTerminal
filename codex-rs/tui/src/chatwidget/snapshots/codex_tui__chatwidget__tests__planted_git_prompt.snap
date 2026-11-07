@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Possibly planted project folders
+
+  These .git folders appeared or changed while a non-admin Windows sandbox command ran, so a
+  command may have planted them. Git runs their hooks and config outside the sandbox whenever you
+  run git there:
+    project/.git
+  Check their hooks and config before you confirm them.
+
+› 1. Keep warning me  Ask again next time
+  2. Confirm them     I checked them; stop warning about them
+
+  Press enter to confirm or esc to go back

@@ -122,3 +122,67 @@ fn find_reports_folded_names_and_unlistable_folders() {
         )
     );
 }
+
+/// D332: a root's top-level `.git` is reported when it exists, a folder or
+/// file with its identity and a junction without one; a missing one isn't.
+/// One counts as appeared in a session unless it is there, as the same
+/// file, from the start; a `.git` below the top of a root isn't D332's.
+#[test]
+fn top_level_git_is_reported_and_compared() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dunce::canonicalize(dir.path()).expect("canonical");
+    let (none, folder, file, linked, target) = (
+        base.join("none"),
+        base.join("folder"),
+        base.join("file"),
+        base.join("linked"),
+        base.join("target"),
+    );
+    for path in [&none, &folder, &file, &linked, &target] {
+        std::fs::create_dir_all(path).expect("create");
+    }
+    std::fs::create_dir(folder.join(".git")).expect(".git folder");
+    std::fs::write(file.join(".git"), b"gitdir: elsewhere").expect(".git file");
+    junction(&linked.join(".git"), &target);
+    let roots = vec![none.clone(), folder.clone(), file.clone(), linked.clone()];
+
+    let before = top_level_git(&roots);
+    let reported: Vec<(PathBuf, bool)> = before
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.identity.is_some()))
+        .collect();
+    let appeared = |path: &Path| git_appeared_in_session(&roots, &before, path);
+    let unchanged = (
+        appeared(&none.join(".git")),
+        appeared(&folder.join(".git")),
+        appeared(&file.join(".git")),
+        appeared(&linked.join(".git")),
+        appeared(&folder.join("sub\\.git")),
+        appeared(&folder.join(".codex")),
+    );
+    std::fs::create_dir(none.join(".git")).expect("plant");
+    std::fs::remove_dir(folder.join(".git")).expect("remove");
+    std::fs::create_dir(folder.join(".git")).expect("replace");
+    let changed = (
+        appeared(&none.join(".git")),
+        appeared(&folder.join(".GIT")),
+        crate::nested_metadata::appeared(&before, top_level_git(&roots)),
+    );
+
+    assert_eq!(
+        (reported, unchanged, changed),
+        (
+            vec![
+                (folder.join(".git"), true),
+                (file.join(".git"), true),
+                (linked.join(".git"), false),
+            ],
+            (true, false, false, true, false, false),
+            (
+                true,
+                true,
+                vec![none.join(".git"), folder.join(".git"), linked.join(".git")]
+            ),
+        )
+    );
+}

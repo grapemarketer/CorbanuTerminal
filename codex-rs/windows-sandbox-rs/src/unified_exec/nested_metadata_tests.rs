@@ -510,3 +510,123 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         )
     );
 }
+
+/// D332 (#1682): a top-level `.git` that appears, or is replaced, while a
+/// session runs counts as planted at once (it can't be confirmed meanwhile)
+/// and after the session; one left alone doesn't, and a link counts after
+/// every session. A confirmed one counts again once replaced.
+#[test]
+fn legacy_top_level_git_is_watched() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let base = test_root.path().join("roots");
+    for dir in ["new", "kept\\.git", "linked", "target"] {
+        fs::create_dir_all(base.join(dir)).expect("create test directory");
+    }
+    let base = canonical(&base);
+    let (new, kept, linked) = (
+        base.join("new\\.git"),
+        base.join("kept\\.git"),
+        base.join("linked\\.git"),
+    );
+    let status = std::process::Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&linked)
+        .arg(base.join("target"))
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("mklink");
+    assert!(status.success(), "mklink /J failed");
+    let roots = ["new", "kept", "linked"].map(|root| base.join(root));
+
+    let lease = crate::integrity_leases::acquire(&roots, /*log_dir*/ None).expect("lease");
+    fs::create_dir(&new).expect("plant");
+    let live = (
+        counts_now(&new),
+        counts_now(&kept),
+        crate::confirm_planted_project_metadata(&new).is_err(),
+    );
+    drop(lease);
+    let ended = (planted(&new), planted(&kept), planted(&linked));
+    let confirmed = crate::confirm_planted_project_metadata(&new).expect("confirm");
+    drop(crate::integrity_leases::acquire(&roots, /*log_dir*/ None).expect("unchanged session"));
+    let after_unchanged = (planted(&new), planted(&kept));
+    let lease =
+        crate::integrity_leases::acquire(&roots, /*log_dir*/ None).expect("replacing session");
+    fs::remove_dir(&new).expect("remove");
+    fs::create_dir(&new).expect("replace");
+    drop(lease);
+    let after_replacing = planted(&new);
+
+    assert_eq!(
+        (live, ended, confirmed, after_unchanged, after_replacing),
+        (
+            (true, false, true),
+            (true, false, true),
+            true,
+            (false, false),
+            true,
+        )
+    );
+}
+
+/// D332: a legacy command may create a `.git` where there was none (`git
+/// init` must work), and it then counts as planted; it can't change the
+/// existing `.git` of another root.
+#[test]
+fn legacy_command_creating_git_is_recorded_as_planted() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    let script = concat!(
+        "mkdir \"%WORKSPACE%\\.git\\hooks\"\r\n",
+        "echo planted> \"%WORKSPACE%\\.git\\hooks\\post-checkout\"\r\n",
+    );
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-top-level-git");
+        let script_path = codex_home.path().join("top-level-git.cmd");
+        fs::write(&script_path, format!("@echo off\r\n{script}exit /b 0\r\n"))
+            .expect("write script");
+        let env_map = HashMap::from([(
+            "WORKSPACE".to_string(),
+            workspace.to_string_lossy().into_owned(),
+        )]);
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script_path.display().to_string(),
+            ],
+            &workspace,
+            env_map,
+            /*timeout_ms*/ Some(10_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        let (_stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
+                .await;
+        exit_code
+    });
+    let git = canonical(&workspace).join(".git");
+
+    assert_eq!(
+        (
+            exit_code,
+            git.join("hooks\\post-checkout").is_file(),
+            planted(&git),
+        ),
+        (0, true, true)
+    );
+}

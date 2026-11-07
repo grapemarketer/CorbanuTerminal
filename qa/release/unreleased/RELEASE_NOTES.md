@@ -524,6 +524,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   at the top. Commands can't rename, move or delete existing ones or the
   folders above them, so a `git checkout` or `npm ci` that does is refused
   there.
+- **Non-admin sandbox: a `.git` that appears or changes is reported**
+  (D332, #1682). When a `.git` at the top of a writable folder is new, or
+  was replaced, when a command ends, Corbanu Terminal warns at startup and
+  the TUI asks you to confirm it once you have checked its hooks and config:
+  git runs them outside the sandbox. Commands can still create a `.git`
+  (`git init` works). A `.git` that is a link is reported after every
+  command.
 - **Non-admin sandbox: links can't undo a read-only path** (#1645, D293,
   #1542; #1670, #1667). A command doesn't start when a configured read-only
   path, or a folder above it, is a link (junction, symbolic link or mount
