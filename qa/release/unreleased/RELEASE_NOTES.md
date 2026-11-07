@@ -259,6 +259,13 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (`mcp__server__tool`), or a hashed form if another tool has that name.
   MCP servers configured without the `mcp__` prefix get the same treatment
   (`server__tool`); only built-in tool namespaces keep the bare name.
+- **MCP servers without the prefix can't take a built-in's namespace** (#1655).
+  With `features.non_prefixed_mcp_tool_names`, a server that would be exposed
+  without `mcp__` under a built-in tool namespace (`web`, `clock`, `skills`,
+  `collaboration`, `image_gen`, `memories`, `multi_agent_v1`, or the configured
+  multi-agent namespace) is now rejected when the config loads and by
+  `corbanu mcp add`, with a message saying how to rename it. Skill dependency
+  install skips such a server, and plugin servers keep the `mcp__` prefix.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
