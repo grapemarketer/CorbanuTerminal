@@ -219,7 +219,15 @@ profile alone (the shell tool, unified exec, `codex sandbox`) or as an extra
 deny-write path (#1686); a link a command could replace on the way to it
 stops the command first. A path meant to be a file (`.env`, say) thus becomes an empty
 folder in each writable root that lacks it, which tools that read it may
-reject. A skip-missing entry applies only to a path that exists, a path in
+reject. Such a path is created before the session records which `.codex`/`.agents`
+folders exist (D262, D283 below), so a configured read-only `.agents` (or a
+nested `.codex`) the sandbox makes isn't reported as planted (a session that
+started before it was made, and saw it absent, still reports it, except one
+whose only root containing it is a `%TEMP%` one, which isn't watched). A
+top-level `.codex`, `.agents` or `.git` made on the way to a deeper
+read-only path (`.codex\hooks`, `.git\hooks`) is then protected as one
+that was there. A
+skip-missing entry applies only to a path that exists, a path in
 a writable root that doesn't exist is left alone, and the command root's
 top-level `.codex` is covered by D262 below. Commands can still write
 inside those folders but can't delete or rename the folders themselves; the
