@@ -519,7 +519,8 @@ impl ChatWidget {
 
     /// #1506 item 2 (D262): at startup, asks whether to load the `.codex` or
     /// `.agents` folders of this project that appeared while a non-admin
-    /// sandbox command ran. Until confirmed, Core ignores them.
+    /// sandbox command ran. Until confirmed, Core ignores them. D332: the
+    /// same for a `.git` that appeared or changed, which Core warns about.
     pub(crate) fn maybe_prompt_planted_project_metadata(&mut self) {
         // Unreadable records can't be confirmed; the startup warning says so.
         let codex_config::PlantedProjectMetadata::Known(planted) =
@@ -546,19 +547,24 @@ impl ChatWidget {
     pub(crate) fn open_planted_project_metadata_prompt(&mut self, paths: Vec<PathBuf>) {
         use ratatui_macros::line;
 
-        let mut lines = vec![
-            line!["Possibly planted project folders".bold()],
-            line![""],
-            line![
+        // D332 (#1682): a `.git` isn't loaded by Corbanu Terminal, but git
+        // runs its hooks and config outside the sandbox.
+        let (git_dirs, folders): (Vec<&PathBuf>, Vec<&PathBuf>) = paths
+            .iter()
+            .partition(|path| codex_config::is_git_dir(path));
+        let mut lines = vec![line!["Possibly planted project folders".bold()]];
+        if !folders.is_empty() {
+            lines.push(line![""]);
+            lines.push(line![
                 "These folders appeared while a non-admin Windows sandbox command ran, so a command may have planted them. Corbanu Terminal isn't loading their config, hooks or skills:"
-            ],
-        ];
-        for path in &paths {
-            lines.push(line![format!("  {}", path.display()).cyan()]);
+            ]);
+            for path in &folders {
+                lines.push(line![format!("  {}", path.display()).cyan()]);
+            }
         }
         // D283: a recorded folder that isn't `.codex`/`.agents` is one the
         // sandbox couldn't list when a command ended.
-        let unlisted = paths.iter().any(|path| {
+        let unlisted = folders.iter().any(|path| {
             !path.file_name().is_some_and(|name| {
                 name.eq_ignore_ascii_case(".codex") || name.eq_ignore_ascii_case(".agents")
             })
@@ -568,23 +574,57 @@ impl ChatWidget {
                 "A folder other than .codex or .agents couldn't be listed when a command ended, so nothing below it is loaded; make it readable and check it first."
             ]);
         }
-        lines.push(line!["Check their contents before you load them.".bold()]);
+        if !git_dirs.is_empty() {
+            lines.push(line![""]);
+            lines.push(line![
+                "These .git folders appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
+            ]);
+            for path in &git_dirs {
+                lines.push(line![format!("  {}", path.display()).cyan()]);
+            }
+        }
+        let git_only = folders.is_empty();
+        lines.push(if git_only {
+            line!["Check their hooks and config before you confirm them.".bold()]
+        } else if git_dirs.is_empty() {
+            line!["Check their contents before you load them.".bold()]
+        } else {
+            line![
+                "Check their contents (for a .git, its hooks and config) before you load or confirm them."
+                    .bold()
+            ]
+        });
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
 
+        let (keep, confirm, confirm_description, confirmed) = if git_only {
+            (
+                "Keep warning me",
+                "Confirm them",
+                "I checked them; stop warning about them",
+                "Confirmed.",
+            )
+        } else {
+            (
+                "Keep ignoring them",
+                "Load them",
+                "I checked them; load them from the next start",
+                "Confirmed. Restart Corbanu Terminal to load them.",
+            )
+        };
         let items = vec![
             SelectionItem {
-                name: "Keep ignoring them".to_string(),
+                name: keep.to_string(),
                 description: Some("Ask again next time".to_string()),
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Load them".to_string(),
-                description: Some("I checked them; load them from the next start".to_string()),
+                name: confirm.to_string(),
+                description: Some(confirm_description.to_string()),
                 actions: vec![Box::new(move |tx| {
                     let message = match confirm_planted_project_metadata(&paths) {
-                        Ok(()) => "Confirmed. Restart Corbanu Terminal to load them.".to_string(),
+                        Ok(()) => confirmed.to_string(),
                         Err(err) => format!("Couldn't confirm them: {err}"),
                     };
                     tx.send(AppEvent::InsertHistoryCell(Box::new(

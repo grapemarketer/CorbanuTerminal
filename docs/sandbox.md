@@ -67,6 +67,15 @@ can't change, move or delete the ones that existed when they started, or
 the folders above them. A folder the sandbox can't list counts as planted. Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
 
+**A `.git` created while a command runs.** Git runs a `.git` folder's hooks
+and config outside the sandbox whenever you run git there. So if the `.git`
+at the top of a folder non-admin sandbox commands may write to appears, or
+is replaced, while a command runs, Corbanu Terminal warns you at startup and
+asks in the TUI whether you have checked it. Commands can still create a
+`.git` (`git init` works). A `.git` that is a link (a junction or symbolic
+link) is flagged after every command. Only that top-level `.git` is checked,
+not `.git` folders deeper inside.
+
 **Read-only paths that don't exist yet.** If your permission profile marks a
 path inside a writable folder read-only and that path doesn't exist when a
 sandboxed command starts, Corbanu Terminal creates it as an empty folder and

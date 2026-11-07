@@ -1313,6 +1313,13 @@ async fn load_project_layers(
     // #1506 item 2 (D262): folders a sandboxed command may have planted.
     let planted = crate::planted_project_metadata();
     for dir in dirs {
+        // D332 (#1682): a `.git` that appeared or changed in a session.
+        let dot_git = dir.join(".git");
+        if std::fs::symlink_metadata(dot_git.as_path()).is_ok()
+            && let Some(warning) = planted.git_warning(dot_git.as_path())
+        {
+            startup_warnings.push(warning);
+        }
         let dot_agents = dir.join(".agents");
         if dot_agents.as_path().is_dir() && planted.contains(dot_agents.as_path()) {
             startup_warnings.push(planted.reason(dot_agents.as_path()));

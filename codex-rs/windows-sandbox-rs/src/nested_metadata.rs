@@ -205,6 +205,53 @@ pub(crate) fn appeared_in_session(
             .any(|old| same_path(&old.path, folder) && old.identity == now)
 }
 
+/// D332 (#1682): the top-level `.git` of each of `roots` (canonical) that
+/// exists, of any kind, with the file it is. A link (Google's `repo` tool
+/// makes one; a sandboxed command could point it elsewhere) or one that
+/// can't be inspected has no identity, so it counts as changed after every
+/// session. Git runs a `.git`'s hooks and config outside the sandbox, so one
+/// that appears or changes while a session runs counts as planted, as new
+/// `.codex`/`.agents` folders do; a missing one may still be made
+/// (`git init` must work).
+pub(crate) fn top_level_git(roots: &[PathBuf]) -> Vec<NestedMetadata> {
+    roots
+        .iter()
+        .filter_map(|root| {
+            let path = root.join(".git");
+            let identity = match std::fs::symlink_metadata(&path) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+                Ok(metadata) if !metadata.file_type().is_symlink() => identity(&path),
+                _ => None,
+            };
+            Some(NestedMetadata { path, identity })
+        })
+        .collect()
+}
+
+/// D332: whether `folder` is the top-level `.git` of one of `roots` and
+/// isn't in `before` (from [`top_level_git`]) as the file it is now (one
+/// that doesn't exist counts: it may appear right after this check).
+pub(crate) fn git_appeared_in_session(
+    roots: &[PathBuf],
+    before: &[NestedMetadata],
+    folder: &Path,
+) -> bool {
+    let top_level = folder
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        && folder
+            .parent()
+            .is_some_and(|parent| roots.iter().any(|root| same_path(parent, root)));
+    if !top_level {
+        return false;
+    }
+    let now = identity(folder).filter(|_| !crate::workspace_acl::is_link(folder));
+    now.is_none()
+        || !before
+            .iter()
+            .any(|old| same_path(&old.path, folder) && old.identity == now)
+}
+
 /// The file `path` is (not followed if it is a link).
 pub(crate) fn identity(path: &Path) -> Option<FileIdentity> {
     use std::os::windows::fs::OpenOptionsExt as _;
