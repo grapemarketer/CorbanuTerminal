@@ -937,7 +937,7 @@ impl FileSystemSandboxPolicy {
             return true;
         }
         let Some(real) = resolve_candidate_path(path, cwd)
-            .and_then(|path| std::fs::canonicalize(path.as_path()).ok())
+            .and_then(|path| canonicalize_allowing_missing(path.as_path()))
         else {
             return false;
         };
@@ -946,7 +946,7 @@ impl FileSystemSandboxPolicy {
             !entry.skips_missing_path()
                 && !entry.access.can_write()
                 && resolve_entry_path(&entry.path, cwd.as_ref())
-                    .and_then(|entry| std::fs::canonicalize(entry.as_path()).ok())
+                    .and_then(|entry| canonicalize_allowing_missing(entry.as_path()))
                     .is_some_and(|entry| entry == real)
         })
     }
@@ -2189,6 +2189,30 @@ fn resolve_project_roots_glob_pattern(subpath: &Path, root: &AbsolutePathBuf) ->
         .into_owned()
 }
 
+/// `path` with links followed, for a path that may not exist yet (#1686):
+/// its nearest existing ancestor canonicalized, plus the rest as spelled.
+fn canonicalize_allowing_missing(path: &Path) -> Option<std::path::PathBuf> {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(real) => {
+                return Some(
+                    missing
+                        .iter()
+                        .rev()
+                        .fold(real, |path, part| path.join(part)),
+                );
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(existing.file_name()?.to_os_string());
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
 fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     if path.is_absolute() {
         AbsolutePathBuf::from_absolute_path(path).ok()
@@ -3042,6 +3066,37 @@ mod tests {
                 policy.has_explicit_non_write_entry_resolving_to(&resolved.join("w"), dir.path()),
             ),
             (false, true, true, false, false)
+        );
+        Ok(())
+    }
+
+    /// #1686: also for a path that doesn't exist yet, spelled through a link.
+    #[cfg(unix)]
+    #[test]
+    fn explicit_non_write_entry_resolving_to_a_missing_path() -> std::io::Result<()> {
+        let dir = TempDir::new()?;
+        let real = dir.path().join("real");
+        fs::create_dir_all(&real)?;
+        let linked = dir.path().join("linked");
+        symlink_dir(&real, &linked)?;
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(linked.join("a/ro"))
+                    .expect("absolute path"),
+            },
+            FileSystemAccessMode::Read,
+        )]);
+        let resolved = fs::canonicalize(&real)?;
+        assert_eq!(
+            (
+                policy
+                    .has_explicit_non_write_entry_resolving_to(&resolved.join("a/ro"), dir.path()),
+                policy.has_explicit_non_write_entry_resolving_to(&linked.join("a/ro"), dir.path()),
+                policy.has_explicit_non_write_entry_resolving_to(&resolved.join("a"), dir.path()),
+                policy
+                    .has_explicit_non_write_entry_resolving_to(&resolved.join("a/rw"), dir.path()),
+            ),
+            (true, true, false, false)
         );
         Ok(())
     }

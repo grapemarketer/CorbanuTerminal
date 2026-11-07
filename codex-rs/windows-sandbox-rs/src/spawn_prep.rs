@@ -403,29 +403,57 @@ fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// #1686: the explicit read-only paths of the writable roots that don't
-/// exist (a dangling link counts, and then can't be created, so the command
-/// doesn't start). Skip-missing entries aren't explicit here, and a root's
-/// top-level `.codex` is left to D262, as when Core passes the paths itself.
-fn missing_explicit_read_only_paths(
+/// #1686: the explicit read-only paths of the writable roots that exist,
+/// whether or not the paths themselves do yet (one made right after the
+/// deny set was computed must not slip through). Skip-missing entries
+/// aren't explicit here, and the command root's top-level `.codex` is left
+/// to D262, as when Core passes the paths itself.
+fn explicit_read_only_paths(
     permissions: &ResolvedWindowsSandboxPermissions,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
 ) -> Vec<PathBuf> {
-    let mut missing: Vec<PathBuf> = permissions
+    let canonical_cwd = canonicalize_path(current_dir);
+    let mut paths: Vec<PathBuf> = permissions
         .writable_roots_for_cwd(current_dir, env_map)
         .into_iter()
+        .filter(|root| root.root.is_dir())
         .flat_map(|root| {
-            let dot_codex = root.root.join(".codex");
+            let dot_codex =
+                is_command_cwd_root(&root.root, &canonical_cwd).then(|| root.root.join(".codex"));
             root.read_only_subpaths
                 .into_iter()
-                .filter(move |path| *path != dot_codex)
+                .filter(move |path| dot_codex.as_ref() != Some(path))
         })
-        .filter(|path| !path.exists() && permissions.is_explicit_read_only_path(path, current_dir))
+        .filter(|path| permissions.is_explicit_read_only_path(path, current_dir))
         .collect();
-    missing.sort();
-    missing.dedup();
-    missing
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// #1686: before the host makes a missing read-only `path`, no folder on
+/// the way to it may be a link a sandboxed command could have planted (D293
+/// would refuse it afterwards, but the host would already have made a
+/// folder at the link's target). A dangling link at `path` itself can't be
+/// made into a folder.
+fn refuse_creating_through_a_link(path: &Path, roots: &[PathBuf]) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        anyhow::bail!(
+            "the read-only path {} is a broken link (or not a folder); the Windows sandbox doesn't start commands with it (#1686). Remove it or point it at a folder.",
+            path.display()
+        );
+    }
+    if let Some(existing) = path.ancestors().skip(1).find(|folder| folder.exists())
+        && let Some(link) = crate::workspace_acl::link_above_carve_out(existing, roots)
+    {
+        anyhow::bail!(
+            "{} is a link (a junction or symbolic link) above the read-only path {}. The non-admin Windows sandbox can't keep a command from replacing a link there and recreating the read-only path, so it doesn't start commands with this configuration (#1542). Configure the read-only path through the link's target instead, or replace the link with a folder.",
+            link.display(),
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
@@ -534,12 +562,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
     // #1686: so must configured read-only paths that reach the backend only
     // through the profile (the shell tool and unified exec pass no extra
     // deny-write paths).
-    let missing_read_only = missing_explicit_read_only_paths(permissions, current_dir, env_map);
+    let explicit_read_only = explicit_read_only_paths(permissions, current_dir, env_map);
     unsafe {
-        for path in additional_deny_write_paths.iter().chain(&missing_read_only) {
+        for path in additional_deny_write_paths
+            .iter()
+            .chain(&explicit_read_only)
+        {
             // Explicit carveouts must exist before the command starts so the
             // sandbox cannot create them under a writable parent first.
             if !path.exists() {
+                refuse_creating_through_a_link(path, &canonical_allow)?;
                 std::fs::create_dir_all(path)
                     .with_context(|| format!("create deny-write path {}", path.display()))?;
             }
@@ -794,6 +826,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
 mod tests {
     use super::SpawnPrepOptions;
     use super::deny_root_capabilities_for_path;
+    use super::explicit_read_only_paths;
     use super::legacy_session_capability_roots;
     use super::prepare_legacy_spawn_context;
     use super::prepare_spawn_context_common;
@@ -1060,5 +1093,88 @@ mod tests {
         assert!(roots.contains(&dunce::canonicalize(&active_root).expect("active root")));
         assert!(!roots.contains(&dunce::canonicalize(&codex_home).expect("codex home")));
         assert!(!roots.contains(&dunce::canonicalize(&sandbox_root).expect("sandbox root")));
+    }
+
+    /// #1686: which configured read-only paths the legacy backend makes
+    /// before a command starts when they don't exist: explicit ones, missing
+    /// or not, also spelled in another case than the root; not skip-missing
+    /// ones, not the command root's own `.codex` (D262's), nor ones in a
+    /// writable root that doesn't exist.
+    #[test]
+    fn explicit_read_only_paths_include_missing_ones() {
+        use codex_protocol::permissions::FileSystemAccessMode;
+        use codex_protocol::permissions::FileSystemPath;
+        use codex_protocol::permissions::FileSystemSandboxEntry;
+        use codex_protocol::permissions::FileSystemSandboxPolicy;
+        use codex_protocol::permissions::FileSystemSpecialPath;
+        let temp = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(temp.path()).expect("canonical temp");
+        let workspace = base.join("Work");
+        let other = base.join("other");
+        std::fs::create_dir_all(workspace.join("present")).expect("create workspace");
+        std::fs::create_dir_all(&other).expect("create other root");
+        let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+        let entry = |path: &Path, access| {
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(path),
+                },
+                access,
+            )
+        };
+        let gone = base.join("gone");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            entry(&workspace, FileSystemAccessMode::Write),
+            entry(&other, FileSystemAccessMode::Write),
+            entry(&gone, FileSystemAccessMode::Write),
+            entry(&workspace.join("present"), FileSystemAccessMode::Read),
+            entry(
+                &base.join("WORK").join("missing"),
+                FileSystemAccessMode::Read,
+            ),
+            entry(&workspace.join(".codex"), FileSystemAccessMode::Read),
+            entry(&other.join(".codex"), FileSystemAccessMode::Read),
+            entry(&gone.join("ro"), FileSystemAccessMode::Read),
+            FileSystemSandboxEntry::skip_missing_path(
+                FileSystemPath::Path {
+                    path: absolute(&workspace.join("skipped")),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]);
+        let profile =
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+        let workspace_roots = workspace_roots_for(workspace.as_path());
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &profile,
+                workspace_roots.as_slice(),
+            )
+            .expect("managed permission profile");
+
+        let found: Vec<String> =
+            explicit_read_only_paths(&permissions, &workspace, &HashMap::new())
+                .into_iter()
+                .map(|path| {
+                    path.strip_prefix(&base)
+                        .expect("below the temp dir")
+                        .display()
+                        .to_string()
+                        .to_ascii_lowercase()
+                })
+                .collect();
+        let mut found = found;
+        found.sort();
+
+        assert_eq!(
+            found,
+            ["other\\.codex", "work\\missing", "work\\present"].map(str::to_string)
+        );
     }
 }

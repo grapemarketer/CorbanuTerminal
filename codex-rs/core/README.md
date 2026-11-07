@@ -203,9 +203,14 @@ also denies the sandbox `DELETE`, and that folder's parent denies Everyone
 `FILE_DELETE_CHILD`, so a command can't move or rename the folder away and
 recreate the read-only path (#1506 item 3, D263). An explicitly configured
 read-only path that doesn't exist yet is created (as a folder) before the
-command starts and protected the same way, however the command was started
-(#1686); a skip-missing entry applies only to a path that exists, and a
-root's top-level `.codex` is covered by D262 below. Commands can still write
+command starts and protected the same way, whether it comes from the
+profile alone (the shell tool, unified exec, `codex sandbox`) or as an extra
+deny-write path (#1686); a link a command could replace on the way to it
+stops the command first. A path meant to be a file (`.env`, say) thus becomes an empty
+folder in each writable root that lacks it, which tools that read it may
+reject. A skip-missing entry applies only to a path that exists, a path in
+a writable root that doesn't exist is left alone, and the command root's
+top-level `.codex` is covered by D262 below. Commands can still write
 inside those folders but can't delete or rename the folders themselves; the
 default `.git`, `.codex` and `.agents` protections sit directly in the root
 and don't add these. A `.codex` or `.agents` folder at the top of a writable
