@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/security_level_picker_issue_1047_tests.rs
-assertion_line: 405
 expression: done
 ---
 Grants and kill switch
@@ -8,7 +7,7 @@ Core's level: Permissive · Kill switch: off
 
 Kill switch off for the next start. Saved: it holds after a restart. Other Corbanu
 Terminals running on this home take it within about a second. Level: Permissive. Restart
-now is not offered: this window uses an app server outside this Corbanu Terminal, and
-Corbanu Terminal starts against one only under Permissive.
+now is not offered: this window's sessions run in an app server outside this Corbanu
+Terminal.
 
 enter or esc back
