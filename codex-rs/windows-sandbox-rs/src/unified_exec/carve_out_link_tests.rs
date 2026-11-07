@@ -331,3 +331,42 @@ fn link_above_carve_out_finds_links_below_the_root() {
         )
     );
 }
+
+/// A configured read-only path that doesn't exist yet (Core passes it as an
+/// extra deny-write path) is created before the command starts and
+/// protected like one that exists: the command can't write in it, nor move
+/// it or the folder above it away and recreate it.
+#[test]
+fn legacy_missing_read_only_path_is_created_and_protected() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    let read_only = workspace.join("a\\ro");
+    let carve_outs = [AbsolutePathBuf::from_absolute_path(&read_only).expect("absolute")];
+    let started = run_script(
+        &PermissionProfile::workspace_write(),
+        &workspace,
+        &carve_outs,
+        HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
+        concat!(
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "rmdir \"%W%\\a\\ro\"\r\n",
+            "ren \"%W%\\a\" a-moved\r\n",
+            "mkdir \"%W%\\a\\ro\"\r\n",
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "echo after> \"%W%\\a\\other.txt\"\r\n",
+        ),
+    );
+
+    assert_eq!(
+        (
+            started,
+            read_only.is_dir(),
+            read_only.join("config.toml").exists(),
+            workspace.join("a-moved").exists(),
+            fs::read_to_string(workspace.join("a\\other.txt")).ok(),
+        ),
+        (Ok(0), true, false, false, Some("after\r\n".to_string()))
+    );
+}
