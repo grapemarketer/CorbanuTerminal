@@ -64,6 +64,12 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "vared -p $(cat f) x",
             "n=$(cat f); set *.none -A $n ls ./x; ls",
             "repeat 1 eval 'set ?A commands ls ./x'",
+            // Review 4: as on main.
+            "eval $'getln *.png'",
+            "trap $'getln *.png' EXIT",
+            "eval $'regexp-replace *.x y z'",
+            "eval $'zlistattr *.png b*.png'",
+            "eval $'zgetattr *.png a b*.png'",
             "trap 'set ?A commands ls ./x' EXIT",
             "zstyle -$o :x y functions",
             "zstyle \"$o\" :x y functions",

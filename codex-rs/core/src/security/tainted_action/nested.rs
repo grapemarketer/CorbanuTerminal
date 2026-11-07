@@ -631,7 +631,10 @@ impl Classifier {
                         })
                         .collect()
                 });
-            found.unreadable |= code_tables::writes_table(&texts, &texts, seen.as_deref());
+            // Main's reading stays a floor: the reading with quotes reads
+            // some words otherwise (`eval $'getln *.png'`).
+            found.unreadable |= code_tables::writes_table(&texts, &texts, /*seen*/ None)
+                || seen.is_some_and(|seen| code_tables::writes_table(&texts, &texts, Some(&seen)));
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
