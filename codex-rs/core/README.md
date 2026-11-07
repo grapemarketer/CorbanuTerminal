@@ -217,7 +217,13 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user.
+folder while a session runs is reported, including the user. A top-level
+`.codex` or `.agents` that is itself a link (a junction, symbolic link or
+mount point), or can't be inspected, stops the command: its protections
+would land on the link's target, and a command could replace the link with
+a writable folder that D262 doesn't report, since something was there when
+the session started (#1682). Replace the link with a folder. Other reparse
+points, such as cloud placeholders, aren't links (#1668).
 
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too

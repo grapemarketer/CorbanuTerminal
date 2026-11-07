@@ -403,6 +403,32 @@ fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+/// #1682: the command doesn't start when the top-level `.codex` or `.agents`
+/// of one of the writable `roots` is a link (a junction, symbolic link or
+/// mount point; one that can't be inspected counts). Its protections would
+/// land on the link's target, so a command could remove the link and make a
+/// writable folder in its place, which D262 doesn't report: something was
+/// there when the session started. Other reparse points, such as cloud
+/// placeholders, are the folder itself (#1668).
+fn refuse_linked_project_metadata(roots: &HashSet<PathBuf>) -> Result<()> {
+    for root in roots {
+        for name in [".codex", ".agents"] {
+            let path = root.join(name);
+            let is_link = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata.file_type().is_symlink(),
+                Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+            };
+            if is_link {
+                anyhow::bail!(
+                    "{} is a link (a junction or symbolic link), or can't be inspected, in a writable folder. The non-admin Windows sandbox can't keep a command from replacing it with a writable folder, so it doesn't start commands there (#1682). Replace the link with a folder.",
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
 /// `gitdir: .` must not relabel the workspace itself). All paths canonical.
 fn strictly_inside_a_root(path: &Path, roots: &[PathBuf]) -> bool {
@@ -445,6 +471,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
 ) -> Result<Option<IntegrityLease>> {
     let AllowDenyPaths { allow, mut deny } =
         compute_allow_paths_for_permissions(permissions, current_dir, env_map);
+    refuse_linked_project_metadata(&allow)?;
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
