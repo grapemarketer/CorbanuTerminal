@@ -93,9 +93,12 @@ fn find_reports_folded_names_and_unlistable_folders() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dunce::canonicalize(dir.path()).expect("canonical");
     std::fs::create_dir_all(root.join("a\\.agent\u{17f}")).expect("create folded name");
+    // Walked into: only `.git` itself is skipped.
+    std::fs::create_dir_all(root.join(".g\u{131}t\\b\\.codex")).expect("create .gıt");
     let not_a_folder = dir.path().join("file");
     std::fs::write(&not_a_folder, "x").expect("write file");
-    let found = find(&[root.clone(), not_a_folder.clone()]);
+    let mut found = find(&[root.clone(), not_a_folder.clone()]);
+    found.entries.sort_by(|a, b| a.path.cmp(&b.path));
 
     assert_eq!(
         (
@@ -109,7 +112,10 @@ fn find_reports_folded_names_and_unlistable_folders() {
             folds_to(".agentss", ".agents"),
         ),
         (
-            vec![(root.join("a\\.agents"), false)],
+            vec![
+                (root.join(".g\u{131}t\\b\\.codex"), true),
+                (root.join("a\\.agents"), false),
+            ],
             vec![not_a_folder],
             true,
             false,

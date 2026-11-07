@@ -229,61 +229,41 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
     );
 }
 
-/// A folder a command made unlistable (here by denying the user listing,
-/// if it can) hides nothing: what it planted below it counts as planted.
+/// A folder the end-of-session walk can't list hides nothing: everything
+/// below it counts as planted. (Here the host holds it open without sharing,
+/// so listing it fails; a command could deny the user listing it instead,
+/// which an elevated host with backup rights would not notice.)
 #[test]
 fn legacy_unlistable_folder_counts_as_planted() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     let _guard = legacy_process_test_guard();
     let test_root = user_owned_test_root();
-    let workspace = test_root.path().join("workspace");
-    fs::create_dir_all(&workspace).expect("create workspace");
-    let user = std::env::var("USERNAME").expect("USERNAME");
-    let script = format!(
-        "mkdir \"%WORKSPACE%\\x\\.codex\"\r\necho planted> \"%WORKSPACE%\\x\\.codex\\config.toml\"\r\nicacls \"%WORKSPACE%\\x\" /deny \"{user}:(RD)\"\r\n"
-    );
-    let runtime = current_thread_runtime();
-    let exit_code = runtime.block_on(async {
-        let codex_home = sandbox_home("legacy-unlistable");
-        let script_path = codex_home.path().join("unlistable.cmd");
-        fs::write(&script_path, format!("@echo off\r\n{script}exit /b 0\r\n"))
-            .expect("write script");
-        let spawned = spawn_windows_sandbox_session_legacy(
-            &PermissionProfile::workspace_write(),
-            workspace_roots_for(&workspace).as_slice(),
-            codex_home.path(),
-            vec![
-                "C:\\Windows\\System32\\cmd.exe".to_string(),
-                "/d".to_string(),
-                "/c".to_string(),
-                script_path.display().to_string(),
-            ],
-            &workspace,
-            HashMap::from([(
-                "WORKSPACE".to_string(),
-                workspace.to_string_lossy().into_owned(),
-            )]),
-            /*timeout_ms*/ Some(10_000),
-            &[],
-            &[],
-            /*tty*/ false,
-            /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
-        )
-        .await
-        .expect("spawn legacy session");
-        collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
-            .await
-            .1
-    });
-    let x = canonical(&workspace).join("x");
+    let root = test_root.path().join("root");
+    fs::create_dir_all(&root).expect("create root");
+    let root = canonical(&root);
+    let x = root.join("x");
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    fs::create_dir_all(x.join(".codex")).expect("plant");
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&x)
+        .expect("hold x");
     let listable = fs::read_dir(&x).is_ok();
-    let counted = counts_now(&x.join(".codex"));
-    // Let the test root go.
-    let _ = std::process::Command::new(system32_exe("icacls.exe"))
-        .arg(&x)
-        .args(["/remove:d", &user])
-        .output();
-    println!("\nd283 unlistable: listable after the command = {listable}");
+    drop(lease);
+    drop(held);
 
-    assert_eq!((exit_code, counted), (0, true));
+    assert_eq!(
+        (
+            listable,
+            planted(&x),
+            counts_now(&x.join(".codex")),
+            counts_now(&x.join("y\\.agents")),
+        ),
+        (false, true, true, true)
+    );
 }

@@ -272,7 +272,10 @@ back), then run `icacls <dir> /remove:d *<sid>` on each folder between the
 writable root and the read-only path, for each SID listed in `cap_sid` under
 `CODEX_HOME` (a JSON file). That also removes the sandbox's other deny
 entries for that SID on the folder, which the next legacy command that needs
-them adds back.
+them adds back. The same goes for the `DELETE` denies D283 adds on nested
+`.codex`/`.agents` folders and the folders above them: they stay after the
+nested folder is gone (remove that folder first, or the next legacy command
+adds them back).
 
 New `[permissions]` / split filesystem policies remain supported on Windows
 only when they can be enforced directly by the selected Windows backend or

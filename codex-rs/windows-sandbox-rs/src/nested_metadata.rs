@@ -97,7 +97,9 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 };
                 if metadata.is_dir()
                     && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-                    && !folds_to(&name, ".git")
+                    // ASCII only: skipping a folded name (`.gıt`) would
+                    // leave an ordinary folder unwatched.
+                    && !name.eq_ignore_ascii_case(".git")
                 {
                     stack.push(entry.path());
                 }
