@@ -45,12 +45,16 @@ mod tests {
         assert!(session_configured(
             "│ model:     gpt-5.6-terra   /model to change │"
         ));
-        assert!(session_configured("  │ model:     gpt-5.6-terra   /model… │"));
+        assert!(session_configured(
+            "  │ model:     gpt-5.6-terra   /model… │"
+        ));
     }
 
     #[test]
     fn other_model_text_is_not_the_header() {
-        assert!(!session_configured("Choose a provider account for Corbanu Terminal"));
+        assert!(!session_configured(
+            "Choose a provider account for Corbanu Terminal"
+        ));
         assert!(!session_configured("│ Model:  gpt-5.6-terra │"));
         assert!(!session_configured("  model: gpt-5.6-terra"));
     }
