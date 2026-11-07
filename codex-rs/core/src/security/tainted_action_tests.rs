@@ -10,6 +10,32 @@ mod issue_1161_round6;
 #[path = "issue_1309_line_writes_tests.rs"]
 mod issue_1309_line_writes;
 
+/// #1716: the work counter (`super::work`) with tracing silenced while it
+/// counts; it shadows the `work` of `use super::*` for these tests. The
+/// `#[traced_test]` tests in this binary install a process-wide subscriber
+/// that keeps every event of every thread in one shared buffer. Once it is
+/// installed, the classifier's #932 shadow log lands there too, and when
+/// that buffer grows on this thread the allocator counts its whole new
+/// size as this thread's work (about 1.5 MB more at 4x on CI, failing
+/// `issue_988_989_checks_are_linear`; a 1,490,944-byte growth when
+/// reproduced). With no subscriber for this thread the counts are the
+/// classifier's own work again, whatever other tests run.
+mod work {
+    pub(super) use super::super::work::*;
+
+    pub(super) fn measure(run: impl FnOnce()) -> Work {
+        quiet(|| super::super::work::measure(run))
+    }
+
+    pub(super) fn assert_linear(label: &str, run: impl Fn(usize)) {
+        quiet(|| super::super::work::assert_linear(label, run));
+    }
+
+    fn quiet<T>(run: impl FnOnce() -> T) -> T {
+        tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), run)
+    }
+}
+
 const HOME: &str = "/home/fixture/.corbanu";
 const USER_HOME: &str = "/home/fixture";
 
@@ -6507,6 +6533,33 @@ fn issue_988_989_checks_are_linear() {
             let _ = script(&format!("echo {} x", unit.repeat(400 * scale)));
         });
     }
+}
+
+/// #1716: no subscriber sees the work the counter counts, so a process-wide
+/// one (see `work` above) adds nothing to the counts.
+#[test]
+fn issue_1716_counted_work_reaches_no_subscriber() {
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(tracing_test::internal::MockWriter::new(buffer))
+        .finish();
+    let line = |scale: usize| format!("{} echo hi", "${".repeat(400 * scale));
+    let logged = || buffer.lock().expect("log buffer").len();
+    tracing::subscriber::with_default(subscriber, || {
+        let _ = script(&line(1));
+        let uncounted = logged();
+        assert!(uncounted > 0, "the line logs a #932 difference");
+        let _ = work::measure(|| {
+            let _ = script(&line(1));
+        });
+        work::assert_linear("logged line", |scale| {
+            let _ = script(&line(scale));
+        });
+        assert_eq!(logged(), uncounted);
+    });
 }
 
 /// #1309: a `cd` the quote-aware reading follows may not happen (it fails,
