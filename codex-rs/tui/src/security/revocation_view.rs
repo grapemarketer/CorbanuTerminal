@@ -20,7 +20,6 @@ use ratatui::text::Line;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::security_level_picker::REMOTE_RESTART_REFUSED;
 use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ListKeymap;
@@ -75,6 +74,11 @@ enum Screen {
     Saving(mpsc::Receiver<Outcome>),
     Done(Outcome),
 }
+
+/// #1094: why "restart now" is not offered after a revocation in a remote or
+/// daemon window. Restarting this terminal doesn't restart those sessions, so
+/// it can't confirm the change holds there.
+pub(crate) const REVOCATION_REMOTE_RESTART_REFUSED: &str = "Restart now is not offered: this window's sessions run in an app server outside this Corbanu Terminal.";
 
 /// Where a commit goes: the session's Corbanu home, its configured level
 /// and thread (as for `LevelBasis::read`).
@@ -325,7 +329,7 @@ impl RevocationView {
                             }
                             let message = outcome_line(revocation, &report).map(|message| {
                                 if !target.sessions_in_this_process && report.not_saved.is_none() {
-                                    format!("{message} {REMOTE_RESTART_REFUSED}")
+                                    format!("{message} {REVOCATION_REMOTE_RESTART_REFUSED}")
                                 } else {
                                     message
                                 }

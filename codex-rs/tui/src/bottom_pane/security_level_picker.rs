@@ -2102,7 +2102,7 @@ fn remote_window_sessions(level: ChosenLevel, reaches: bool) -> String {
 }
 
 /// #1047: why "restart now" is not offered in a remote window.
-pub(crate) const REMOTE_RESTART_REFUSED: &str = "Restart now is not offered: this window uses an app server outside this Corbanu Terminal, and Corbanu Terminal starts against one only under Permissive.";
+const REMOTE_RESTART_REFUSED: &str = "Restart now is not offered: this window uses an app server outside this Corbanu Terminal, and Corbanu Terminal starts against one only under Permissive.";
 
 /// #919 (Travis, 2026-10-16, D20): on the Aggressive review, where Core's
 /// record is committed.

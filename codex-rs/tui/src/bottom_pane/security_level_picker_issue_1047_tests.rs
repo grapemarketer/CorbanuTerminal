@@ -306,6 +306,7 @@ fn issue_1047_remote_window_is_not_told_it_starts_here() {
 /// that the app-server launch guard refuses. Embedded sessions keep it.
 #[test]
 fn issue_1094_revocation_restart_follows_the_window_session_location() {
+    use crate::security::revocation_view::REVOCATION_REMOTE_RESTART_REFUSED;
     use crate::security::revocation_view::RevocationView;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -384,10 +385,13 @@ fn issue_1094_revocation_restart_follows_the_window_session_location() {
                 done.split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ")
-                    .contains(REMOTE_RESTART_REFUSED),
+                    .contains(REVOCATION_REMOTE_RESTART_REFUSED),
                 !sessions_in_this_process,
                 "{name}: {done}"
             );
+            // The #1047 sentence is about confirming a level; it doesn't
+            // apply here and would contradict "Level: Permissive".
+            assert!(!done.contains("only under Permissive"), "{name}: {done}");
             view.handle_key_event(key(KeyCode::Char('r')));
             let mut change_events = Vec::new();
             let mut restarts = 0;
