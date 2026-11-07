@@ -69,9 +69,18 @@ struct Outcome {
 /// `None` if the setup could not run here.
 fn equality_case(name: &str, setup: Setup) -> Option<Outcome> {
     let base = tempfile::tempdir().expect("base dir");
+    equality_case_in(base.path(), name, &setup)
+}
+
+/// [`equality_case`] in `base`.
+fn equality_case_in(
+    base: &Path,
+    name: &str,
+    setup: &dyn Fn(&Path, &Path) -> bool,
+) -> Option<Outcome> {
     // Snapshots read through the long-path form; the steps get the plain
     // form, as the sandbox passes roots.
-    let verbatim = std::fs::canonicalize(base.path())
+    let verbatim = std::fs::canonicalize(base)
         .expect("canonical base")
         .join("t");
     let plain = dunce::simplified(&verbatim).to_path_buf();
@@ -443,9 +452,30 @@ const LABEL_CASES: [(&str, Setup); 4] = [
     }),
 ];
 
+fn wide_tree(root: &Path, _: &Path) -> bool {
+    let wide = root.join("src\\wide");
+    std::fs::create_dir_all(&wide).expect("dir");
+    for f in 0..3000 {
+        std::fs::write(
+            wide.join(format!("file-with-a-longer-name-{f:05}.rs")),
+            b"w",
+        )
+        .expect("file");
+    }
+    for d in 0..300 {
+        let dir = root.join(format!("src\\many\\d{d:03}"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        for f in 0..10 {
+            std::fs::write(dir.join(format!("f{f}.rs")), b"w").expect("file");
+        }
+    }
+    true
+}
+
 /// Deep and wide trees: D313's handle-relative opens must not fall back on
-/// paths past `MAX_PATH`.
-const SIZE_CASES: [(&str, Setup); 3] = [
+/// paths past `MAX_PATH`; a stale file listed after 3,000 others (past the
+/// first listing buffer) must still be found.
+const SIZE_CASES: [(&str, Setup); 4] = [
     ("D1-deep-100", |root, _| {
         deep_chain(root, 100, "d");
         true
@@ -454,8 +484,12 @@ const SIZE_CASES: [(&str, Setup); 3] = [
         deep_chain(root, 300, "dddddd");
         true
     }),
-    ("W1-wide-3000-files-300-folders", |root, _| {
-        let wide = root.join("src\\wide");
+    ("W1-wide-3000-files-300-folders", wide_tree),
+    ("W2-stale-file-after-3000-names", |root, _| {
+        // Created in place, so inherited as they should be; then one stale
+        // file moved in, which sorts (upper-cased, "Z" after "F") after the
+        // 3,000 others.
+        let wide = root.join(".git\\objects\\wide");
         std::fs::create_dir_all(&wide).expect("dir");
         for f in 0..3000 {
             std::fs::write(
@@ -464,13 +498,7 @@ const SIZE_CASES: [(&str, Setup); 3] = [
             )
             .expect("file");
         }
-        for d in 0..300 {
-            let dir = root.join(format!("src\\many\\d{d:03}"));
-            std::fs::create_dir_all(&dir).expect("dir");
-            for f in 0..10 {
-                std::fs::write(dir.join(format!("f{f}.rs")), b"w").expect("file");
-            }
-        }
+        rename(&root.join("src\\m\\g.rs"), &wide.join("zzzz-stale.rs"));
         true
     }),
 ];
@@ -495,8 +523,37 @@ fn d311_label_cases_match_the_tree_walk() {
 #[test]
 fn d311_deep_and_wide_cases_match_the_tree_walk_without_falling_back() {
     let written = assert_equal(&SIZE_CASES);
-    for (name, how) in &written {
-        assert_eq!(how, &vec![Written::Direct; SESSION_B.len()], "{name}");
+    for name in [
+        "D1-deep-100",
+        "D2-deep-300-past-max-path",
+        "W1-wide-3000-files-300-folders",
+    ] {
+        assert_eq!(
+            written[name],
+            vec![Written::Direct; SESSION_B.len()],
+            "{name}"
+        );
+    }
+    // The moved-in file is stale: found at the first step, which walks.
+    assert_eq!(
+        written["W2-stale-file-after-3000-names"][0],
+        Written::Walked
+    );
+}
+
+/// Breaks the direct write on this thread until dropped.
+struct Broken;
+
+impl Broken {
+    fn set(mutant: Mutant) -> Self {
+        MUTANT.with(|cell| cell.set(Some(mutant)));
+        Self
+    }
+}
+
+impl Drop for Broken {
+    fn drop(&mut self) {
+        MUTANT.with(|cell| cell.set(None));
     }
 }
 
@@ -504,7 +561,7 @@ fn d311_deep_and_wide_cases_match_the_tree_walk_without_falling_back() {
 /// different from the walk's in the case that exercises it.
 #[test]
 fn d311_broken_versions_are_caught() {
-    let mutants: [(Mutant, &str, Setup); 5] = [
+    let mutants: [(Mutant, &str, Setup); 6] = [
         (
             Mutant::FilesUnchecked,
             "1-file-moved-into-git",
@@ -522,12 +579,14 @@ fn d311_broken_versions_are_caught() {
             "5-root-itself-stale",
             root_itself_stale,
         ),
+        (Mutant::ListingTruncated, SIZE_CASES[3].0, SIZE_CASES[3].1),
     ];
     let mut missed = Vec::new();
     for (mutant, name, setup) in mutants {
-        MUTANT.with(|cell| cell.set(Some(mutant)));
-        let outcome = equality_case(&format!("{mutant:?}/{name}"), setup);
-        MUTANT.with(|cell| cell.set(None));
+        let outcome = {
+            let _broken = Broken::set(mutant);
+            equality_case(&format!("{mutant:?}/{name}"), setup)
+        };
         let outcome = outcome.expect("the case runs everywhere");
         if outcome.differing.is_empty() {
             missed.push(mutant);
@@ -569,7 +628,17 @@ fn step_restore(root: &Path) -> String {
 /// `mutant`, if any) on the other. `None` if the setup could not run here.
 fn command_case(name: &str, setup: Setup, mutant: Option<LabelMutant>) -> Option<Outcome> {
     let base = tempfile::tempdir().expect("base dir");
-    let verbatim = std::fs::canonicalize(base.path())
+    command_case_in(base.path(), name, &setup, mutant)
+}
+
+/// [`command_case`] in `base`.
+fn command_case_in(
+    base: &Path,
+    name: &str,
+    setup: &dyn Fn(&Path, &Path) -> bool,
+    mutant: Option<LabelMutant>,
+) -> Option<Outcome> {
+    let verbatim = std::fs::canonicalize(base)
         .expect("canonical base")
         .join("t");
     let plain = dunce::simplified(&verbatim).to_path_buf();
@@ -703,4 +772,78 @@ fn d311_label_walk_broken_versions_are_caught() {
         }
     }
     assert!(missed.is_empty(), "broken versions not caught: {missed:?}");
+/// Cloud-file (OneDrive) placeholder folders are reparse points but not
+/// links: Windows' walk goes into them, and so must the check, which also
+/// finds a stale file inside one.
+#[test]
+fn d311_cloud_placeholder_folders_match_the_tree_walk() {
+    use crate::unified_exec::tests::cloud_placeholder::ExposePlaceholders;
+    use crate::unified_exec::tests::cloud_placeholder::SyncRoot;
+    use crate::unified_exec::tests::cloud_placeholder::is_placeholder;
+    let _guard = crate::unified_exec::tests::legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
+    for stale in [false, true] {
+        let base = tempfile::tempdir().expect("base dir");
+        let sync_roots = std::cell::RefCell::new(Vec::new());
+        let setup = |root: &Path, _: &Path| {
+            let cloud = root.join("src\\cloud");
+            std::fs::create_dir_all(&cloud).expect("sync root");
+            let sync_root = SyncRoot::register(&cloud);
+            sync_root.placeholder_folder("a");
+            sync_root.placeholder_folder("p");
+            std::fs::create_dir_all(cloud.join("a\\b")).expect("folder");
+            std::fs::write(cloud.join("a\\b\\f.rs"), b"f").expect("file");
+            std::fs::write(cloud.join("p\\g.rs"), b"g").expect("file");
+            assert!(is_placeholder(&cloud) && is_placeholder(&cloud.join("a")));
+            if stale {
+                add_stale_inherited_entry(&cloud.join("a\\b\\f.rs"));
+            }
+            sync_roots.borrow_mut().push(sync_root);
+            true
+        };
+        let name = if stale {
+            "P2-stale-file-in-a-placeholder"
+        } else {
+            "P1-placeholders"
+        };
+        let outcome = equality_case_in(base.path(), name, &setup).expect("runs everywhere");
+        drop(sync_roots);
+        assert!(
+            outcome.differing.is_empty(),
+            "{name}: {:?}",
+            outcome.differing
+        );
+        let first = if stale {
+            Written::Walked
+        } else {
+            Written::Direct
+        };
+        assert_eq!(outcome.written[0], first, "{name}");
+    }
+}
+
+/// The same for the label walk: placeholder folders get the labels Windows'
+/// walk gives what is inside them.
+#[test]
+fn d311_label_walk_cloud_placeholder_folders_match_windows_walk() {
+    use crate::unified_exec::tests::cloud_placeholder::ExposePlaceholders;
+    use crate::unified_exec::tests::cloud_placeholder::SyncRoot;
+    let _guard = crate::unified_exec::tests::legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
+    let base = tempfile::tempdir().expect("base dir");
+    let sync_roots = std::cell::RefCell::new(Vec::new());
+    let setup = |root: &Path, _: &Path| {
+        let cloud = root.join("src\\cloud");
+        std::fs::create_dir_all(&cloud).expect("sync root");
+        let sync_root = SyncRoot::register(&cloud);
+        sync_root.placeholder_folder("a");
+        std::fs::create_dir_all(cloud.join("a\\b")).expect("folder");
+        std::fs::write(cloud.join("a\\b\\f.rs"), b"f").expect("file");
+        sync_roots.borrow_mut().push(sync_root);
+        true
+    };
+    let outcome = command_case_in(base.path(), "P1-placeholders", &setup, None)
+        .expect("runs everywhere");
+    drop(sync_roots);
+    assert!(outcome.differing.is_empty(), "{:?}", outcome.differing);
 }

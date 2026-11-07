@@ -15,7 +15,9 @@
 //!   opened through its handle (`crate::acl::walk`), so a folder swapped for
 //!   a link meanwhile can't redirect the walk, and long paths need nothing
 //!   special;
-//! - links are labelled as objects and not followed, as Windows' walk does.
+//! - links (name-surrogate reparse points) are labelled as objects and not
+//!   followed, as Windows' walk does; other reparse points, such as cloud-file
+//!   placeholder folders, are walked into, as Windows' walk does too.
 //!
 //! Any failure leaves the caller to make the `SetNamedSecurityInfoW` call,
 //! which rewrites every label below `path` from the top again, so a partial
@@ -23,6 +25,8 @@
 
 use crate::acl::FILE_MAPPING;
 use crate::acl::walk::Handle;
+use crate::acl::walk::Kind;
+use crate::acl::walk::Subfolder;
 use crate::acl::walk::label_threads;
 use crate::acl::walk::list;
 use crate::acl::walk::open_relative;
@@ -35,6 +39,7 @@ use std::ffi::c_void;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -71,8 +76,6 @@ use windows_sys::Win32::Security::SetSecurityDescriptorControl;
 use windows_sys::Win32::Security::SetSecurityDescriptorGroup;
 use windows_sys::Win32::Security::SetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::SetSecurityDescriptorSacl;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
@@ -83,7 +86,6 @@ use windows_sys::Win32::System::SystemServices::SYSTEM_MANDATORY_LABEL_ACE_TYPE;
 
 /// The SACL control bits that decide (or show) a label.
 const SACL_BITS: u16 = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_PRESENT;
-const KIND_BITS: u32 = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
 
 /// Sets the label SACL `sacl` (`path`'s explicit label entries) on `path`
 /// and recomputes the label of every object below it, as
@@ -109,7 +111,7 @@ pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
             0
         };
     let root = Handle::open_with(path, access, FILE_FLAG_BACKUP_SEMANTICS)?;
-    if (root.attributes()? & FILE_ATTRIBUTE_DIRECTORY != 0) != is_dir {
+    if root.kind()?.is_dir() != is_dir {
         bail!("{} changed while being labelled", path.display());
     }
     let current = Sd::read(root.0)?;
@@ -150,7 +152,7 @@ pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
     let mutant = mutant();
     par_walk(
         vec![Folder {
-            handle: root,
+            at: Place::Open(root),
             sd: computed,
             path: path.to_path_buf(),
         }],
@@ -162,32 +164,43 @@ pub(super) unsafe fn set_label_tree(path: &Path, sacl: *mut ACL) -> Result<()> {
     )
 }
 
-/// A folder whose entries still need labelling: held open, with its
-/// descriptor as now written.
+/// A folder whose entries still need labelling, with its descriptor as now
+/// written.
 struct Folder {
-    handle: Handle,
+    at: Place,
     sd: Sd,
     /// For messages (and the links-followed mutant) only.
     path: PathBuf,
 }
 
-/// Labels the entries of `folder` from its descriptor, adding its plain
-/// subfolders to `found`.
+enum Place {
+    /// The folder the walk starts at, held open.
+    Open(Handle),
+    /// A subfolder, opened again through its folder when walked.
+    Below(Subfolder),
+}
+
+/// Labels the entries of `folder` from its descriptor, adding its
+/// subfolders (not links) to `found`.
 unsafe fn label_folder(folder: Folder, found: &mut Vec<Folder>) -> Result<()> {
+    let dir = Arc::new(match folder.at {
+        Place::Open(handle) => handle,
+        Place::Below(subfolder) => subfolder.reopen(READ_CONTROL)?,
+    });
     let mut computed_for: HashMap<Vec<u8>, (Sd, LabelState)> = HashMap::new();
-    for (name, listed) in list(folder.handle.0)? {
+    for (name, listed) in list(dir.0)? {
         let path = folder.path.join(OsString::from_wide(&name));
-        let is_dir = listed & FILE_ATTRIBUTE_DIRECTORY != 0;
-        let follow = is_mutant(Mutant::LinksFollowed) && listed & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-        let plain_dir = is_dir && (follow || listed & FILE_ATTRIBUTE_REPARSE_POINT == 0);
-        let access = READ_CONTROL | WRITE_OWNER | if plain_dir { FILE_LIST_DIRECTORY } else { 0 };
+        let is_dir = listed.is_dir();
+        let follow = is_mutant(Mutant::LinksFollowed) && listed.kind() == Kind::Link && is_dir;
+        let walk_into = follow || listed.kind() == Kind::Folder;
+        let access = READ_CONTROL | WRITE_OWNER;
         let child = if follow {
             Handle::open_with(&path, access | SYNCHRONIZE, FILE_FLAG_BACKUP_SEMANTICS)?
         } else {
             // The entry itself, links not followed.
-            open_relative(folder.handle.0, &name, access)?
+            open_relative(dir.0, &name, access)?
         };
-        if !follow && child.attributes()? & KIND_BITS != listed & KIND_BITS {
+        if !follow && !child.kind()?.same_kind(listed) {
             bail!("{} changed while being labelled", path.display());
         }
         let sd = Sd::read(child.0)?;
@@ -202,9 +215,18 @@ unsafe fn label_folder(folder: Folder, found: &mut Vec<Folder>) -> Result<()> {
         if *computed_state != state && !(is_mutant(Mutant::FilesUnwritten) && !is_dir) {
             write_label(child.0, computed, computed_state)?;
         }
-        if plain_dir && !is_mutant(Mutant::SubfoldersUnwalked) {
+        if walk_into && !is_mutant(Mutant::SubfoldersUnwalked) {
+            let at = if follow {
+                Place::Open(Handle::open_with(
+                    &path,
+                    READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                )?)
+            } else {
+                Place::Below(Subfolder::new(&dir, name, &child)?)
+            };
             found.push(Folder {
-                handle: child,
+                at,
                 sd: Sd::copy_of(computed.ptr()),
                 path,
             });

@@ -30,6 +30,8 @@ use super::FILE_MAPPING;
 use super::INHERITED_ACE;
 use super::is_exact_delete_child_deny;
 use super::walk::Handle;
+use super::walk::Kind;
+use super::walk::Subfolder;
 use super::walk::check_threads;
 use super::walk::list;
 use super::walk::open_relative;
@@ -44,6 +46,7 @@ use std::ffi::c_void;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -91,8 +94,6 @@ use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
 use windows_sys::Win32::Security::SetSecurityDescriptorGroup;
 use windows_sys::Win32::Security::SetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
@@ -179,7 +180,7 @@ pub(super) unsafe fn set_delete_child_deny(
             check_against_parent(path, &current, new_dacl.as_ptr())?;
         }
         write_and_check(handle.0, &current, new_dacl.as_ptr())?;
-        sync_below(path, psid)
+        sync_below(path, &handle, psid)
     })();
     drop(handle);
     if direct.is_ok() {
@@ -271,18 +272,22 @@ unsafe fn walk(
 /// D311: folders are checked on several threads; D313: each is held open
 /// while its entries are listed and opened through its handle
 /// ([`open_relative`]), so what is checked and written is always an
-/// entry of the folder whose descriptor was read.
-unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
+/// entry of the folder whose descriptor was read. A subfolder still to walk
+/// is opened again through its folder later and must be the same folder
+/// ([`Subfolder`]); `root` must be the folder `written` (whose DACL was just
+/// written).
+unsafe fn sync_below(root: &Path, written: &Handle, psid: *mut c_void) -> Result<()> {
+    // The folder itself, not a link, and the one whose DACL was written.
     let handle = Handle::open(root, READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE)?;
-    if handle.attributes()? & KIND_BITS != FILE_ATTRIBUTE_DIRECTORY {
-        bail!("{} is not a plain folder", root.display());
+    if handle.kind()?.kind() != Kind::Folder || handle.identity()? != written.identity()? {
+        bail!("{} is not the folder written", root.display());
     }
     // The SID outlives the walk, which ends before this returns.
     let sid = psid as usize;
     let mutant = mutant();
     par_walk(
         vec![Folder {
-            handle,
+            at: Place::Open(handle),
             path: root.to_path_buf(),
         }],
         check_threads(),
@@ -293,14 +298,19 @@ unsafe fn sync_below(root: &Path, psid: *mut c_void) -> Result<()> {
     )
 }
 
-/// A folder [`sync_below`] still has to check the entries of, held open.
+/// A folder [`sync_below`] still has to check the entries of.
 struct Folder {
-    handle: Handle,
+    at: Place,
     /// For messages only; never opened.
     path: PathBuf,
 }
 
-const KIND_BITS: u32 = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
+enum Place {
+    /// The folder below which the walk starts, held open.
+    Open(Handle),
+    /// A subfolder, opened again through its folder when walked.
+    Below(Subfolder),
+}
 
 /// One folder of [`sync_below`]: checks (and writes) its entries, adding its
 /// plain subfolders to `found`.
@@ -313,27 +323,36 @@ unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>
             .collect()
     };
     let flags = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
-    let parent = Descriptor::read(folder.handle.0)?;
+    let dir = Arc::new(match folder.at {
+        Place::Open(handle) => handle,
+        Place::Below(subfolder) => subfolder.reopen(READ_CONTROL)?,
+    });
+    let parent = Descriptor::read(dir.0)?;
     // What Windows computes depends only on the parent's descriptor and the
     // object's kind, owner, group, flags and explicit entries; most objects
     // in a folder share those.
     let mut computed_for: HashMap<Vec<u8>, (Vec<Vec<u8>>, u16)> = HashMap::new();
-    for (name, listed) in list(folder.handle.0)? {
+    let mut entries = list(dir.0)?;
+    if is_mutant(Mutant::ListingTruncated) {
+        entries.truncate(600);
+    }
+    for (name, listed) in entries {
         let path = folder.path.join(OsString::from_wide(&name));
-        let is_dir = listed & FILE_ATTRIBUTE_DIRECTORY != 0;
-        let is_plain_dir = listed & KIND_BITS == FILE_ATTRIBUTE_DIRECTORY;
+        let is_dir = listed.is_dir();
+        // A folder, not a link: written if needed and walked.
+        let is_plain_dir = listed.kind() == Kind::Folder;
         if !is_dir && is_mutant(Mutant::FilesUnchecked) {
             continue;
         }
         // Only a plain folder may need writing (and walking).
         let access = if is_plain_dir {
-            READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY
+            READ_CONTROL | WRITE_DAC
         } else {
             READ_CONTROL
         };
         // The entry itself, links not followed.
-        let handle = open_relative(folder.handle.0, &name, access)?;
-        if handle.attributes()? & KIND_BITS != listed & KIND_BITS {
+        let handle = open_relative(dir.0, &name, access)?;
+        if !handle.kind()?.same_kind(listed) {
             bail!("{} changed while being checked", path.display());
         }
         let child = Descriptor::read(handle.0)?;
@@ -356,7 +375,10 @@ unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>
         let walk_into = is_plain_dir && !is_mutant(Mutant::SubfoldersUnwalked);
         if aces == *computed {
             if walk_into {
-                found.push(Folder { handle, path });
+                found.push(Folder {
+                    at: Place::Below(Subfolder::new(&dir, name, &handle)?),
+                    path,
+                });
             }
             continue;
         }
@@ -374,7 +396,10 @@ unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>
             write_and_check(handle.0, &child, computed.dacl()?)?;
         }
         if walk_into {
-            found.push(Folder { handle, path });
+            found.push(Folder {
+                at: Place::Below(Subfolder::new(&dir, name, &handle)?),
+                path,
+            });
         }
     }
     Ok(())
@@ -398,6 +423,9 @@ pub(super) enum Mutant {
     CopiesUnwritten,
     /// The folder itself is not checked against its parent.
     TargetUnchecked,
+    /// Only a folder's first 600 entries (about one listing buffer) are
+    /// checked.
+    ListingTruncated,
 }
 
 #[cfg(test)]
