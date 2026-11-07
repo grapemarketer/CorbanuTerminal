@@ -21,6 +21,7 @@ use super::command_identity::elevated::elevated_home;
 use super::command_identity::elevated::run_elevated;
 use super::command_identity::run_legacy;
 use super::*;
+use pretty_assertions::assert_eq;
 
 const SHARED_ROOT_ENV: &str = "CODEX_SEC_WIN_1770_SHARED_ROOT";
 const EXISTING: &str = "existing.txt";
