@@ -2205,6 +2205,53 @@ mod tests {
         );
     }
 
+    /// #1758: a top-level `.git`/`.codex`/`.agents` the setup helper makes on
+    /// the way to a missing configured read-only path is protected from the
+    /// first command on, in any writable root but the temp ones (D283).
+    #[test]
+    fn payload_deny_write_paths_protect_metadata_made_on_the_way() {
+        let tmp = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(tmp.path()).expect("canonical tempdir");
+        let codex_home = base.join("codex-home");
+        let command_cwd = base.join("workspace");
+        let other = base.join("other");
+        let temp = base.join("temp");
+        for dir in [&command_cwd, &other, &temp] {
+            fs::create_dir_all(dir).expect("create root");
+        }
+        let explicit = vec![
+            command_cwd.join(".git\\hooks"),
+            other.join(".Agents\\skills"),
+            other.join(".codex"),
+            command_cwd.join("deep\\.codex\\hooks"),
+            temp.join(".git\\hooks"),
+        ];
+        let writable_roots =
+            vec![AbsolutePathBuf::from_absolute_path(&other).expect("absolute writable root")];
+        let permission_profile = workspace_write_profile(
+            &writable_roots,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ true,
+        );
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let env_map = HashMap::from([("TEMP".to_string(), temp.display().to_string())]);
+        let request = super::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: &command_cwd,
+            env_map: &env_map,
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths =
+            super::build_payload_deny_write_paths(&request, Some(explicit.clone()));
+
+        let mut expected: HashSet<PathBuf> = explicit.into_iter().collect();
+        expected.extend([command_cwd.join(".git"), other.join(".Agents")]);
+        assert_eq!(expected, deny_write_paths.into_iter().collect());
+    }
+
     #[test]
     fn full_read_roots_preserve_legacy_platform_defaults() {
         let tmp = TempDir::new().expect("tempdir");

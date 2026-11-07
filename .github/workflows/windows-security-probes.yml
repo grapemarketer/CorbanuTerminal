@@ -188,6 +188,14 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones resolved_permissions::tests::temp_root_carries_explicit_read_only_paths_inside_it --nocapture --test-threads=1 2>&1 | tee d1686.log
           grep -q "test result: ok. 2 passed" d1686.log
           rm d1686.log
+      - name: A .git the default sandbox makes on the way is protected from the first command (#1758)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact setup::tests::payload_deny_write_paths_protect_metadata_made_on_the_way allow::tests::metadata_made_on_the_way_skips_writable_and_existing_folders --nocapture --test-threads=1 2>&1 | tee d1758.log
+          grep -q "test result: ok. 2 passed" d1758.log
+          rm d1758.log
       - name: D261 denies without the tree walk match it (D285, #1542 item 6)
         if: ${{ !cancelled() }}
         shell: bash
@@ -379,7 +387,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 42
+            Assert-Tests $sandbox 'sec_win_' 43
             & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
             # D324 (#1648): the elevated backend from a normal session. Each test
@@ -400,6 +408,18 @@ jobs:
               if ($code -ne 0) { throw "D324 $t failed in a normal session" }
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
             }
+            # #1758: the elevated backend's first command, from a normal session.
+            $t1758 = 'unified_exec::tests::command_identity::elevated::sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks'
+            Assert-Tests $sandbox $t1758 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for #1758 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $t1758, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "#1758 failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1758 did not run in a normal session" }
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')
