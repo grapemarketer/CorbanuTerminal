@@ -1057,8 +1057,9 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
 }
 
 /// `text` is the whole assistant text; `held_back` says none of it was streamed yet.
-/// Only a JSON object whose top-level `type` is a tool-call type is a serialized call.
-/// Other text that merely names "function_call" (a JSON answer about function calling)
+/// Only a JSON object whose top-level `type` is a tool-call type, followed by nothing but
+/// whitespace, is a serialized call. Other text that merely names "function_call" (a JSON
+/// answer about function calling, or one that opens with such JSON and goes on in prose)
 /// stays an ordinary message, and so does text already streamed that is not JSON.
 fn parse_serialized_function_call_text(
     text: &str,
@@ -1069,10 +1070,13 @@ fn parse_serialized_function_call_text(
     }
 
     let trimmed = text.trim();
-    let value: Value = match serde_json::from_str(trimmed) {
-        Ok(value) => value,
-        Err(_) if !held_back => return Ok(None),
-        Err(err) => {
+    // Read only the first JSON value; what follows it decides below.
+    let mut values = serde_json::Deserializer::from_str(trimmed).into_iter::<Value>();
+    let value = match values.next() {
+        Some(Ok(value)) => value,
+        None => return Ok(None),
+        Some(Err(_)) if !held_back => return Ok(None),
+        Some(Err(err)) => {
             return Err(format!(
                 "chat completions stream emitted malformed function-call JSON as assistant \
                  text: {err}; raw excerpt: {}",
@@ -1086,6 +1090,19 @@ fn parse_serialized_function_call_text(
         .is_some_and(|kind| matches!(kind, "function_call" | "custom_tool_call"))
     {
         return Ok(None);
+    }
+    let rest = trimmed[values.byte_offset()..].trim_start();
+    if !rest.is_empty() {
+        // Prose after the call is an answer that opens with a call example. More JSON
+        // after it (a second call, a stray brace) is a broken call, as before.
+        if !held_back || !rest.starts_with(['{', '}', '[', ']', ',']) {
+            return Ok(None);
+        }
+        return Err(format!(
+            "chat completions stream emitted malformed function-call JSON as assistant text: \
+             trailing JSON after the call; raw excerpt: {}",
+            diagnostic_excerpt(trimmed)
+        ));
     }
     let parsed: TextFunctionCall = serde_json::from_value(value).map_err(|err| {
         format!(
