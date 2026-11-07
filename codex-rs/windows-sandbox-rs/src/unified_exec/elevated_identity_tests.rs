@@ -653,9 +653,8 @@ fn sec_win_1648_racing_command_cannot_open_a_starting_runner() {
     };
     assert!(count("seen") >= 10, "the racer saw too few runners: {line}");
     for name in ["process_won", "token_won", "main_thread_won", "host_won"] {
-        assert_eq!(
-            count(name),
-            0,
+        assert!(
+            count(name) == 0,
             "a racing command opened a starting runner: {line}"
         );
     }
