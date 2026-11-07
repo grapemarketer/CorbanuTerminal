@@ -177,6 +177,7 @@ fn local_app_data() -> Option<PathBuf> {
 
 /// Labels `roots` (canonical paths) Low for a session, until the lease is
 /// dropped. A root another live session already holds keeps its label.
+#[cfg(test)]
 pub(crate) fn acquire(roots: &[PathBuf], log_dir: Option<&Path>) -> Result<IntegrityLease> {
     acquire_watching(roots, roots, log_dir)
 }
