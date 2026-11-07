@@ -2185,6 +2185,8 @@ impl App {
                 // Only once core has moved: otherwise the list (and the
                 // message) could still be the old account's.
                 if let Some(account) = account_switch {
+                    // #1251: the new account's sign-in summary, for `/status`.
+                    self.check_named_accounts();
                     let message = match outcome {
                         SettingsUpdateOutcome::Confirmed => {
                             if self.refresh_model_list(app_server).await {
@@ -3850,11 +3852,9 @@ impl App {
             }
             AppEvent::VaultCredentialDeleted { label, result } => {
                 self.chat_widget.on_vault_credential_deleted(label, result);
-                // #1193: the deleted entry may have been a named account.
-                crate::provider_named_accounts::check_named_account_providers(
-                    &self.model_catalog,
-                    &self.config,
-                );
+                // #1193/#1251: the deleted entry may have been a named
+                // account or a named sign-in.
+                self.check_named_accounts();
             }
             AppEvent::VaultMenuCredentialsReady { result } => {
                 self.chat_widget.on_vault_menu_credentials_ready(result);

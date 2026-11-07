@@ -188,14 +188,16 @@ impl Session {
     /// `reopened`: the session resumes or forks a saved conversation (#403).
     /// Its warm-up is a paid request the user did not ask for, so it is
     /// labelled as a reopen warm-up, announced once sent, and skipped
-    /// entirely when `skip_reopen_warmup` is set.
+    /// entirely when `skip_reopen_warmup` is set. `skip_startup_warmup` skips
+    /// every warm-up, for clients that start a thread only for realtime (#1045).
     pub(crate) async fn schedule_startup_prewarm(
         self: &Arc<Self>,
         base_instructions: String,
         reopened: bool,
     ) {
-        let skip_reopen_warmup = reopened && self.get_config().await.skip_reopen_warmup;
-        if skip_reopen_warmup || !self.services.model_client().responses_websocket_enabled() {
+        let config = self.get_config().await;
+        let skip_warmup = config.skip_startup_warmup || (reopened && config.skip_reopen_warmup);
+        if skip_warmup || !self.services.model_client().responses_websocket_enabled() {
             // Without websocket prewarm, resolve auth once so Agent Identity bootstrap can
             // register or engage this session's bearer fallback before the first user request.
             let model_client = self.services.model_client();

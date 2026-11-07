@@ -15,6 +15,7 @@ use tracing::warn;
 
 use super::BridgeRuntime;
 use super::finish_edit_result;
+use super::status::StatusTokenUsage;
 use crate::render::render_html_chunks;
 use crate::session::StreamUpdate;
 
@@ -129,8 +130,15 @@ impl BridgeRuntime {
                     .conversation_for_thread(&notification.thread_id)
                     .await
                 {
-                    self.last_token_usage
-                        .insert(conversation, notification.token_usage);
+                    let previous = self.last_token_usage.remove(&conversation);
+                    self.last_token_usage.insert(
+                        conversation,
+                        StatusTokenUsage::apply(
+                            previous,
+                            &notification.thread_id,
+                            notification.token_usage,
+                        ),
+                    );
                 }
                 Ok(())
             }

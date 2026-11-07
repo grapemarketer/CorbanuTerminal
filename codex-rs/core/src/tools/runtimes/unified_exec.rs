@@ -506,6 +506,11 @@ impl UnifiedExecRuntime<'_> {
                             )
                         })?);
                 }
+                // #722 (D278): the remote proxy's own denials (blocked sites,
+                // local addresses, mode limits, misses nobody here decides)
+                // come back to this machine and end the command as failed.
+                // Executors that predate it ignore the request.
+                launch.report_denials = network.remote_denial_recorder().is_some();
                 if !launch.proxy.enabled {
                     (env, None, None)
                 } else {
@@ -638,6 +643,7 @@ impl UnifiedExecRuntime<'_> {
                             &prepared.exec_request,
                             windows_sandbox_proxy_settings_mode,
                             /*network_policy_decider*/ None,
+                            /*network_denial_observer*/ None,
                             req.tty,
                             prepared.spawn_lifecycle,
                             req.turn_environment.environment.as_ref(),

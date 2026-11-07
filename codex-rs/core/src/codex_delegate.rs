@@ -92,6 +92,12 @@ pub(crate) async fn run_codex_thread_interactive(
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
+    // Do not let a startup that completes on its first poll win over prior
+    // cancellation: `or_cancel` below picks a ready branch at random (#1448).
+    // Backport of upstream openai/codex#51063.
+    if cancel_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);

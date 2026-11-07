@@ -112,6 +112,7 @@ fn launch_config_materializes_audit_and_execution_attribution() {
         environment_id: Some("remote".to_string()),
         execution_id: Some("execution-1".to_string()),
         policy_decision_timeout_ms: None,
+        report_denials: false,
     })
     .expect("remote launch state");
 

@@ -923,8 +923,30 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    /// Writes an executable fake Git from a child process. Written here, a
+    /// sibling test that forks while the file is open for writing keeps a
+    /// copy of that descriptor until it execs, and running the script then
+    /// fails with ETXTBSY on Linux (#1448; same fix as #635).
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    fn write_fake_git(path: &Path, contents: &str) {
+        use std::io::Write as _;
+
+        let mut writer = std::process::Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("spawn fake Git writer");
+        writer
+            .stdin
+            .take()
+            .expect("fake Git writer stdin")
+            .write_all(contents.as_bytes())
+            .expect("write fake Git");
+        let status = writer.wait().expect("wait for fake Git writer");
+        assert!(status.success(), "fake Git writer failed: {status}");
+    }
 
     #[tokio::test]
     async fn git_metadata_commands_do_not_inherit_stdin() {
@@ -1060,7 +1082,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let git = temp_dir.path().join("git");
         let log = temp_dir.path().join("git.log");
-        std::fs::write(
+        write_fake_git(
             &git,
             "#!/bin/sh\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
@@ -1068,13 +1090,7 @@ mod tests {
              config) printf '/tmp/fsmonitor-helper\\000' ;;\n\
              *) printf 'worktree output\\n' ;;\n\
              esac\n",
-        )
-        .expect("write fake Git");
-        let mut permissions = std::fs::metadata(&git)
-            .expect("read fake Git metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
+        );
 
         // The config response mirrors:
         // git -c core.fsmonitor=/tmp/fsmonitor-helper \
@@ -1125,7 +1141,7 @@ mod tests {
         let git = temp_dir.path().join("git");
         let global_config = temp_dir.path().join("git.global");
         let log = temp_dir.path().join("git.log");
-        std::fs::write(
+        write_fake_git(
             &git,
             "#!/bin/sh\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
@@ -1136,13 +1152,7 @@ mod tests {
              version) printf 'feature: fsmonitor--daemon\\n' ;;\n\
              *) printf 'worktree output\\n' ;;\n\
              esac\n",
-        )
-        .expect("write layered-config Git");
-        let mut permissions = std::fs::metadata(&git)
-            .expect("read layered-config Git metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&git, permissions).expect("mark layered-config Git executable");
+        );
 
         let global_status = std::process::Command::new("git")
             .args([

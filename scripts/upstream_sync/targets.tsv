@@ -1,0 +1,3 @@
+tag	commit	published_utc	note
+rust-v0.165.0	360319d8dee62d87e2d59fc0c21805d79519cfed	2026-10-27T20:09	D274 default; on a release branch
+rust-v0.167.0	086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a	2026-11-06T01:40	recommended in upstreamSyncPlan.md

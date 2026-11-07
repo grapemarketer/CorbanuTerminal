@@ -38,6 +38,14 @@ impl ChatWidget {
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
         self.apply_thread_model_provider(session.model_provider_id.clone());
+        // #1251: when the session runs on a named sign-in account, cache its
+        // summary for `/status` now, off the UI thread.
+        if codex_model_provider::named_sign_in_account(&self.config.model_provider).is_some() {
+            crate::provider_named_accounts::check_named_account_providers(
+                &self.model_catalog,
+                &self.config,
+            );
+        }
         let runtime_workspace_roots = session.runtime_workspace_roots.clone();
         self.config.workspace_roots = runtime_workspace_roots.clone();
         self.config

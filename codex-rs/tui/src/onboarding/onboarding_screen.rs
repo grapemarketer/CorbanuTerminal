@@ -305,7 +305,7 @@ impl OnboardingScreen {
                 std::collections::BTreeMap::new()
             };
             if let Some(app_server_request_handle) = app_server_request_handle {
-                let widget = AuthModeWidget {
+                let mut widget = AuthModeWidget {
                     request_frame: tui.frame_requester(),
                     highlighted_mode,
                     error: Arc::new(RwLock::new(None)),

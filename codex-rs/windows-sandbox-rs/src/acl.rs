@@ -689,7 +689,9 @@ pub unsafe fn add_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    add_deny_ace(path, psid, DenyAceKind::DeleteChild { inherit_to_subdirs })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ true)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 /// Whether `path`'s DACL itself (not an inherited copy) denies `psid`
@@ -729,9 +731,9 @@ pub unsafe fn remove_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    remove_matching_aces(path, |_, ace| {
-        is_exact_delete_child_deny(ace, psid, inherit_to_subdirs)
-    })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ false)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 unsafe fn is_exact_delete_child_deny(
@@ -1669,6 +1671,9 @@ const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
     GenericExecute: FILE_GENERIC_EXECUTE,
     GenericAll: FILE_ALL_ACCESS,
 };
+
+#[path = "acl_delete_child.rs"]
+mod delete_child;
 
 #[cfg(test)]
 #[path = "acl_tests.rs"]

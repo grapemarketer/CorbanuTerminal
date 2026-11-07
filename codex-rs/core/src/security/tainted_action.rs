@@ -464,6 +464,47 @@ fn classified(
     classifier
 }
 
+/// D258: whether the word lexer reads `text`'s commands where the quote-aware
+/// reading does, but for where quoted text cuts them: only letters, digits,
+/// `_./:@%+=~-`, blanks, `,;&|`, quotes, and braces around one or more
+/// non-empty plain alternatives (`src/{a,b}.rs`, `stash@{0}`; not `{a,}`,
+/// `{}`, `}x` or a range `{a..b}`, which the word lexer does not expand).
+/// The word lexer expands braces in each blank-separated piece before it
+/// finds commands, so a piece with both a group and `;`, `&` or `|`
+/// (`{-q,--upload-pack=./x}|cat`) is not plain either.
+fn brace_plain(text: &str) -> bool {
+    let plain = |ch: char| ch.is_ascii_alphanumeric() || "_./:@%+=~-".contains(ch);
+    // In a group: the current alternative so far.
+    let mut group: Option<&str> = None;
+    // This piece's groups and operators.
+    let (mut grouped, mut operator) = (false, false);
+    for (at, ch) in text.char_indices() {
+        work::step();
+        match (group, ch) {
+            (None, '{') => {
+                group = Some(&text[at + 1..at + 1]);
+                grouped = true;
+            }
+            (None, ' ' | '\t' | '\n') => (grouped, operator) = (false, false),
+            (None, ';' | '&' | '|') => operator = true,
+            (None, ch) if plain(ch) || ",'\"".contains(ch) => {}
+            (Some(alternative), '.') if alternative.ends_with('.') => return false,
+            (Some(alternative), ch) if plain(ch) => {
+                group = Some(&text[at - alternative.len()..at + ch.len_utf8()]);
+            }
+            (Some(alternative), ',') if !alternative.is_empty() => {
+                group = Some(&text[at + 1..at + 1]);
+            }
+            (Some(alternative), '}') if !alternative.is_empty() => group = None,
+            _ => return false,
+        }
+        if grouped && operator {
+            return false;
+        }
+    }
+    group.is_none()
+}
+
 /// #1240: [`classify_with`] of a command run in `cwd` as on Windows, on any
 /// platform (an action cannot hold a Windows folder elsewhere). Filesystem
 /// lookups under Windows rules happen only on Windows (#1261: the first
@@ -581,6 +622,7 @@ impl Classifier {
             unseen_folder: false,
             sudo_redefined: false,
             quoted_text: false,
+            brace_unsure: false,
             launched: launched_git::Launch::default(),
             substitution_budget: Budget {
                 left: MAX_SUBSTITUTED_BYTES,
@@ -1318,6 +1360,13 @@ struct Classifier {
     /// which the word lexer ignores: it may end a command early there
     /// (`'a; b'`, `'a ( b'`, `a\;b`).
     quoted_text: bool,
+    /// D258: the line (or one that runs it) holds more than plain words,
+    /// operators, quotes and well-formed brace groups ([`brace_plain`]). The
+    /// word lexer may then cut or misread a command where the quote-aware
+    /// reading does not (`$'`, substitutions, comments, here-documents,
+    /// redirections, stray braces), so git's brace check uses the line's
+    /// quotes, not its command's.
+    brace_unsure: bool,
     /// #1065: bytes of command text, and command lines, lexed so far.
     classified_bytes: usize,
     classified_lines: usize,
@@ -1636,6 +1685,8 @@ impl Classifier {
         let outer_sudo_redefined = self.sudo_redefined;
         let outer_quoted_text = self.quoted_text;
         self.quoted_text |= command.iter().any(|part| part.contains(['\'', '"', '\\']));
+        let outer_brace_unsure = self.brace_unsure;
+        self.brace_unsure |= command.iter().any(|part| !brace_plain(part));
         self.sudo_redefined |= command
             .iter()
             .any(|part| unknown_folder::may_redefine_sudo(part));
@@ -2095,6 +2146,7 @@ impl Classifier {
         self.sed_scope = outer_scope;
         self.sudo_redefined = outer_sudo_redefined;
         self.quoted_text = outer_quoted_text;
+        self.brace_unsure = outer_brace_unsure;
         self.visited = outer_visited;
         self.visited_all = outer_visited_all;
     }
@@ -2692,11 +2744,35 @@ impl Classifier {
         {
             self.note(ProtectedActionKind::Persistence);
         }
+        // #1309: a wrapper before the command moved it (`sudo -D ~ git log
+        // --output=f`); git's own `-C` comes after and is followed above.
+        let moved = command.as_ref().is_some_and(|(index, _)| {
+            unknown_folder::elsewhere_at(words, self.sudo_unsure())
+                .is_some_and(|from| from < *index)
+        });
+        // #1607: zsh's file after a `>!`, with the line's variables
+        // substituted as in the words.
+        let zsh_writes: Vec<String> = simple
+            .zsh_writes
+            .iter()
+            .filter_map(|&(at, joined)| {
+                let word = words.get(at)?;
+                Some(
+                    if joined {
+                        word.strip_prefix('!').unwrap_or(word)
+                    } else {
+                        word
+                    }
+                    .to_string(),
+                )
+            })
+            .collect();
         for file in outputs
             .iter()
             .flatten()
             .chain(&wrapper_outputs)
             .chain(modified_outputs.iter().flatten())
+            .chain(&zsh_writes)
         {
             work::step();
             if outputs::unseen_place(file) {
@@ -2710,7 +2786,7 @@ impl Classifier {
                 // ~`, `--output-directory ~/`) may be the home's.
                 if self.homes.is_persistence(&resolved)
                     || (file.ends_with('/') && self.homes.holds_a_home(&resolved))
-                    || self.unknown_place(folders, file)
+                    || self.unknown_folder_file(folders, moved, file)
                 {
                     self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(file));
                 }
@@ -3015,6 +3091,20 @@ impl Classifier {
             || folders.unseen
             || folders.unseen_in_substitution)
             && self.relative_place(word)
+    }
+
+    /// #1309: the rule the git-config check (`git config -f FILE`) and the
+    /// output-file check (`--output=FILE`) share, in both readings: a file
+    /// named relative to its folder may be any file when that folder is
+    /// unknown: after a change the reading cannot follow (see
+    /// [`Self::unknown_place`]), or as the caller found (`unknown`): under
+    /// a wrapper's folder option in any spelling (`sudo -D`, `env -C"$D"`,
+    /// `nsenter --wd=`, `docker exec -w`, `systemd-run
+    /// --working-directory`), or, in the quote-aware reading, after a `cd`
+    /// it cannot resolve (`cd "$X"`, `CDPATH=~ cd .`, `eval 'cd ~'`, a
+    /// function's `cd`).
+    fn unknown_folder_file(&self, folders: &Folders, unknown: bool, file: &str) -> bool {
+        (unknown && self.relative_place(file)) || self.unknown_place(folders, file)
     }
 
     /// #1410: whether a word (with the variables this reading knows, the

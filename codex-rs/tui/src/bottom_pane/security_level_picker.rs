@@ -287,6 +287,7 @@ impl SecurityLevelPicker {
                 codex_home: self.codex_home.clone(),
                 configured: self.core.configured,
                 thread: self.core.thread,
+                sessions_in_this_process: self.core.sessions_in_this_process,
             },
             self.app_event_tx.clone(),
         )
