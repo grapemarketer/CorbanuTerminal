@@ -7,8 +7,8 @@ Rows (one per path, each path exactly once):
   conflict          every unmerged path (content, modify/delete, delete/modify, add/add, file-location)
   security-review   upstream changed it since the merge base, it merged without a conflict, and it is on a
                     security path; reviewed diff-level in S3b
-  ci-review         upstream changed a file under .github/{workflows,actions,scripts} and it merged without a
-                    conflict; the integrator reviews or ports it with the CI files in S4
+  ci-review         upstream changed (or deleted) a file under .github/ and it merged without a conflict; the
+                    integrator reviews or ports it with the CI files in S4
   migration         an upstream-added SQL migration whose number is at or below main's highest; renumbered in S1c
 
 Columns: path kind code area slice tier owner contributor status resolution hunks lines test snap
@@ -105,6 +105,8 @@ def main():
         note = ""
         if r["code"] == "UD":
             note = "deleted upstream; skeleton keeps ours"
+        elif r["code"] == "DU":
+            note = "deleted on main, modified upstream; skeleton keeps it deleted"
         elif r["code"] in ("AU", "UA"):
             note = "added on main inside a directory upstream renamed; git placed it at this path"
         rows.append({**r, "kind": KIND.get(r["code"], r["code"]), "slice": s, "tier": tier, "owner": owner,
@@ -113,13 +115,15 @@ def main():
                      "sec_footprint": p in footprint, "note": note})
         seen.add(p)
     changed = git(wt, "diff", "--name-only", base, tag).split("\n")
+    deleted = set(git(wt, "diff", "--name-only", "--diff-filter=D", base, tag).split("\n"))
     for p in changed:
-        if p and p not in seen and p.startswith((".github/workflows/", ".github/actions/", ".github/scripts/")):
+        if p and p not in seen and p.startswith(".github/"):
+            what = "deleted upstream" if p in deleted else "upstream change"
             rows.append({"path": p, "kind": "ci-review", "code": "", "area": "CI/workflows",
-                         "slice": "S0 manifests/locks/CI", "tier": "0", "owner": "integrator", "contributor": "no",
+                         "slice": "S0 manifests/locks/CI", "tier": "S4", "owner": "integrator", "contributor": "no",
                          "status": "open", "resolution": "", "hunks": 0, "lines": 0, "test": False, "snap": False,
                          "sec_named": False, "sec_footprint": False,
-                         "note": "upstream CI change merged without conflict; review or port in S4"})
+                         "note": f"{what} merged without conflict; review or port in S4"})
             seen.add(p)
     for p in changed:
         if not p or p in seen or slices.TIER0.search(p):

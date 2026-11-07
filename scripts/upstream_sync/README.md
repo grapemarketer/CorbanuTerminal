@@ -25,8 +25,8 @@ plus `git`, `gh`, `cargo`, `bazel` and `actionlint` where noted. Nothing here pu
 `path kind code area slice tier owner contributor status resolution hunks lines test snap sec_named sec_footprint
 note`. `kind` is `content`, `modify/delete` (deleted upstream, the skeleton keeps ours), `file-location` (added on
 `main` inside a directory upstream renamed; git placed it at the new path), `add/add`, `security-review` (merged
-cleanly, on a security path, reviewed diff-level in S3b), `ci-review` (an upstream CI change that merged cleanly;
-integrator, S4) or `migration` (renumbering proposed in `note`). `status` is
+cleanly, on a security path, reviewed diff-level in S3b), `ci-review` (an upstream change or deletion under
+`.github/` that merged cleanly; integrator, S4) or `migration` (renumbering proposed in `note`). `status` is
 `open` or `resolved`; `resolution` is one of `ours`, `theirs`, `merged`, `ported`, `deleted`. Slice PRs update their
 rows; the integrator owns the file.
 
@@ -67,7 +67,9 @@ The CI mode skips only the heavy `blocking-ci` jobs (`bazel`, `rust-ci`, `sdk`) 
 `tmux-smoke` and `orchestrate-tui-matrix` on PRs into `sync/**`. The security lanes (`credential-boundary-canary`,
 `security-ingress-contract`, `security-platform-contract`, `windows-security-probes`) and `v8-canary` still run on
 those PRs when their paths change; they exist on `main` with `workflow_dispatch`, so they can also be run on the
-sync branch with `gh workflow run <file> --ref sync/upstream-<tag>`. Package CI tests exactly the packages listed;
+sync branch with `gh workflow run <file> --ref sync/upstream-<tag>`. They are expected to fail while the crates
+they build still have conflict markers; a red security lane on a slice PR whose own crates are marker-free is a
+real failure. Package CI tests exactly the packages listed;
 to cover "codex-core and its dependencies", list them.
 
 ## Security paths

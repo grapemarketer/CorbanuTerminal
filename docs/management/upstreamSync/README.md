@@ -23,7 +23,7 @@ they still have to be prepared the same way (about half a day).
 | CI mode, package-scoped CI, sync-branch CODEOWNERS | `ci_mode.py` and `ci_mode/sync-package-ci.yml`, applied by the skeleton command; CODEOWNERS needs the security owner's GitHub handle |
 | Governed records (active plan, sprint records) | wait for the active-plan slot (decision 2 on #1532) |
 | Tier 0 resolutions (manifests, lockfiles, CI files) | `rust-v0.167.0`: prepared against `main` `15ab4699`, decisions below; `rust-v0.165.0`: not yet |
-| Skeleton rehearsal (`rust-v0.167.0`, local branch on glitch, not pushed) | passed: parents `15ab4699` + `086ccc83`; 757 files committed with markers; ledger 1,554 rows; `cargo metadata --locked`, cargo-deny (merged lock, our policy) and `bazel mod deps` pass; CI-mode and CODEOWNERS commits apply |
+| Skeleton rehearsal (`rust-v0.167.0`, local branch on glitch, not pushed) | passed: parents `15ab4699` + `086ccc83`; 757 files committed with markers; ledger written; `cargo metadata --locked`, cargo-deny (merged lock, our policy) and `bazel mod deps` pass; CI-mode and CODEOWNERS commits apply |
 | Skeleton two-parent merge commit | waits for the tag decision |
 
 ## Ledger previews (`main` `23be0b3883b1`)
@@ -38,9 +38,9 @@ clean-merging security-review rows and the migration rows. Columns are described
 | content / modify-delete / file-location / add-add | 779 / 62 / 32 / 6 | 799 / 63 / 32 / 7 |
 | Conflicted paths with the named-security flag / footprint flag | 115 / 322 | 116 / 323 |
 | Clean-merging upstream changes on security paths (S3b review), of which on named paths | 525 / 466 | 564 / 506 |
-| Clean-merging upstream changes to CI files (`ci-review`, integrator, S4) | 72 | 73 |
+| Clean-merging upstream changes under `.github/` (`ci-review`, integrator, S4) | 77 | 78 |
 | Upstream migrations to renumber (0047–0062 → 0054–0069) | 16 | 16 |
-| Total rows | 1,492 | 1,554 |
+| Total rows | 1,497 | 1,559 |
 
 `main` moved since the plan's trial (`e6376b75`): 878 → 879 and 899 → 901 conflicted files. Hunk counts in the
 previews use zdiff3 (the skeleton's style) and run about 10% above the plan's default-style figures.
@@ -59,10 +59,11 @@ The skeleton keeps `main`'s behaviour wherever a manifest choice could change it
 the change is mechanical. Each choice is a ledger row the owning slice can revisit.
 
 - **CI files** (`.github/workflows`, `actions`, `scripts` with conflicts): our whole file, plus our
-  `r2-release.yml` so `rust-release.yml` still matches it. The 73 upstream CI changes that merge cleanly come in as
-  they are and each has a `ci-review` ledger row (e.g. `blocking-ci` drops `bazel` from `CI required`; `setup-ci`
-  enables unprivileged user namespaces on Linux, which our core-security job already does, and moves the DotSlash
-  action to `meta/install-dotslash`). Upstream's CI changes (voice SDK jobs, BuildBuddy, custom
+  `r2-release.yml` so `rust-release.yml` still matches it. The 78 upstream changes under `.github/` that merge cleanly
+  come in as they are and each has a `ci-review` ledger row (e.g. `blocking-ci` drops `bazel` from `CI required`;
+  `setup-ci` enables unprivileged user namespaces on Linux, which our core-security job already does, and moves the
+  DotSlash action to `meta/install-dotslash` at the same commit; `.github/dotslash-zsh-config.json` is deleted while
+  our kept `rust-release-zsh.yml` still uses it, which S3b's zsh removal (D275) resolves). Upstream's CI changes (voice SDK jobs, BuildBuddy, custom
   runners, nightly 2026-08-20, dylint 6.1.0) are ported by the integrator in S4 where the merged code needs them.
   `tools/argument-comment-lint/Cargo.{toml,lock}` stay ours for the same reason.
 - **Workspace:** union of members and dependencies; version stays `0.1.48`, Rust 1.99.1. `mcp-server` and
