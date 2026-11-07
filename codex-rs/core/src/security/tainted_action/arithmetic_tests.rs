@@ -1004,7 +1004,7 @@ fn flags_unsafe_matches_judging_each_argument() {
     // Cases only a non-ASCII argument makes unsafe, and safe cases with one.
     let (mut by_non_ascii, mut safe_non_ascii) = (0, 0);
     for case in 0..60_000_u64 {
-        let text = pieces.text(&with_close, 24);
+        let text = pieces.text(&with_close, /*max*/ 24);
         let region = format!("${{({text})x}}");
         let unsafe_name = hashed_unsafe(case, 2 + case % 6);
         let unsafe_in = |text: &str| names(&without_substitutions(text)).any(&unsafe_name);
@@ -1043,7 +1043,7 @@ fn first_unsafe_names_match_reading_each_piece() {
     let mut pieces = Pieces(0x1111_2026_1106_0002);
     let pieces_with_closes: Vec<&str> = PIECES.iter().copied().chain([")", "))", "`)"]).collect();
     for case in 0..20_000_u64 {
-        let text = pieces.text(&pieces_with_closes, 30);
+        let text = pieces.text(&pieces_with_closes, /*max*/ 30);
         let unsafe_name = hashed_unsafe(case, 2 + case % 6);
         let first = first_unsafe_names(&text, &unsafe_name);
         // Offsets after a non-ASCII character or at the start, and ends at
