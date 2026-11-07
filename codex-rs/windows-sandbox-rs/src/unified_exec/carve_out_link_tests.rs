@@ -1,6 +1,6 @@
 //! D293 (#1542 items 1 and 2, #1667): links at or above an explicit
 //! read-only path nested in a writable root, and such a path spelled through
-//! a linked root.
+//! a linked root; #1682: a top-level `.codex`/`.agents` that is a link.
 
 use super::*;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -329,5 +329,53 @@ fn link_above_carve_out_finds_links_below_the_root() {
             None,
             None,
         )
+    );
+}
+
+/// #1682: a writable root's top-level `.codex` or `.agents` that is a
+/// junction stops the command. Before, its protections landed on the
+/// junction's target, so the command could remove the junction and make a
+/// writable folder there, which D262 didn't report.
+#[test]
+fn legacy_top_level_project_metadata_link_stops_the_command() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [".codex", ".agents"]
+        .into_iter()
+        .map(|name| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            let real = test_root.path().join("real");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            fs::create_dir_all(&real).expect("create target");
+            fs::write(real.join("config.toml"), "original").expect("seed target file");
+            let link = workspace.join(name);
+            junction(&link, &real);
+            let _unlink = Unlink(link.clone());
+            let started = run_script(
+                &PermissionProfile::workspace_write(),
+                &workspace,
+                &[],
+                HashMap::from([("L".to_string(), link.to_string_lossy().into_owned())]),
+                concat!(
+                    "rmdir \"%L%\"\r\n",
+                    "mkdir \"%L%\"\r\n",
+                    "echo planted> \"%L%\\config.toml\"\r\n",
+                ),
+            );
+            (
+                name,
+                started
+                    .as_ref()
+                    .err()
+                    .is_some_and(|err| err.contains("#1682")),
+                crate::workspace_acl::is_reparse_point(&link),
+                fs::read_to_string(link.join("config.toml")).ok(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [".codex", ".agents"].map(|name| (name, true, true, Some("original".to_string())))
     );
 }
