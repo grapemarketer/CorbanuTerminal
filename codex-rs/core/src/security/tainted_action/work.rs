@@ -8,11 +8,15 @@
 //! (`to_string`, `format!`, `collect`) outside any loop of ours. A linearity
 //! test classifies the same input at two sizes and compares both counts,
 //! which, unlike a wall-clock budget, do not depend on the machine or its
-//! load. Reverse searches also charge the bytes in the searched suffix,
-//! through the returned byte offset (or all text on a miss), and substring
-//! needle setup. This exposes repeated prefix scans without a timing bound.
-//! Other unwrapped library scans and recursion remain outside the counter.
-//! Outside tests counters are no-ops.
+//! load. Reverse string searches (`work::rfind`, `work::rfind_by`; a test
+//! below rejects a raw `str::rfind`) also charge the bytes in the searched
+//! suffix, through the returned byte offset (or all text on a miss), and
+//! substring needle setup. This exposes repeated prefix scans without a
+//! timing bound. The recursive readings of `eval`/`trap` text, of the words
+//! a launcher runs and of a followed shell's script also step once per call
+//! (#1112). Other unwrapped library scans (forward searches, iterator
+//! scans, `rsplit`) and other recursion remain outside the counter. Outside
+//! tests counters are no-ops.
 
 #[cfg(test)]
 use std::alloc::GlobalAlloc;
@@ -29,7 +33,7 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-/// One loop iteration of classifier work.
+/// One loop iteration (or recursive call) of classifier work.
 #[inline(always)]
 pub(super) fn step() {
     #[cfg(test)]
@@ -349,8 +353,8 @@ mod tests {
         );
     }
 
-    /// Lines of `source` (up to its tests) that search backwards with
-    /// `str::rfind` instead of the counted `work::rfind`/`work::rfind_by`.
+    /// Lines of `source` (up to its tests) that call `.rfind(`, a string's
+    /// reverse search, instead of the counted `work::rfind`/`work::rfind_by`.
     fn uncounted_reverse_searches(file: &str, source: &str) -> Vec<String> {
         let mut found = Vec::new();
         for (at, line) in source.lines().enumerate() {
@@ -366,9 +370,9 @@ mod tests {
         found
     }
 
-    /// #1112: reverse searches stay visible to the counter (#1399).
+    /// #1112: reverse string searches stay visible to the counter (#1399).
     #[test]
-    fn every_classifier_reverse_search_is_counted() {
+    fn classifier_reverse_string_searches_are_counted() {
         let found: Vec<String> = SOURCES
             .iter()
             .flat_map(|(file, source)| uncounted_reverse_searches(file, source))
