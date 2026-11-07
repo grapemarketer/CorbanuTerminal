@@ -294,6 +294,22 @@ impl Drop for LocalSid {
     }
 }
 
+/// This process's token, opened only to read it (`TOKEN_QUERY`): the
+/// elevated runner can't open its own for more once hardened (D324).
+///
+/// # Safety
+/// Caller must close the returned token handle.
+pub unsafe fn get_current_token_for_query() -> Result<HANDLE> {
+    let mut token: HANDLE = 0;
+    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+        return Err(anyhow!(
+            "OpenProcessToken(TOKEN_QUERY) failed: {}",
+            GetLastError()
+        ));
+    }
+    Ok(token)
+}
+
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
