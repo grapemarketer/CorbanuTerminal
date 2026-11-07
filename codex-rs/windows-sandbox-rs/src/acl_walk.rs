@@ -211,6 +211,23 @@ impl Handle {
         Ok(Self(handle))
     }
 
+    /// Opens the root of a walk with `access`, following links as before,
+    /// but refuses (D352, #1722) a root that is itself a link: Windows' walk
+    /// writes such a link itself, not what it points at, so the caller falls
+    /// back to that walk. The handle must be the object checked to be no
+    /// link, so a link swapped in meanwhile is refused too.
+    pub(crate) unsafe fn open_root(path: &Path, access: u32) -> Result<Self> {
+        let itself = Self::open(path, FILE_READ_ATTRIBUTES)?;
+        if itself.kind()?.kind() == Kind::Link {
+            bail!("{} is a link", path.display());
+        }
+        let root = Self::open_with(path, access, FILE_FLAG_BACKUP_SEMANTICS)?;
+        if root.identity()? != itself.identity()? {
+            bail!("{} changed while being opened", path.display());
+        }
+        Ok(root)
+    }
+
     pub(crate) unsafe fn identity(&self) -> Result<FileId> {
         super::file_identity(self.0).map_err(|err| anyhow!("reading a file ID failed: {err}"))
     }
