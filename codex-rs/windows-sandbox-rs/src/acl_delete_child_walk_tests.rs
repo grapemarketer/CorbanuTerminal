@@ -1036,3 +1036,6 @@ fn d311_label_walk_production_order_and_file_roots_match_windows_walk() {
         "our walk did the work"
     );
 }
+
+#[path = "acl_delete_child_walk_corner_tests.rs"]
+mod corners;
