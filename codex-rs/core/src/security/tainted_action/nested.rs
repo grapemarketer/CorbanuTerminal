@@ -567,7 +567,7 @@ impl Classifier {
             // `git` before it (`env -u git -iC ~ git log`) hides none; but
             // not where the command is git and the option its own.
             if let Some(from) = elsewhere_from
-                && !own_git_folder(&texts, command_at.as_ref(), from)
+                && !own_git_folder(&texts, from)
                 && let Some(at) = (from + 1..texts.len()).find(|at| {
                     work::step();
                     let program = name(&texts[*at]);
@@ -1710,7 +1710,7 @@ fn cut_matters(words: &[Word]) -> bool {
 /// values) come between them (`git -c k=v -C ~ log`). Not a git after a
 /// wrapper or a subcommand (`=git submodule foreach env -iC ~ git log`),
 /// and not one a wrapper's option value spells (`sudo --user git -D ~`).
-fn own_git_folder(texts: &[String], command_at: Option<&(usize, String)>, from: usize) -> bool {
+fn own_git_folder(texts: &[String], from: usize) -> bool {
     const VALUED: &[&str] = &[
         "-C",
         "-c",
@@ -1721,10 +1721,13 @@ fn own_git_folder(texts: &[String], command_at: Option<&(usize, String)>, from: 
         "--config-env",
         "--super-prefix",
     ];
-    let Some((0, program)) = command_at else {
+    // As written: `=git` is not read so here (as on main), so a later git
+    // is still judged (`=git -C ~/r submodule foreach git log …`).
+    let Some(first) = texts.first() else {
         return false;
     };
-    if !(program == "git" || git_helpers::git_name(program) == Some(None))
+    let program = name(first);
+    if !(program == "git" || git_helpers::git_name(first) == Some(None))
         || !texts.get(from).is_some_and(|word| word.starts_with("-C"))
     {
         return false;
@@ -1740,8 +1743,9 @@ fn own_git_folder(texts: &[String], command_at: Option<&(usize, String)>, from: 
 
 /// #1620: whether a writer's operand is a word zsh reads as the installed
 /// program it names (`tee -a =mytool`, `cp x ="mytool"`, `curl -o
-/// =mytool`), after zsh's precommand modifiers (`noglob tee =mytool`). An
-/// option's quoted value (`curl --proto '=https'`) is not expanded.
+/// =mytool`, `cp x ""=mytool`, `cp x {,=mytool}`), after zsh's precommand
+/// modifiers (`noglob tee =mytool`). An option's quoted value (`curl
+/// --proto '=https'`) is not expanded.
 fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
     let Some((mut index, mut program)) = command_at.cloned() else {
         return false;
@@ -1761,7 +1765,9 @@ fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> b
             .iter()
             .any(|word| {
                 work::step();
-                word.equals_first && outputs::zsh_program_path(&word.text)
+                (word.equals_first && outputs::zsh_program_path(&word.text))
+                    || (word.brace_expansion
+                        && (word.text.contains("{=") || word.text.contains(",=")))
             })
 }
 

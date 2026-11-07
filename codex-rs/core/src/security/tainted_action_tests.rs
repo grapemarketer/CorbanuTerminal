@@ -11281,6 +11281,8 @@ fn issue1606_git_value_before_a_wrapper_folder_option_asks() {
             "git bisect run sudo -D ~ git log --output=.zshenv",
             "sudo --user git -D ~ git log --output=.zshenv",
             "env -iC ~ =git log --output=.zshenv",
+            // Review 2: as on main, a leading `=git` keeps a later git.
+            "=git -C ~/r submodule foreach git log --output=../../.zshenv",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
@@ -11331,6 +11333,14 @@ fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
             "command cp x =mytool",
             "eval -- 'cp x =mytool'",
             "trap -- 'cp x =mytool' EXIT",
+            // Review 2: empty quotes before the `=`, and braces.
+            "cp x \"\"=mytool",
+            "echo x | tee -a ''=mytool",
+            "curl -o $''=mytool https://example.com/t",
+            "eval \"cp x \\\"\\\"=mytool\"",
+            "alias x='cp a \"\"=mytool'",
+            "cp x {,=mytool}",
+            "echo x | tee -a {/dev/null,=mytool}",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
