@@ -220,18 +220,33 @@ folder between the project root and its working directory) are covered too
 (#1541, D283). When a session starts, it lists every one below the top of
 its writable roots, with its file identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
-100,000-file workspace). Each one it finds gets the top-level ones'
-protection: an explicit Medium label, the capability-SID write deny and the
-tracked Everyone delete-child denies; if the write deny can't be added, the
-command doesn't start. When the session ends (or, for one that crashed, at
-the next sweep), every such entry that wasn't in its list as the same file
-is recorded as possibly planted, like the top-level ones: a new one, or one
-replaced (say, by moving a folder above it away and recreating it), even if
-the user had confirmed it before. While the session runs, Core treats such
-an entry as planted as soon as it appears, and confirming it is refused. A
-nested link named `.codex` or `.agents` is never protected (its target is
-the sandbox's choice) and counts as planted after every session in its root
-until confirmed again. The
+100,000-file workspace). Names are compared the way NTFS compares them, so
+a name such as `.agentſ` counts (and is never trusted). Each one it finds
+gets the top-level ones' protection: an explicit Medium label, the
+capability-SID write deny and the tracked Everyone delete-child denies. It
+and every folder between it and the root also get D263's denies, so a
+command can't move or rename them (nor swap one for a link while Core reads
+it). The host then checks the folder is still the one it found before it
+writes the rest. If any of that fails, the command doesn't start. When the
+session ends (or, for one that crashed, at the next sweep), every such entry
+that wasn't in its list as the same file is recorded as possibly planted,
+like the top-level ones. That is a new one, or one replaced, even if the
+user had confirmed it before. So is every folder the walk couldn't list:
+everything below it counts as planted until confirmed. While the session
+runs, Core treats such an entry as planted right away, even before it
+exists, and checks again right before loading each folder. Confirming is
+refused. Costs and limits:
+- A nested link named `.codex` or `.agents` is never protected (its target
+  is the sandbox's choice). It counts as planted after every session in its
+  root until confirmed again, which is noisy for repositories that link
+  `.agents`.
+- Commands can't rename, move or delete nested `.codex`/`.agents` folders or
+  the folders above them (a `git checkout` or `npm ci` that does is refused
+  there).
+- A command doesn't start if those denies can't be written.
+- Sessions started by builds before D283 aren't watched for nested folders.
+
+The
 Everyone deny entries are visible in the folder's security settings while a
 session needs them. Each one a session adds is recorded first, in
 `delete-child-denies.json` next to the integrity-label records (#1506 item 1,

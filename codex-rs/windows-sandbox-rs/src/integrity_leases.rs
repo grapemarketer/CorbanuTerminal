@@ -178,7 +178,7 @@ pub(crate) fn acquire(roots: &[PathBuf], log_dir: Option<&Path>) -> Result<Integ
     let registry = ensure_registry()?;
     // Outside the lock: the walk can take a while. Whatever appears from
     // here on counts as planted.
-    let nested_metadata = crate::nested_metadata::find(roots);
+    let nested_metadata = crate::nested_metadata::find(roots).entries;
     let lock = lock(&registry)?;
     let mut lease = IntegrityLease {
         registry,
@@ -258,7 +258,7 @@ fn lease_root(registry: &Path, labels: &mut Labels, root: &Path) -> Result<()> {
 impl IntegrityLease {
     /// D283: the `.codex`/`.agents` entries below the top of the roots when
     /// the session started, which it must protect.
-    pub(crate) fn nested_metadata_to_protect(&self) -> Vec<PathBuf> {
+    pub(crate) fn nested_metadata_to_protect(&self) -> Vec<NestedMetadata> {
         crate::nested_metadata::to_protect(&self.nested_metadata)
     }
 
@@ -288,6 +288,9 @@ impl IntegrityLease {
         let Some((file, path)) = self.session.take() else {
             return Ok(());
         };
+        // D283: the command's processes are gone; walked before the lock (it
+        // can take a while) while the session file still counts as live.
+        let nested_now = crate::nested_metadata::find(&self.roots);
         // If the lock can't be had, the closed session file is stale and
         // the next sweep puts the labels back.
         let lock = lock(&self.registry)?;
@@ -303,8 +306,8 @@ impl IntegrityLease {
         .is_ok()
             && record_nested_planted(
                 &self.registry,
-                &self.roots,
                 &self.nested_metadata,
+                nested_now,
                 self.log_dir.as_deref(),
             )
             .is_ok()
@@ -407,15 +410,24 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
             continue;
         }
         // D283: a session that ended without releasing its lease: what
-        // appeared deeper in its roots, before its file goes. (A live one
-        // records that when it ends.)
+        // appeared deeper in its roots, before its file goes. A live one (or
+        // one that can't be told apart from a live one) records that when it
+        // ends, so its file stays.
         if let Some(record) = &record
             && let Some(nested) = &record.nested_metadata
-            && session_file_is_closed(&path)
-            && record_nested_planted(registry, &record.roots, nested, log_dir).is_err()
         {
-            live.extend(record.roots.iter().cloned());
-            continue;
+            let recorded = session_file_is_closed(&path)
+                && record_nested_planted(
+                    registry,
+                    nested,
+                    crate::nested_metadata::find(&record.roots),
+                    log_dir,
+                )
+                .is_ok();
+            if !recorded {
+                live.extend(record.roots.iter().cloned());
+                continue;
+            }
         }
         match std::fs::remove_file(&path) {
             // Its session ended without releasing the lease.
@@ -525,17 +537,19 @@ fn record_planted(registry: &Path, absent: &[PathBuf], log_dir: Option<&Path>) -
     result
 }
 
-/// D283: records each `.codex`/`.agents` entry below the top of `roots` that
-/// isn't in `before` (taken when the session started) as the same file. An
-/// earlier confirmation doesn't cover it: it is new or was replaced. Called
-/// with the registry locked.
+/// D283: records each `.codex`/`.agents` entry below the top of the roots
+/// found `now` that isn't in `before` (taken when the session started) as the
+/// same file, and each folder the walk couldn't list (everything below it
+/// counts as planted). An earlier confirmation doesn't cover them: they are
+/// new or were replaced. Called with the registry locked.
 fn record_nested_planted(
     registry: &Path,
-    roots: &[PathBuf],
     before: &[NestedMetadata],
+    now: crate::nested_metadata::Found,
     log_dir: Option<&Path>,
 ) -> Result<()> {
-    let appeared = crate::nested_metadata::appeared(before, crate::nested_metadata::find(roots));
+    let mut appeared = crate::nested_metadata::appeared(before, now.entries);
+    appeared.extend(now.unlistable);
     if appeared.is_empty() {
         return Ok(());
     }
@@ -580,18 +594,14 @@ fn session_file_is_closed(path: &Path) -> bool {
 }
 
 /// D283: whether `folder` (a `.codex` or `.agents` folder, parent
-/// canonical) lies below the top of a writable root of a legacy session that
-/// still runs (or ended without its records being swept), and wasn't there,
-/// as the same file, when that session started. Core doesn't load such a
-/// folder; once the session ends, it is recorded with the others
-/// ([`planted_project_metadata`]).
-pub fn nested_project_metadata_appeared_in_live_session(folder: &Path) -> Result<bool> {
-    // Nothing to load.
-    if std::fs::symlink_metadata(folder)
-        .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-    {
-        return Ok(false);
-    }
+/// canonical) counts as planted right now: it lies below the top of a
+/// writable root of a legacy session that still runs (or ended without its
+/// records being swept) and wasn't there, as the same file, when that
+/// session started (one that doesn't exist yet counts too); or, read after
+/// that, the records list it or a folder above it. Core asks this for each
+/// folder it is about to load, on top of [`planted_project_metadata`]'s
+/// list, which a session ending since may have added to.
+pub fn project_metadata_counts_as_planted(folder: &Path) -> Result<bool> {
     let Some(registry) = registry_dir() else {
         return Ok(false);
     };
@@ -600,11 +610,21 @@ pub fn nested_project_metadata_appeared_in_live_session(folder: &Path) -> Result
         Err(err) => return Err(err).with_context(|| format!("inspect {}", registry.display())),
         Ok(_) => {}
     }
-    Ok(session_records(&registry)?.iter().any(|record| {
+    // Sessions first: one that ends meanwhile records what it saw before
+    // its file goes.
+    let live = session_records(&registry)?.iter().any(|record| {
         record.nested_metadata.as_ref().is_some_and(|nested| {
             crate::nested_metadata::appeared_in_session(&record.roots, nested, folder)
         })
-    }))
+    });
+    if live {
+        return Ok(true);
+    }
+    let planted = load_planted(&registry)?;
+    Ok(planted
+        .entries
+        .iter()
+        .any(|entry| crate::nested_metadata::starts_with(folder, entry)))
 }
 
 /// D262 (#1506 item 2): the `.codex`/`.agents` folders that appeared while a

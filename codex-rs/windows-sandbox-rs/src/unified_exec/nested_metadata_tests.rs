@@ -9,8 +9,9 @@ fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).expect("canonical")
 }
 
-fn appeared_live(folder: &Path) -> bool {
-    crate::nested_project_metadata_appeared_in_live_session(folder).expect("live records")
+/// What Core asks right before loading `folder`.
+fn counts_now(folder: &Path) -> bool {
+    crate::project_metadata_counts_as_planted(folder).expect("records")
 }
 
 fn planted(folder: &Path) -> bool {
@@ -46,10 +47,11 @@ fn legacy_nested_project_metadata_is_watched() {
     fs::create_dir_all(&replaced).expect("recreate");
     fs::create_dir(&in_git).expect("inside .git");
     let live = (
-        appeared_live(&new),
-        appeared_live(&replaced),
-        appeared_live(&kept),
-        appeared_live(&root.join("absent\\.codex")),
+        counts_now(&new),
+        counts_now(&replaced),
+        counts_now(&kept),
+        // It may appear right after the check.
+        counts_now(&root.join("absent\\.codex")),
         crate::confirm_planted_project_metadata(&new).is_err(),
     );
     drop(lease);
@@ -59,7 +61,9 @@ fn legacy_nested_project_metadata_is_watched() {
         planted(&moved),
         planted(&kept),
         planted(&in_git),
-        appeared_live(&new),
+        counts_now(&new),
+        counts_now(&kept),
+        counts_now(&root.join("absent\\.codex")),
     );
     let confirmed = crate::confirm_planted_project_metadata(&new).expect("confirm");
     drop(
@@ -78,8 +82,8 @@ fn legacy_nested_project_metadata_is_watched() {
     assert_eq!(
         (live, ended, confirmed, after_unchanged, after_replacing),
         (
-            (true, true, false, false, true),
-            (true, true, true, false, false, false),
+            (true, true, false, true, true),
+            (true, true, true, false, false, true, false, false),
             true,
             false,
             true,
@@ -115,13 +119,13 @@ fn legacy_nested_project_metadata_survives_a_crash() {
         .map_while(Result::ok)
         .any(|line| line.trim() == CRASH_CHILD_READY);
     fs::create_dir(&dot_agents).expect("plant .agents");
-    let live = (appeared_live(&dot_agents), planted(&dot_agents));
+    let live = (counts_now(&dot_agents), planted(&dot_agents));
     child.kill().expect("kill the crash child");
     child.wait().expect("wait for the crash child");
     crate::repair_stale_integrity_labels().expect("repair");
-    let crashed = (appeared_live(&dot_agents), planted(&dot_agents));
+    let crashed = (counts_now(&dot_agents), planted(&dot_agents));
 
-    assert_eq!((ready, live, crashed), (true, (true, false), (false, true)));
+    assert_eq!((ready, live, crashed), (true, (true, false), (true, true)));
 }
 
 /// A legacy command can't change, delete, move or add to a `.codex` folder
@@ -148,6 +152,8 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
         "ren \"%SUB%\\.codex\" codex-renamed\r\n",
         "move \"%SUB%\\.codex\" \"%SUB%\\codex-moved\"\r\n",
         "rd /s /q \"%SUB%\\.codex\"\r\n",
+        "ren \"%SUB%\" sub-renamed\r\n",
+        "move \"%SUB%\" \"%WORKSPACE%\\sub-moved\"\r\n",
         "mkdir \"%WORKSPACE%\\new\\.agents\"\r\n",
     );
     let runtime = current_thread_runtime();
@@ -201,7 +207,10 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
             fs::read_to_string(&config).ok(),
             dot_codex.join("hooks.json").exists(),
             dot_codex.join("skills").exists(),
-            sub.join("codex-renamed").exists() || sub.join("codex-moved").exists(),
+            sub.join("codex-renamed").exists()
+                || sub.join("codex-moved").exists()
+                || workspace.join("sub-renamed").exists()
+                || workspace.join("sub-moved").exists(),
             new_agents.is_dir(),
             planted(&new_agents),
             planted(&canonical(&sub).join(".codex")),
@@ -218,4 +227,63 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
             false,
         )
     );
+}
+
+/// A folder a command made unlistable (here by denying the user listing,
+/// if it can) hides nothing: what it planted below it counts as planted.
+#[test]
+fn legacy_unlistable_folder_counts_as_planted() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    let user = std::env::var("USERNAME").expect("USERNAME");
+    let script = format!(
+        "mkdir \"%WORKSPACE%\\x\\.codex\"\r\necho planted> \"%WORKSPACE%\\x\\.codex\\config.toml\"\r\nicacls \"%WORKSPACE%\\x\" /deny \"{user}:(RD)\"\r\n"
+    );
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-unlistable");
+        let script_path = codex_home.path().join("unlistable.cmd");
+        fs::write(&script_path, format!("@echo off\r\n{script}exit /b 0\r\n"))
+            .expect("write script");
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script_path.display().to_string(),
+            ],
+            &workspace,
+            HashMap::from([(
+                "WORKSPACE".to_string(),
+                workspace.to_string_lossy().into_owned(),
+            )]),
+            /*timeout_ms*/ Some(10_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 20))
+            .await
+            .1
+    });
+    let x = canonical(&workspace).join("x");
+    let listable = fs::read_dir(&x).is_ok();
+    let counted = counts_now(&x.join(".codex"));
+    // Let the test root go.
+    let _ = std::process::Command::new(system32_exe("icacls.exe"))
+        .arg(&x)
+        .args(["/remove:d", &user])
+        .output();
+    println!("\nd283 unlistable: listable after the command = {listable}");
+
+    assert_eq!((exit_code, counted), (0, true));
 }

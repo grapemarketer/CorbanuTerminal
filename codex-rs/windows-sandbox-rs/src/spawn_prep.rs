@@ -280,6 +280,7 @@ unsafe fn deny_moving_ancestors_below_roots(
     path: &Path,
     root_sids: &[RootCapabilitySid],
     denies: &mut Vec<crate::integrity_leases::DeleteChildDeny>,
+    with_path: bool,
 ) -> Result<()> {
     let containing: Vec<&RootCapabilitySid> = root_sids
         .iter()
@@ -295,12 +296,70 @@ unsafe fn deny_moving_ancestors_below_roots(
         .iter()
         .map(|root_sid| root_sid.sid.as_ptr())
         .collect();
-    deny_moving_ancestors(path, &outermost.root, &sids, denies).with_context(|| {
+    let denied = if with_path {
+        crate::workspace_acl::deny_moving_path_and_ancestors(path, &outermost.root, &sids, denies)
+    } else {
+        deny_moving_ancestors(path, &outermost.root, &sids, denies)
+    };
+    denied.with_context(|| {
         format!(
             "the Windows sandbox could not protect the folders above read-only path {}",
             path.display()
         )
     })
+}
+
+/// D283: keeps each nested `.codex`/`.agents` folder in `found` (and every
+/// folder between it and its writable root) from being moved, renamed or
+/// replaced by a link, as D263 does above explicit read-only paths, then
+/// checks it is still the folder the session's walk found. Only then may the
+/// host write its other denies by path: until the folders above it are
+/// pinned, a command could have swapped one for a link and steered those
+/// writes elsewhere.
+///
+/// # Safety
+/// The root SIDs must be valid.
+unsafe fn pin_nested_metadata(
+    found: &[crate::nested_metadata::NestedMetadata],
+    root_sids: &[RootCapabilitySid],
+    log_dir: &Path,
+) -> Result<()> {
+    let mut denies = Vec::new();
+    for entry in found {
+        deny_moving_ancestors_below_roots(
+            &entry.path,
+            root_sids,
+            &mut denies,
+            /*with_path*/ true,
+        )
+        .with_context(|| {
+            format!(
+                "the Windows sandbox could not protect project folder {}",
+                entry.path.display()
+            )
+        })?;
+    }
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &denies,
+        /*required*/ true,
+        Some(log_dir),
+    )?;
+    for entry in found {
+        let unchanged = !crate::workspace_acl::is_reparse_point(&entry.path)
+            && dunce::canonicalize(&entry.path).is_ok_and(|canonical| {
+                canonical
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&entry.path.to_string_lossy())
+            })
+            && crate::nested_metadata::identity(&entry.path) == entry.identity;
+        if !unchanged {
+            anyhow::bail!(
+                "project folder {} changed while the Windows sandbox prepared the command; run it again",
+                entry.path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
@@ -368,16 +427,22 @@ pub(crate) fn apply_legacy_session_acl_rules(
     let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
     // D283 (#1541): `.codex`/`.agents` deeper in a writable root get the
     // top-level ones' protection; the command doesn't start without it.
-    let nested_metadata: HashSet<PathBuf> = match &lease {
+    let nested_found = match &lease {
         Some(lease) => lease.nested_metadata_to_protect(),
         None if allow.is_empty() => Vec::new(),
         None => {
             let roots: Vec<PathBuf> = allow.iter().cloned().collect();
-            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&roots))
+            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&roots).entries)
         }
+    };
+    let nested_metadata: HashSet<PathBuf> = nested_found
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    if !acl_sids.write_root_sids.is_empty() {
+        // SAFETY: the root SIDs are valid for the call.
+        unsafe { pin_nested_metadata(&nested_found, acl_sids.write_root_sids, &log_dir)? };
     }
-    .into_iter()
-    .collect();
     deny.extend(nested_metadata.iter().cloned());
     // The label records must not be writable from a session whose root
     // holds them: protect them like `.git`.
@@ -474,6 +539,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
                     p,
                     acl_sids.write_root_sids,
                     &mut required_delete_child_denies,
+                    /*with_path*/ false,
                 )?;
             }
         }

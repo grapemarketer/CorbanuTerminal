@@ -35,6 +35,8 @@ fn find_reports_nested_entries_only() {
     junction(&root.join("j\\.codex"), &root.join("target"));
 
     let found = find(std::slice::from_ref(&root));
+    assert!(found.unlistable.is_empty(), "{:?}", found.unlistable);
+    let found = found.entries;
     let mut paths: Vec<(PathBuf, bool)> = found
         .iter()
         .map(|entry| (entry.path.clone(), entry.identity.is_some()))
@@ -60,12 +62,12 @@ fn appeared_compares_path_and_identity() {
     for path in ["kept\\.codex", "replaced\\.codex"] {
         std::fs::create_dir_all(root.join(path)).expect("create");
     }
-    let before = find(std::slice::from_ref(&root));
+    let before = find(std::slice::from_ref(&root)).entries;
     std::fs::remove_dir(root.join("replaced\\.codex")).expect("remove");
     std::fs::create_dir(root.join("replaced\\.codex")).expect("recreate");
     std::fs::create_dir_all(root.join("new\\.agents")).expect("create new");
 
-    let mut appeared = appeared(&before, find(std::slice::from_ref(&root)));
+    let mut appeared = appeared(&before, find(std::slice::from_ref(&root)).entries);
     appeared.sort();
     assert_eq!(
         appeared,
@@ -79,5 +81,42 @@ fn appeared_compares_path_and_identity() {
             appeared_in_session(&roots, &before, &root.join(".codex")),
         ),
         (false, true, false)
+    );
+}
+
+/// A name NTFS may fold to `.agents` (`ſ` upper-cases to `S`) is found
+/// under the name Core opens, and never matches; a folder the walk can't
+/// list is reported.
+#[test]
+fn find_reports_folded_names_and_unlistable_folders() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    std::fs::create_dir_all(root.join("a\\.agent\u{17f}")).expect("create folded name");
+    let hidden = root.join("hidden");
+    std::fs::create_dir_all(hidden.join("b\\.codex")).expect("create hidden");
+    let user = std::env::var("USERNAME").expect("USERNAME");
+    let icacls = |args: &[&str]| {
+        let status = std::process::Command::new("icacls")
+            .arg(&hidden)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("icacls");
+        assert!(status.success(), "icacls {args:?}");
+    };
+    icacls(&["/deny", &format!("{user}:(RD)")]);
+    let found = find(std::slice::from_ref(&root));
+    icacls(&["/remove:d", &user]);
+
+    assert_eq!(
+        (
+            found
+                .entries
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.identity.is_some()))
+                .collect::<Vec<_>>(),
+            found.unlistable,
+        ),
+        (vec![(root.join("a\\.agents"), false)], vec![hidden])
     );
 }

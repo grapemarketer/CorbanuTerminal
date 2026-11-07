@@ -124,7 +124,34 @@ pub unsafe fn deny_moving_ancestors(
     cap_sids: &[*mut c_void],
     denies: &mut Vec<DeleteChildDeny>,
 ) -> Result<()> {
-    for ancestor in &ancestors_below_root(path, root) {
+    deny_moving_folders(&ancestors_below_root(path, root), cap_sids, denies)
+}
+
+/// D283: as [`deny_moving_ancestors`], and `path` (a folder) can't be moved
+/// or renamed either.
+///
+/// # Safety
+/// Caller must ensure every pointer in `cap_sids` is a valid SID.
+pub unsafe fn deny_moving_path_and_ancestors(
+    path: &Path,
+    root: &Path,
+    cap_sids: &[*mut c_void],
+    denies: &mut Vec<DeleteChildDeny>,
+) -> Result<()> {
+    let mut folders = ancestors_below_root(path, root);
+    let canonical = canonicalize_path(path);
+    if canonical.starts_with(canonicalize_path(root)) && canonical != canonicalize_path(root) {
+        folders.push(canonical);
+    }
+    deny_moving_folders(&folders, cap_sids, denies)
+}
+
+unsafe fn deny_moving_folders(
+    folders: &[PathBuf],
+    cap_sids: &[*mut c_void],
+    denies: &mut Vec<DeleteChildDeny>,
+) -> Result<()> {
+    for ancestor in folders {
         if is_reparse_point(ancestor) || !ancestor.is_dir() {
             continue;
         }

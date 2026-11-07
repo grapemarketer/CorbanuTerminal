@@ -247,7 +247,7 @@ pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::confirm_planted_project_metadata;
 #[cfg(target_os = "windows")]
-pub use integrity_leases::nested_project_metadata_appeared_in_live_session;
+pub use integrity_leases::project_metadata_counts_as_planted;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::planted_project_metadata;
 #[cfg(target_os = "windows")]
