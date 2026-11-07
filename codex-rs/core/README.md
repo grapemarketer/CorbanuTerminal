@@ -280,9 +280,10 @@ after the folders' own `DELETE` denies are written (their parents'
 delete-child denies follow just after), which narrows the window for a link
 a running command swaps in meanwhile. A root spelled through a link from
 outside the writable roots is fine. Other reparse points, such as OneDrive
-placeholders, aren't links and don't stop the command; as before, D263
-doesn't put its denies on them, so they get no protection against being
-moved. A read-only path spelled
+placeholders, aren't links and don't stop the command; they get the same
+denies as plain folders, above such a path or as a protected path itself
+(#1668). As for plain folders, a D263 deny that can't be written stops the
+command. A read-only path spelled
 through a writable root's link, and so listed against the root's resolved
 path, gets the same protection (#1542 item 2). An entry that was already there and isn't recorded (one
 the user made, or one left by a version before this change) is never

@@ -65,8 +65,9 @@ unsafe fn protect_workspace_subdir(
 /// working because they use the object's own `DELETE` right.
 pub fn delete_child_route_denies(path: &Path) -> Vec<DeleteChildDeny> {
     // The sandbox may have planted a junction or symlink here; never follow it
-    // and write a persistent deny onto whatever it points at.
-    if is_reparse_point(path) {
+    // and write a persistent deny onto whatever it points at. Other reparse
+    // points, such as cloud placeholders, are the folder itself (#1668).
+    if is_link(path) {
         return Vec::new();
     }
     let mut denies = Vec::new();
@@ -114,7 +115,9 @@ pub(crate) fn ancestors_below_root(path: &Path, root: &Path) -> Vec<PathBuf> {
 /// to a rename is open. Writes inside those folders keep working; the
 /// sandbox just can't delete or rename the folders themselves. Unsandboxed
 /// renames keep working through the user's own `DELETE` right. Links are
-/// never followed.
+/// never followed (D293 refuses them there); other reparse points, such as
+/// cloud placeholders, get the denies like plain folders (#1668), and a
+/// folder that can't be inspected must take them too.
 ///
 /// # Safety
 /// Caller must ensure every pointer in `cap_sids` is a valid SID.
@@ -152,14 +155,16 @@ unsafe fn deny_moving_folders(
     denies: &mut Vec<DeleteChildDeny>,
 ) -> Result<()> {
     for ancestor in folders {
-        if is_reparse_point(ancestor) || !ancestor.is_dir() {
+        if std::fs::symlink_metadata(ancestor)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        {
             continue;
         }
         for sid in cap_sids {
             add_deny_delete_ace(ancestor, *sid)?;
         }
         if let Some(parent) = ancestor.parent()
-            && !is_reparse_point(parent)
+            && !is_link(parent)
             && parent.is_dir()
         {
             denies.push(DeleteChildDeny {
@@ -215,6 +220,16 @@ pub(crate) fn link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Option<Pat
         }
     }
     None
+}
+
+/// Whether `path` is a link (a junction, symbolic link, mount point or other
+/// name-surrogate reparse point), which names another location. Other
+/// reparse points, such as cloud-file (OneDrive) placeholders, are the
+/// object itself. A path that can't be inspected counts as a link.
+pub(crate) fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(true)
 }
 
 pub(crate) fn is_reparse_point(path: &Path) -> bool {
