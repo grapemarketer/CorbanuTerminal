@@ -191,11 +191,29 @@ time with different writable roots (different projects, or different extra
 writable folders): either can write in the other's. Documented for now
 (D291, Travis 2026-11-06) in the non-admin warning and `docs/sandbox.md`. D291
 also pointed people who work on several projects at once to the elevated
-backend, but measured since, its commands can do the same to each other and
-more: they share one sandbox account and get full access to each other's
-processes even without borrowing a token (#1648, awaiting a decision). So the
-docs say neither backend keeps concurrent projects apart. A redesigned legacy
-token that closes the borrowing is to be measured separately. Killing
+backend, but measured since, its commands could do the same to each other and
+more: they share one sandbox account (a restricting SID of every elevated
+token) and the logon SID of the session that starts their runners, and had
+full access to each other's processes and runners even without borrowing a
+token (#1648). Since D324 (Travis 2026-11-07) each elevated command's token
+carries its own identity SID too, and its default DACL grants full access
+only to SYSTEM, the sandbox users' group (every elevated token holds it as a
+normal group, never as a restricting SID, so it can't pass the write check)
+and that SID; the logon SID, the sandbox account, `OWNER RIGHTS`, Everyone
+and the capability SIDs get read and execute. Each runner also limits its
+process, threads, token and default DACL so that the sandbox account, which
+all elevated commands share, can only query them. Measured on CI, elevated
+and in a normal session: an elevated command can no longer open another
+elevated command's process, or its own or another command's runner, for any
+of the 8 write rights, adjust their tokens, or open a runner's token; it
+keeps full access to its own processes; a cmd pipeline, PowerShell (with and
+without ConPTY), `git init` and `git status` still work. It can still end
+another elevated command's processes (D292), and still borrow another
+elevated command's token through the group's `TOKEN_DUPLICATE` and write in
+that command's writable roots, as legacy commands can (#1560). So the docs
+still say neither backend keeps concurrent projects apart. Closing the
+borrowing for both backends, after the #1560 token measurement, is D324's
+second step. Killing
 another command's processes stays possible on purpose (D292). Two routes
 still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child
