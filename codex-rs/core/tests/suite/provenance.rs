@@ -15,6 +15,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1116,13 +1117,17 @@ async fn pf_30_s03_recalled_memory_gates_a_first_protected_action() -> anyhow::R
 }
 
 /// PF-30-S03 slice 2: a child agent tricked by its parent. The parent reads
-/// hostile tool output and hands a sub-agent the injected task; the child
-/// has seen nothing untrusted itself, but its task is agent data, so its
-/// vault command is refused with approvals off.
+/// hostile tool output and hands a sub-agent the injected task. Starting the
+/// agent asks the human (D320, #1653); even once the human allows it, the
+/// child, which has seen nothing untrusted itself, gets its task as agent
+/// data, so its vault command needs a fresh human approval of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Result<()> {
     use codex_core::config::Constrained;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::ReviewDecision;
+    use codex_protocol::request_user_input::RequestUserInputAnswer;
+    use codex_protocol::request_user_input::RequestUserInputResponse;
     use core_test_support::responses::ev_function_call_with_namespace;
     use core_test_support::responses::mount_sse_once_match;
     skip_if_no_network!(Ok(()));
@@ -1139,7 +1144,13 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
     };
     let server = start_mock_server().await;
     let read = serde_json::json!({ "command": PF_30_S03_INJECTED }).to_string();
-    let spawn = serde_json::json!({ "message": CHILD_TASK, "task_name": "helper" }).to_string();
+    // No forked history: the child must not see the hostile output itself.
+    let spawn = serde_json::json!({
+        "message": CHILD_TASK,
+        "task_name": "helper",
+        "fork_turns": "none",
+    })
+    .to_string();
     let vault = serde_json::json!({ "command": PF_30_S03_VAULT }).to_string();
     mount_sse_once_match(
         &server,
@@ -1175,7 +1186,7 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
         ]),
     )
     .await;
-    mount_sse_once_match(
+    let child_start = mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
             body_has(request, CHILD_TASK)
@@ -1202,7 +1213,9 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
     let test = test_codex()
         .with_config(|config| {
             config.security_level = SecurityLevel::Moderate;
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            // Approvals on: with them off, D320 refuses the agent launch and
+            // there is no child to trick.
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             for feature in [
                 Feature::SourceEnvelopes,
                 Feature::Collab,
@@ -1213,6 +1226,7 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
         })
         .build_with_auto_env(&server)
         .await?;
+    let parent_id = test.session_configured.thread_id;
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -1225,7 +1239,97 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
             thread_settings: Default::default(),
         })
         .await?;
-    let request = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let wait = std::time::Duration::from_secs(20);
+    // D320: after the hostile read, starting the helper asks the human, as
+    // an agent launch. The human allows it.
+    let EventMsg::RequestUserInput(question) = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::RequestUserInput(_)
+                    | EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::TurnComplete(_)
+            )
+        },
+        wait,
+    )
+    .await
+    else {
+        anyhow::bail!("starting the helper did not ask the human");
+    };
+    let asked = &question.questions[0];
+    assert!(
+        asked
+            .question
+            .contains("start a new agent after untrusted content"),
+        "{}",
+        asked.question
+    );
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: question.turn_id.clone(),
+            response: RequestUserInputResponse {
+                answers: std::collections::HashMap::from([(
+                    asked.id.clone(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Allow once".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    let child = tokio::time::timeout(wait, async {
+        loop {
+            let ids = test.thread_manager.list_thread_ids().await;
+            if let Some(id) = ids.into_iter().find(|id| *id != parent_id) {
+                break test.thread_manager.get_thread(id).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the allowed helper never started"))??;
+    // The child's own vault command still needs a fresh human approval: it
+    // never saw the hostile output, but its task is agent mail, data without
+    // standing. The human denies.
+    let EventMsg::ExecApprovalRequest(approval) = wait_for_event_with_timeout(
+        &child,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        wait,
+    )
+    .await
+    else {
+        anyhow::bail!("the child's vault command did not ask the human");
+    };
+    assert_eq!(
+        approval.command.last().map(String::as_str),
+        Some(PF_30_S03_VAULT)
+    );
+    let reason = approval.reason.clone().unwrap_or_default();
+    assert!(
+        reason.contains("vault access after untrusted content"),
+        "{reason}"
+    );
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    let child_request = child_start.single_request();
+    let child_body = child_request.body_json().to_string();
+    assert!(child_body.contains(CHILD_TASK), "{child_body}");
+    assert!(!child_body.contains("The user approved"), "{child_body}");
+    const DENIED: &str = "the human denied the helper's vault listing";
+    child
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::denied(DENIED),
+        })
+        .await?;
+    let request = tokio::time::timeout(wait, async {
         loop {
             if let Some(request) = child_done.requests().into_iter().next() {
                 break request;
@@ -1238,7 +1342,7 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
     let output = request
         .function_call_output_text(CHILD_CALL)
         .expect("child vault call output");
-    assert!(output.contains("approvals are off"), "{output}");
-    assert!(output.contains("vault access"), "{output}");
+    // Not run: the child got the human's refusal.
+    assert!(output.contains(DENIED), "{output}");
     Ok(())
 }

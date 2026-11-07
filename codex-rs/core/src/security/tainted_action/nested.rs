@@ -18,6 +18,7 @@ use super::ProtectedActionKind;
 use super::WRITERS;
 use super::braces;
 use super::certain_cd;
+use super::code_tables;
 use super::code_variables;
 use super::git_config;
 use super::git_helpers;
@@ -601,6 +602,41 @@ impl Classifier {
             // Words before it were checked as wrappers (starts ascend).
             let mut wrappers_checked = 0;
             let mut joined_left = MAX_JOINED_BYTES;
+            // #1685: a value set in zsh's `functions`, `aliases`,
+            // `galiases` or `saliases` or bash's `BASH_ALIASES` is code run
+            // by name later (`functions[f]='tee -a ~/.zshrc'; f`): a line of
+            // its own too, within the same budget.
+            let mut tables = 0;
+            // An array form (`aliases+=(x '…')`) is not read, nor is a
+            // command writing a table by name (`zparseopts -a functions`,
+            // `set -A aliases …`), nor any other write to one: they fail
+            // closed (#1704).
+            found.unreadable |= code_tables::writes_table(&texts, &texts);
+            'tables: for (at, text) in texts.iter().enumerate() {
+                work::step();
+                let (values, array) = code_table_values(text);
+                found.unreadable |=
+                    array || code_tables::sets_table_otherwise(text, !values.is_empty());
+                for value in values {
+                    work::step();
+                    tables += 1;
+                    let Some(rest) = joined_left
+                        .checked_sub(value.len() + 1)
+                        .filter(|_| tables <= outbound::MAX_JUDGED_POSITIONS)
+                    else {
+                        found.unreadable = true;
+                        break 'tables;
+                    };
+                    joined_left = rest;
+                    push_script(
+                        found,
+                        folders,
+                        value.to_string(),
+                        replaced(launches[at]),
+                        unknown,
+                    );
+                }
+            }
             let mut runners = 0;
             // #1449: one runner's options are read to the end of the
             // command; any other's up to `MAX_JUDGED_POSITIONS` words.
@@ -750,6 +786,60 @@ impl Classifier {
                         push_script(found, folders, line, replaced(launches[at]), unknown);
                     }
                     continue;
+                }
+                // #1685: an alias's value is a line of its own, run later
+                // (`alias x='tee -a ~/.zshrc'`): every check of a line counts
+                // on it. (The word lexer reads `eval`'s and `trap`'s text.)
+                // Within the command's budget for joined lines.
+                if resolved_name == "alias" {
+                    for (nth, value) in texts[at + 1..]
+                        .iter()
+                        .filter_map(|arg| arg.split_once('=').map(|(_, value)| value))
+                        .enumerate()
+                    {
+                        work::step();
+                        let Some(rest) = joined_left
+                            .checked_sub(value.len() + 1)
+                            .filter(|_| nth < outbound::MAX_JUDGED_POSITIONS)
+                        else {
+                            found.unreadable = true;
+                            break;
+                        };
+                        joined_left = rest;
+                        push_script(
+                            found,
+                            folders,
+                            value.to_string(),
+                            replaced(launches[at]),
+                            unknown,
+                        );
+                    }
+                }
+                // #1685: trap's action, when it holds quotes or backslashes
+                // the word lexer drops, is a line of its own read with them
+                // (as `eval`'s, #1283). Not on a line where D191 found every
+                // trap only removes temp paths, whose variables a line of its
+                // own would not know.
+                if resolved_name == "trap" && !self.temp_traps {
+                    let args = &texts[at + 1..];
+                    let args = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+                    if let Some(action) = args.first()
+                        && action.contains(['\'', '"', '\\'])
+                    {
+                        match joined_left.checked_sub(action.len() + 1) {
+                            Some(rest) => {
+                                joined_left = rest;
+                                push_script(
+                                    found,
+                                    folders,
+                                    action.clone(),
+                                    replaced(launches[at]),
+                                    unknown,
+                                );
+                            }
+                            None => found.unreadable = true,
+                        }
+                    }
                 }
                 // #1422: `compgen -C cmd` runs `cmd` as shell code.
                 if resolved_name == "compgen" {
@@ -2105,6 +2195,43 @@ fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)
         work::step();
         writes_in(line)
     })
+}
+
+/// #1685: the values an assignment to an entry of a table of code run by
+/// name may set (`functions[f]=…`, `aliases[x]+=…`, `BASH_ALIASES[x]=…`):
+/// the text after each `]=` or `]+=`, since a subscript may hold one
+/// (`functions[f]+='… #]=x'` sets the text after the first). And whether
+/// it is an array form of such a table (`aliases+=(…)`, `functions=(…)`)
+/// or an empty value.
+fn code_table_values(text: &str) -> (Vec<&str>, bool) {
+    const TABLES: &[&str] = &[
+        "functions",
+        "aliases",
+        "galiases",
+        "saliases",
+        "BASH_ALIASES",
+    ];
+    let name_end = text.find(['[', '+', '=']).unwrap_or(text.len());
+    if !TABLES.contains(&&text[..name_end]) {
+        return (Vec::new(), false);
+    }
+    let rest = &text[name_end..];
+    // The reading ends the word before an array's `(` (`aliases=`).
+    if matches!(rest, "=" | "+=") || rest.starts_with("=(") || rest.starts_with("+=(") {
+        return (Vec::new(), true);
+    }
+    if !rest.starts_with('[') {
+        return (Vec::new(), false);
+    }
+    let values = rest
+        .match_indices(']')
+        .filter_map(|(at, _)| {
+            work::step();
+            let after = &rest[at + 1..];
+            after.strip_prefix('=').or_else(|| after.strip_prefix("+="))
+        })
+        .collect();
+    (values, false)
 }
 
 /// #1620: see [`code_writes_zsh_program`].

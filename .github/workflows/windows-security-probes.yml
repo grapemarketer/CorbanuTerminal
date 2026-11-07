@@ -38,6 +38,7 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
@@ -75,6 +76,7 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
@@ -124,11 +126,15 @@ env:
     nested_metadata::legacy_unlistable_folder_counts_as_planted
     nested_metadata::legacy_temp_root_is_not_watched_for_nested_metadata
     nested_metadata::legacy_workspace_stays_watched_when_temp_resolves_to_it
+    nested_metadata::legacy_configured_project_metadata_the_sandbox_makes_is_not_planted
     carve_out_link::legacy_link_above_read_only_path_stops_the_command
+    carve_out_link::legacy_link_above_read_only_path_leaves_its_target_unchanged
     carve_out_link::legacy_read_only_path_that_is_a_link_stops_the_command
     carve_out_link::legacy_read_only_path_through_a_linked_root_keeps_its_ancestors
     carve_out_link::link_above_carve_out_finds_links_below_the_root
     carve_out_link::legacy_top_level_project_metadata_link_stops_the_command
+    carve_out_link::legacy_missing_read_only_path_is_created_and_protected
+    carve_out_link::legacy_read_only_path_under_temp_root_is_protected
     cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
     cloud_placeholder::legacy_cloud_placeholder_root_gets_its_label_back
     cloud_placeholder::legacy_nested_project_metadata_in_cloud_placeholders_is_watched
@@ -171,6 +177,14 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
           grep -q "test result: ok. 3 passed" d283-1541.log
           rm d283-1541.log
+      - name: Configured read-only paths the legacy backend makes (#1686, #1708)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones resolved_permissions::tests::temp_root_carries_explicit_read_only_paths_inside_it --nocapture --test-threads=1 2>&1 | tee d1686.log
+          grep -q "test result: ok. 2 passed" d1686.log
+          rm d1686.log
       - name: D261 denies without the tree walk match it (D285, #1542 item 6)
         if: ${{ !cancelled() }}
         shell: bash
@@ -179,6 +193,23 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::d285_ --nocapture --test-threads=1 2>&1 | tee d285.log
           grep -q "test result: ok. 8 passed" d285.log
           rm d285.log
+      - name: D311/D313 our own walks (below-check and labels) match Windows' walk (#1542)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # The elevated runner may create symbolic links: no link case skips.
+          CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::walk_equality::d311_ --nocapture --test-threads=1 2>&1 | tee d311.log
+          grep -q "test result: ok. 15 passed" d311.log
+          if grep -q "skipped: no symbolic link privilege" d311.log; then exit 1; fi
+          # #1715: the walk corners (protected SACLs, other reparse points, a swapped root).
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::walk_equality::corners::d311_ --nocapture --test-threads=1 2>&1 | tee d1715.log
+          grep -q "test result: ok. 4 passed" d1715.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::walk::tests:: --nocapture --test-threads=1 2>&1 | tee d313.log
+          grep -q "test result: ok. 7 passed" d313.log
+          rm d311.log d1715.log d313.log
       - name: Credential file watch (#442)
         if: ${{ !cancelled() }}
         shell: bash
@@ -269,6 +300,22 @@ jobs:
           # PowerShell; native commands are checked through $LASTEXITCODE instead.
           $ErrorActionPreference = 'Continue'
           $medium = '.github/scripts/run-at-medium-integrity.ps1'
+          # #1689: a normal session's own TEMP lets its user label it (a
+          # user's %TEMP% is theirs, with Full control). The runner's TEMP is
+          # made elevated and inherits D:\'s ACL, which on some runners doesn't
+          # give the user WRITE_OWNER: a normal session then couldn't label it,
+          # or what tests make in it, Low.
+          'TEMP ACL before the #1689 grant:'
+          icacls $env:TEMP | Select-String -NotMatch 'S-1-5-21-'
+          $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          # /C: what earlier steps left in TEMP may not take the inherited entry.
+          icacls $env:TEMP /grant "*${user}:(OI)(CI)(WO)" /C /Q | Out-Null
+          $granted = (Get-Acl -LiteralPath $env:TEMP).Access | Where-Object {
+            $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $user -and
+            $_.AccessControlType -eq 'Allow' -and
+            ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::TakeOwnership)
+          }
+          if (-not $granted) { throw "granting WRITE_OWNER on TEMP failed" }
           function Get-TestExe([string[]]$CargoArgs) {
             $artifacts = cargo test --locked --manifest-path codex-rs/Cargo.toml @CargoArgs --no-run --message-format=json
             if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed" }
@@ -304,9 +351,28 @@ jobs:
             & $medium -Program $d1 -Arguments @('--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
-            Assert-Tests $sandbox 'sec_win_' 33
+            # The D324 tests skip here: no elevated setup is recorded yet.
+            Assert-Tests $sandbox 'sec_win_' 42
             & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
+            # D324 (#1648): the elevated backend from a normal session. Each test
+            # reuses the setup an elevated run recorded right before it.
+            # The ignored #1560 borrow test runs only on request.
+            $d324Ignored = @(& $sandbox --list --ignored --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' })
+            $d324 = @(& $sandbox --list --format terse 'sec_win_1648_' | Where-Object { $_ -like '*: test' } | ForEach-Object { $_ -replace ': test$', '' } | Where-Object { $d324Ignored -notcontains $_ })
+            if ($d324.Count -ne 8) { throw "expected 8 D324 tests, found $($d324.Count)" }
+            New-Item -ItemType Directory -Force $env:CODEX_PF27S06_SETUP_SEED | Out-Null
+            foreach ($t in $d324) {
+              & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+              $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "D324 $t failed in a normal session" }
+              if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
+            }
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')
@@ -325,6 +391,15 @@ jobs:
             Assert-Tests $sandbox 'acl::delete_child::tests::d285_' 8
             & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::d285_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D285 ACL comparison failed in a normal session" }
+            Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::d311_' 15
+            & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::walk_equality::d311_', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D311 walk comparison failed in a normal session" }
+            Assert-Tests $sandbox 'acl::delete_child::tests::walk_equality::corners::d311_' 4
+            & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::walk_equality::corners::d311_', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "#1715 walk corners failed in a normal session" }
+            Assert-Tests $sandbox 'acl::walk::tests::' 7
+            & $medium -Program $sandbox -Arguments @('acl::walk::tests::', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D313 handle-relative walk tests failed in a normal session" }
             Assert-Tests $sandbox 'credential_watch' 18
             & $medium -Program $sandbox -Arguments @('credential_watch', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#442 credential watch failed in a normal session" }

@@ -9,8 +9,15 @@ on:
   pull_request: {}
   workflow_dispatch:
 
+# A called workflow sees its caller's github context, so this workflow never
+# runs on `push` by itself: `push` means postmerge-ci called it. Scope that case
+# to the caller's run. A shared main group would keep only one pending run, so
+# each push behind a multi-hour V8 build cancelled the previous push's queued
+# canary and failed that commit's "Postmerge CI results" even though every
+# test passed. Per-run groups give every main commit its own V8 result; only
+# commits that touch V8 inputs (v8_canary_changes.py) pay for the build matrix.
 concurrency:
-  group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
+  group: ${{ github.workflow }}::${{ github.event_name == 'push' && format('run-{0}', github.run_id) || (github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name) }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:

@@ -345,6 +345,12 @@ pub(crate) fn spawn_runner_transport(
             log_dir,
         );
     }
+    if let Some(err) = &launched.default_dacl_error {
+        crate::logging::log_note(
+            &format!("runner default DACL left to the runner (D324, #1721): {err}"),
+            log_dir,
+        );
+    }
     if let Some(err) = &launched.window_access_error {
         crate::logging::log_note(
             &format!("runner may not start: could not give its logon this window station: {err}"),

@@ -1688,7 +1688,7 @@ const OBJECT_INHERIT_ACE: u32 = 0x1;
 const INHERITANCE_FLAGS: u32 =
     OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE as u32;
 /// Maps generic rights to file rights.
-const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
+pub(crate) const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
     GenericRead: FILE_GENERIC_READ,
     GenericWrite: FILE_GENERIC_WRITE,
     GenericExecute: FILE_GENERIC_EXECUTE,
@@ -1697,6 +1697,10 @@ const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
 
 #[path = "acl_delete_child.rs"]
 mod delete_child;
+
+/// D311/D313: the pieces of our own tree walk.
+#[path = "acl_walk.rs"]
+pub(crate) mod walk;
 
 #[cfg(test)]
 #[path = "acl_tests.rs"]

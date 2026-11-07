@@ -521,6 +521,48 @@ async fn detect_home_skips_skills_when_all_skill_directories_exist() {
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
+/// #1681 control: with `features.non_prefixed_mcp_tool_names` off, a
+/// server named after a built-in namespace imports like any other.
+#[tokio::test]
+async fn import_repo_mcp_keeps_builtin_named_servers_when_feature_is_off() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    let codex_home = root.path().join(".codex");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{
+          "mcpServers": {
+            "docs": {"command": "docs-server"},
+            "web": {"command": "web-server"}
+          }
+        }"#,
+    )
+    .expect("write mcp");
+
+    let outcome = service_for_paths(root.path().join(EXTERNAL_AGENT_DIR), codex_home)
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        }])
+        .await;
+
+    let [item_result] = outcome.item_results.as_slice() else {
+        panic!("expected one item result: {outcome:?}");
+    };
+    assert_eq!(item_result.error_count, 0, "{item_result:?}");
+    let mut imported: Vec<_> = item_result
+        .successes
+        .iter()
+        .filter_map(|success| success.source.clone())
+        .collect();
+    imported.sort();
+    assert_eq!(imported, vec!["docs".to_string(), "web".to_string()]);
+}
+
 #[tokio::test]
 async fn import_repo_mcp_skips_servers_that_clash_with_builtin_namespaces() {
     let root = TempDir::new().expect("create tempdir");
@@ -583,6 +625,15 @@ async fn import_repo_mcp_skips_servers_that_clash_with_builtin_namespaces() {
         "{}",
         error.message
     );
+    // #1681: `web` was never written here, so removing it is no fix.
+    assert!(
+        error.message.ends_with(
+            "It was not imported. Rename it in the other agent's config, or add it here under another name, such as `corbanu mcp add web_mcp ...`."
+        ),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("mcp remove"), "{}", error.message);
     let config: TomlValue = toml::from_str(
         &fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
     )

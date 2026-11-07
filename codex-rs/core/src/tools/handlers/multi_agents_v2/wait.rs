@@ -158,12 +158,21 @@ impl Handler {
             *count
         };
         let watchdog_escalated = consecutive_empty_waits >= 3;
-        let agents = session
+        let mut agents = session
             .services
             .agent_control
             .list_agents(&turn.session_source, /*path_prefix*/ None)
             .await
             .unwrap_or_default();
+        // #1701: report only the caller's own agents (and theirs), not other
+        // loaded threads and their final messages.
+        let own_agents = session
+            .services
+            .agent_control
+            .spawn_descendant_agent_names(session.thread_id)
+            .await
+            .unwrap_or_default();
+        agents.retain(|agent| own_agents.contains(&agent.agent_name));
         let result = WaitAgentResult::from_outcome(
             outcome,
             agents,

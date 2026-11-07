@@ -2592,6 +2592,16 @@ impl NonPrefixedMcpServerNameClash {
         format!("{reason}. Choose another name, such as `corbanu mcp add {suggested} ...`.")
     }
 
+    /// #1681: the external-agent import wording. The server was skipped,
+    /// never written to this config, so there is nothing to remove here.
+    pub fn import_message(&self) -> String {
+        let reason = self.reason();
+        let suggested = self.suggested_name();
+        format!(
+            "{reason}. It was not imported. Rename it in the other agent's config, or add it here under another name, such as `corbanu mcp add {suggested} ...`."
+        )
+    }
+
     /// The warning when a skill's MCP server dependency is not installed.
     pub fn skill_dependency_message(&self) -> String {
         let name = &self.name;

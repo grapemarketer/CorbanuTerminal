@@ -41,6 +41,8 @@ use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
+use codex_windows_sandbox::restrict_current_default_dacl;
+use codex_windows_sandbox::restrict_current_token_access;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::token_mode_for_permission_profile;
@@ -64,6 +66,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
+use windows_sys::Win32::System::Console::FreeConsole;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
@@ -74,9 +77,6 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-// Kept in sync with codex_exec_server::CODEX_FS_HELPER_ARG1 without introducing
-// a dependency cycle.
-const FS_HELPER_ARG: &str = "--codex-run-as-fs-helper";
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 const TERMINATION_WAIT_MS: u32 = 5_000;
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
@@ -235,7 +235,54 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
-fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
+/// D324 (#1648): keeps this runner's commands, and every other elevated
+/// command, from writing to it. They all run as the sandbox account this
+/// runner runs as, which is a restricting SID of their tokens, and this
+/// process, its threads and its token gave that account full access: a
+/// command could start a child under the runner, with its unrestricted
+/// token, or write the runner's memory, threads or token. Afterwards the
+/// account may only query this process and its threads (and wait for
+/// them) and query its token, and objects the runner creates without
+/// explicit security (threads Windows starts in it, pipes, the console
+/// host) give the commands no write right and no `TOKEN_DUPLICATE` either.
+/// Runs first thing in `main`. Core starts the runner suspended and, before
+/// it runs, gives its process and main thread a DACL that only SYSTEM may
+/// open (and its default DACL this one, where Core may), but from the
+/// secondary logon service creating it until then, any elevated command
+/// could open it (#1721).
+/// Returns the token the command's token is made from, opened first: the
+/// runner can't open its own token for that afterwards.
+fn harden_runner() -> Result<OwnedWinHandle> {
+    // A console host started before this would carry the logon's default
+    // DACL, which gives the sandbox account full access: a command could
+    // start a child under it. The runner is a GUI-subsystem binary, so
+    // Windows starts none; this only leaves a console the runner got anyway
+    // (#1721).
+    // SAFETY: no arguments; a failure means there was no console.
+    unsafe { FreeConsole() };
+    let base = unsafe { get_current_token_for_restriction() }.map(OwnedWinHandle::new);
+    // The token first: Core started this process with a DACL nobody but
+    // SYSTEM may open, and the process DACL set last lets the sandbox account
+    // query it, which is enough to open its token.
+    // Every step runs even if an earlier one failed: the runner lives on
+    // until it has reported the error.
+    let steps = [
+        restrict_current_default_dacl().context("restrict the runner's default DACL"),
+        restrict_current_token_access().context("restrict access to the runner's token"),
+        codex_process_hardening::restrict_current_process_access()
+            .context("restrict access to the runner's process and threads"),
+    ];
+    let errors: Vec<String> = steps
+        .into_iter()
+        .filter_map(|step| step.err().map(|err| format!("{err:#}")))
+        .collect();
+    if !errors.is_empty() {
+        anyhow::bail!("harden the runner: {}", errors.join("; "));
+    }
+    base
+}
+
+fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
     let token_mode = token_mode_for_permission_profile(
@@ -270,7 +317,6 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         .iter()
         .map(LocalSid::as_ptr)
         .collect();
-    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     let h_token = OwnedWinHandle::new(unsafe {
         match token_mode {
             WindowsSandboxTokenMode::ReadOnlyCapability => {
@@ -357,11 +403,10 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             &req.env,
             stdin_mode,
             StderrMode::Separate,
-            if req.command.get(1).is_some_and(|arg| arg == FS_HELPER_ARG) {
-                ConsoleMode::NoWindow
-            } else {
-                ConsoleMode::Inherit
-            },
+            // D324: the runner has no console to inherit (see
+            // `harden_runner`), so each command gets a hidden one of its own,
+            // whose host it starts with its own token.
+            ConsoleMode::NoWindow,
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
@@ -560,6 +605,8 @@ pub fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some(codex_windows_sandbox::WINDOW_ACCESS_REAPER_ARG) {
         return codex_windows_sandbox::run_window_access_reaper();
     }
+    // Before anything else (see `harden_runner`).
+    let base = harden_runner();
     // Core gave this logon its desktop access; the runner can't change it.
     codex_windows_sandbox::mark_as_command_runner();
     let mut pipe_in = None;
@@ -602,14 +649,14 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let ipc_spawn = match spawn_ipc_process(&req) {
+    let ipc_spawn = match base.and_then(|base| spawn_ipc_process(&req, &base)) {
         Ok(value) => value,
         Err(err) => {
             let _ = send_error(
                 &pipe_write,
                 ErrorStage::SpawnChild,
                 windows_error_code(&err),
-                err.to_string(),
+                format!("{err:#}"),
             );
             return Err(err);
         }

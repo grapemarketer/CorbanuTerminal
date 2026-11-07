@@ -1221,7 +1221,10 @@ fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     expand_user_profile_root_for(roots, Path::new(&user_profile))
 }
 
-fn expand_user_profile_root_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
+pub(crate) fn expand_user_profile_root_for(
+    roots: Vec<PathBuf>,
+    user_profile: &Path,
+) -> Vec<PathBuf> {
     let user_profile_key = canonical_path_key(user_profile);
     let mut expanded = Vec::new();
     for root in roots {

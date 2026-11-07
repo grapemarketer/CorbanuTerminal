@@ -16,9 +16,13 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - **Usage includes observed descendant work** (#290, #1601, thanks to
   @white-guy-01). Repeated cumulative reports are counted once. Every
   history-forked descendant makes the total `null`, as do a descendant with no
-  report,
-  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
-  thread's own totals are not a difference from the start of the invocation.
+  report, a failed or timed-out ancestry read, or dropped events (`Lagged`).
+  The selected thread's own totals are not a difference from the start of the
+  invocation, so its first report needs no inherited baseline: a resumed
+  thread whose first report follows a compaction estimate keeps a known total
+  (#1637). A history-forked subagent that is not saved to disk yet is now also
+  recognized as a fork (the app server's `thread/read` returns its
+  `forkedFromId`), so it too makes the total `null` (#1637).
   Detached children can incur further usage after this snapshot.
 - **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
   defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
@@ -104,6 +108,22 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   older builds then treat it as written by a newer build and leave
   collection off. A home with no ledger yet gets none: its `/cost` already
   shows as unavailable (#314, D228).
+
+## Moderate: waiting on and starting agents after untrusted content
+
+- **Waiting on an agent never asks** (D320, #1653). On Z.AI and other
+  providers without namespace tools, `wait_agent_v1` used to ask (or, with
+  approvals off as in `corbanu exec`, was refused) as "a tool the security
+  level has not classified" once untrusted content had entered the session,
+  so a parent couldn't wait for its child. It now goes ahead, as `wait_agent`
+  already did.
+- **Starting an agent asks, on every route.** After untrusted content under
+  Moderate (and Aggressive), `spawn_agent` (and `spawn_agent_v1`,
+  `spawn_agent_plaintext`) asks for your approval, and the prompt says it is
+  "a request to start a new agent". With approvals off it is refused. This is
+  new on the OpenAI Responses route, where `spawn_agent` used to go ahead.
+  The other `_v1` agent aliases (`send_input_v1`, `close_agent_v1`,
+  `resume_agent_v1`) still ask as unclassified tools.
 
 ## `/security` wording
 
@@ -394,9 +414,12 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   When the window is exceeded, `Context` shows the full window and
   `Thread total` stays the provider-reported usage, computed from the
   provider's counters, which the fill now keeps (#1583; #1586, thanks to
-  @sendoeth). After compaction,
-  `Context` shows the new, smaller estimate rather than a full window, and
-  `/new` starts the new thread without the previous thread's total.
+  @sendoeth). When the first update the bridge sees for a thread is a fill
+  (for example after a bridge restart), `Context` shows the full window if
+  the thread had already reached it (#1638), and otherwise what the fill
+  added.
+  After compaction, `Context` shows core's token estimate, and `/new` starts
+  the new thread without the previous thread's total.
 
 ## Usage totals survive a full context window
 
@@ -419,6 +442,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - **A reply that opens with such JSON and goes on in prose is a message**
   (#1659, #1654). It used to fail with `trailing characters` after five
   retries.
+- **A reply that opens with JSON-like text that does not parse is a message**
+  (#1728, #1660, thanks to @bradsbots), for example `{"function_call": auto} …`.
+  It used to fail with `malformed function-call JSON` after five retries. A
+  broken reply that names a tool-call `type` still counts as a broken call and
+  is retried.
 - **Text already shown stays a message** (#1656, #1608, thanks to
   @bradsbots), even if it turns out to parse as a tool call.
 - **A `null` usage counter no longer drops its chunk** (#1589, #1588, thanks

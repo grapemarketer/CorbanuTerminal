@@ -22,7 +22,7 @@
 //! of the others hold its entries for that moment. No hooks, windows, menus
 //! or clipboard either way.
 
-use crate::token::get_current_token_for_restriction;
+use crate::token::get_current_token_for_query;
 use crate::token::get_logon_sid_bytes;
 use crate::winutil::to_wide;
 use anyhow::Context;
@@ -427,7 +427,7 @@ pub(crate) fn process_logon_sid(process: HANDLE) -> Result<Vec<u8>> {
 pub(crate) fn current_logon_sid() -> Result<Vec<u8>> {
     // SAFETY: the token is closed right after reading its logon SID.
     unsafe {
-        let token = get_current_token_for_restriction()?;
+        let token = get_current_token_for_query()?;
         let sid = get_logon_sid_bytes(token);
         CloseHandle(token);
         sid
@@ -605,7 +605,7 @@ pub(crate) fn protect_to_this_user(dir: &Path) -> Result<()> {
 fn current_user_sid_string() -> Option<String> {
     // SAFETY: the token is closed right after reading its user.
     let sid = unsafe {
-        let token = get_current_token_for_restriction().ok()?;
+        let token = get_current_token_for_query().ok()?;
         let sid = crate::token::get_user_sid_bytes(token);
         CloseHandle(token);
         sid.ok()?
