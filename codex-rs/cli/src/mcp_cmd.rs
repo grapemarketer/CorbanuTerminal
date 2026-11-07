@@ -309,6 +309,9 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     } = add_args;
 
     validate_server_name(&name)?;
+    if let Some(message) = config.non_prefixed_mcp_server_name_clash(&name) {
+        bail!(message);
+    }
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)

@@ -510,6 +510,72 @@ async fn load_config_resolves_non_prefixed_mcp_tool_servers() -> std::io::Result
 }
 
 #[tokio::test]
+async fn load_config_rejects_unprefixed_mcp_servers_in_builtin_namespaces() -> std::io::Result<()> {
+    let server = "command = \"echo\"\n";
+    let rejected = [
+        (
+            format!("[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.web]\n{server}"),
+            "`web` is a built-in tool namespace",
+        ),
+        (
+            "[features.non_prefixed_mcp_tool_names]\nenabled = true\nserver_names = [\"skills\"]\n"
+                .to_string(),
+            "remove `skills` from `features.non_prefixed_mcp_tool_names.server_names`",
+        ),
+        (
+            format!(
+                "[features]\nnon_prefixed_mcp_tool_names = true\nmulti_agent_v2 = {{ enabled = true, tool_namespace = \"team\" }}\n[mcp_servers.team]\n{server}"
+            ),
+            "`team` is the multi-agent tool namespace",
+        ),
+    ];
+    for (config_contents, expected) in rejected {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str::<ConfigToml>(&config_contents)
+            .expect("TOML deserialization should succeed");
+        let err = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err(&config_contents);
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains(expected), "{err}");
+    }
+
+    let accepted = [
+        format!("[mcp_servers.web]\n{server}"),
+        format!(
+            "[features.non_prefixed_mcp_tool_names]\nenabled = true\nserver_names = [\"history\"]\n[mcp_servers.web]\n{server}"
+        ),
+        format!("[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.web_mcp]\n{server}"),
+        format!(
+            "[features]\nnon_prefixed_mcp_tool_names = true\n[mcp_servers.web]\nenabled = false\n{server}"
+        ),
+    ];
+    for config_contents in accepted {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str::<ConfigToml>(&config_contents)
+            .expect("TOML deserialization should succeed");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(config.non_prefixed_mcp_server_name_clash("web_mcp"), None);
+        if config_contents.contains("non_prefixed_mcp_tool_names = true") {
+            let message = config
+                .non_prefixed_mcp_server_name_clash("image.gen")
+                .expect("image.gen clashes");
+            assert!(message.contains("`image_gen_mcp`"), "{message}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_update_plan_enabled() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     let config_toml = toml::from_str(

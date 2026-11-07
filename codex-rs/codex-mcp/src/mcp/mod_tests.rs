@@ -37,6 +37,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         apps_enabled: false,
         prefix_mcp_tool_names: true,
         non_prefixed_mcp_tool_servers: Vec::new(),
+        multi_agent_v2_tool_namespace: None,
         protocol_mode: McpProtocolMode::Legacy,
         client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
