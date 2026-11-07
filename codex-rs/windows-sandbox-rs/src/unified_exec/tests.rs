@@ -1853,7 +1853,7 @@ fn sec_win_1507_elevated_command_cannot_break_away_from_its_job() {
 
 /// D256 (#1507): common tools still work in an elevated-backend command
 /// whose job refuses breakaway: a cmd pipeline, Windows PowerShell calling a
-/// native program (with and without ConPTY), and `git init` and `git commit`.
+/// native program (with and without ConPTY), and `git init` and `git status`.
 #[test]
 fn sec_win_1507_elevated_tools_work_without_breakaway() {
     if option_env!("BAZEL_PACKAGE").is_some() {
@@ -1924,19 +1924,17 @@ fn sec_win_1507_elevated_tools_work_without_breakaway() {
             false,
         ),
         (
-            "git commit",
+            // `.git` is read-only to sandboxed commands, so no commit.
+            "git status",
             vec![
                 cmd,
                 "/d".to_string(),
                 "/c".to_string(),
                 // Git for Windows' `cmd` folder is on PATH (CI, and its
                 // installer's default).
-                "(echo d256> d256.txt && git add d256.txt && git -c user.name=d256 \
-                 -c user.email=d256@example.com -c commit.gpgsign=false commit -q -m d256 \
-                 && git log --format=d256-%s) 2>&1"
-                    .to_string(),
+                "(echo d256> d256.txt && git status --porcelain) 2>&1".to_string(),
             ],
-            &["d256-d256"],
+            &["?? d256.txt"],
             false,
         ),
     ];
