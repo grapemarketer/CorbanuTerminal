@@ -373,7 +373,8 @@ impl Reader<'_> {
 
     /// #1515: the `((` or `$((` whose second `(` is at `open` is
     /// arithmetic, read at `depth`, when that bracket closes right before
-    /// the last `)` with no quote or backslash between.
+    /// the last `)` and [`clean_closes`] pairs it: nothing between them
+    /// that may make a shell count brackets differently (see its rule).
     fn note_arithmetic(&mut self, open: usize, depth: usize) {
         let chars = self.chars;
         let closes = self.closes.get_or_insert_with(|| clean_closes(chars));
@@ -474,7 +475,11 @@ impl Reader<'_> {
                 '(' => {
                     // #1515: a `((` that `))` closes is arithmetic up to it.
                     let opens = self.opens_group(&list, next);
-                    if opens && next == Some('(') && !self.arithmetic_at(index) {
+                    if opens
+                        && next == Some('(')
+                        && arithmetic_position(&self.out[list.command].words, &list)
+                        && !self.arithmetic_at(index)
+                    {
                         self.note_arithmetic(index + 1, self.nesting);
                     }
                     if !opens && !self.arithmetic_at(index) {
@@ -944,6 +949,19 @@ impl Reader<'_> {
         }
         index
     }
+}
+
+/// #1623: where a `((` may start arithmetic: in command (keyword)
+/// position, right after `for` (`for (( ... ))`), or after an array
+/// assignment's `=` (`a=((...))`, which neither bash nor zsh runs as
+/// commands, so reading it as arithmetic keeps it quiet as before). Not in
+/// a `case` pattern or `[[ ... ]]`, where a group may open but no
+/// arithmetic does.
+fn arithmetic_position(words: &[Word], list: &List) -> bool {
+    if list.has_word {
+        return !list.word.quoted && array_name(&list.word.text) && assigning(words);
+    }
+    list.keyword || (words.len() == 1 && !words[0].quoted && words[0].text == "for")
 }
 
 /// #1515: each `(` of `chars` and the `)` that closes it, when nothing

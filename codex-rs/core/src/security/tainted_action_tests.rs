@@ -11773,3 +11773,58 @@ fn issue1636_non_ascii_expansions_read() {
         Some(ProtectedActionKind::UnseenCode)
     );
 }
+
+/// #1623: `((` is looked for as arithmetic only in command position, after
+/// `for`, or after an array assignment's `=`, not in a `case` pattern or
+/// `[[ ... ]]`. No line changes whether it asks: each verdict below is
+/// main's (before this change), in bash and zsh.
+#[test]
+fn issue1623_arithmetic_check_placement_keeps_verdicts() {
+    use ProtectedActionKind::UnseenCode;
+    let asks = [
+        "a=((1)) git -C .(N) config core.pager sh",
+        "a=((1)); git -C .(N) config core.pager sh",
+        "case x in ((a)) git -C .(N) config core.pager sh;; esac",
+        "[[ ((a == a)) ]] && git -C .(N) config core.pager sh",
+        "echo x ((git -C .(N) config core.pager sh))",
+    ];
+    let quiet = [
+        // Not command position: read as before.
+        "a=((1)); git log",
+        "a=((x) (y)); echo ${a[@]}",
+        // Neither shell runs it (zsh: missing end of string; bash: syntax
+        // error), and it stays quiet.
+        "a=((git -C .(N) config core.pager sh))",
+        "case x in ((a)) echo a;; esac",
+        "[[ ((a == a)) ]] && git log",
+        "echo ((1))",
+        "f() ((1)); f",
+        // Command position and `for`: arithmetic as before.
+        "for ((i=0; i<3; i++)); do git log; done",
+        "for (( git -C .(N) config core.pager sh )); do :; done",
+        "(( x = 1 )) && git log",
+        "if (( x > 1 )); then git log; fi",
+        "while (( x < 1 )); do git log; done",
+        "! (( x )) || git log",
+        "time (( x )); git log",
+        "x=$(( 1 + (2) )); git log",
+        "{ (( x = 2*(1) )); }; git log",
+        "( (( x = 2*(1) )) ); git log",
+        "(( git -C .(N) config core.pager sh ))",
+        "true; (( x = 2*(1) )); git log",
+    ];
+    let mut wrong = Vec::new();
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        for command in asks {
+            if kind(&[shell, "-lc", command]) != Some(UnseenCode) {
+                wrong.push(format!("asks {shell}: {command}"));
+            }
+        }
+        for command in quiet {
+            if kind(&[shell, "-lc", command]).is_some() {
+                wrong.push(format!("quiet {shell}: {command}"));
+            }
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+}
