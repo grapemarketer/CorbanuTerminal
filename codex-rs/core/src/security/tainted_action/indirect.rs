@@ -401,80 +401,102 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
     command_word(&masked).is_some_and(|(at, _)| command.operated.contains(&at))
 }
 
-/// #1482 item 2: whether the word read as the command is a redirection's
-/// target (`>log ./run.sh`, `sudo -R >log -C sub ./run.sh`), which the
-/// shell removes from the words it runs, and without the targets the
-/// command is one this reading judges by its file: a program named by a
-/// path or a shell or interpreter. The words keep the targets, so that
-/// command is never judged. A descriptor number before a target (`2>log`,
-/// lexed as `2` and `log`) is part of the redirection. `2>/dev/null git
-/// status` is read as before.
-pub(super) fn redirect_hides_command(command: &SimpleCommand, words: &[String]) -> bool {
-    let redirected = |at: usize| {
-        work::step();
-        command.writes_to.contains(&at)
-            || command.stdin_from == Some(at)
-            || command.here_string == Some(at)
-    };
-    let target = |at: usize| {
-        redirected(at)
-            || (redirected(at + 1)
-                && !words[at].is_empty()
-                && words[at].bytes().all(|byte| byte.is_ascii_digit()))
-    };
-    if !command_word(words).is_some_and(|(at, _)| target(at)) {
+/// #1482 item 2: whether the word read as the command, in the words from
+/// `from` on, is part of a redirection: its file (`>log ./run.sh`, `sudo -R
+/// >log -C sub ./run.sh`), a descriptor (`2>log sh x`, `2>&1 ./x`, `>&2
+/// ./x`), a `{fd}` name (`{fd}>log ./x`) or a here-document's delimiter
+/// (`<<EOF ./x`). The shell runs none of them, so the command it runs is
+/// never the one judged, whatever it is: it asks (`2>/dev/null ls` too;
+/// `ls 2>/dev/null` is read as before). `&>log` is read as `&` and `>log`,
+/// so the words after it start with its file. `from`: the operands of
+/// `eval`.
+pub(super) fn redirect_hides_command(
+    command: &SimpleCommand,
+    words: &[String],
+    from: usize,
+) -> bool {
+    let Some((at, _)) = words.get(from..).and_then(command_word) else {
         return false;
-    }
-    let runs: Vec<String> = words
-        .iter()
-        .enumerate()
-        .filter(|(at, _)| !target(*at))
-        .map(|(_, word)| word.clone())
-        .collect();
-    command_word(&runs).is_some_and(|(at, _)| runs[at].contains('/')) || invocation(&runs).is_some()
+    };
+    let at = from + at;
+    command.writes_to.contains(&at)
+        || command.redirect_words.contains(&at)
+        || command.stdin_from == Some(at)
+        || command.here_string == Some(at)
 }
 
 /// #1482 item 4: whether a sudo among the programs of these words runs an
 /// askpass helper or an editor named by the environment (`sudo -A`, `sudo
 /// -e`, `--askpass`, `--edit`, `sudoedit`): code the words do not name.
+/// sudo's own options are read up to its command, with their values (`sudo
+/// -p A ./x` asks for nothing; `sudo -R sub -A ./x` runs a helper).
 /// `sudo -i` (the target user's home) is a folder option of
 /// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
 pub(super) fn sudo_runs_helper(words: &[String]) -> bool {
-    let values: String = WRAPPERS
+    let options = WRAPPERS
         .iter()
         .find(|(wrapper, _, _)| *wrapper == "sudo")
-        .map_or(&[][..], |(_, options, _)| *options)
+        .map_or(&[][..], |(_, options, _)| *options);
+    let values: String = options
         .iter()
         .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
         .chain(["R"])
         .collect();
-    let helper = |option: &String| {
+    // Whether the option runs a helper, and whether its value is the next
+    // word.
+    let read = |option: &str| -> (bool, bool) {
         work::step();
         if let Some(long) = option.strip_prefix("--") {
-            let name = long.split_once('=').map_or(long, |(name, _)| name);
-            return !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            let helper =
+                !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
+            let takes = !value
+                && !name.is_empty()
+                && options.iter().any(|known| {
+                    work::step();
+                    known
+                        .strip_prefix("--")
+                        .is_some_and(|known| known.starts_with(name))
+                });
+            return (helper, takes);
         }
-        let Some(letters) = option.strip_prefix('-') else {
-            return false;
-        };
-        for letter in letters.chars() {
+        let letters = option.strip_prefix('-').unwrap_or_default();
+        for (at, letter) in letters.char_indices() {
             work::step();
             if matches!(letter, 'A' | 'e') {
-                return true;
+                return (true, false);
             }
-            // The rest of the word is this letter's value.
+            // The rest of the word, or the next word, is this letter's value.
             if values.contains(letter) {
-                return false;
+                return (false, letters[at + letter.len_utf8()..].is_empty());
             }
         }
-        false
+        (false, false)
     };
-    let programs = programs(words);
-    programs.iter().enumerate().any(|(n, at)| {
+    programs(words).into_iter().any(|at| {
         work::step();
-        let name = basename(&words[*at]).to_lowercase();
-        let end = programs.get(n + 1).copied().unwrap_or(words.len());
-        name == "sudoedit" || (name == "sudo" && words[at + 1..end].iter().any(&helper))
+        let name = basename(&words[at]).to_lowercase();
+        if name == "sudoedit" {
+            return true;
+        }
+        if name != "sudo" {
+            return false;
+        }
+        let mut next = at + 1;
+        while let Some(option) = words.get(next) {
+            work::step();
+            if option == "--" || !option.starts_with('-') || option == "-" {
+                break;
+            }
+            let (helper, takes) = read(option);
+            if helper {
+                return true;
+            }
+            next += 1 + usize::from(takes);
+        }
+        false
     })
 }
 
