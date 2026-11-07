@@ -212,9 +212,13 @@ own or another command's runner, or a runner's console host for any of the 8
 write rights, adjust their tokens, or open a runner's or console host's
 token; it keeps full access to its own processes; a cmd pipeline,
 PowerShell (with and without ConPTY), `git init` and `git status` still
-work. Not closed: a runner is open to the sandbox account from the moment
-the secondary logon service starts it until that first step, so a command
-racing a runner's start-up can still get it (#1721). Elevated commands can
+work. Core starts each runner suspended and, before it runs, limits its
+process and main thread to SYSTEM; the runner has no console, so no console
+host starts before its first step. Not closed: the threads Windows' loader
+starts in a runner before that first step get the logon's default DACL,
+which gives the sandbox account full access, so a command racing a
+runner's start-up can still open one for write rights (10 to 16 of 20
+start-ups on CI, #1721). Elevated commands can
 still read each other's processes, as before (reads aren't restricted), end
 them (D292), and borrow another elevated command's token through the
 group's `TOKEN_DUPLICATE` and write in that command's writable roots, as
