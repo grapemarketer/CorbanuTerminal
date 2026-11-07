@@ -309,7 +309,7 @@ jobs:
 
       - name: Restore upstream source-build cache
         id: source_build_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
@@ -387,7 +387,7 @@ jobs:
       - name: Save upstream source-build cache
         if: steps.source_build_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
