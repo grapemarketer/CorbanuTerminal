@@ -385,9 +385,15 @@ unsafe fn pin_nested_metadata(
 }
 
 /// D293 (#1542 item 1): the command doesn't start when a link a sandboxed
-/// command could replace lies above explicit read-only path `path`.
+/// command could replace is, or lies above, explicit read-only path `path`.
 fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
     if let Some(link) = crate::workspace_acl::link_above_carve_out(path, roots) {
+        if link == path {
+            anyhow::bail!(
+                "the read-only path {} is itself a link (a junction or symbolic link) in a writable folder. The non-admin Windows sandbox can't keep a command from replacing it with a writable folder, so it doesn't start commands with this configuration (#1667). Configure the read-only path as the link's target instead, or replace the link with a folder.",
+                path.display()
+            );
+        }
         anyhow::bail!(
             "{} is a link (a junction or symbolic link) above the read-only path {}. The non-admin Windows sandbox can't keep a command from replacing a link there and recreating the read-only path, so it doesn't start commands with this configuration (#1542). Configure the read-only path through the link's target instead, or replace the link with a folder.",
             link.display(),

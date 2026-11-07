@@ -171,22 +171,22 @@ unsafe fn deny_moving_folders(
     Ok(())
 }
 
-/// D293 (#1542 item 1): a link (junction, symbolic link or mount point)
-/// above the explicit read-only path `path` that a sandboxed command could
+/// D293 (#1542 item 1): a link (junction, symbolic link or mount point) at
+/// or above the explicit read-only path `path` that a sandboxed command could
 /// remove and replace, because the folder holding it lies inside one of the
 /// writable `roots` (canonical): then the read-only path could be recreated
-/// behind it, away from D263's denies, which land on the link's target. Each
-/// folder above `path` as spelled counts, and so does each folder on the way
-/// to a link's target (a link above the roots, or a root that is a link, may
-/// point at one). Unreadable folders inside a root count as links; a chain
-/// of more than 32 links counts as one.
+/// behind it, away from D263's denies, which land on the link's target. The
+/// path itself (#1667) and each folder above it as spelled count, and so
+/// does each folder on the way to a link's target (a link above the roots,
+/// or a root that is a link, may point at one). Unreadable entries inside a
+/// root count as links; a chain of more than 32 links counts as one.
 pub(crate) fn link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     let inside_a_root = |folder: &Path| {
         let canonical = canonicalize_path(folder);
         roots.iter().any(|root| canonical.starts_with(root))
     };
     // (spelling to check, whether to check the spelling itself too)
-    let mut pending = vec![(path.to_path_buf(), false)];
+    let mut pending = vec![(path.to_path_buf(), true)];
     let mut links = 0;
     while let Some((spelled, with_itself)) = pending.pop() {
         for folder in spelled.ancestors().skip(usize::from(!with_itself)) {
