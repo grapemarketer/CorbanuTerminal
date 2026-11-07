@@ -273,3 +273,30 @@ fn legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved() {
         )
     );
 }
+
+/// A writable root that is a placeholder gets its label back once the
+/// session ends, as a plain folder does. Before, the sweep skipped every
+/// reparse point, so it stayed Low.
+#[test]
+fn legacy_cloud_placeholder_root_gets_its_label_back() {
+    let _guard = legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
+    let test_root = user_owned_test_root();
+    let cloud = test_root.path().join("cloud");
+    fs::create_dir_all(&cloud).expect("create sync root");
+    let sync_root = SyncRoot::register(&cloud);
+    sync_root.placeholder_folder("w");
+    let root = dunce::canonicalize(cloud.join("w")).expect("canonical root");
+    fs::write(root.join("file.txt"), "x").expect("seed file");
+    assert!(is_placeholder(&root));
+
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    let during = low_integrity_can_open_for_write(&root.join("file.txt"));
+    drop(lease);
+    let after = low_integrity_can_open_for_write(&root.join("file.txt"));
+    drop(sync_root);
+
+    assert_eq!((during, after), (true, false));
+}
