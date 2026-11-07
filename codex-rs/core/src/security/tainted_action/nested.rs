@@ -751,6 +751,23 @@ impl Classifier {
                     }
                     continue;
                 }
+                // #1685: an alias's value is a line of its own, run later
+                // (`alias x='tee -a ~/.zshrc'`): every check of a line counts
+                // on it. (The word lexer reads `eval`'s and `trap`'s text.)
+                if resolved_name == "alias" {
+                    for arg in &texts[at + 1..] {
+                        work::step();
+                        if let Some((_, value)) = arg.split_once('=') {
+                            push_script(
+                                found,
+                                folders,
+                                value.to_string(),
+                                replaced(launches[at]),
+                                unknown,
+                            );
+                        }
+                    }
+                }
                 // #1422: `compgen -C cmd` runs `cmd` as shell code.
                 if resolved_name == "compgen" {
                     match rerun::compgen_commands(command.words.get(at + 1..).unwrap_or_default()) {
