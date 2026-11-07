@@ -169,7 +169,9 @@ Path(os.environ["BAZEL_ARGS_CAPTURE"]).write_text(
             jvm_out.parent.mkdir(parents=True)
             jvm_out.write_text("jvm.out: server stderr\n", encoding="utf-8")
             (temp_path / "o" / "java.log").write_text(
-                "java.log: NullPointerException at Example.java:1\n", encoding="utf-8"
+                "java.log: NullPointerException at Example.java:1\n"
+                "args: --remote_header=x-buildbuddy-api-key=SECRET123 --config=ci\n",
+                encoding="utf-8",
             )
             fake_bazel = temp_path / "bazel"
             fake_bazel.write_text(
@@ -205,22 +207,29 @@ sys.exit(code)
                 capture_output=True,
                 text=True,
             )
-            return result, int(counter.read_text())
+            calls = int(counter.read_text()) if counter.exists() else 0
+            return result, calls
 
     def test_a_bazel_server_crash_is_logged_and_retried_once(self) -> None:
         result, calls = self.run_with_exit_codes([37, 0])
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, 2)
-        self.assertIn("jvm.out: server stderr", result.stdout)
-        self.assertIn("java.log: NullPointerException", result.stdout)
-        self.assertIn("retrying once", result.stdout)
+        # Diagnostics go to stderr: callers such as sdk.yml parse stdout.
+        self.assertIn("jvm.out: server stderr", result.stderr)
+        self.assertIn("java.log: NullPointerException", result.stderr)
+        self.assertIn("retrying once", result.stderr)
+        self.assertNotIn("java.log", result.stdout)
+        self.assertNotIn("SECRET123", result.stdout + result.stderr)
+        self.assertIn("--remote_header=<redacted>", result.stderr)
 
     def test_a_second_bazel_server_crash_fails(self) -> None:
         result, calls = self.run_with_exit_codes([37, 37, 0])
 
         self.assertEqual(result.returncode, 37)
         self.assertEqual(calls, 2)
+        self.assertEqual(result.stderr.count("java.log: NullPointerException"), 2)
+        self.assertIn("crashed again on the retry", result.stderr)
 
     def test_build_and_test_failures_are_not_retried(self) -> None:
         for code in [1, 3]:
