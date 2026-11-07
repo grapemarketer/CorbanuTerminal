@@ -24,6 +24,11 @@ using at that moment.
 - A few ways of starting programs that leave the command's job, so cancelling
   doesn't end them (see #1507 in `codex-rs/core/README.md`; measured on a
   server without a desktop session, not yet on a desktop).
+- Two commands running at the same time in different projects (or with
+  different extra folders they may write to) aren't kept apart: one can
+  borrow the other's access and write in that project's folders while the
+  other runs (#1560). If you work on several projects at once, use the
+  default sandbox.
 - Drives without Windows permissions, such as FAT or exFAT USB drives: neither
   sandbox can protect files there.
 

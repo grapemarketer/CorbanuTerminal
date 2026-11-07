@@ -182,7 +182,15 @@ write right). The borrowed token carries the command's identity, so with it
 they can write to its processes again, including starting a child in its job
 through the parent-process route, and write in its writable roots while it
 runs (#1560). The boundary D259 draws between legacy commands holds only once
-#1560 is closed. Two routes still start a child
+#1560 is closed. This matters only while two legacy commands run at the same
+time with different writable roots (different projects, or different extra
+writable folders): either can write in the other's. Accepted for now (D291,
+Travis 2026-11-06): the non-admin warning and `docs/sandbox.md` tell people
+who work on several projects at once to use the elevated backend, whose
+commands run as a separate sandbox account (not measured for this route). A
+redesigned legacy token that closes it is to be measured separately. Killing
+another command's processes stays possible on purpose (D292). Two routes
+still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child
 runs at Low integrity but with an unrestricted token) and
 `MMC20.Application` (Low, restricted). Closing them waits on a measurement
