@@ -47,7 +47,7 @@ updated: 2026-11-07
 ## Remaining
 
 - [ ] Slice PRs S4a–S4e; snapshots re-accepted after reading each diff.
-- [ ] Revert the sync-branch CI mode.
+- [ ] Exclude the `//codex-rs/voice-host` Bazel targets (D316) before reverting the sync-branch CI mode; then revert it.
 - [ ] True-TUI QA and demo reels.
 - [ ] Code-blind functional design frozen before test-result disclosure, or non-user-facing N/A reason recorded.
 

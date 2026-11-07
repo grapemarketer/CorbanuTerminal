@@ -50,12 +50,13 @@ updated: 2026-11-07
 - [x] Tier 0 re-prepared against `781b935f` (5 workflow files changed since `15ab4699`; all keep ours).
 - [x] CorbanuCore/rusty_v8 pins `350c5a85` (D317); `voice-host` excluded from the workspace (D316).
 - [x] Skeleton run on glitch and opened as #1690 (evidence in its description; logs `~/corbanu-rtx/sync-s0b/` on glitch).
-- [x] Code-blind functional design: N/A, S00 changes no user-visible behaviour (no runnable build until S04).
+- [x] Code-blind functional design: N/A, S00 changes no user-visible behaviour (no runnable build until S04); accepted by the integrator; the functional gate is PF-85-S05.
+- [x] Baseline lanes dispatched on the sync branch at `781b935f` before the skeleton merge (runs 42354273115, 42354275358, 42354277670, 42354280028).
 
 ## Remaining
 
-- [ ] Merge the skeleton PR into the sync branch; confirm the CI mode loads on the sync branch.
-- [ ] Baseline lanes on the cut SHA; S1 kick-off checklist on #1628.
+- [ ] Record the baseline results on #1627; merge the skeleton PR into the sync branch; confirm the CI mode loads there.
+- [ ] S1 kick-off checklist on #1628.
 
 ## Verification
 

@@ -30,7 +30,7 @@ updated: 2026-11-07
 
 ## Code boundaries
 
-- Write scope: S3a/S3b paths in the ledger and `security_paths.txt`.
+- Write scope: S3b ledger rows and the `security_paths.txt` files the port touches (S3a paths are resolved in S01/S02).
 - Branch target: `sync/upstream-rust-v0.167.0` (PRs only).
 
 ## Preconditions
@@ -54,7 +54,7 @@ updated: 2026-11-07
 ## Verification
 
 - [ ] Security lanes, Linux/macOS/Windows sandbox tests, Windows PC run.
-- [ ] TUI applicability: `/security` picker, covered in S04 QA.
+- [ ] TUI applicability: `/security` picker, covered in S05 QA.
 
 ## Exit evidence
 

@@ -7,7 +7,7 @@ owner: "Travis Good accountable; upstream-sync integrator (maintainer)"
 parallel_sprint_limit: 1
 integration_owner: "Upstream-sync integrator (maintainer); merges slice PRs into the sync branch and the final PR into main"
 activation_authority: "Travis Good"
-activation_basis: "Travis Good's #1532 decisions D273 (dedicated owned program), D303 (target rust-v0.167.0) and D304 (active-plan slot 2), 2026-11-06/07"
+activation_basis: "Travis Good's #1532 decisions D273 (dedicated owned program, 2026-11-06), D303 (target rust-v0.167.0) and D304 (active-plan slot 2), both 2026-11-07"
 target_release: "TBD (first release after the final merge and its 48-hour canary)"
 deadline: "TBD"
 created: 2026-11-07

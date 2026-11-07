@@ -276,16 +276,20 @@ reels, code-blind functional runs).
 
 - **Kept-ours manifest choices (D319):** the security owner decides `age` 0.11 (vault file format) and our reduced
   `zip` decoder set (#968) against upstream's versions. Hard requirement: existing vault files and archives keep
-  working, so the S1 owner adds checked-in fixtures that must pass on the synced build whatever is decided:
+  working, so the S1 owner adds checked-in fixtures that must pass on the synced build whatever is decided. They are
+  generated once from `main`'s code (`age` 0.11.1, our current `zip` features) and committed before any `age` or
+  `zip` change, and never regenerated:
   - vault files of every kind (`local.age`, `codex_auth.age`, `mcp_oauth.age`) at scrypt work factor 16 (what
     current builds write), 20 (the decrypt limit; older builds calibrated up to it and files are re-encrypted only
     after a successful open) and one value in between, each made with a known fixture passphrase through a
     throwaway keyring or fallback store (no native Keychain; test-isolation rules apply);
   - one zip archive per compression method we accept today (stored, deflate, deflate64, bzip2) and one with a
     method we reject; these stand in for the untrusted skill and plugin bundles `zip` reads;
-  - vault files written by the synced build open in the last released build (rollback).
-  All must open with the synced build. The accepted decoder set may grow only with the security owner's approval and
-  must not shrink.
+  Tests copy each fixture to a temp dir, check the decrypted or extracted contents against stored expected values
+  (not only that the file opens), and check that a vault file above work factor 16 comes back re-encrypted at 16.
+  The accepted decoder set may grow only with the security owner's approval and must not shrink. Rollback (vault
+  files written by the synced build open in the last released build) is tested in S5 against that release's binary,
+  next to the state-DB rollback test.
 - **Scope:** S1a protocol (regenerate app-server schemas with `just write-app-server-schema`); S1b config/providers/
   auth (regenerate `models.json`, re-apply the Corbanu catalog, keep the OpenAI-style route default, vault-backed login,
   Corbanu home); S1c other crates (follow upstream's `core-skills` split; **renumber upstream migrations 0047–0062
@@ -432,7 +436,7 @@ credential brokers · browser isolation · branding, `corbanu` binary names, Cor
 | V8 152.2.0 artifacts, the `rusty_v8` git source, GStreamer for `voice-host` | verified per OS in S0; SG1; `rusty_v8` from CorbanuCore (D317); `voice-host` out of our lanes (D316) |
 | New compiler warnings under `-D warnings` on 1.99.1 | 10 instances found on glitch; fixed by the owning slices |
 | Windows PC offline (down since 10-27 per the handoff; owner action D212) | native Windows CI is the required lane; Windows PC sessions scheduled with Travis for S3b and S5 |
-| Review budget (5 rounds per PR) on S3b and the final PR | ask in advance for a higher budget for those two PRs |
+| Review budget (5 rounds per PR) on S3b and the final PR | D307: up to 8 rounds for those two PRs |
 | CI cost on red slice PRs | sync-branch-only CI mode until the workspace compiles |
 | Disk (Mac drive, glitch 90% used) | build dirs on CorbanuDrive only, one target dir per worker, removed after each slice |
 | Branch stalls half-done | one named owner; weekly status on #1532; explicit abort if S2 slips more than a week |
