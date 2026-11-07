@@ -1743,7 +1743,8 @@ fn own_git_folder(texts: &[String], from: usize) -> bool {
 
 /// #1620: whether a writer's operand is a word zsh reads as the installed
 /// program it names (`tee -a =mytool`, `cp x ="mytool"`, `curl -o
-/// =mytool`, `cp x ""=mytool`, `cp x {,=mytool}`), after zsh's precommand
+/// =mytool`, `cp x ""=mytool`, `cp x {,}=mytool`: any `=` in a word with
+/// a brace group may start one of its words), after zsh's precommand
 /// modifiers (`noglob tee =mytool`). An option's quoted value (`curl
 /// --proto '=https'`) is not expanded.
 fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
@@ -1766,8 +1767,7 @@ fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> b
             .any(|word| {
                 work::step();
                 (word.equals_first && outputs::zsh_program_path(&word.text))
-                    || (word.brace_expansion
-                        && (word.text.contains("{=") || word.text.contains(",=")))
+                    || (word.brace_expansion && word.text.contains('='))
             })
 }
 

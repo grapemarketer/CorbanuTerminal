@@ -11341,6 +11341,10 @@ fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
             "alias x='cp a \"\"=mytool'",
             "cp x {,=mytool}",
             "echo x | tee -a {/dev/null,=mytool}",
+            // Review 3: a group right before the `=`.
+            "echo x | tee -a {,}=mytool",
+            "echo x | tee -a {a,}=mytool",
+            "eval 'tee -a {,}=mytool'",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
