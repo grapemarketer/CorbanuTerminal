@@ -349,6 +349,44 @@ mod tests {
         );
     }
 
+    /// Lines of `source` (up to its tests) that search backwards with
+    /// `str::rfind` instead of the counted `work::rfind`/`work::rfind_by`.
+    fn uncounted_reverse_searches(file: &str, source: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for (at, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("mod tests") || code.starts_with("#[path = ") {
+                break;
+            }
+            let code = code.split("//").next().unwrap_or_default();
+            if code.contains(".rfind(") {
+                found.push(format!("{file}:{}", at + 1));
+            }
+        }
+        found
+    }
+
+    /// #1112: reverse searches stay visible to the counter (#1399).
+    #[test]
+    fn every_classifier_reverse_search_is_counted() {
+        let found: Vec<String> = SOURCES
+            .iter()
+            .flat_map(|(file, source)| uncounted_reverse_searches(file, source))
+            .collect();
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "use `work::rfind` or `work::rfind_by` (see work.rs)"
+        );
+        let source = "let a = work::rfind(t, \"x\");\nlet b = t[..at].rfind('x');\n\
+                      // t.rfind('x')\nlet c = t.rfind(char::is_whitespace); // why\n\
+                      mod tests {\nlet d = t.rfind('x');\n";
+        assert_eq!(
+            uncounted_reverse_searches("f.rs", source),
+            vec!["f.rs:2", "f.rs:4"]
+        );
+    }
+
     /// A module added to the classifier is checked too.
     #[test]
     fn every_classifier_module_is_checked() {
