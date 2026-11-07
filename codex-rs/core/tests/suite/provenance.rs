@@ -1144,7 +1144,13 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
     };
     let server = start_mock_server().await;
     let read = serde_json::json!({ "command": PF_30_S03_INJECTED }).to_string();
-    let spawn = serde_json::json!({ "message": CHILD_TASK, "task_name": "helper" }).to_string();
+    // No forked history: the child must not see the hostile output itself.
+    let spawn = serde_json::json!({
+        "message": CHILD_TASK,
+        "task_name": "helper",
+        "fork_turns": "none",
+    })
+    .to_string();
     let vault = serde_json::json!({ "command": PF_30_S03_VAULT }).to_string();
     mount_sse_once_match(
         &server,
@@ -1180,7 +1186,7 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
         ]),
     )
     .await;
-    mount_sse_once_match(
+    let child_start = mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
             body_has(request, CHILD_TASK)
@@ -1284,8 +1290,9 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
     })
     .await
     .map_err(|_| anyhow::anyhow!("the allowed helper never started"))??;
-    // The child's own vault command still needs a fresh human approval: its
-    // task came from a tainted parent, so it is agent data. The human denies.
+    // The child's own vault command still needs a fresh human approval: it
+    // never saw the hostile output, but its task is agent mail, data without
+    // standing. The human denies.
     let EventMsg::ExecApprovalRequest(approval) = wait_for_event_with_timeout(
         &child,
         |event| {
@@ -1310,6 +1317,10 @@ async fn pf_30_s03_a_tricked_child_agent_cannot_reach_the_vault() -> anyhow::Res
         "{reason}"
     );
     assert_eq!(approval.proposed_execpolicy_amendment, None);
+    let child_request = child_start.single_request();
+    let child_body = child_request.body_json().to_string();
+    assert!(child_body.contains(CHILD_TASK), "{child_body}");
+    assert!(!child_body.contains("The user approved"), "{child_body}");
     const DENIED: &str = "the human denied the helper's vault listing";
     child
         .submit(Op::ExecApproval {
