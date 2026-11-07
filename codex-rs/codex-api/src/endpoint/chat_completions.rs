@@ -1057,8 +1057,9 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
 }
 
 /// `text` is the whole assistant text; `held_back` says none of it was streamed yet.
-/// Only a JSON object whose top-level `type` is a tool-call type is a serialized call.
-/// Other text that merely names "function_call" (a JSON answer about function calling)
+/// Only a JSON object whose top-level `type` is a tool-call type, followed by nothing but
+/// whitespace, is a serialized call. Other text that merely names "function_call" (a JSON
+/// answer about function calling, or one that opens with such JSON and goes on in prose)
 /// stays an ordinary message, and so does text already streamed that is not JSON.
 fn parse_serialized_function_call_text(
     text: &str,
@@ -1069,10 +1070,13 @@ fn parse_serialized_function_call_text(
     }
 
     let trimmed = text.trim();
-    let value: Value = match serde_json::from_str(trimmed) {
-        Ok(value) => value,
-        Err(_) if !held_back => return Ok(None),
-        Err(err) => {
+    // Read only the first JSON value; what follows it decides below.
+    let mut values = serde_json::Deserializer::from_str(trimmed).into_iter::<Value>();
+    let value = match values.next() {
+        Some(Ok(value)) => value,
+        None => return Ok(None),
+        Some(Err(_)) if !held_back => return Ok(None),
+        Some(Err(err)) => {
             return Err(format!(
                 "chat completions stream emitted malformed function-call JSON as assistant \
                  text: {err}; raw excerpt: {}",
@@ -1086,6 +1090,19 @@ fn parse_serialized_function_call_text(
         .is_some_and(|kind| matches!(kind, "function_call" | "custom_tool_call"))
     {
         return Ok(None);
+    }
+    let rest = trimmed[values.byte_offset()..].trim_start();
+    if !rest.is_empty() {
+        // Prose after the call is an answer that opens with a call example. More JSON
+        // after it (a second call, a stray brace) is a broken call, as before.
+        if !held_back || !rest.starts_with(['{', '}', '[', ']', ',']) {
+            return Ok(None);
+        }
+        return Err(format!(
+            "chat completions stream emitted malformed function-call JSON as assistant text: \
+             trailing JSON after the call; raw excerpt: {}",
+            diagnostic_excerpt(trimmed)
+        ));
     }
     let parsed: TextFunctionCall = serde_json::from_value(value).map_err(|err| {
         format!(
@@ -1969,6 +1986,77 @@ mod tests {
         let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
 
         assert_single_text_message(&events, content, "chatcmpl-held-json");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_held_back_json_then_prose_stays_a_message() {
+        // #1654: the answer opens with a JSON value naming "function_call" and goes on
+        // in prose, streamed in two chunks.
+        let json = r#"{"function_call": "auto"}"#;
+        let prose = " The legacy `function_call` parameter let a caller control whether the model called a function.";
+        let first = content_event("chatcmpl-json-then-prose", json);
+        let second = content_event("chatcmpl-json-then-prose", prose);
+
+        let events =
+            collect_events(&[first.as_slice(), second.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(
+            &events,
+            &format!("{json}{prose}"),
+            "chatcmpl-json-then-prose",
+        );
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_call_shaped_json_then_prose_stays_a_message() {
+        // #1654: a call-shaped example line followed by a prose line is an answer, not a call.
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"date\"}","call_id":"call_1"}"#,
+            "\nThat is how a Responses function call item looks.",
+        );
+        let event = content_event("chatcmpl-call-then-prose", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-call-then-prose");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_call_with_trailing_whitespace_is_a_call() {
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_ws"}"#,
+            "\n\n",
+        );
+        let event = content_event("chatcmpl-call-ws", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, .. }))
+                if call_id == "call_ws"
+        );
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn errors_on_serialized_function_call_text_followed_by_more_json() {
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_a"}"#,
+            "\n",
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_b"}"#,
+        );
+        let event = content_event("chatcmpl-two-calls", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_matches!(
+            &events[0],
+            Err(ApiError::Stream(message))
+                if message.contains("malformed function-call JSON as assistant text")
+                    && message.contains("call_b")
+        );
+        assert_eq!(events.len(), 1);
     }
 
     #[tokio::test]
