@@ -232,7 +232,29 @@ jobs:
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib sec_win_ -- --nocapture --test-threads=1
+          # The #1770 tests run in their own step below.
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib sec_win_ -- --skip sec_win_1770_ --nocapture --test-threads=1
+      - name: Sandboxed command tokens stay restricted (#1770)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # A command of each backend may not write into a fresh folder in the
+        # runner's D:\tmp that any signed-in account may write to (labelled
+        # Low, so Low integrity can't hide it): only its restricted token
+        # keeps it out.
+        env:
+          CODEX_SEC_WIN_341_REQUIRE: "1"
+        run: |
+          set -euo pipefail
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          export CODEX_SEC_WIN_1770_SHARED_ROOT="$(cygpath -w "${CI_BUILD_ROOT}/tmp")"
+          for backend in legacy elevated; do
+            cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact "unified_exec::tests::token_boundary::sec_win_1770_${backend}_command_cannot_write_to_a_shared_folder" --nocapture --test-threads=1 2>&1 | tee sec-1770.log
+            grep -q "test result: ok. 1 passed" sec-1770.log
+            grep -qF "sec-win-1770 ${backend}: creating a file, creating a folder and appending were refused in ${CODEX_SEC_WIN_1770_SHARED_ROOT}\\" sec-1770.log
+          done
+          rm sec-1770.log
       - name: Legacy sandbox delete boundary (#158)
         if: ${{ !cancelled() }}
         shell: bash
@@ -310,8 +332,10 @@ jobs:
           New-Item -ItemType Directory $temp -ErrorAction Stop | Out-Null
           icacls $temp /setowner "*$user" /Q | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "setting the owner of $temp failed" }
-          # A fresh DACL, protected, replaces the inherited one
-          # (`icacls /inheritance:r` would copy D:\'s CREATOR OWNER entry in).
+          # A fresh DACL, protected, replaces the inherited one. An
+          # `icacls /inheritance:r /grant:r` attempt (which removes inherited
+          # entries; `/inheritance:d` is the one that copies them) still left
+          # an explicit CREATOR OWNER entry in CI (run 42397202004).
           $full = [Security.AccessControl.FileSystemRights]::FullControl
           $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
           $dacl = New-Object Security.AccessControl.DirectorySecurity
@@ -376,8 +400,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 42
-            & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
+            Assert-Tests $sandbox 'sec_win_' 44
+            # The #1770 tests run on their own below.
+            & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
             # D324 (#1648): the elevated backend from a normal session. Each test
             # reuses the setup an elevated run recorded right before it.
@@ -397,6 +422,30 @@ jobs:
               if ($code -ne 0) { throw "D324 $t failed in a normal session" }
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
             }
+            # #1770: a command of each backend may not write into a fresh
+            # folder in the runner's D:\tmp (not this step's TEMP) that any
+            # signed-in account may write to; only its restricted token keeps
+            # it out. The elevated one reuses a setup recorded right before.
+            $env:CODEX_SEC_WIN_1770_SHARED_ROOT = Join-Path $env:CI_BUILD_ROOT 'tmp'
+            foreach ($backend in @('legacy', 'elevated')) {
+              $t = "unified_exec::tests::token_boundary::sec_win_1770_${backend}_command_cannot_write_to_a_shared_folder"
+              Assert-Tests $sandbox $t 1
+              if ($backend -eq 'elevated') {
+                & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+                $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              }
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "#1770 $backend failed in a normal session" }
+              $refused = "sec-win-1770 ${backend}: creating a file, creating a folder and appending were refused in $($env:CODEX_SEC_WIN_1770_SHARED_ROOT)\"
+              if (-not ($out -match 'test result: ok\. 1 passed') -or -not ($out | Where-Object { $_.Contains($refused) })) {
+                throw "#1770 $backend did not run in a normal session"
+              }
+            }
+            Remove-Item Env:CODEX_SEC_WIN_1770_SHARED_ROOT
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')
