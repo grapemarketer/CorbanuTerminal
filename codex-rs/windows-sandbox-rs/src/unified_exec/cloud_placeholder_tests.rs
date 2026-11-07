@@ -71,12 +71,12 @@ fn cloud_api(name: &str) -> unsafe extern "system" fn() -> isize {
 
 fn library_proc(library: &str, name: &str) -> unsafe extern "system" fn() -> isize {
     let library = to_wide(library);
-    let name = std::ffi::CString::new(name).expect("name");
+    let symbol = std::ffi::CString::new(name).expect("name");
     // SAFETY: plain library and symbol lookups with NUL-terminated names.
     unsafe {
         let module = LoadLibraryW(library.as_ptr());
         assert!(module != 0, "load library for {name}");
-        GetProcAddress(module, name.as_ptr().cast()).expect("cldapi symbol")
+        GetProcAddress(module, symbol.as_ptr().cast()).expect(name)
     }
 }
 
