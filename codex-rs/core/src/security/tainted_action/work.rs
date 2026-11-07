@@ -8,11 +8,15 @@
 //! (`to_string`, `format!`, `collect`) outside any loop of ours. A linearity
 //! test classifies the same input at two sizes and compares both counts,
 //! which, unlike a wall-clock budget, do not depend on the machine or its
-//! load. Reverse searches also charge the bytes in the searched suffix,
-//! through the returned byte offset (or all text on a miss), and substring
-//! needle setup. This exposes repeated prefix scans without a timing bound.
-//! Other unwrapped library scans and recursion remain outside the counter.
-//! Outside tests counters are no-ops.
+//! load. Reverse string searches (`work::rfind`, `work::rfind_by`; a test
+//! below rejects a raw `str::rfind`) also charge the bytes in the searched
+//! suffix, through the returned byte offset (or all text on a miss), and
+//! substring needle setup. This exposes repeated prefix scans without a
+//! timing bound. The recursive readings of `eval`/`trap` text, of the words
+//! a launcher runs and of a followed shell's script also step once per call
+//! (#1112). Other unwrapped library scans (forward searches, iterator
+//! scans, `rsplit`) and other recursion remain outside the counter. Outside
+//! tests counters are no-ops.
 
 #[cfg(test)]
 use std::alloc::GlobalAlloc;
@@ -29,7 +33,7 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-/// One loop iteration of classifier work.
+/// One loop iteration (or recursive call) of classifier work.
 #[inline(always)]
 pub(super) fn step() {
     #[cfg(test)]
@@ -347,6 +351,44 @@ mod tests {
             vec![
                 "f.rs:4", "f.rs:9", "f.rs:16", "f.rs:17", "f.rs:23", "f.rs:26"
             ]
+        );
+    }
+
+    /// Lines of `source` (up to its tests) that call `.rfind(`, a string's
+    /// reverse search, instead of the counted `work::rfind`/`work::rfind_by`.
+    fn uncounted_reverse_searches(file: &str, source: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for (at, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("mod tests") || code.starts_with("#[path = ") {
+                break;
+            }
+            let code = code.split("//").next().unwrap_or_default();
+            if code.contains(".rfind(") {
+                found.push(format!("{file}:{}", at + 1));
+            }
+        }
+        found
+    }
+
+    /// #1112: reverse string searches stay visible to the counter (#1399).
+    #[test]
+    fn classifier_reverse_string_searches_are_counted() {
+        let found: Vec<String> = SOURCES
+            .iter()
+            .flat_map(|(file, source)| uncounted_reverse_searches(file, source))
+            .collect();
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "use `work::rfind` or `work::rfind_by` (see work.rs)"
+        );
+        let source = "let a = work::rfind(t, \"x\");\nlet b = t[..at].rfind('x');\n\
+                      // t.rfind('x')\nlet c = t.rfind(char::is_whitespace); // why\n\
+                      mod tests {\nlet d = t.rfind('x');\n";
+        assert_eq!(
+            uncounted_reverse_searches("f.rs", source),
+            vec!["f.rs:2", "f.rs:4"]
         );
     }
 

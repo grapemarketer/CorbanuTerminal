@@ -248,6 +248,8 @@ pub(super) fn evaluated_input_runs(name: &str, args: &[String]) -> bool {
 /// `evaluated_input_runs`, `depth` evaluations deep; deeper than
 /// `MAX_DEPTH` asks.
 fn evaluated(name: &str, args: &[String], depth: usize) -> bool {
+    // #1112: each recursive reading counts, besides its loops.
+    work::step();
     let lines = match name {
         "eval" => vec![
             args.strip_prefix(&["--".to_string()])
@@ -1015,6 +1017,8 @@ fn env_split(words: &[String], options: usize) -> Option<(Vec<String>, bool)> {
 /// evaluator, interpreter or awk runs, or a shell's script, or the
 /// positional parameters a shell's script runs.
 fn words_run(words: &[String], fills: &Fills, depth: usize) -> bool {
+    // #1112: each recursive reading counts, besides its loops.
+    work::step();
     if depth > MAX_DEPTH {
         return true;
     }
