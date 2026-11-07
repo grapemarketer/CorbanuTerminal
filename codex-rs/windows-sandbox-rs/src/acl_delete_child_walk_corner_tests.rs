@@ -7,9 +7,8 @@
 //! - D261's check of a root swapped for another folder (or a link) between
 //!   the write and the check, which must check nothing.
 //!
-//! A label root that is a link is not here: Windows' walk labels the link
-//! itself, while ours follows it (#1715's measurement; production callers
-//! never pass one).
+//! A root that is a link is not here: Windows' walks write the link itself,
+//! while ours follow it (#1722; production callers never pass one).
 
 use super::*;
 use crate::acl::walk::Handle;
