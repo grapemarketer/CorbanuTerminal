@@ -228,7 +228,10 @@ while any legacy command ran would count as planted, and the temp folder
 isn't treated as a project location; a workspace or configured root stays
 watched even if the temp folder resolves to it), with its file identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
-100,000-file workspace). Names are compared the way NTFS compares them, so
+100,000-file workspace). Other reparse points, such as ProjFS (VFS for Git)
+folders or cloud placeholders a program sees as they are, aren't links: the
+walk looks inside them, and one named `.codex` or `.agents` is protected and
+identified like a plain folder (#1672). Names are compared the way NTFS compares them, so
 a name such as `.agentſ` counts (and is never trusted). Each one it finds
 gets the top-level ones' protection: an explicit Medium label, the
 capability-SID write deny and the tracked Everyone delete-child denies. It

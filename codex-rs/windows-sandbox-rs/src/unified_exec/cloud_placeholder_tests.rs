@@ -329,8 +329,13 @@ fn legacy_nested_project_metadata_in_cloud_placeholders_is_watched() {
         fs::write(cloud.join(dot_codex).join("config.toml"), "original").expect("seed config");
     }
     assert_eq!(
-        [&cloud, &cloud.join("p"), &cloud.join("q"), &cloud.join("q\\.codex")]
-            .map(|path| is_placeholder(path)),
+        [
+            &cloud,
+            &cloud.join("p"),
+            &cloud.join("q"),
+            &cloud.join("q\\.codex")
+        ]
+        .map(|path| is_placeholder(path)),
         [true; 4]
     );
     let started = run_script(

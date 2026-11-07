@@ -12,12 +12,10 @@
 
 use serde::Deserialize;
 use serde::Serialize;
-use std::os::windows::fs::MetadataExt as _;
 use std::path::Path;
 use std::path::PathBuf;
 
 const PROJECT_METADATA_NAMES: [&str; 2] = [".codex", ".agents"];
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 /// A nested `.codex`/`.agents` entry and the file it was. `identity` is
 /// `None` for a link (the sandbox may be able to point it elsewhere without
@@ -47,7 +45,8 @@ pub(crate) struct Found {
 
 /// The `.codex`/`.agents` entries below the top of `roots` (canonical), of
 /// any kind (a link counts), recorded under the name Core opens. Links are
-/// never followed, and the walk doesn't descend into `.git` folders or into
+/// never followed; other reparse points, such as ProjFS folders or cloud
+/// placeholders, are walked like plain folders (#1672). The walk doesn't descend into `.git` folders or into
 /// the entries it reports: the sandbox can't write inside a protected one,
 /// and Core doesn't run from inside `.git`. Names match the way NTFS
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
@@ -95,8 +94,8 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                     found.unlistable.push(entry.path());
                     continue;
                 };
+                // `is_dir` is false for links.
                 if metadata.is_dir()
-                    && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
                     // ASCII only: skipping a folded name (`.gıt`) would
                     // leave an ordinary folder unwatched.
                     && !name.eq_ignore_ascii_case(".git")
@@ -205,11 +204,11 @@ pub(crate) fn identity(path: &Path) -> Option<FileIdentity> {
     Some(FileIdentity { volume, id })
 }
 
-/// A link or other reparse point; unknown counts as one.
+/// A link (a name-surrogate reparse point); unknown counts as one. Other
+/// reparse points, such as ProjFS folders or cloud placeholders, are the
+/// folder itself (#1672).
 fn is_link(metadata: Result<&std::fs::Metadata, &std::io::Error>) -> bool {
-    metadata.map_or(true, |metadata| {
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    })
+    metadata.map_or(true, |metadata| metadata.file_type().is_symlink())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
