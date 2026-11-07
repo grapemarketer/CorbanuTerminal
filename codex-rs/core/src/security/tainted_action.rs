@@ -32,6 +32,7 @@ mod aliases;
 mod arithmetic;
 mod braces;
 mod certain_cd;
+mod code_tables;
 mod code_variables;
 mod git_config;
 mod git_helpers;
@@ -642,6 +643,7 @@ impl Classifier {
             in_file: 0,
             reads_follow: false,
             temp: None,
+            temp_traps: false,
             held: None,
             workspace: String::new(),
             cut_values: HashSet::new(),
@@ -684,6 +686,60 @@ fn rank(kind: ProtectedActionKind) -> u8 {
         ProtectedActionKind::ValueTransfer => 8,
         ProtectedActionKind::Vault => 9,
     }
+}
+
+/// #1685: what the text of `eval` or `trap` runs, from the command
+/// `from`, read past a leading `--`, zsh's precommand modifiers and more
+/// such commands (the word lexer splits the quoted text): also bash/zsh
+/// `coproc` and zsh `repeat N`, which run the command after them.
+#[derive(Default)]
+struct Carried {
+    /// The command it runs, if any.
+    command: Option<(usize, String)>,
+    /// Where each piece of text starts, and where its command word is
+    /// (`words.len()` for none): the words between are read as
+    /// assignments and wrappers (`eval '=tee …'`, `trap './env ls' EXIT`).
+    spans: Vec<(usize, usize)>,
+}
+
+fn carried_command(words: &[String], from: Option<&(usize, String)>) -> Carried {
+    let mut carried = Carried::default();
+    let Some((mut index, mut name)) = from.cloned() else {
+        return carried;
+    };
+    loop {
+        work::step();
+        let skip = match name.as_str() {
+            "eval" | "trap" => 1 + usize::from(words.get(index + 1).is_some_and(|w| w == "--")),
+            "coproc" => 1,
+            "repeat" => 2,
+            name if !carried.spans.is_empty() && unknown_folder::MODIFIERS.contains(&name) => 1,
+            _ => break,
+        };
+        let after = (index + skip).min(words.len());
+        let Some((at, next)) = indirect::command_word(&words[after..]) else {
+            carried.spans.push((after, words.len()));
+            return carried;
+        };
+        carried.spans.push((after, after + at));
+        (index, name) = (after + at, next);
+    }
+    if !carried.spans.is_empty() {
+        carried.command = Some((index, name));
+    }
+    carried
+}
+
+/// #1685: whether word `at` is in a piece of `eval` or `trap` text before
+/// its command word ([`Carried::spans`], which ascend).
+fn before_carried_command(spans: &[(usize, usize)], at: usize) -> bool {
+    spans
+        .get(
+            spans
+                .partition_point(|(start, _)| *start <= at)
+                .wrapping_sub(1),
+        )
+        .is_some_and(|(_, end)| at < *end)
 }
 
 /// Commands that install something to run later outside the sandbox:
@@ -1388,6 +1444,9 @@ struct Classifier {
     windows_budget: usize,
     /// D191: the action's own line's variables that hold a `mktemp` path.
     temp: Option<mktemp::Scope>,
+    /// #1685: the line being read by the quote-aware reading had a D191
+    /// scope: each of its traps only removes temp paths.
+    temp_traps: bool,
     /// D191: prompts only a temp path raised, dropped only when the action
     /// asks for nothing else (else it asks as on main, for the strongest).
     held: Option<ProtectedActionKind>,
@@ -1924,7 +1983,9 @@ impl Classifier {
             );
             // #1422: an alias the line defines runs text neither reading
             // reads as the shell does (`alias b=bash` then `b run.sh`).
-            if aliases.read(&words) {
+            // #1704: so does a command writing such a table by name, its
+            // name known from a value (`t=functions; zparseopts -a $t`).
+            if aliases.read(&words) || code_tables::writes_table(&words, &simple.words) {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(
@@ -2122,6 +2183,7 @@ impl Classifier {
         }
         // D191: the prompts only a temp path raised, kept now unless its
         // variable kept that path (see `release_held`).
+        let temp_traps = self.temp.is_some();
         if let Some(scope) = std::mem::replace(&mut self.temp, outer_temp) {
             match scope.finish(arithmetic.assigns_unseen_name(command)) {
                 (Some(kind), true) => self.note(kind),
@@ -2147,7 +2209,9 @@ impl Classifier {
         }
         self.rebuilt_foreign = outer_foreign;
         // #885: nested shells' scripts and sed programs, read with quotes.
+        let outer_temp_traps = std::mem::replace(&mut self.temp_traps, temp_traps);
         self.quoted_pass(command, cwd, depth, (lexed_seds, lexed_shells));
+        self.temp_traps = outer_temp_traps;
         self.sed_scope = outer_scope;
         self.sudo_redefined = outer_sudo_redefined;
         self.quoted_text = outer_quoted_text;
@@ -2392,6 +2456,59 @@ impl Classifier {
         let modified = after_modifiers.and_then(|after| {
             indirect::command_word(&words[after..]).map(|(at, name)| (after + at, name))
         });
+        // #1685: the command `eval` runs now, or `trap` later, from its
+        // text (`eval 'tee -a ~/.zshrc'`, `trap -- 'cp x ~/.zshrc' EXIT`,
+        // `noglob eval …`, `eval eval …`). It stays the command word, as
+        // before: this only adds what that command writes.
+        let Carried {
+            command: carried,
+            spans: carried_spans,
+        } = carried_command(words, modified.as_ref().or(command.as_ref()));
+        // #1685: a variable that text sets has a value this reading does
+        // not follow (`eval 'F=~/.zshrc'; tee -a "$F"`): unseen, as for
+        // output it cannot see. One with a value already keeps it, since
+        // `trap` text runs later (`trap 'HOME=/x' EXIT; grep -r t "$HOME"`),
+        // and the line asks.
+        let declares = carried.as_ref().is_some_and(|(_, name)| {
+            matches!(
+                name.as_str(),
+                "export" | "local" | "declare" | "readonly" | "typeset"
+            )
+        });
+        for (at, word) in words.iter().enumerate() {
+            work::step();
+            let in_text = before_carried_command(&carried_spans, at)
+                || (declares && carried.as_ref().is_some_and(|(index, _)| at > *index));
+            if in_text
+                && let Some((name, _)) = word.split_once('=')
+                && !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                match variables.get(name) {
+                    None => {
+                        variables.insert(name.to_string(), shell::UNSEEN_OUTPUT.to_string());
+                    }
+                    Some(value) if !value.contains(shell::UNSEEN_OUTPUT) => {
+                        self.note(ProtectedActionKind::UnseenCode);
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        // #1685: a folder change in that text is not followed (`trap` runs
+        // it later): the folder is one this reading cannot know.
+        if carried
+            .as_ref()
+            .is_some_and(|(_, name)| unknown_folder::CHANGERS.contains(&name.as_str()))
+        {
+            if simple.substituted {
+                folders.unseen_in_substitution = true;
+            } else {
+                folders.unseen = true;
+            }
+        }
         let skipped_to = match (after_modifiers, &modified, &command) {
             (Some(_), Some((at, _)), _) | (None, _, Some((at, _))) => *at,
             _ => lower.len(),
@@ -2412,7 +2529,10 @@ impl Classifier {
                     && word.starts_with('=')
                     && (at < skipped_to
                         || (exec_wrapped && at > skipped_to)
-                        || (at > 0 && runs_next(&lower[at - 1])))
+                        || (at > 0 && runs_next(&lower[at - 1]))
+                        // #1685: or before the command of `eval` or
+                        // `trap` text (`eval '=tee -a ~/.zshrc'`).
+                        || before_carried_command(&carried_spans, at))
             })
         {
             self.note(ProtectedActionKind::UnseenCode);
@@ -2520,19 +2640,21 @@ impl Classifier {
         }
         let stdin_fed =
             simple.pipe_from.is_some() || simple.stdin_from.is_some() || simple.reads_outer_output;
-        if let Some((index, _)) = &command
-            && let Some(kind) = outbound::classify(
+        // #1685: and the command `eval` or `trap` text runs.
+        for (index, _) in command.iter().chain(&carried) {
+            work::step();
+            if let Some(kind) = outbound::classify(
                 words,
                 *index,
                 stdin_fed,
                 variables
                     .keys()
                     .any(|name| name.to_lowercase().ends_with("_proxy")),
-            )
-        {
-            self.note(kind);
+            ) {
+                self.note(kind);
+            }
         }
-        let recursive = command.as_ref().is_some_and(|(_, name)| {
+        let recursive = command.iter().chain(&carried).any(|(_, name)| {
             RECURSIVE_READERS.iter().any(|(reader, flags)| {
                 *reader == name.as_str()
                     && (flags.is_empty()
@@ -2543,7 +2665,13 @@ impl Classifier {
             })
         });
         // #1142: setting a variable whose value git or a pager runs.
-        if code_variables::sets_code_variable(simple, words, command.as_ref()) {
+        // #1685: also in the text of `eval` or `trap` (`eval 'export
+        // GIT_PAGER=sh'`).
+        if code_variables::sets_code_variable(simple, words, command.as_ref())
+            || carried.as_ref().is_some_and(|carried| {
+                code_variables::sets_code_variable(simple, words, Some(carried))
+            })
+        {
             #[cfg(test)]
             named_shell::measure_tests::detail(|| {
                 code_variables::sets_code_variable_why(
@@ -2572,8 +2700,23 @@ impl Classifier {
             self.homes.windows_paths(),
             &|entry| !self.visited_all || self.writable_folder(entry, &here, &roots),
         );
+        // #1685: and in the text of `eval` or `trap` (`eval 'X=1
+        // LD_PRELOAD=./x.so ls'`, `trap 'export NODE_OPTIONS=…' DEBUG`).
+        let carried_judgment = carried.as_ref().map(|carried| {
+            loader_variables::judge(
+                simple,
+                words,
+                Some(carried),
+                &mut cut,
+                self.homes.windows_paths(),
+                &|entry| !self.visited_all || self.writable_folder(entry, &here, &roots),
+            )
+        });
         self.cut_values = cut;
         self.loader_judgment(&judgment);
+        if let Some(judgment) = &carried_judgment {
+            self.loader_judgment(judgment);
+        }
         if !self.interactive_shell {
             let fed = simple.pipe_from.is_some()
                 || simple.stdin_from.is_some()
@@ -2596,9 +2739,15 @@ impl Classifier {
                 hidden[*index] || folders.unchecked || unchecked.iter().any(|word| *word);
             outputs::output_files(name, &words[index + 1..], unchecked)
         });
+        let carried_outputs = carried.as_ref().and_then(|(index, name)| {
+            let unchecked =
+                hidden[*index] || folders.unchecked || unchecked.iter().any(|word| *word);
+            outputs::output_files(name, &words[index + 1..], unchecked)
+        });
         if command
-            .as_ref()
-            .is_some_and(|(index, name)| outputs::joins_names(name, &words[index + 1..]))
+            .iter()
+            .chain(&carried)
+            .any(|(index, name)| outputs::joins_names(name, &words[index + 1..]))
         {
             self.note(ProtectedActionKind::Persistence);
         }
@@ -2608,18 +2757,22 @@ impl Classifier {
                 WRITERS.contains(&name.as_str())
                     || outputs.is_some()
                     || modified_outputs.is_some()
+                    || carried_outputs.is_some()
                     || modified
-                        .as_ref()
-                        .is_some_and(|(_, name)| WRITERS.contains(&name.as_str())),
+                        .iter()
+                        .chain(&carried)
+                        .any(|(_, name)| WRITERS.contains(&name.as_str())),
             )
         });
         let path_writer = command
-            .as_ref()
-            .filter(|(_, name)| outputs::PATH_WRITERS.contains(&name.as_str()))
+            .iter()
+            .chain(&carried)
+            .find(|(_, name)| outputs::PATH_WRITERS.contains(&name.as_str()))
             .map(|(index, _)| *index);
         // #1159: `time -o FILE cmd` writes FILE.
-        let wrapper_outputs = command
+        let wrapper_outputs = carried
             .as_ref()
+            .or(command.as_ref())
             .map(|(index, _)| outputs::wrapper_output_files(&words[..*index]))
             .unwrap_or_default();
         let cwd = folders.cwd.clone();
@@ -2731,7 +2884,7 @@ impl Classifier {
         // a home. D195 (#1309): or in one the classifier cannot know,
         // unless git's own leading `-C` names one (`git -C /x pull`; not a
         // value elsewhere, `merge -m --cd=/x`).
-        if let Some((index, name)) = &command
+        if let Some((index, name)) = carried.as_ref().or(command.as_ref())
             && outputs::writes_working_tree(name, &words[index + 1..])
             && (bases
                 .iter()
@@ -2751,10 +2904,13 @@ impl Classifier {
         }
         // #1309: a wrapper before the command moved it (`sudo -D ~ git log
         // --output=f`); git's own `-C` comes after and is followed above.
-        let moved = command.as_ref().is_some_and(|(index, _)| {
-            unknown_folder::elsewhere_at(words, self.sudo_unsure())
-                .is_some_and(|from| from < *index)
-        });
+        let moved = carried
+            .as_ref()
+            .or(command.as_ref())
+            .is_some_and(|(index, _)| {
+                unknown_folder::elsewhere_at(words, self.sudo_unsure())
+                    .is_some_and(|from| from < *index)
+            });
         // #1607: zsh's file after a `>!`, with the line's variables
         // substituted as in the words.
         let zsh_writes: Vec<String> = simple
@@ -2777,6 +2933,7 @@ impl Classifier {
             .flatten()
             .chain(&wrapper_outputs)
             .chain(modified_outputs.iter().flatten())
+            .chain(carried_outputs.iter().flatten())
             .chain(&zsh_writes)
         {
             work::step();
@@ -2797,8 +2954,27 @@ impl Classifier {
                 }
             }
         }
-        self.scripts_of(simple, words, unseen, command.as_ref(), &cwd, depth);
-        self.path_programs(words, command.as_ref(), &cwd, depth);
+        self.scripts_of(
+            simple,
+            words,
+            unseen,
+            command.as_ref(),
+            /*from*/ 0,
+            &cwd,
+            depth,
+        );
+        // #1685: and those the command `eval` or `trap` text runs.
+        if let Some((index, _)) = &carried {
+            self.scripts_of(simple, words, unseen, carried.as_ref(), *index, &cwd, depth);
+        }
+        self.path_programs(
+            words,
+            command.as_ref(),
+            carried.as_ref(),
+            &carried_spans,
+            &cwd,
+            depth,
+        );
         self.unseen_folder = outer_unseen_folder;
     }
 
@@ -2807,10 +2983,14 @@ impl Classifier {
     /// by its path, besides what its name would run. A shell builtin named
     /// by a path (`./cd`, `./source`) runs that file, not the builtin, so
     /// the rest of the line is not known: it asks.
+    /// `carried`, `spans`: see [`Carried`]; the programs of each piece of
+    /// `eval` or `trap` text are read too (#1685: `trap './env ls' EXIT`).
     fn path_programs(
         &mut self,
         words: &[String],
         command: Option<&(usize, String)>,
+        carried: Option<&(usize, String)>,
+        spans: &[(usize, usize)],
         cwd: &str,
         depth: usize,
     ) {
@@ -2822,8 +3002,19 @@ impl Classifier {
         let read = command
             .filter(|_| indirect::invocation(words).is_none())
             .map(|(index, _)| *index);
+        let carried_read = carried
+            .filter(|(index, _)| indirect::invocation(&words[*index..]).is_none())
+            .map(|(index, _)| *index);
         let elsewhere = unknown_folder::elsewhere_at(words, self.sudo_unsure());
-        for at in indirect::programs(words) {
+        let carried_programs = spans.iter().flat_map(|&(start, _)| {
+            indirect::programs(&words[start..])
+                .into_iter()
+                .map(move |at| start + at)
+        });
+        for at in indirect::programs(words)
+            .into_iter()
+            .chain(carried_programs)
+        {
             work::step();
             let word = &words[at];
             if !word.contains('/') {
@@ -2832,7 +3023,10 @@ impl Classifier {
             // #1403: also when `scripts_of` read it (`./cd`, `./export`).
             if PATH_BUILTINS.contains(&basename(&word.to_lowercase())) {
                 self.note(ProtectedActionKind::UnseenCode);
-            } else if Some(at) != read && !self.runs_elsewhere(elsewhere, at, word) {
+            } else if Some(at) != read
+                && Some(at) != carried_read
+                && !self.runs_elsewhere(elsewhere, at, word)
+            {
                 self.named_program_file(word, cwd, depth);
             }
         }
@@ -2963,12 +3157,14 @@ impl Classifier {
     /// module, preloaded files, a redirected stdin, or the command itself when
     /// it is a path. A required path the classifier cannot resolve (it holds
     /// a variable) fails closed.
+    #[allow(clippy::too_many_arguments)]
     fn scripts_of(
         &mut self,
         simple: &SimpleCommand,
         words: &[String],
         unseen: &[bool],
         command: Option<&(usize, String)>,
+        from: usize,
         cwd: &str,
         depth: usize,
     ) {
@@ -2981,7 +3177,9 @@ impl Classifier {
         } else {
             unknown_folder::elsewhere_at(words, self.sudo_unsure())
         };
-        let Some(invocation) = indirect::invocation(words) else {
+        // `from`: where the words naming the command start (#1685: the
+        // text of `eval` or `trap`).
+        let Some(invocation) = indirect::invocation(&words[from..]) else {
             let word = &words[*index];
             // `env -C sub ./run.sh` runs `sub/run.sh`.
             if word.contains('/') && !self.runs_elsewhere(elsewhere, *index, word) {
