@@ -19,6 +19,7 @@ expression: popup
   6. OpenRouter MiniMax M3             Model: minimax/minimax-m3. OpenRouter: MiniMax M3 - $0.60/M input, $2.40/M output.
   7. OpenRouter Gemini 3.5 Flash       Model: google/gemini-3.5-flash. OpenRouter: Gemini 3.5 Flash - $1.50/M input, $9.00/M
                                        output.
-  8. OpenRouter Tencent Hy3 Free       Model: tencent/hy3:free. OpenRouter: Tencent Hy3 Free - $0/M input, $0/M output.
-                                                                                                                           1 / 9
+  8. OpenRouter Kimi K3                Model: moonshotai/kimi-k3. OpenRouter: Kimi K3 - $3.00/M input, $0.30/M cached input,
+                                       $15.00/M output.
+
   Use Left/Right to switch providers. Press Enter to confirm or Esc to go back

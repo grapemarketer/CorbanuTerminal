@@ -3048,6 +3048,7 @@ fn bundled_models_json_contains_openrouter_models() {
         deepseek_pro_0813,
         deepseek_flash,
         openrouter_owl,
+        hy3,
     ] {
         assert_eq!(model.visibility, ModelVisibility::Hide);
         assert!(matches!(
@@ -3055,8 +3056,8 @@ fn bundled_models_json_contains_openrouter_models() {
             Some(ModelOrchestrationMetadata::Disabled { .. })
         ));
     }
+    assert_eq!(kimi.visibility, ModelVisibility::List);
     for model in [hy3, kimi] {
-        assert_eq!(model.visibility, ModelVisibility::List);
         assert!(!model.supports_parallel_tool_calls);
         assert_standard_base(&model.base_instructions);
     }

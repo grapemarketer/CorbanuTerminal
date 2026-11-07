@@ -44,17 +44,16 @@ hidden from `/model` and kept for saved configs; the others are listed:
 | `x-ai/grok-4.5`                          | OpenRouter Grok 4.5               | `$2.00/M input`, `$6.00/M output`                              |
 | `minimax/minimax-m3`                     | OpenRouter MiniMax M3             | `$0.60/M input`, `$2.40/M output`                              |
 | `google/gemini-3.5-flash`                | OpenRouter Gemini 3.5 Flash       | `$1.50/M input`, `$9.00/M output`                              |
-| `tencent/hy3:free`                       | OpenRouter Tencent Hy3 Free       | `$0/M input`, `$0/M output`                                    |
 
 Grok 4.7's and Grok 4.6's listed rates double when the prompt exceeds 200,000
 tokens. DeepSeek V4.1 Flash and MiMo V2.6 Pro rates vary by provider and time
 of day, and peak prices are higher. Nemotron 3 Ultra Free is a free endpoint;
 rate limits and provider data-use terms apply.
 
-`openrouter/owl-alpha` is retired: OpenRouter lists no endpoints for it
-(checked 2026-10-28), so requests to it are expected to fail. The hidden
-catalogue row stays only so a saved config resolves to its own entry instead
-of another model; pick a current model with `/model`.
+`openrouter/owl-alpha` and `tencent/hy3:free` are retired: OpenRouter lists no
+endpoints for them (checked 2026-10-28 and 2026-11-07), so requests to them are
+expected to fail. The hidden catalogue rows stay only so a saved config resolves
+to its own entry instead of another model; pick a current model with `/model`.
 
 DeepSeek V4 Flash is intentionally pinned to the exact
 `deepseek/deepseek-v4-flash-0731` slug. Direct DeepSeek uses provider
