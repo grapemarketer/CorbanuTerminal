@@ -186,7 +186,7 @@ fn first_group(word: &str, old_bash: bool) -> Option<Group> {
         let inner = &word[open.at + 1..at];
         let kind = if open.comma {
             Some(Kind::Commas)
-        } else if !open.nested && range(inner, 0).is_some() {
+        } else if !open.nested && range(inner, /*room*/ 0).is_some() {
             Some(Kind::Range)
         } else if open.dots && open.any_comma {
             Some(Kind::Dropped)
@@ -373,7 +373,7 @@ mod tests {
             ("{x{1..2}..{c,d}}", vec!["x1..c", "x1..d", "x2..c", "x2..d"]),
             ("{x{a..b}{c,d}}", vec!["{xac}", "{xad}", "{xbc}", "{xbd}"]),
         ] {
-            let expansion = expand(text, 64, /*old_bash*/ false);
+            let expansion = expand(text, /*limit*/ 64, /*old_bash*/ false);
             assert_eq!(
                 (expansion.words, expansion.truncated),
                 (words.iter().map(ToString::to_string).collect(), false),
@@ -386,17 +386,17 @@ mod tests {
             ("{1..99999999999999999999}", "1"),
             ("--x{1..99999999999999999999}", "--x1"),
         ] {
-            let expansion = expand(text, 64, /*old_bash*/ false);
+            let expansion = expand(text, /*limit*/ 64, /*old_bash*/ false);
             assert!(expansion.truncated, "{text}");
             assert_eq!(expansion.words.len(), 64, "{text}");
             assert_eq!(expansion.words[0], first, "{text}");
         }
         let chain = "{u..u}".repeat(300);
-        let expansion = expand(&chain, 64, /*old_bash*/ false);
+        let expansion = expand(&chain, /*limit*/ 64, /*old_bash*/ false);
         assert!(expansion.truncated);
         assert_eq!(expansion.words.len(), 1);
         let long = format!("--{}", "x".repeat(5000));
-        assert!(expand(&long, 64, /*old_bash*/ false).truncated);
+        assert!(expand(&long, /*limit*/ 64, /*old_bash*/ false).truncated);
         // bash 3.2.
         for (text, words) in [
             ("{-b},-u./x}", vec!["-b}", "-u./x"]),
@@ -411,7 +411,7 @@ mod tests {
             ("{x{a},b}", vec!["x{a}", "b"]),
             ("{a}{b,c}", vec!["{a}b", "{a}c"]),
         ] {
-            let expansion = expand(text, 64, /*old_bash*/ true);
+            let expansion = expand(text, /*limit*/ 64, /*old_bash*/ true);
             assert_eq!(
                 expansion.words,
                 words.iter().map(ToString::to_string).collect::<Vec<_>>(),
