@@ -373,7 +373,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL \
+          curl -fsSL --retry 5 --retry-all-errors --retry-connrefused --connect-timeout 20 --max-time 300 \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "${RUNNER_TEMP}/codex-zsh"
 
@@ -613,7 +613,7 @@ jobs:
           signed_root="${GITHUB_WORKSPACE}/signed-resources/${TARGET}"
           zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
           mkdir -p "$signed_root"
-          curl -fsSL \
+          curl -fsSL --retry 5 --retry-all-errors --retry-connrefused --connect-timeout 20 --max-time 300 \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
             -o "$zsh_manifest"
 

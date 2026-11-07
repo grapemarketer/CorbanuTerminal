@@ -232,6 +232,7 @@ pub(crate) fn is_link(path: &Path) -> bool {
         .unwrap_or(true)
 }
 
+#[cfg(test)]
 pub(crate) fn is_reparse_point(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;

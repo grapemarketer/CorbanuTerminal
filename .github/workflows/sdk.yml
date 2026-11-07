@@ -77,8 +77,9 @@ jobs:
 
   # D287 (#1605): the Bazel `sdks` job below is too slow for PRs, so a PR could
   # change the TypeScript SDK or `codex exec` (#1373) without these tests
-  # running. On PRs that touch sdk/typescript/**, codex-rs/exec/** or this
-  # workflow, build the CLI with Cargo and run them. A skipped job leaves the
+  # running. On PRs that touch sdk/typescript/**, codex-rs/exec/**, this
+  # workflow or a lockfile the SDK build uses (pnpm-lock.yaml, codex-rs/Cargo.lock;
+  # D314), build the CLI with Cargo and run them. A skipped job leaves the
   # `sdk` call successful, so it blocks `CI required` only when it runs.
   typescript-sdk-changed:
     name: Detect TypeScript SDK changes
@@ -104,7 +105,9 @@ jobs:
           files="$(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")"
           run=false
           while IFS= read -r f; do
-            [[ $f == sdk/typescript/* || $f == codex-rs/exec/* || $f == .github/workflows/sdk.yml ]] && run=true
+            case $f in
+              sdk/typescript/* | codex-rs/exec/* | .github/workflows/sdk.yml | pnpm-lock.yaml | codex-rs/Cargo.lock) run=true ;;
+            esac
           done <<< "$files"
           echo "TypeScript SDK tests: $run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
@@ -310,7 +313,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && github.ref == 'refs/heads/main'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
