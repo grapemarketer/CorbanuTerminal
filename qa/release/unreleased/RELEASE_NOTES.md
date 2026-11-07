@@ -151,6 +151,17 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   unclassified tool.
 - **The same rules apply under Aggressive** (D335).
 
+## Agent tools act only on the caller's own agents
+
+- **A sub-agent's `list_agents` shows only itself and its own agents**
+  (D320, #1756, #1767, thanks to @citadelculture). With MultiAgentV2,
+  `list_agents` used to list every live agent, including the caller's parent
+  and siblings and other root threads' agents; it now lists the caller and
+  the agents it started (and theirs), loaded or not. This is the intended
+  tightening of D320. `close_agent` and `send_input` (and their `_v1`
+  aliases) likewise refuse an agent the caller didn't start, directly or
+  through its own agents.
+
 ## `/security` wording
 
 - **Revoke all names its real scope.** After "Revoke all active authority",
