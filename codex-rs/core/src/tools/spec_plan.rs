@@ -298,7 +298,9 @@ pub(crate) fn finalize_tool_router(
         omitted_tools,
     } = build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
     ToolRouter::from_parts(registry, specs)
-        .with_flat_tool_names(flat_tool_names)
+        .with_flat_tool_names(flat_tool_names.with_multi_agent_v2_namespace(
+            turn_context.config.multi_agent_v2.tool_namespace.clone(),
+        ))
         .with_omitted_tools(omitted_tools)
 }
 

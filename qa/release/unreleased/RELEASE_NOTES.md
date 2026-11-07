@@ -245,6 +245,8 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   it out) used to replay under its bare name, such as `shell`, which a
   built-in tool can share. It now replays under the MCP tool's flat name
   (`mcp__server__tool`), or a hashed form if another tool has that name.
+  MCP servers configured without the `mcp__` prefix get the same treatment
+  (`server__tool`); only built-in tool namespaces keep the bare name.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
