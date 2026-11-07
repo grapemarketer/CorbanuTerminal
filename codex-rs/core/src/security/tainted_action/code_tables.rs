@@ -325,7 +325,7 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         "zstyle" => {
             // `zstyle` takes no option's value attached (`-afoo`): one
             // word there is one option, its name a later word.
-            if option(0, false) {
+            if option(0, /*takes_names*/ false) {
                 return true;
             }
             let Some(option) = args.first().filter(|arg| arg.starts_with('-')) else {
