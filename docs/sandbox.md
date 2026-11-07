@@ -55,8 +55,10 @@ doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
 has ended). Check its contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
-when the command ends is treated the same way. Commands can't change, move
-or delete the ones that existed when they started, or the folders above
+when the command ends is treated the same way. A read-only `.codex` or
+`.agents` folder your permission profile names but that doesn't exist yet is
+created by Corbanu Terminal before the command starts, and isn't counted.
+Commands can't change, move or delete the ones that existed when they started, or the folders above
 them. A folder the sandbox can't list counts as planted. Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
 
