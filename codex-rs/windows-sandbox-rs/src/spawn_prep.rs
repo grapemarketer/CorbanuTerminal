@@ -302,6 +302,19 @@ unsafe fn deny_moving_ancestors_below_roots(
     })
 }
 
+/// D293 (#1542 item 1): the command doesn't start when a link a sandboxed
+/// command could replace lies above explicit read-only path `path`.
+fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
+    if let Some(link) = crate::workspace_acl::link_above_carve_out(path, roots) {
+        anyhow::bail!(
+            "{} is a link (a junction or symbolic link) above the read-only path {}. The non-admin Windows sandbox can't keep a command from replacing a link there and recreating the read-only path, so it doesn't start commands with this configuration (#1542). Configure the read-only path through the link's target instead, or replace the link with a folder.",
+            link.display(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
 /// `gitdir: .` must not relabel the workspace itself). All paths canonical.
 fn strictly_inside_a_root(path: &Path, roots: &[PathBuf]) -> bool {
@@ -447,11 +460,15 @@ pub(crate) fn apply_legacy_session_acl_rules(
             // Nor does it stop the command moving a folder between the root
             // and an explicit nested carve-out, then recreating the carve-out.
             if p.exists() && explicit_carve_outs.contains(p) {
+                refuse_link_above_carve_out(p, &canonical_allow)?;
                 deny_moving_ancestors_below_roots(
                     p,
                     acl_sids.write_root_sids,
                     &mut required_delete_child_denies,
                 )?;
+                // Again, with the folders pinned: a link swapped in meanwhile
+                // by a command already running.
+                refuse_link_above_carve_out(p, &canonical_allow)?;
             }
         }
         if !additional_deny_read_paths.is_empty() {

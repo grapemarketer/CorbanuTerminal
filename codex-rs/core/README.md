@@ -229,8 +229,27 @@ writable root holds its folder and the folder isn't labelled Low (a Low
 label means a sandbox, perhaps another Windows account's, whose records
 these aren't, may be using it); a session that crashed has its entries
 removed by the next sweep (a later legacy command, or the next TUI or
-app-server start). A deny that D263 needs above an explicit nested read-only
-path must be in place, or the command doesn't start. An entry that was already there and isn't recorded (one
+app-server start). Accepted gap (#1542 item 5, D293): the records and their
+lock are per Windows account, so in the milliseconds between one account's
+sweep finding a folder not Low and removing the deny, another account's
+session could label the folder Low and start a command that relies on that
+deny. A deny that D263 needs above an explicit nested read-only
+path must be in place, or the command doesn't start. So must there be no
+link (junction, symbolic link or mount point) above such a path that a
+command could replace, that is, one whose folder lies inside a writable
+root, whether in the path as configured or on the way to a link's target
+(#1542 item 1, D293). D263's denies land on the link's target, so the link
+itself could be removed and the read-only path recreated behind it.
+Configure the path through the link's target instead. The check runs again
+after the folders' own `DELETE` denies are written (their parents'
+delete-child denies follow just after), which narrows the window for a link
+a running command swaps in meanwhile. A root spelled through a link from
+outside the writable roots is fine. Other reparse points, such as OneDrive
+placeholders, aren't links and don't stop the command; as before, D263
+doesn't put its denies on them, so they get no protection against being
+moved. A read-only path spelled
+through a writable root's link, and so listed against the root's resolved
+path, gets the same protection (#1542 item 2). An entry that was already there and isn't recorded (one
 the user made, or one left by a version before this change) is never
 removed. Without usable records the entries are added untracked and stay, as
 before. Unsandboxed deletes normally keep working because they use each
