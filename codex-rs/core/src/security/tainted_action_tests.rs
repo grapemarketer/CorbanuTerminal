@@ -11391,3 +11391,23 @@ fn issue1636_shell_made_words_are_linear() {
         let _ = script(&format!("git clone --{}", "{u..u}".repeat(100 * scale)));
     });
 }
+
+/// #1636: non-ASCII text in the expansions it reads (review 3's corpus run).
+#[test]
+fn issue1636_non_ascii_expansions_read() {
+    for script in [
+        "git log ${${é}:-x}",
+        "git log ${${N:-é}:-é} ${é}",
+        "git clone ${N:-{é,ü}} r d",
+        "git add {é..ü} {é,}ü",
+        "echo ${${é",
+    ] {
+        for shell in ["bash", "zsh"] {
+            let _ = kind(&[shell, "-lc", script]);
+        }
+    }
+    assert_eq!(
+        script("git clone ${${é}:---upload-pack=./x} r d"),
+        Some(ProtectedActionKind::UnseenCode)
+    );
+}

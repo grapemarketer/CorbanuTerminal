@@ -1969,7 +1969,7 @@ fn after_nested(body: &str) -> &str {
                     '}' => depth -= 1,
                     _ => {}
                 }
-                (depth == 0).then_some(&inner[at + 1..])
+                (depth == 0).then(|| &inner[at + 1..])
             })
             .unwrap_or(body);
     }
