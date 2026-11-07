@@ -68,7 +68,7 @@ pub(crate) fn rows(facts: Facts) -> Vec<(&'static str, String)> {
         ),
         (
             "Untrusted content",
-            "tool, MCP, web, agent and memory output reaches the model labelled untrusted; after it, protected actions (the vault, credentials, security settings, disclosure, value transfer, code you have not seen, MCP calls that change or send data, starting an agent, tools Corbanu has not classified) need your fresh approval, and cached, remembered or automatic approvals don't count; with approvals off they are refused".to_string(),
+            "tool, MCP, web, agent and memory output reaches the model labelled untrusted; after it, protected actions (the vault, credentials, security settings, disclosure, value transfer, code you have not seen, MCP calls that change or send data, starting or restarting an agent, tools Corbanu has not classified) need your fresh approval, and cached, remembered or automatic approvals don't count; with approvals off they are refused".to_string(),
         ),
         (
             "Secrets",

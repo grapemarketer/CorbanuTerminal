@@ -135,8 +135,21 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   `spawn_agent_plaintext`) asks for your approval, and the prompt says it is
   "a request to start a new agent". With approvals off it is refused. This is
   new on the OpenAI Responses route, where `spawn_agent` used to go ahead.
-  The other `_v1` agent aliases (`send_input_v1`, `close_agent_v1`,
-  `resume_agent_v1`) still ask as unclassified tools.
+- **The `_v1` agent aliases act like their usual names** (D334, #1702). On
+  Z.AI, Chat Completions and Claude-style routes, `send_input_v1` and
+  `close_agent_v1` now go ahead after untrusted content, as `send_input` and
+  `close_agent` do; before, they asked (or were refused with approvals off) as
+  unclassified tools.
+- **Restarting a finished agent asks, like starting one** (D334). After
+  untrusted content, `resume_agent` (and `resume_agent_v1`) asks for your
+  approval on every route, and so does a MultiAgentV2 `followup_task` (and
+  `followup_task_plaintext`) to an agent that isn't running, since it starts a
+  new turn there; the prompt says it is "a request to restart a finished
+  agent", and with approvals off it is refused. A follow-up to an agent with a
+  turn running goes ahead. Before, `resume_agent` and `followup_task` went
+  ahead on every route that offers them, and `resume_agent_v1` asked as an
+  unclassified tool.
+- **The same rules apply under Aggressive** (D335).
 
 ## `/security` wording
 
