@@ -52,12 +52,12 @@ pub const UNELEVATED_READ_ROOTS_REFUSAL: &str = concat!(
     switch_to_elevated!()
 );
 
-/// D331: refusal for a profile with a writable folder (`descendant`) inside
-/// a read-only one (`read_only`), which neither Windows sandbox enforces
-/// directly.
+/// D331: refusal for a profile with a writable folder (`descendant`) at or
+/// inside a read-only one (`read_only`), which neither Windows sandbox
+/// enforces directly.
 pub fn writable_inside_read_only_refusal(read_only: &Path, descendant: &Path) -> String {
     format!(
-        "the command was not run because the Windows sandbox doesn't support a writable folder inside a read-only one, which this permission profile asks for ({} inside {}). Change the profile so that no writable folder lies inside a read-only one.",
+        "the command was not run because the Windows sandbox doesn't support a writable folder in a read-only one, which this permission profile asks for: {} is writable but lies in {}, which is read-only (the protected .git, .codex and .agents folders count as read-only). Change the profile so that no writable folder lies in a read-only one.",
         descendant.display(),
         read_only.display()
     )
@@ -133,6 +133,44 @@ pub fn refuse_unenforceable_windows_read_restrictions(
     Ok(())
 }
 
+/// D331: the refusals of [`resolve_windows_restricted_token_filesystem_overrides`]
+/// that concern what the unelevated backend can enforce from the profile
+/// alone, for launches that pass it nothing else (the agent's commands): reads
+/// (#300) and a writable folder in a read-only one. Its other refusals check
+/// that `command/exec`'s extra deny-write paths can be derived from the
+/// legacy projection, which such launches don't use.
+pub fn refuse_unenforceable_windows_restricted_token_profile(
+    sandbox: SandboxType,
+    permission_profile: &PermissionProfile,
+    sandbox_policy_cwd: &AbsolutePathBuf,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> std::result::Result<(), String> {
+    if sandbox != SandboxType::WindowsRestrictedToken
+        || windows_sandbox_level == WindowsSandboxLevel::Elevated
+    {
+        return Ok(());
+    }
+    refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
+    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
+    // As the resolver: only where it gets that far.
+    if permission_profile_supports_windows_restricted_token_sandbox(permission_profile)
+        && !file_system_sandbox_policy
+            .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
+    {
+        return Ok(());
+    }
+    file_system_sandbox_policy.remove_skip_missing_path_entries();
+    let split_writable_roots =
+        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    match reopened_writable_descendant(&split_writable_roots) {
+        Some((read_only, descendant)) => {
+            Err(writable_inside_read_only_refusal(read_only, descendant))
+        }
+        None => Ok(()),
+    }
+}
+
 pub fn resolve_windows_restricted_token_filesystem_overrides(
     sandbox: SandboxType,
     permission_profile: &PermissionProfile,
@@ -173,6 +211,8 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     // deny-write sentinels.
     file_system_sandbox_policy.remove_skip_missing_path_entries();
 
+    // The read checks at the top already refuse what the next two do; they
+    // stay as a second line of defence.
     // The restricted-token backend can still enforce split write restrictions,
     // but its WRITE_RESTRICTED token does not make capability SID deny-read ACEs
     // participate in read access checks. Read restrictions therefore require the

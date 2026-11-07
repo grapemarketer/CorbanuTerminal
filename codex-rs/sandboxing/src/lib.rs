@@ -56,6 +56,7 @@ pub use windows::UNELEVATED_READ_ROOTS_REFUSAL;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
 pub use windows::refuse_unenforceable_windows_read_restrictions;
+pub use windows::refuse_unenforceable_windows_restricted_token_profile;
 pub use windows::resolve_windows_elevated_filesystem_overrides;
 pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;

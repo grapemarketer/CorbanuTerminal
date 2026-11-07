@@ -90,11 +90,12 @@ fn missing_read_only_paths_reach_the_restricted_token_backend() {
 }
 
 /// D331: a writable folder inside a read-only one is refused by both
-/// backends' resolvers with the same clear message, naming both folders; a
-/// deny-read profile that needs no other override (a Moderate-style
-/// protected file) gets the clear "can't block reading" refusal from the
-/// non-admin resolver (`command/exec`, the exec server) rather than the
-/// backend's unclear error.
+/// backends' resolvers and by the agent path's check with the same clear
+/// message, naming both folders; a deny-read profile that needs no other
+/// override (a Moderate-style protected file) gets the clear "can't block
+/// reading" refusal from the non-admin resolver (`command/exec`, the exec
+/// server) rather than the backend's unclear error, and from the agent
+/// path's check. A plain workspace profile passes that check.
 #[test]
 fn unenforceable_profiles_get_clear_refusals() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
@@ -126,10 +127,24 @@ fn unenforceable_profiles_get_clear_refusals() {
         entry(&out, FileSystemAccessMode::Write),
     ]);
     let deny_read = profile(vec![
-        root_read,
+        root_read.clone(),
         entry(&cwd, FileSystemAccessMode::Write),
         entry(&cwd.join("secret.env"), FileSystemAccessMode::Deny),
     ]);
+    let plain = profile(vec![
+        root_read,
+        entry(&cwd, FileSystemAccessMode::Write),
+        entry(&docs, FileSystemAccessMode::Read),
+    ]);
+    let agent_path = |profile: &PermissionProfile| {
+        refuse_unenforceable_windows_restricted_token_profile(
+            SandboxType::WindowsRestrictedToken,
+            profile,
+            &cwd,
+            WindowsSandboxLevel::RestrictedToken,
+        )
+        .err()
+    };
     let unelevated = |profile: &PermissionProfile| {
         resolve_windows_restricted_token_filesystem_overrides(
             SandboxType::WindowsRestrictedToken,
@@ -152,11 +167,17 @@ fn unenforceable_profiles_get_clear_refusals() {
             )
             .err(),
             unelevated(&deny_read),
+            agent_path(&nested),
+            agent_path(&deny_read),
+            agent_path(&plain),
         ),
         (
             Some(refusal.clone()),
+            Some(refusal.clone()),
+            Some(UNELEVATED_DENY_READ_REFUSAL.to_string()),
             Some(refusal),
             Some(UNELEVATED_DENY_READ_REFUSAL.to_string()),
+            None,
         )
     );
 }

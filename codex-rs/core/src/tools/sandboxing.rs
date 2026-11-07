@@ -660,13 +660,11 @@ impl<'a> SandboxAttempt<'a> {
             } else {
                 // #300: the unelevated backend cannot block reads, so a
                 // profile that denies some is refused rather than run with
-                // its protected files readable. D331: so is every other
-                // profile `process_exec_tool_call` refuses as one this
-                // backend can't enforce (a writable folder inside a
-                // read-only one, say). The overrides it resolves aren't
-                // needed: the backend applies the profile's read-only paths
-                // itself (#1686).
-                codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides(
+                // its protected files readable. D331: so is a writable folder
+                // in a read-only one, as `process_exec_tool_call` refuses it.
+                // The backend applies the profile's read-only paths itself
+                // (#1686), so no overrides are resolved here.
+                codex_sandboxing::refuse_unenforceable_windows_restricted_token_profile(
                     exec_request.sandbox,
                     &exec_request.permission_profile,
                     &sandbox_cwd,
