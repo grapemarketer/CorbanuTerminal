@@ -494,7 +494,13 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
             )
         })
         .collect();
-    let git = (git_hooks.is_dir(), workspace.join(".git\\config").exists());
+    // D332: nor is the `.git` the host made for `.git\\hooks`.
+    let git = (
+        git_hooks.is_dir(),
+        workspace.join(".git\\config").exists(),
+        planted(&workspace.join(".git")),
+        counts_now(&workspace.join(".git")),
+    );
     let command_made: Vec<_> = [third.join(".agents"), workspace.join("deep\\.agents")]
         .iter()
         .map(|path| (path.is_dir(), planted(path)))
@@ -505,7 +511,7 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         (
             Ok(0),
             vec![(true, false, false, false); configured.len() + on_the_way.len()],
-            (true, false),
+            (true, false, false, false),
             vec![(true, true); 2],
         )
     );
@@ -571,8 +577,7 @@ fn legacy_top_level_git_is_watched() {
 }
 
 /// D332: a legacy command may create a `.git` where there was none (`git
-/// init` must work), and it then counts as planted; it can't change the
-/// existing `.git` of another root.
+/// init` must work), and it then counts as planted.
 #[test]
 fn legacy_command_creating_git_is_recorded_as_planted() {
     let _guard = legacy_process_test_guard();

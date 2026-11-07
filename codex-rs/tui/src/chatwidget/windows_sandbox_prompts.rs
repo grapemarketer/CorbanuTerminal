@@ -586,8 +586,13 @@ impl ChatWidget {
         let git_only = folders.is_empty();
         lines.push(if git_only {
             line!["Check their hooks and config before you confirm them.".bold()]
-        } else {
+        } else if git_dirs.is_empty() {
             line!["Check their contents before you load them.".bold()]
+        } else {
+            line![
+                "Check their contents (for a .git, its hooks and config) before you load or confirm them."
+                    .bold()
+            ]
         });
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));

@@ -64,9 +64,8 @@ fn planted_junction_is_not_followed() {
     );
 }
 
-/// D332: a recorded `.git` gets its own warning; one not recorded, and any
-/// when the records can't be read (the project folder warning says so),
-/// gets none.
+/// D332: a recorded `.git` gets its own warning, and so does any when the
+/// records can't be read; one not recorded gets none.
 #[test]
 fn planted_git_gets_a_warning() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -83,11 +82,13 @@ fn planted_git_gets_a_warning() {
                 ))
             }),
             PlantedProjectMetadata::Known(Vec::new()).git_warning(&dot_git),
-            PlantedProjectMetadata::Unreadable("damaged".to_string()).git_warning(&dot_git),
+            PlantedProjectMetadata::Unreadable("damaged".to_string())
+                .git_warning(&dot_git)
+                .is_some_and(|warning| warning.contains("(damaged)")),
             is_git_dir(&dot_git),
             is_git_dir(&root.join(".GIT")),
             is_git_dir(&root.join(".codex")),
         ),
-        (Some(true), None, None, true, true, false)
+        (Some(true), None, true, true, true, false)
     );
 }

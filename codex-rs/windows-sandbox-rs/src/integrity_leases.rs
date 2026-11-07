@@ -124,8 +124,8 @@ struct SessionRecord {
     /// D283: the roots it watches for them (not `%TEMP%`/`%TMP%`).
     #[serde(default)]
     nested_roots: Vec<PathBuf>,
-    /// D332: the top-level `.git` of each of `nested_roots` at the start
-    /// (`None` from builds before D332, which didn't watch them).
+    /// D332: the top-level `.git` of each of `roots` at the start (`None`
+    /// from builds before D332, which didn't watch them).
     #[serde(default)]
     git_dirs: Option<Vec<NestedMetadata>>,
 }
@@ -147,6 +147,8 @@ pub(crate) struct IntegrityLease {
     absent_metadata: Vec<PathBuf>,
     nested_roots: Vec<PathBuf>,
     nested_metadata: Vec<NestedMetadata>,
+    /// D332: the roots, and their top-level `.git` at the start.
+    roots: Vec<PathBuf>,
     git_dirs: Vec<NestedMetadata>,
 }
 
@@ -198,7 +200,8 @@ pub(crate) fn acquire_watching(
     // Outside the lock: the walk can take a while. Whatever appears from
     // here on counts as planted.
     let nested_metadata = crate::nested_metadata::find(nested_roots).entries;
-    let git_dirs = crate::nested_metadata::top_level_git(nested_roots);
+    // D332: every root, `%TEMP%` too, as D262 does: one look per root.
+    let git_dirs = crate::nested_metadata::top_level_git(roots);
     let lock = lock(&registry)?;
     let mut lease = IntegrityLease {
         registry,
@@ -207,6 +210,7 @@ pub(crate) fn acquire_watching(
         absent_metadata: absent_project_metadata(roots),
         nested_roots: nested_roots.to_vec(),
         nested_metadata,
+        roots: roots.to_vec(),
         git_dirs,
     };
     let wanted: BTreeSet<PathBuf> = roots.iter().cloned().collect();
@@ -314,7 +318,7 @@ impl IntegrityLease {
         // D283: the command's processes are gone; walked before the lock (it
         // can take a while) while the session file still counts as live.
         let nested_now = crate::nested_metadata::find(&self.nested_roots);
-        let git_now = crate::nested_metadata::top_level_git(&self.nested_roots);
+        let git_now = crate::nested_metadata::top_level_git(&self.roots);
         // If the lock can't be had, the closed session file is stale and
         // the next sweep puts the labels back.
         let lock = lock(&self.registry)?;
@@ -468,7 +472,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 && record_git_planted(
                     registry,
                     git_dirs,
-                    crate::nested_metadata::top_level_git(&record.nested_roots),
+                    crate::nested_metadata::top_level_git(&record.roots),
                     log_dir,
                 )
                 .is_ok();
@@ -707,7 +711,7 @@ pub fn project_metadata_counts_as_planted(folder: &Path) -> Result<bool> {
         record.nested_metadata.as_ref().is_some_and(|nested| {
             crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, folder)
         }) || record.git_dirs.as_ref().is_some_and(|git_dirs| {
-            crate::nested_metadata::git_appeared_in_session(&record.nested_roots, git_dirs, folder)
+            crate::nested_metadata::git_appeared_in_session(&record.roots, git_dirs, folder)
         })
     });
     if live {
@@ -772,11 +776,7 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
                 crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, path)
             })
             || record.git_dirs.as_ref().is_some_and(|git_dirs| {
-                crate::nested_metadata::git_appeared_in_session(
-                    &record.nested_roots,
-                    git_dirs,
-                    path,
-                )
+                crate::nested_metadata::git_appeared_in_session(&record.roots, git_dirs, path)
             })
         {
             anyhow::bail!(

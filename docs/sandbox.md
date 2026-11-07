@@ -56,12 +56,8 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. A `.git` at
-the top of such a folder that appears or changes while a command runs is
-flagged too (D332): Corbanu Terminal warns you at startup and asks in the TUI
-whether you have checked it, because git runs a `.git`'s hooks and config
-outside the sandbox whenever you run git there. A `.git` that is a link
-(junction or symbolic link) is flagged after every command. Such folders deeper in your workspace are covered too. One that is new, or was replaced,
+has ended). Check its contents before you choose to load it. Such folders
+deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. A read-only `.codex` or
 `.agents` folder your permission profile names that doesn't exist yet (or
 one on the way to a read-only folder inside it) is created by Corbanu
@@ -70,6 +66,15 @@ planted; another command that was already running still does. Commands
 can't change, move or delete the ones that existed when they started, or
 the folders above them. A folder the sandbox can't list counts as planted. Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
+
+**A `.git` created while a command runs.** Git runs a `.git` folder's hooks
+and config outside the sandbox whenever you run git there. So if the `.git`
+at the top of a folder non-admin sandbox commands may write to appears, or
+is replaced, while a command runs, Corbanu Terminal warns you at startup and
+asks in the TUI whether you have checked it. Commands can still create a
+`.git` (`git init` works). A `.git` that is a link (a junction or symbolic
+link) is flagged after every command. Only that top-level `.git` is checked,
+not `.git` folders deeper inside.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

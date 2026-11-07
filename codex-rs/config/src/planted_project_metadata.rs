@@ -61,11 +61,14 @@ impl PlantedProjectMetadata {
 
     /// D332: the warning for `git_dir` (a folder's `.git`) if it counts as
     /// planted: nothing stops git from running its hooks and config, so the
-    /// person is told instead. Records that can't be read add none: the
-    /// project folder warning already says so.
+    /// person is told instead. Records that can't be read count every `.git`
+    /// as planted, as they do every project folder.
     pub fn git_warning(&self, git_dir: &Path) -> Option<String> {
         match self {
-            Self::Unreadable(_) => None,
+            Self::Unreadable(err) => Some(format!(
+                "{PLANTED_GIT_WARNING_PREFIX}{}. The records of folders that non-admin Windows sandbox commands may have planted can't be read ({err}), so Corbanu Terminal can't tell whether a command planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder; check them first.",
+                git_dir.display()
+            )),
             Self::Known(_) => self.contains(git_dir).then(|| {
                 format!(
                     "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder. Check its hooks and config, then open Corbanu Terminal in this folder and confirm it.",

@@ -530,7 +530,7 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   the TUI asks you to confirm it once you have checked its hooks and config:
   git runs them outside the sandbox. Commands can still create a `.git`
   (`git init` works). A `.git` that is a link is reported after every
-  command.
+  command. `.git` folders deeper inside aren't checked.
 - **Non-admin sandbox: links can't undo a read-only path** (#1645, D293,
   #1542; #1670, #1667). A command doesn't start when a configured read-only
   path, or a folder above it, is a link (junction, symbolic link or mount
