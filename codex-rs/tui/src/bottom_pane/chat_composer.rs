@@ -9801,6 +9801,65 @@ mod tests {
         );
     }
 
+    /// D376 (#1748): while the session is starting, a slash command is queued
+    /// whether its keys arrive in one burst (the popup never opens) or slowly
+    /// enough for the popup to open before Enter (or Tab, for a command that
+    /// runs on Tab).
+    #[test]
+    fn slash_command_during_startup_is_queued_whatever_the_keystroke_timing() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        for (typed, key, slow, expected) in [
+            ("/model", KeyCode::Enter, false, "/model"),
+            ("/model", KeyCode::Enter, true, "/model"),
+            ("/mod", KeyCode::Enter, true, "/model"),
+            ("/review now", KeyCode::Enter, false, "/review now"),
+            ("/skills", KeyCode::Tab, true, "/skills"),
+        ] {
+            let (tx, mut rx) = unbounded_channel::<AppEvent>();
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                AppEventSender::new(tx),
+                /*enhanced_keys_supported*/ false,
+                "Ask Corbanu Terminal to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_queue_submissions(/*queue_submissions*/ true);
+            let chars: Vec<char> = typed.chars().collect();
+            if slow {
+                type_chars_humanlike(&mut composer, &chars);
+                assert!(
+                    matches!(composer.popups.active, ActivePopup::Command(_)),
+                    "{typed}: the popup opens when typed slowly"
+                );
+            } else {
+                for ch in chars {
+                    let _ = composer
+                        .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                }
+            }
+
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+
+            match result {
+                InputResult::Queued { text, action, .. } => {
+                    assert_eq!(text.trim_end(), expected, "{typed} slow={slow}");
+                    assert_eq!(action, QueuedInputAction::ParseSlash, "{typed}");
+                }
+                other => panic!("{typed} slow={slow}: expected it queued, got {other:?}"),
+            }
+            assert!(composer.draft.textarea.is_empty(), "{typed}");
+            assert!(
+                matches!(composer.popups.active, ActivePopup::None),
+                "{typed}"
+            );
+            assert!(rx.try_recv().is_err(), "{typed}: nothing dispatched");
+        }
+    }
+
     #[test]
     fn tab_queues_slash_led_prompts_while_task_running_without_validation() {
         use crossterm::event::KeyCode;

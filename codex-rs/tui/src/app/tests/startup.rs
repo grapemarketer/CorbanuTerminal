@@ -180,6 +180,74 @@ async fn startup_thread_started_submits_queued_startup_input() {
     }
 }
 
+/// D376 (#1748): a slash command typed during startup is queued and runs
+/// once startup completes, whether its keys arrive in one burst or slowly
+/// enough for the slash popup to open before Enter.
+#[tokio::test]
+async fn startup_slash_command_runs_after_startup_whatever_the_keystroke_timing() {
+    for slow in [false, true] {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.pending_startup_thread_start = true;
+        app.chat_widget
+            .set_queue_submissions_until_session_configured(/*queue*/ true);
+        for ch in "/model".chars() {
+            app.chat_widget
+                .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            if slow {
+                std::thread::sleep(
+                    crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+                );
+                let _ = app
+                    .chat_widget
+                    .handle_paste_burst_tick(crate::tui::FrameRequester::test_dummy());
+            }
+        }
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["/model".to_string()],
+            "slow={slow}"
+        );
+        assert!(!app.chat_widget.has_active_view(), "slow={slow}");
+
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        app.handle_startup_thread_started(
+            &mut app_server,
+            Ok(AppServerStartedThread {
+                session: test_thread_session(ThreadId::new(), test_path_buf("/tmp/project")),
+                turns: Vec::new(),
+                blocks_direct_input: false,
+            }),
+        )
+        .await
+        .expect("startup thread should attach");
+
+        assert!(
+            app.chat_widget.queued_user_message_texts().is_empty(),
+            "slow={slow}"
+        );
+        assert!(
+            app.chat_widget.has_active_view(),
+            "slow={slow}: the model picker opens"
+        );
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let text = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+                assert!(
+                    !text.contains("disabled until startup completes"),
+                    "slow={slow}: {text}"
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn startup_thread_start_failure_returns_error() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
