@@ -2320,4 +2320,29 @@ mod pipeline_tests {
             vec![None]
         );
     }
+
+    /// #1132: allocation accounting includes both String bytes and the
+    /// `Option<String>` vector slots. Keep mixed long and short names below
+    /// and at the byte limit, but collapse an over-limit list to unknown.
+    #[test]
+    fn issue_1132_mixed_target_byte_boundaries_are_fail_closed() {
+        let slots = 3 * std::mem::size_of::<Option<String>>();
+        assert!(MAX_SAVED_TARGET_BYTES > slots + 2);
+        let targets = |long_bytes| {
+            vec![
+                Some("l".repeat(long_bytes)),
+                Some("s".to_string()),
+                Some(String::new()),
+            ]
+        };
+
+        let below = targets(MAX_SAVED_TARGET_BYTES - slots - 2);
+        assert_eq!(byte_bounded_targets(below.clone()), below);
+
+        let at_limit = targets(MAX_SAVED_TARGET_BYTES - slots - 1);
+        assert_eq!(byte_bounded_targets(at_limit.clone()), at_limit);
+
+        let above = targets(MAX_SAVED_TARGET_BYTES - slots);
+        assert_eq!(byte_bounded_targets(above), vec![None]);
+    }
 }

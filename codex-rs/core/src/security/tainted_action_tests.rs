@@ -8984,6 +8984,21 @@ fn issue_1132_many_short_saved_targets_are_linear() {
     });
 }
 
+/// #1132: an over-limit output list becomes one unknown target, so a
+/// harmless known list stays quiet but the same command with an unknown
+/// destination is rejected when the line runs a script.
+#[test]
+fn issue_1132_oversized_saved_targets_are_unseen_code() {
+    let (_dir, cwd) = issue_885_fixture();
+    let classify = |count| {
+        let script = format!("sed p{}; bash r.sh", " >a".repeat(count));
+        classify_fixture(&shell_in(&cwd, &[SCRIPT_BASH, "-c", &script]))
+    };
+
+    assert_eq!(classify(64), None);
+    assert_eq!(classify(65), Some(ProtectedActionKind::UnseenCode));
+}
+
 /// Sharing target judgement must keep both known and unknown destinations
 /// conservative, while ordinary sed output without an executed script stays
 /// unprotected. These are classified strings; no shell command is executed.
