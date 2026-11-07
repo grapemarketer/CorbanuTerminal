@@ -772,6 +772,8 @@ fn d311_label_walk_broken_versions_are_caught() {
         }
     }
     assert!(missed.is_empty(), "broken versions not caught: {missed:?}");
+}
+
 /// Cloud-file (OneDrive) placeholder folders are reparse points but not
 /// links: Windows' walk goes into them, and so must the check, which also
 /// finds a stale file inside one.
@@ -842,8 +844,8 @@ fn d311_label_walk_cloud_placeholder_folders_match_windows_walk() {
         sync_roots.borrow_mut().push(sync_root);
         true
     };
-    let outcome = command_case_in(base.path(), "P1-placeholders", &setup, None)
-        .expect("runs everywhere");
+    let outcome =
+        command_case_in(base.path(), "P1-placeholders", &setup, None).expect("runs everywhere");
     drop(sync_roots);
     assert!(outcome.differing.is_empty(), "{:?}", outcome.differing);
 }
