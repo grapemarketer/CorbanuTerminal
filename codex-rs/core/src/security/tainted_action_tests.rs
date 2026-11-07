@@ -11339,6 +11339,20 @@ fn issue1636_brace_made_git_options_ask_without_quotes() {
             let script = format!("env {{{}{last}}} clone -u./x ./r d", "-i,".repeat(64));
             assert_eq!(line(&script), Some(UnseenCode), "{shell} {script:?}");
         }
+        // Review 3: an empty alternative before an option, past each bound.
+        for script in [
+            "git ls-remote ./r {{1..64},{,}--upload-pack=./x}".to_string(),
+            format!(
+                "git ls-remote ./r {{{},{{,}}--upload-pack=./x}}",
+                "{u..u}".repeat(256)
+            ),
+            format!(
+                "git ls-remote ./r {{{{a}},{{,}}--upload-pack=./x}}{}",
+                "$N".repeat(2100)
+            ),
+        ] {
+            assert_eq!(line(&script), Some(UnseenCode), "{shell} {script:?}");
+        }
         // Ordinary lines stay as they were.
         for script in [
             "git add src/{a,b}.rs | cat",

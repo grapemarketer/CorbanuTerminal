@@ -1751,7 +1751,9 @@ impl ShellMade {
 
 /// #1636: whether some word `text` expands to may start with `-`: it starts
 /// with `-`, `=`, an expansion or a substitution's output, or with a group
-/// whose alternative may (`{-q,x}`, `{x,$N}`, `{+../}`).
+/// and holds any of those (an empty alternative may come before it:
+/// `{,}--upload-pack=./x`), or a range whose ends are not letters or digits
+/// (`{+../}`).
 fn may_make_option(text: &str) -> bool {
     if text.starts_with(['-', '=', '$']) || text.starts_with(UNSEEN_OUTPUT) {
         return true;
@@ -1759,10 +1761,12 @@ fn may_make_option(text: &str) -> bool {
     text.starts_with('{')
         && {
             let bytes = text.as_bytes();
-            bytes.windows(2).any(|pair| {
+            bytes.iter().any(|byte| {
             work::step();
-            matches!(pair, [b'{' | b',', b'-' | b'$' | b'=' | 1 | 2])
-                || matches!(pair, [b'{', ch] | [b'.', ch] if !ch.is_ascii_alphanumeric() && !b"{},.".contains(ch))
+            matches!(byte, b'-' | b'$' | b'=' | 1 | 2)
+        }) || bytes.windows(2).any(|pair| {
+            work::step();
+            matches!(pair, [b'{', ch] | [b'.', ch] if !ch.is_ascii_alphanumeric() && !b"{},.".contains(ch))
         })
         }
 }
