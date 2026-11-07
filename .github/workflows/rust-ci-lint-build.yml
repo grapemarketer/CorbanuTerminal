@@ -166,6 +166,16 @@ jobs:
           # setup-zig can't restore without saving, so only main caches (#636).
           use-cache: ${{ github.ref == 'refs/heads/main' }}
 
+      # The script pins libcap's version and sha256, so its hash is the key.
+      # A restored tarball is re-verified against the pin before use.
+      - if: ${{ inputs.target == 'x86_64-unknown-linux-musl' || inputs.target == 'aarch64-unknown-linux-musl'}}
+        name: Restore libcap tarball cache (musl)
+        id: cache_libcap_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/libcap-tarball
+          key: libcap-tarball-v1-${{ hashFiles('.github/scripts/install-musl-build-tools.sh') }}
+
       - if: ${{ inputs.target == 'x86_64-unknown-linux-musl' || inputs.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         env:
@@ -173,8 +183,17 @@ jobs:
           TARGET: ${{ inputs.target }}
           APT_UPDATE_ARGS: -o Acquire::Retries=3
           APT_INSTALL_ARGS: --no-install-recommends
+          LIBCAP_TARBALL_CACHE_DIR: ${{ runner.temp }}/libcap-tarball
         shell: bash
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ (inputs.target == 'x86_64-unknown-linux-musl' || inputs.target == 'aarch64-unknown-linux-musl') && steps.cache_libcap_restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        name: Save libcap tarball cache (musl)
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/libcap-tarball
+          key: libcap-tarball-v1-${{ hashFiles('.github/scripts/install-musl-build-tools.sh') }}
 
       - if: ${{ !contains(inputs.target, 'windows') }}
         name: Configure rusty_v8 artifact overrides and verify checksums

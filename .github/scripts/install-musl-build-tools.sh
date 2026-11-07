@@ -35,7 +35,52 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_kernel_path="pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+# Tried in order. mirrors.edge.kernel.org is not the same infrastructure as
+# the cdn/www kernel.org frontends, and Debian's orig tarball is byte-identical
+# upstream (it only lives in the pool while a suite ships this version). Every
+# candidate must match libcap_sha256.
+libcap_download_urls=(
+  "https://mirrors.edge.kernel.org/${libcap_kernel_path}"
+  "https://cdn.kernel.org/${libcap_kernel_path}"
+  "https://www.kernel.org/${libcap_kernel_path}"
+  "https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_${libcap_version}.orig.tar.xz"
+)
+
+sha256_matches() {
+  local actual
+  actual="$(sha256sum "$1")"
+  [[ "${actual%% *}" == "$2" ]]
+}
+
+# Fetches the first URL that downloads and writes it to $dest only after the
+# sha256 matches. A mirror that is down or times out falls through to the
+# next; a checksum mismatch aborts (fail closed) rather than trying elsewhere.
+download_verified() {
+  local dest="$1" sha256="$2"
+  shift 2
+  local partial="${dest}.partial"
+  local url
+  for url in "$@"; do
+    echo "Downloading ${url}"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 \
+      --retry 5 --retry-all-errors --retry-connrefused \
+      --connect-timeout 20 --max-time 300 \
+      "${url}" -o "${partial}"; then
+      echo "Download failed from ${url}; trying the next mirror." >&2
+      continue
+    fi
+    if ! sha256_matches "${partial}" "${sha256}"; then
+      echo "sha256 mismatch for ${url}; refusing to use it." >&2
+      exit 1
+    fi
+    echo "${partial}: sha256 OK"
+    mv "${partial}" "${dest}"
+    return 0
+  done
+  echo "Could not download ${dest##*/} from any mirror." >&2
+  exit 1
+}
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
@@ -59,10 +104,17 @@ libcap_pkgconfig_dir="${libcap_prefix}/lib/pkgconfig"
 
 if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
-  libcap_tarball="${libcap_root}/${libcap_tarball_name}"
+  # LIBCAP_TARBALL_CACHE_DIR lets a workflow persist the tarball with
+  # actions/cache. A cached copy is used only if it still matches the pin.
+  libcap_tarball_dir="${LIBCAP_TARBALL_CACHE_DIR:-${libcap_root}}"
+  mkdir -p "${libcap_tarball_dir}"
+  libcap_tarball="${libcap_tarball_dir}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
-  echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
+  if [[ -f "${libcap_tarball}" ]] && sha256_matches "${libcap_tarball}" "${libcap_sha256}"; then
+    echo "Using cached ${libcap_tarball}"
+  else
+    download_verified "${libcap_tarball}" "${libcap_sha256}" "${libcap_download_urls[@]}"
+  fi
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
   libcap_source_dir="${libcap_src_root}/libcap-${libcap_version}"
