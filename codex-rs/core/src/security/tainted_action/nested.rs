@@ -398,7 +398,7 @@ impl Classifier {
             // gate as above.
             if level == 0
                 && (self.not_shell == 0 || self.rebuilt > 0)
-                && (writes_zsh_program(&texts, command_at.as_ref())
+                && (writes_zsh_program(&command.words, command_at.as_ref())
                     || code_writes_zsh_program(&texts, command_at.as_ref()))
             {
                 note_git(found, ProtectedActionKind::Persistence);
@@ -1703,13 +1703,19 @@ fn cut_matters(words: &[Word]) -> bool {
 
 /// #1620: whether a writer's operand is a word zsh reads as the installed
 /// program it names (`tee -a =mytool`, `cp x =mytool`, `curl -o =mytool`).
-fn writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)>) -> bool {
+/// Not a quoted word: an option's quoted value (`curl --proto '=https'`) is
+/// not expanded.
+fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
     command_at.is_some_and(|(index, name)| {
         WRITERS.contains(&name.as_str())
-            && texts[index + 1..].iter().any(|text| {
-                work::step();
-                outputs::zsh_program_path(text)
-            })
+            && words
+                .get(index + 1..)
+                .unwrap_or_default()
+                .iter()
+                .any(|word| {
+                    work::step();
+                    !word.quoted && outputs::zsh_program_path(&word.text)
+                })
     })
 }
 
@@ -1745,7 +1751,7 @@ fn writes_in(line: &str) -> bool {
         command.writes_to.iter().any(|word| {
             work::step();
             outputs::zsh_program_path(&word.text)
-        }) || writes_zsh_program(&texts, indirect::command_word(&texts).as_ref())
+        }) || writes_zsh_program(&command.words, indirect::command_word(&texts).as_ref())
     })
 }
 

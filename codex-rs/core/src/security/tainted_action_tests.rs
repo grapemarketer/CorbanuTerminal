@@ -11233,6 +11233,9 @@ fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
             "trap 'rm -f x' EXIT",
             "alias ll='ls -l'",
             "echo =mytool",
+            "curl --proto '=https' -o out https://example.com/t",
+            "curl --proto \"=https\" -sSfo out https://example.com/t",
+            "cp x '=mytool'",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
