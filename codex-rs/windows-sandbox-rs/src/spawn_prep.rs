@@ -367,7 +367,7 @@ unsafe fn pin_nested_metadata(
         Some(log_dir),
     )?;
     for entry in found {
-        let unchanged = !crate::workspace_acl::is_reparse_point(&entry.path)
+        let unchanged = !crate::workspace_acl::is_link(&entry.path)
             && dunce::canonicalize(&entry.path).is_ok_and(|canonical| {
                 canonical
                     .to_string_lossy()

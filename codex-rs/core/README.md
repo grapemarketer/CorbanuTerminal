@@ -239,7 +239,10 @@ while any legacy command ran would count as planted, and the temp folder
 isn't treated as a project location; a workspace or configured root stays
 watched even if the temp folder resolves to it), with its file identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
-100,000-file workspace). Names are compared the way NTFS compares them, so
+100,000-file workspace). Other reparse points, such as ProjFS (VFS for Git)
+folders or cloud placeholders a program sees as they are, aren't links: the
+walk looks inside them, and one named `.codex` or `.agents` is protected and
+identified like a plain folder (#1672). Names are compared the way NTFS compares them, so
 a name such as `.agentſ` counts (and is never trusted). Each one it finds
 gets the top-level ones' protection: an explicit Medium label, the
 capability-SID write deny and the tracked Everyone delete-child denies. It
@@ -264,6 +267,11 @@ refused. Costs and limits:
   there).
 - A command doesn't start if those denies can't be written.
 - Sessions started by builds before D283 aren't watched for nested folders.
+- The walk lists ProjFS folders and exposed cloud placeholders through their
+  provider (#1672): a stalled provider stalls it, and one that fails a
+  listing makes that folder unlistable. Content a provider hasn't filled in
+  yet comes from the provider, not from writes the sandbox's denies govern,
+  as for such files in a plain `.codex`.
 
 The
 Everyone deny entries are visible in the folder's security settings while a
