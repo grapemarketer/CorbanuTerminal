@@ -3003,3 +3003,7 @@ mod carve_out_link;
 /// #1668: cloud-file placeholder folders at or above read-only paths.
 #[path = "cloud_placeholder_tests.rs"]
 pub(crate) mod cloud_placeholder;
+
+/// #1780: a read-only path and its writable root spelled one through a link.
+#[path = "real_path_read_only_tests.rs"]
+mod real_path_read_only;

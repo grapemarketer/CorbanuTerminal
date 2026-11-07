@@ -159,13 +159,7 @@ impl ResolvedWindowsSandboxPermissions {
             // #1708: explicit read-only (and deny) paths inside a temp root
             // are carved out of it like any other root's. The default
             // `.git`/`.codex`/`.agents` protections stay off there (D283).
-            let explicit_non_write: Vec<PathBuf> = self
-                .file_system
-                .get_read_only_paths_with_cwd(cwd)
-                .into_iter()
-                .chain(self.file_system.get_unreadable_roots_with_cwd(cwd))
-                .map(AbsolutePathBuf::into_path_buf)
-                .collect();
+            let explicit_non_write = self.explicit_non_write_paths(cwd);
             roots.extend(windows_temp_env_roots(env_map).into_iter().map(|root| {
                 let read_only_subpaths = explicit_non_write
                     .iter()
@@ -200,18 +194,36 @@ impl ResolvedWindowsSandboxPermissions {
                 )
             });
 
+        let explicit_non_write = self.explicit_non_write_paths(cwd);
         file_system
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
-            .map(|root| WindowsWritableRoot {
-                root: root.root.into_path_buf(),
-                read_only_subpaths: root
+            .map(|root| {
+                let root_path = root.root.into_path_buf();
+                let mut read_only_subpaths: Vec<PathBuf> = root
                     .read_only_subpaths
                     .into_iter()
                     .map(AbsolutePathBuf::into_path_buf)
-                    .collect(),
+                    .collect();
+                let missed =
+                    inside_only_by_real_path(&explicit_non_write, &root_path, &read_only_subpaths);
+                read_only_subpaths.extend(missed);
+                WindowsWritableRoot {
+                    root: root_path,
+                    read_only_subpaths,
+                }
             })
             .collect::<Vec<_>>()
+    }
+
+    /// The profile's explicit read-only and deny paths, as configured.
+    fn explicit_non_write_paths(&self, cwd: &Path) -> Vec<PathBuf> {
+        self.file_system
+            .get_read_only_paths_with_cwd(cwd)
+            .into_iter()
+            .chain(self.file_system.get_unreadable_roots_with_cwd(cwd))
+            .map(AbsolutePathBuf::into_path_buf)
+            .collect()
     }
 
     fn has_writable_tmpdir_entry(&self) -> bool {
@@ -250,6 +262,33 @@ fn strictly_inside(path: &Path, root: &Path) -> bool {
         || canonicalize_allowing_missing(path)
             .zip(dunce::canonicalize(root).ok())
             .is_some_and(|(path, root)| below(&path, &root))
+}
+
+/// #1780: the real paths of the explicit read-only (and deny) `paths` that
+/// lie below writable `root` only with links followed, which `listed` (the
+/// root's read-only paths, matched by spelling) misses: a root reached
+/// through a junction with a path given by its real location, or the
+/// reverse. The root's write access lands on its real location, so these
+/// must be denied there too. Paths `listed` already covers are left out.
+fn inside_only_by_real_path(paths: &[PathBuf], root: &Path, listed: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(real_root) = dunce::canonicalize(root) else {
+        return Vec::new();
+    };
+    let mut covered: Vec<PathBuf> = listed
+        .iter()
+        .filter_map(|path| canonicalize_allowing_missing(path))
+        .collect();
+    let mut missed = Vec::new();
+    for real in paths
+        .iter()
+        .filter_map(|path| canonicalize_allowing_missing(path))
+    {
+        if real != real_root && real.starts_with(&real_root) && !covered.contains(&real) {
+            covered.push(real.clone());
+            missed.push(real);
+        }
+    }
+    missed
 }
 
 /// `path` with links followed: its nearest existing ancestor canonicalized,
@@ -407,6 +446,95 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(temp_roots, vec![expected.clone(), expected]);
+    }
+
+    /// #1780: a writable root and explicit read-only (or deny) paths inside
+    /// it, one spelled through a junction and the other by the real path:
+    /// each path is still one of the root's read-only paths, once.
+    #[test]
+    fn read_only_paths_inside_a_root_match_by_real_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(tmp.path()).expect("canonical tempdir");
+        let real = base.join("real");
+        let linked = base.join("linked");
+        std::fs::create_dir_all(real.join("docs")).expect("create docs");
+        std::fs::create_dir_all(real.join("notes")).expect("create notes");
+        std::fs::create_dir_all(base.join("elsewhere")).expect("create elsewhere");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&linked)
+            .arg(&real)
+            .output()
+            .expect("mklink");
+        assert!(output.status.success(), "mklink /J failed");
+        let absolute = |path: PathBuf| AbsolutePathBuf::from_absolute_path(path).expect("abs");
+        let entry = |path: PathBuf, access| FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: absolute(path),
+            },
+            access,
+            missing_path_behavior: None,
+        };
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                        missing_path_behavior: None,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                        },
+                        access: FileSystemAccessMode::Write,
+                        missing_path_behavior: None,
+                    },
+                    entry(real.join("docs"), FileSystemAccessMode::Read),
+                    entry(linked.join("notes"), FileSystemAccessMode::Read),
+                    entry(real.join("missing"), FileSystemAccessMode::Read),
+                    entry(real.join("secret"), FileSystemAccessMode::Deny),
+                    entry(base.join("elsewhere"), FileSystemAccessMode::Read),
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let mut expected = vec![
+            real.join("docs"),
+            real.join("missing"),
+            real.join("notes"),
+            real.join("secret"),
+        ];
+        expected.sort();
+
+        for cwd in [&linked, &real] {
+            let permissions =
+                ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                    &permission_profile,
+                    workspace_roots_for(cwd).as_slice(),
+                )
+                .expect("managed permission profile");
+            let roots = permissions.writable_roots_other_than_temp_for_cwd(cwd);
+            assert_eq!(roots.len(), 1, "cwd {}: {roots:?}", cwd.display());
+            // The `.git`/`.codex`/`.agents` protections aren't at issue here.
+            let mut real_subpaths: Vec<PathBuf> = roots[0]
+                .read_only_subpaths
+                .iter()
+                .filter(|path| {
+                    !path.file_name().is_some_and(|name| {
+                        codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES
+                            .iter()
+                            .any(|protected| name == *protected)
+                    })
+                })
+                .map(|path| canonicalize_allowing_missing(path).expect("resolvable"))
+                .collect();
+            real_subpaths.sort();
+            assert_eq!(real_subpaths, expected, "cwd {}: {roots:?}", cwd.display());
+        }
     }
 
     #[test]
