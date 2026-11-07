@@ -390,19 +390,49 @@ fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")
 fi
-set +e
-# Work around Bazel 9 remote repo contents cache / overlay materialization
-# failures seen in CI (for example "is not a symlink" or permission errors
-# while materializing external repos such as rules_perl). This only disables
-# the startup-level repo contents cache; keyed runs still use BuildBuddy.
-run_bazel_with_startup_args \
-  --noexperimental_remote_repo_contents_cache \
-  "${bazel_run_args[@]}" \
-  -- \
-  "${bazel_targets[@]}" \
-  2>&1 | tee "$bazel_console_log"
-bazel_status=${PIPESTATUS[0]}
-set -e
+# Exit code 37 means the Bazel server itself crashed (an internal error, such
+# as #1787's NullPointerException), not that a build or test failed. Print the
+# server logs so the crash can be reported upstream, then retry once; a second
+# crash fails the job.
+bazel_server_crash_status=37
+print_bazel_server_log_tails() {
+  local console_log="$1"
+  local jvm_out output_base
+  jvm_out="$(sed -nE "s#.*log file: '([^']*jvm\.out)'.*#\1#p" "$console_log" | tail -n 1)"
+  if [[ -z "$jvm_out" ]]; then
+    echo "No Bazel server log path was found in the console output."
+    return
+  fi
+  output_base="$(dirname "$(dirname "$jvm_out")")"
+  for server_log in "$jvm_out" "$output_base/java.log"; do
+    echo "::group::Bazel server log tail: ${server_log}"
+    tail -n 200 "$server_log" 2>&1 || true
+    echo "::endgroup::"
+  done
+}
+
+for bazel_attempt in 1 2; do
+  set +e
+  # Work around Bazel 9 remote repo contents cache / overlay materialization
+  # failures seen in CI (for example "is not a symlink" or permission errors
+  # while materializing external repos such as rules_perl). This only disables
+  # the startup-level repo contents cache; keyed runs still use BuildBuddy.
+  run_bazel_with_startup_args \
+    --noexperimental_remote_repo_contents_cache \
+    "${bazel_run_args[@]}" \
+    -- \
+    "${bazel_targets[@]}" \
+    2>&1 | tee "$bazel_console_log"
+  bazel_status=${PIPESTATUS[0]}
+  set -e
+  if [[ $bazel_status -ne $bazel_server_crash_status ]]; then
+    break
+  fi
+  print_bazel_server_log_tails "$bazel_console_log"
+  if [[ $bazel_attempt -eq 1 ]]; then
+    echo "::warning::The Bazel server crashed (exit ${bazel_server_crash_status}); retrying once (#1787)."
+  fi
+done
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
   if [[ $print_failed_bazel_action_summary -eq 1 ]]; then
