@@ -47,6 +47,9 @@ fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKin
 type Read = (Vec<String>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
 
 /// The words and redirection positions the lexer reads, per command.
+// `iter().copied()`: `stdin_from` and `here_string` are `Option`s on main,
+// where the reverted run builds these tests too.
+#[allow(clippy::iter_cloned_collect)]
 fn lexed(line: &str) -> Vec<Read> {
     shell::simple_commands(&[line.to_string()])
         .commands
@@ -68,6 +71,10 @@ fn strings(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_string()).collect()
 }
 
+/// Files of a temporary workspace: name and text.
+#[cfg(unix)]
+type Files = &'static [(&'static str, &'static str)];
+
 #[cfg(unix)]
 const SUB_EVIL: &[(&str, &str)] = &[("run.sh", "true\n"), ("sub/run.sh", EVIL)];
 #[cfg(unix)]
@@ -77,7 +84,7 @@ const X_OK: &[(&str, &str)] = &[("x", "true\n")];
 
 /// Every line #1772 lists, by item, with the files it is judged among.
 #[cfg(unix)]
-const ASKS: &[(&str, &[(&str, &str)], &str)] = &[
+const ASKS: &[(&str, Files, &str)] = &[
     // Item 1: a command behind a leading redirection, judged by name only.
     ("1", SUB_EVIL, "2>/dev/null cd sub && ./run.sh"),
     ("1", SUB_EVIL, ">log cd sub; ./run.sh"),
@@ -262,25 +269,29 @@ fn issue_1772_lexer_reads_redirections_as_the_shell_does() {
             none.clone(),
             none.clone(),
             vec![4],
-            none.clone()
+            none
         )]
     );
     assert_eq!(lexed("sleep 1 & ls").len(), 2);
 }
 
-/// The quoted-file reading scans each text once: unclosed quotes and
-/// double quotes holding an expansion after many redirections.
+/// The quoted-file reading scans each text once: an unclosed quote before
+/// many redirections, quoted files, double quotes holding an expansion and
+/// escaped spaces. Each input is 100 units at 1x, so the 1x run is the same
+/// reading as the larger one.
 #[test]
 fn issue_1772_quoted_files_are_linear() {
-    for (label, unit) in [
-        ("unclosed single", ">' "),
-        ("unclosed double", ">\" "),
-        ("expanding double", ">\"$a\" "),
-        ("escaped space", ">a\\ b "),
+    for (label, prefix, unit) in [
+        ("unclosed single", ">'", " >a\\ b"),
+        ("unclosed double", ">\"", " >a\\ b"),
+        ("quoted single", "", ">'a b' "),
+        ("quoted double", "", ">\"a b\" "),
+        ("expanding double", "", ">\"$a\" "),
+        ("escaped space", "", ">a\\ b "),
     ] {
         tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
             work::assert_linear(label, |scale| {
-                lexed(&unit.repeat(scale));
+                lexed(&format!("{prefix}{}", unit.repeat(100 * scale)));
             });
         });
     }
