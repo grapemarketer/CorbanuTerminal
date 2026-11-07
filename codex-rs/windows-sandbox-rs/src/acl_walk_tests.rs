@@ -215,7 +215,7 @@ fn list_returns_every_entry_and_open_relative_takes_plain_names_only() {
     }
     std::fs::create_dir_all(base.path().join("sub")).expect("sub");
     let handle = open_dir(base.path());
-    let mut expected = written.clone();
+    let mut expected = written;
     expected.push("sub".to_string());
     expected.sort();
     assert_eq!(names(&handle), expected);
