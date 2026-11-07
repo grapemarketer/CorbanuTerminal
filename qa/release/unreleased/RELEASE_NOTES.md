@@ -561,11 +561,14 @@ asking and now ask first:
   code. Before, only some of these were checked there. A `cd` in such text
   isn't followed: the folder it leaves counts as unknown. Ordinary text such
   as `trap 'rm -f x' EXIT` or `alias ll='ls -l'` stays quiet.
-- Variables and environment settings made in such text
-  (`eval 'F=~/.zshrc'; tee -a "$F"`, `eval 'export GIT_PAGER=sh'`), and
-  writes to the shells' tables of code run by name (zsh's `functions`,
-  `commands` and alias tables, bash's `BASH_CMDS`; for example
-  `functions[f]='tee -a ~/.zshrc'; f`) (D341, #1698, #1685).
+- Later uses of variables set in such text
+  (`eval 'F=~/.zshrc'; tee -a "$F"`), settings there of variables that run
+  code (`eval 'export GIT_PAGER=sh'`), and code written into the shells'
+  tables of code run by name (zsh's `functions`, `commands` and alias
+  tables, bash's `BASH_ALIASES` and `BASH_CMDS`), which is now checked as a
+  line of its own (`functions[f]='tee -a ~/.zshrc'; f`; D341, #1698,
+  #1685, #1704). Ordinary settings such as `eval "x=1"` or
+  `aliases[ll]='ls -l'` stay quiet.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
@@ -605,11 +608,11 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   outside its own sandbox restrictions (#1721), and can still read and end
   the other's processes. So still avoid running commands
   in several projects at once (see `docs/sandbox.md`).
-- **Refused permission profiles say why** (D331, #1762). A profile with a
-  writable folder inside a read-only one is now refused for the agent's
-  commands in the non-admin sandbox too, as it already was in the default
-  sandbox and for app-server `command/exec`; in our measurements this
-  changes the outcome only under Permissive. On both sandboxes the message
+- **Profiles the Windows sandbox can't enforce are refused, and say why**
+  (D331, #1762). A profile with a writable folder inside a read-only one is
+  now refused for the agent's commands in the non-admin sandbox too, as it
+  already was in the default sandbox and for app-server `command/exec`; in
+  our measurements this changes the outcome only under Permissive. On both sandboxes the message
   now names both folders, notes that the protected `.git`, `.codex` and
   `.agents` folders count as read-only, and says to change the profile so
   that no writable folder lies in a read-only one. In the non-admin
