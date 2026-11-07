@@ -491,6 +491,17 @@ fn refuse_creating_through_a_link(path: &Path, roots: &[PathBuf]) -> Result<()> 
     Ok(())
 }
 
+/// #1686: makes missing explicit read-only `path` (a folder), refusing to
+/// make it through a link a sandboxed command could have planted.
+fn create_missing_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
+    if !path.exists() {
+        refuse_creating_through_a_link(path, roots)?;
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("create deny-write path {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
 /// `gitdir: .` must not relabel the workspace itself). All paths canonical.
 fn strictly_inside_a_root(path: &Path, roots: &[PathBuf]) -> bool {
@@ -531,13 +542,34 @@ pub(crate) fn apply_legacy_session_acl_rules(
     acl_sids: LegacyAclSids<'_>,
     session: bool,
 ) -> Result<Option<IntegrityLease>> {
-    let AllowDenyPaths { allow, mut deny } =
-        compute_allow_paths_for_permissions(permissions, current_dir, env_map);
+    let allow = compute_allow_paths_for_permissions(permissions, current_dir, env_map).allow;
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
     let nested_roots = nested_metadata_roots(permissions, current_dir, &allow);
     refuse_linked_project_metadata(&nested_roots, acl_sids.write_root_sids)?;
+    let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
+    // #1686: so must configured read-only paths that reach the backend only
+    // through the profile (the shell tool and unified exec pass no extra
+    // deny-write paths).
+    let explicit_read_only = explicit_read_only_paths(permissions, current_dir, env_map);
+    // Explicit carveouts must exist before the command starts so the sandbox
+    // cannot create them under a writable parent first. Made before the
+    // session records which `.codex`/`.agents` folders exist (D262, D283):
+    // one the host makes here (a configured read-only `.agents`, say) is
+    // then there from the start, as if the person had made it, rather than
+    // reported as planted. Whatever appears after this still is.
+    for path in additional_deny_write_paths
+        .iter()
+        .chain(&explicit_read_only)
+    {
+        create_missing_carve_out(path, &canonical_allow)?;
+    }
+    // Read after that (the first read above is used only for `allow`): a
+    // folder made on the way to one (`.codex` for a read-only `.codex\hooks`,
+    // or `.git` for `.git\hooks`), which the session then finds present,
+    // gets the protection of one that was there before (#1705 review).
+    let mut deny = compute_allow_paths_for_permissions(permissions, current_dir, env_map).deny;
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
         Some(crate::integrity_leases::acquire_watching(
@@ -562,7 +594,6 @@ pub(crate) fn apply_legacy_session_acl_rules(
     if lease.is_some() {
         refuse_linked_project_metadata(&nested_roots, acl_sids.write_root_sids)?;
     }
-    let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
     // D283 (#1541): `.codex`/`.agents` deeper in a writable root get the
     // top-level ones' protection; the command doesn't start without it.
     let nested_found = match &lease {
@@ -601,22 +632,13 @@ pub(crate) fn apply_legacy_session_acl_rules(
     let mut delete_child_denies = Vec::new();
     // D263's, which the command must not start without.
     let mut required_delete_child_denies = Vec::new();
-    // #1686: so must configured read-only paths that reach the backend only
-    // through the profile (the shell tool and unified exec pass no extra
-    // deny-write paths).
-    let explicit_read_only = explicit_read_only_paths(permissions, current_dir, env_map);
     unsafe {
         for path in additional_deny_write_paths
             .iter()
             .chain(&explicit_read_only)
         {
-            // Explicit carveouts must exist before the command starts so the
-            // sandbox cannot create them under a writable parent first.
-            if !path.exists() {
-                refuse_creating_through_a_link(path, &canonical_allow)?;
-                std::fs::create_dir_all(path)
-                    .with_context(|| format!("create deny-write path {}", path.display()))?;
-            }
+            // Again: a command already running may have removed it since.
+            create_missing_carve_out(path, &canonical_allow)?;
             deny.insert(path.clone());
             explicit_carve_outs.insert(path.clone());
         }

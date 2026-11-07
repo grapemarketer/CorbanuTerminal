@@ -400,3 +400,113 @@ fn legacy_workspace_stays_watched_when_temp_resolves_to_it() {
 
     assert_eq!((exit_code, planted_here), (0, true));
 }
+
+/// A configured read-only `.codex`/`.agents` that doesn't exist yet, which
+/// the host makes before the command starts (#1686), isn't reported as
+/// planted: at the top of the command's root, deeper in it, and at the top of
+/// another writable root. Nor is a top-level one the host makes on the way to
+/// a deeper read-only path; that one gets the protection of one that was
+/// there (#1705 review), as does a `.git` made that way. The command can't
+/// write in any of them, and the
+/// folders it makes itself (at the top of a third root, and deeper in its
+/// own) are still reported. Before, the host made them after the session had
+/// recorded them as absent, so each was reported as possibly planted.
+#[test]
+fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let roots = ["workspace", "other", "third"].map(|name| {
+        let root = test_root.path().join(name);
+        fs::create_dir_all(&root).expect("create root");
+        canonical(&root)
+    });
+    let [workspace, other, third] = &roots;
+    let configured = [
+        workspace.join(".agents"),
+        workspace.join("sub\\.codex"),
+        other.join(".codex"),
+        workspace.join(".codex\\hooks"),
+        other.join(".agents\\skills"),
+    ];
+    let git_hooks = workspace.join(".git\\hooks");
+    // Made on the way to the last two.
+    let on_the_way = [workspace.join(".codex"), other.join(".agents")];
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let mut entries = vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Read,
+    )];
+    entries.extend(roots.iter().map(|root| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(root),
+            },
+            FileSystemAccessMode::Write,
+        )
+    }));
+    entries.extend(configured.iter().chain([&git_hooks]).map(|path| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(path),
+            },
+            FileSystemAccessMode::Read,
+        )
+    }));
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(entries),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let script: String = configured
+        .iter()
+        .chain(&on_the_way)
+        .map(|path| format!("echo planted> \"{}\\config.toml\"\r\n", path.display()))
+        .chain([
+            format!(
+                "echo planted> \"{}\"\r\n",
+                workspace.join(".git\\config").display()
+            ),
+            format!("mkdir \"{}\"\r\n", third.join(".agents").display()),
+            format!(
+                "mkdir \"{}\"\r\n",
+                workspace.join("deep\\.agents").display()
+            ),
+        ])
+        .collect();
+    let started =
+        super::carve_out_link::run_script(&profile, workspace, &[], HashMap::new(), &script);
+    let host_made: Vec<_> = configured
+        .iter()
+        .chain(&on_the_way)
+        .map(|path| {
+            (
+                path.is_dir(),
+                path.join("config.toml").exists(),
+                planted(path),
+                counts_now(path),
+            )
+        })
+        .collect();
+    let git = (git_hooks.is_dir(), workspace.join(".git\\config").exists());
+    let command_made: Vec<_> = [third.join(".agents"), workspace.join("deep\\.agents")]
+        .iter()
+        .map(|path| (path.is_dir(), planted(path)))
+        .collect();
+
+    assert_eq!(
+        (started, host_made, git, command_made),
+        (
+            Ok(0),
+            vec![(true, false, false, false); configured.len() + on_the_way.len()],
+            (true, false),
+            vec![(true, true); 2],
+        )
+    );
+}
