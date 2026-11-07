@@ -435,7 +435,7 @@ const LABEL_CASES: [(&str, Setup); 4] = [
     }),
 ];
 
-fn wide_tree(root: &Path) -> bool {
+fn wide_tree(root: &Path, _: &Path) -> bool {
     let wide = root.join("src\\wide");
     std::fs::create_dir_all(&wide).expect("dir");
     for f in 0..3000 {
