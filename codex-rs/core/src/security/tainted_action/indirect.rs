@@ -401,6 +401,166 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
     command_word(&masked).is_some_and(|(at, _)| command.operated.contains(&at))
 }
 
+/// #1482 item 2: whether the word read as the command, in the words from
+/// `from` on, is part of a redirection: its file (`>log ./run.sh`, `sudo
+/// -R >log -C sub ./run.sh`), a descriptor (`2>log sh x`, `2>&1 ./x`,
+/// `>&2 ./x`), a `{fd}` name (`{fd}>log ./x`) or a here-document's
+/// delimiter (`<<EOF ./x`), while the words without those run a command
+/// this reading would judge by more than its name: a program named by a
+/// path, a shell or interpreter, `eval`, `source`, `.` or `trap` (`>log
+/// eval ./x`), or a word starting with `-` (`&>log` is lexed as `&` and
+/// `>log`, so `sudo &>log -u root ./x` leaves `-u root ./x`). The shell
+/// removes the redirection's words, so that command is never judged.
+/// `2>/dev/null git status`, `exec >out` and foreign text read as shell
+/// (`<?php echo 1;`) are read as before. `from`: the operands of `eval`.
+pub(super) fn redirect_hides_command(
+    command: &SimpleCommand,
+    words: &[String],
+    from: usize,
+) -> bool {
+    let Some(rest) = words.get(from..) else {
+        return false;
+    };
+    if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
+        return false;
+    }
+    let Some(runs) = unredirected(command, words, from) else {
+        return false;
+    };
+    command_word(&runs).is_some_and(|(at, name)| {
+        runs[at].contains('/')
+            || runs[at].starts_with('-')
+            || matches!(name.as_str(), "eval" | "source" | "." | "trap")
+    }) || invocation(&runs).is_some()
+}
+
+/// #1482 item 2: whether the word at `at` is part of a redirection
+/// (`redirect_hides_command`). The lexer adds the indexes in ascending
+/// order, so each lookup is a binary search, not a scan of the line.
+fn held(command: &SimpleCommand, at: usize) -> bool {
+    work::step();
+    command.writes_to.binary_search(&at).is_ok()
+        || command.redirect_words.binary_search(&at).is_ok()
+        || command.stdin_from == Some(at)
+        || command.here_string == Some(at)
+}
+
+/// #1482 items 2 and 4: the words from `from` on without those a
+/// redirection holds, as the shell runs them (`>log sudo -A true` runs
+/// `sudo -A true`); `None` when no redirection holds one. One pass over
+/// the words.
+fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Option<Vec<String>> {
+    let rest = words.get(from..)?;
+    let mut any = false;
+    let runs = rest
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| {
+            let hidden = held(command, from + at);
+            any |= hidden;
+            !hidden
+        })
+        .map(|(_, word)| word.clone())
+        .collect();
+    any.then_some(runs)
+}
+
+/// #1482 item 4: whether a sudo among the programs of these words runs an
+/// askpass helper or an editor named by the environment (`sudo -A`, `sudo
+/// -e`, `--askpass`, `--edit`, `sudoedit`): code the words do not name.
+/// sudo's own options are read up to its command, with their values (`sudo
+/// -p A ./x` asks for nothing; `sudo -R sub -A ./x` runs a helper).
+/// `sudo -i` (the target user's home) is a folder option of
+/// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
+/// The words are read as written and, when a redirection holds some of
+/// them, as the shell runs them (`>log sudo -A true`, `sudo 2>&1 -A
+/// true`, `sudo {fd}>log -e f`). `from`: the operands of `eval`.
+pub(super) fn sudo_runs_helper(command: &SimpleCommand, words: &[String], from: usize) -> bool {
+    words.get(from..).is_some_and(sudo_in_words_runs_helper)
+        || unredirected(command, words, from).is_some_and(|runs| sudo_in_words_runs_helper(&runs))
+}
+
+fn sudo_in_words_runs_helper(words: &[String]) -> bool {
+    let options = WRAPPERS
+        .iter()
+        .find(|(wrapper, _, _)| *wrapper == "sudo")
+        .map_or(&[][..], |(_, options, _)| *options);
+    let values: String = options
+        .iter()
+        .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
+        .chain(["R"])
+        .collect();
+    // Whether the option runs a helper, and whether its value is the next
+    // word.
+    let read = |option: &str| -> (bool, bool) {
+        work::step();
+        if let Some(long) = option.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            let helper =
+                !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
+            let takes = !value
+                && !name.is_empty()
+                && options.iter().any(|known| {
+                    work::step();
+                    known
+                        .strip_prefix("--")
+                        .is_some_and(|known| known.starts_with(name))
+                });
+            return (helper, takes);
+        }
+        let letters = option.strip_prefix('-').unwrap_or_default();
+        for (at, letter) in letters.char_indices() {
+            work::step();
+            if matches!(letter, 'A' | 'e') {
+                return (true, false);
+            }
+            // The rest of the word, or the next word, is this letter's value.
+            if values.contains(letter) {
+                return (false, letters[at + letter.len_utf8()..].is_empty());
+            }
+        }
+        (false, false)
+    };
+    // Whether sudo's option scan, from each word on, reaches a helper: the
+    // scan from a word only depends on that word and the scan after it
+    // (from the next word, or the one after its value). Read once, from
+    // the end, so chained sudos whose scans run past each other (`sudo -R
+    // sudo -R … ./x`, `--us`, `-xu`) cost one read per word, not one per
+    // sudo and word. Filled at the first sudo.
+    let mut helper_from: Vec<bool> = Vec::new();
+    for at in programs(words) {
+        work::step();
+        let name = basename(&words[at]).to_lowercase();
+        if name == "sudoedit" {
+            return true;
+        }
+        if name != "sudo" {
+            continue;
+        }
+        if helper_from.is_empty() {
+            helper_from = vec![false; words.len() + 2];
+            for (next, option) in words.iter().enumerate().rev() {
+                work::step();
+                if option == "--" || !option.starts_with('-') || option == "-" {
+                    continue;
+                }
+                let (helper, takes) = read(option);
+                helper_from[next] = helper
+                    || helper_from
+                        .get(next + 1 + usize::from(takes))
+                        .copied()
+                        .unwrap_or_default();
+            }
+        }
+        if helper_from[at + 1] {
+            return true;
+        }
+    }
+    false
+}
+
 /// The invocation a simple command makes, if it runs a shell or interpreter.
 pub(super) fn invocation(words: &[String]) -> Option<Invocation<'_>> {
     let (index, name) = command_word(words)?;

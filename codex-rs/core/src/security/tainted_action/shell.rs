@@ -60,6 +60,12 @@ pub(super) struct SimpleCommand {
     pub(super) here_string: Option<usize>,
     /// Indexes of the words its output is redirected to (`> file`, `>> file`).
     pub(super) writes_to: Vec<usize>,
+    /// #1482 item 2: indexes of the words a redirection holds that are not
+    /// its file: a descriptor number (`2` of `2>log` and `2>&1`, `1` of
+    /// `2>&1`, `2` of `>&2`), a `{fd}` name (`{fd}>log`, read as `fd`) and
+    /// a here-document's delimiter (`EOF` of `<<EOF`). The shell runs none
+    /// of them.
+    pub(super) redirect_words: Vec<usize>,
     /// #1607: files zsh writes where bash reads the line otherwise, by
     /// word index: the word after `>!` (`>! f`, which bash passes on as an
     /// argument; `false`) or the rest of the `!` word (`>!f`, bash's file
@@ -147,6 +153,24 @@ pub(super) fn simple_commands(command: &[String]) -> Lexed {
         incomplete,
         too_deep,
     }
+}
+
+/// #1482 item 5: whether `text`, read as a line, is one word. An argv
+/// element is one word whatever it holds; one that the lexer reads as
+/// several words or commands (`A=1 ./y`, `./{x,y}`, ``true`./x` ``) is not
+/// the word the classifier judges. Quotes and braces the lexer drops in one
+/// word (`-I{}`) are read as before. Empty text runs nothing.
+pub(super) fn one_word(text: &str) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    let lexed = simple_commands(&[text.to_string()]);
+    !lexed.incomplete
+        && !lexed.too_deep
+        && matches!(
+            lexed.commands.as_slice(),
+            [only] if only.fed_by.is_empty() && only.words.len() == 1
+        )
 }
 
 /// Whether text may use bash's prompt transformation (`${v@P}`,
@@ -540,6 +564,7 @@ struct Open {
     /// #1607: the outer word follows a zsh `>!` (`>!$(cat f)`, `>! $(cat f)`).
     outer_clobber: bool,
     outer_zsh_writes_next: bool,
+    outer_redirect_word_next: bool,
     first: usize,
     backtick: bool,
     /// `>(...)`: the substitution reads the outer command's output.
@@ -592,6 +617,9 @@ struct Lexer {
     clobber: bool,
     /// #1607: zsh writes the next word (after `>! `).
     zsh_writes_next: bool,
+    /// #1482 item 2: the next word is part of a redirection, not its file
+    /// (`SimpleCommand::redirect_words`).
+    redirect_word_next: bool,
     /// A substitution opened past `MAX_SUBSTITUTION_DEPTH`.
     too_deep: bool,
     /// Open substitutions that are not past `MAX_SUBSTITUTION_DEPTH`.
@@ -614,6 +642,9 @@ impl Lexer {
     fn flush(&mut self) {
         if !self.word.is_empty() {
             let index = Some(self.current.words.len());
+            if std::mem::take(&mut self.redirect_word_next) {
+                self.current.redirect_words.extend(index);
+            }
             let redirect = std::mem::take(&mut self.redirect);
             let clobber = std::mem::take(&mut self.clobber) && redirect == Redirect::Stdout;
             match redirect {
@@ -651,6 +682,23 @@ impl Lexer {
         }
     }
 
+    /// #1482 item 2: at a redirection operator, whether the word being
+    /// built is its descriptor (`2>log`, `2>&1`, `0<f`) or `{fd}` name
+    /// (`{fd}>log`, its braces already dropped): flushed as part of the
+    /// redirection.
+    fn redirect_prefix(&mut self, previous: Option<char>) {
+        let word = &self.word;
+        if !word.is_empty()
+            && (word.bytes().all(|byte| byte.is_ascii_digit())
+                || (previous == Some('}')
+                    && word
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')))
+        {
+            self.redirect_word_next = true;
+        }
+    }
+
     /// The pipe feeding the innermost group (stored with it when it opened).
     fn group_pipe(&self) -> Option<usize> {
         self.groups.last().and_then(|(_, pipe)| *pipe)
@@ -670,6 +718,7 @@ impl Lexer {
     fn finish_current(&mut self) -> Option<usize> {
         self.flush();
         self.zsh_writes_next = false;
+        self.redirect_word_next = false;
         if self.current.words.is_empty() && self.current.fed_by.is_empty() {
             // Nothing to finish: keep its pipe and context (`a | (sh)`,
             // `a |& sh`, `a |` + newline + `sh`).
@@ -751,6 +800,7 @@ impl Lexer {
         let outer_redirect = std::mem::take(&mut self.redirect);
         let outer_clobber = std::mem::take(&mut self.clobber);
         let outer_zsh_writes_next = std::mem::take(&mut self.zsh_writes_next);
+        let outer_redirect_word_next = std::mem::take(&mut self.redirect_word_next);
         self.open.push(Open {
             outer,
             outer_word,
@@ -760,6 +810,7 @@ impl Lexer {
             outer_redirect,
             outer_clobber,
             outer_zsh_writes_next,
+            outer_redirect_word_next,
             first: self.done.len(),
             backtick,
             output,
@@ -794,6 +845,7 @@ impl Lexer {
                 self.redirect = open.outer_redirect;
                 self.clobber = open.outer_clobber;
                 self.zsh_writes_next = open.outer_zsh_writes_next;
+                self.redirect_word_next = open.outer_redirect_word_next;
                 self.word.push_str(UNSEEN_OUTPUT);
             }
             return;
@@ -838,6 +890,7 @@ impl Lexer {
             self.redirect = open.outer_redirect;
             self.clobber = open.outer_clobber;
             self.zsh_writes_next = open.outer_zsh_writes_next;
+            self.redirect_word_next = open.outer_redirect_word_next;
             // Not literal text: the output of a lookup or of `cd X && pwd`.
             self.looked_up |= spliced.is_some()
                 && !matches!(top.as_slice(), [only] if fact_output(&self.done[*only]));
@@ -878,6 +931,7 @@ impl Lexer {
             work::step();
             let ch = chars[index];
             let next = chars.get(index + 1).copied();
+            let previous = index.checked_sub(1).map(|at| chars[at]);
             match ch {
                 '$' if index >= arithmetic_end && misread_parameter(&chars[index + 1..]) => {
                     self.operated = true;
@@ -927,6 +981,7 @@ impl Lexer {
                 HIDDEN => self.hidden = true,
                 '\'' | '"' | '{' | '}' => {}
                 '<' if next == Some('<') && chars.get(index + 2) == Some(&'<') => {
+                    self.redirect_prefix(previous);
                     self.flush();
                     self.redirect = Redirect::HereString;
                     index += 3;
@@ -934,23 +989,29 @@ impl Lexer {
                 }
                 '<' if next == Some('<') => {
                     // A here-document: its text follows in the script.
+                    self.redirect_prefix(previous);
                     self.flush();
+                    self.redirect_word_next = true;
                     self.joint = Some(Joint::Other);
                     index += 2;
                     continue;
                 }
                 '<' => {
+                    self.redirect_prefix(previous);
                     self.flush();
                     self.redirect = Redirect::Stdin;
                 }
                 // `>&2`, `2>&1`, `>&-`: a descriptor, not a file; `>&file`
                 // writes the file.
                 '>' if next == Some('&') => {
+                    self.redirect_prefix(previous);
                     self.flush();
                     let descriptor = chars
                         .get(index + 2)
                         .is_some_and(|after| after.is_ascii_digit() || *after == '-');
-                    if !descriptor {
+                    if descriptor {
+                        self.redirect_word_next = true;
+                    } else {
                         self.redirect = Redirect::Stdout;
                         self.clobber = chars.get(index + 2) == Some(&'!');
                     }
@@ -958,6 +1019,7 @@ impl Lexer {
                     continue;
                 }
                 '>' => {
+                    self.redirect_prefix(previous);
                     self.flush();
                     self.redirect = Redirect::Stdout;
                     self.clobber = next == Some('!');

@@ -663,6 +663,22 @@ impl Classifier {
         }
         self.homes.allow_lookups_under(cwd);
         self.path(cwd);
+        // #1482 item 5: each element of the action's argv is one word. An
+        // element up to the command that the lexer below reads otherwise
+        // (`["true ./x"]`, one file of that whole name; `["env", "A=1 ./y",
+        // "./x"]`, which sets `A` and runs `./x`; `["./{x,y}"]`) is not the
+        // word judged: it asks. A shell's `-c` script comes after its
+        // command. Windows program paths hold spaces.
+        if !self.homes.windows_paths()
+            && indirect::programs(command).last().is_some_and(|last| {
+                command[..=*last].iter().any(|element| {
+                    work::step();
+                    !shell::one_word(element)
+                })
+            })
+        {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         self.command(command, cwd, /*depth*/ 0);
     }
 }
@@ -2304,6 +2320,21 @@ impl Classifier {
             variables.insert(name.to_string(), shell::UNSEEN_OUTPUT.to_string());
         }
         if self.rebuilt == 0 && indirect::misread_command(simple, words) {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
+        // #1482 items 2 and 4, also in the line `eval` runs (`eval '>log
+        // ./x'`, `eval sudo -A ./x`).
+        let operands = command
+            .as_ref()
+            .filter(|(_, name)| name == "eval")
+            .map(|(index, _)| index + 1);
+        if indirect::redirect_hides_command(simple, words, /*from*/ 0)
+            || indirect::sudo_runs_helper(simple, words, /*from*/ 0)
+            || operands.is_some_and(|from| {
+                indirect::redirect_hides_command(simple, words, from)
+                    || indirect::sudo_runs_helper(simple, words, from)
+            })
+        {
             self.note(ProtectedActionKind::UnseenCode);
         }
         // #1436: as the quote-aware reading reads them, when set.

@@ -7074,6 +7074,176 @@ fn issue_1482_unknown_cluster_letters_keep_one_word() {
     assert_eq!(quiet, Vec::<&str>::new(), "should ask");
 }
 
+/// #1482 items 2-5 ask: a redirection's file, descriptor, `{fd}` name or
+/// here-document delimiter read as the command (`sudo -R >log -C sub
+/// ./run.sh`, `>log ./x`, `2>&1 ./x`, `<<EOF ./x`), also in `eval`'s line,
+/// `eval` text without the wrapper-folder check (`eval 'sudo -C 3
+/// ./run.sh'`), sudo running code the words do not name (`-i` from the
+/// target user's home, `-A` an askpass helper, `-e` an editor), also in
+/// `eval`'s line, and an argv element up to the command that the lexer
+/// reads otherwise (`["true ./x"]`, one file of that name; `["env", "A=1
+/// ./y", "./x"]`). The lines around them stay as they were. Review 1 of
+/// #1719 added the descriptor, `eval`, argv and `-R VALUE` lines.
+#[cfg(unix)]
+#[test]
+fn issue_1482_items_2_to_5_ask() {
+    let evil = "echo x >> ~/.zshenv\n";
+    let x_evil: &[(&str, &str)] = &[("x", evil)];
+    let x_ok: &[(&str, &str)] = &[("x", "true\n")];
+    let sub_evil: &[(&str, &str)] = &[("run.sh", "true\n"), ("sub/run.sh", evil)];
+    let three_evil: &[(&str, &str)] = &[("run.sh", "true\n"), ("3/run.sh", evil)];
+    let mut wrong = Vec::new();
+    for (files, line) in [
+        // Item 2.
+        (sub_evil, "sudo -R >log -C sub ./run.sh"),
+        (x_evil, ">log ./x"),
+        (x_evil, "sudo >log ./x"),
+        (x_evil, "env >log ./x"),
+        (x_evil, "2>log sh x"),
+        (x_evil, "sudo 2>log ./x"),
+        (x_evil, "<log sh x"),
+        (x_evil, "sudo 2>&1 ./x"),
+        (x_evil, "2>&1 ./x"),
+        (x_evil, ">&2 ./x"),
+        (x_evil, "{fd}>log ./x"),
+        (x_evil, "<<EOF ./x"),
+        (x_evil, ">log eval ./x"),
+        // `&>log` is read as `&` and `>log`.
+        (x_evil, "sudo &>log -u root ./x"),
+        (sub_evil, "sudo -R &>log -C sub ./run.sh"),
+        (x_ok, "eval '>log ./x'"),
+        // Item 3.
+        (three_evil, "eval 'sudo -C 3 ./run.sh'"),
+        (three_evil, "eval sudo -C 3 ./run.sh"),
+        (sub_evil, "eval 'sudo -D sub ./run.sh'"),
+        (x_evil, "eval ./x"),
+        // Item 4.
+        (x_ok, "sudo -i ./x"),
+        (x_ok, "sudo -iu root ./x"),
+        (x_ok, "sudo -A ./x"),
+        (x_ok, "sudo -nA ./x"),
+        (x_ok, "sudo --askpass ./x"),
+        (x_ok, "sudo -e ./x"),
+        (x_ok, "sudo -u root -e ./x"),
+        (x_ok, "sudo --edit ./x"),
+        (x_ok, "sudoedit ./x"),
+        (x_ok, "eval sudo -A ./x"),
+        (x_ok, "eval sudoedit ./x"),
+        (x_ok, "sudo -R sub -A ./x"),
+        (x_ok, "sudo --user root --askpass ./x"),
+        // Review 2: a redirection before or among sudo's options.
+        (x_ok, ">log sudo -A true"),
+        (x_ok, "2>/dev/null sudo -A true"),
+        (x_ok, "sudo >log -A true"),
+        (x_ok, "sudo 2>&1 -A true"),
+        (x_ok, "sudo {fd}>log -e f"),
+        (x_ok, ">log sudoedit f"),
+        // Review 2: each sudo's options are read as before, past the next
+        // program the wrapper reading sees (`env`, the `-R` value).
+        (x_ok, "sudo -R env -A true"),
+        (x_ok, "sudo -R sudo -A true"),
+        (x_ok, "sudo --us root -A true"),
+    ] {
+        if in_workspace(files, line).is_none() {
+            wrong.push(line);
+        }
+    }
+    assert_eq!(wrong, Vec::<&str>::new(), "should ask");
+    for (files, line) in [
+        (x_ok, "ls >log"),
+        (x_ok, "ls 2>/dev/null"),
+        (x_ok, "2>/dev/null ls"),
+        (x_ok, "exec >log"),
+        (x_ok, "exec 3>&1"),
+        (x_ok, "cat <<EOF"),
+        (x_ok, "ls 2>&1"),
+        (x_ok, "ls >&2"),
+        (x_ok, "sudo ./x >log"),
+        (x_ok, "sudo ./x 2>&1"),
+        (x_ok, "sudo --user root ./x"),
+        (x_ok, "eval sudo ./x"),
+        (x_ok, "eval ./x"),
+        (x_ok, "eval true"),
+        (x_ok, "sudo -u root ./x"),
+        (x_ok, "sudo -E ./x"),
+        (x_ok, "sudo -u e ./x"),
+        (x_ok, "sudo -p A ./x"),
+        // #1309: `-s` runs `$SHELL`, read as before.
+        (x_ok, "sudo -s ./x"),
+        (x_ok, ">log sudo true"),
+        (x_ok, "sudo 2>&1 -u root true"),
+        // D217: sudo's own `-C N` names no folder.
+        (three_evil, "sudo -C 3 ./run.sh"),
+    ] {
+        if in_workspace(files, line).is_some() {
+            wrong.push(line);
+        }
+    }
+    assert_eq!(wrong, Vec::<&str>::new(), "should be quiet");
+    // Item 5: each argv element is one word.
+    let root = tempfile::tempdir().expect("tempdir");
+    std::fs::write(root.path().join("x"), "true\n").expect("x");
+    let cwd = root.path().to_string_lossy().into_owned();
+    let argv = |command: &[&str]| {
+        classify_with(&shell_in(&cwd, command), &fixture(HOME), Some(root.path()))
+    };
+    let mut wrong = Vec::new();
+    for command in [
+        &["true ./x"][..],
+        &["env", "true ./x"],
+        &["sudo", "-u", "root", "true ./x"],
+        &["true;./x"],
+        &["env", "A=1 ./y", "./x"],
+        &["sudo", "-u", "root ./y", "./x"],
+        &["./{x,y}"],
+        &["true`./x`"],
+    ] {
+        if argv(command).is_none() {
+            wrong.push(command);
+        }
+    }
+    assert_eq!(wrong, Vec::<&[&str]>::new(), "should ask");
+    for command in [
+        &["true", "./x"][..],
+        &["./x"],
+        &["echo", "a b"],
+        &["bash", "-lc", "true ./x"],
+        &["sudo", "sh", "-c", "true ./x"],
+        &["env", "A=1", "./x"],
+        &["sudo", "-u", "root", "./x"],
+        &["./x", "a b", "{c,d}"],
+        &["xargs", "-I{}", "rm", "--", "{}"],
+    ] {
+        if argv(command).is_some() {
+            wrong.push(command);
+        }
+    }
+    assert_eq!(wrong, Vec::<&[&str]>::new(), "should be quiet");
+}
+
+/// #1482 items 2-5 (reviews 1 and 2 of #1719): the redirection and sudo
+/// option checks stay linear in the line's length, also for chained sudos
+/// whose option reading runs past the next sudo (`-R`, `--us`, `-xu`).
+#[test]
+fn issue_1482_items_2_to_5_checks_are_linear() {
+    for (label, unit) in [
+        ("redirections", ">a "),
+        ("descriptors", "2>&1 "),
+        ("sudo options", "-u root "),
+        ("sudo clusters", "-nu root "),
+        ("chained sudo -R", "sudo -R "),
+        ("chained sudo --us", "sudo --us "),
+        ("chained sudo -xu", "sudo -xu "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let units = unit.repeat(400 * scale);
+            let _ = script(&format!("sudo {units}./x"));
+            let _ = script(&format!("{units}./x"));
+            let _ = script(&format!("eval sudo {units}./x"));
+        });
+    }
+}
+
 /// #1302 follow-up: programs named by a path, behind a wrapper's folder,
 /// are judged in linear work.
 #[cfg(unix)]
