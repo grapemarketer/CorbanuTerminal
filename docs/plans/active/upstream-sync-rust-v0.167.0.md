@@ -106,7 +106,7 @@ Slice workers branch from the sync branch, one slice each, and are recorded in t
 | PF-85 | [PF-85-S00](../../sprints/current/upstream-sync/pf-85-s00-setup-and-skeleton.md), [PF-85-S01](../../sprints/current/upstream-sync/pf-85-s01-tier1-below-core.md), [PF-85-S02](../../sprints/current/upstream-sync/pf-85-s02-tier2-core.md), [PF-85-S03](../../sprints/current/upstream-sync/pf-85-s03-security-port.md), [PF-85-S04](../../sprints/current/upstream-sync/pf-85-s04-tier3-tui-app-server-exec-cli.md), [PF-85-S05](../../sprints/current/upstream-sync/pf-85-s05-qualification-and-merge.md), [PF-85-S06](../../sprints/current/upstream-sync/pf-85-s06-cadence.md) | pending |
 
 PF-85 is the sync of `rust-v0.167.0` into `main`. S3a's paths are resolved inside S01 and S02; the S03 port starts at
-the S02 exit and runs alongside S04 (plan §6). That needs `parallel_sprint_limit` 2, a second `parallel_lanes` entry
+the S02 exit and runs alongside S04 (plan §6). That needs `parallel_sprint_limit` 2, `parallel_lanes` naming two lanes
 and disjoint S03/S04 write scopes (S04's tier-3 rows include security-path files) when S03 starts; until then one
 sprint is in progress at a time.
 

@@ -52,6 +52,29 @@ def stage_blobs(wt, p):
     return out
 
 
+def stage_modes(wt, p):
+    out = {"1": "", "2": "", "3": ""}
+    for line in git(wt, "ls-files", "-u", "--", p).splitlines():
+        meta, _ = line.split("\t", 1)
+        mode, _, stage = meta.split()
+        out[stage] = mode
+    return out
+
+
+def tree_mode(wt, rev, p):
+    line = git(wt, "ls-tree", rev, "--", p, check=False).strip()
+    return line.split()[0] if line else ""
+
+
+def copy_prepared(a, wt, p, mode):
+    """Copy a prepared file and give it the mode git recorded (copy2 keeps the saved copy's mode, not git's)."""
+    dst = os.path.join(wt, p)
+    shutil.copy2(os.path.join(a.dir, "files", p), dst)
+    if mode in ("100755", "100644"):
+        os.chmod(dst, 0o755 if mode == "100755" else 0o644)
+    git(wt, "add", "--", p)
+
+
 def cmd_prep(a):
     here = os.path.dirname(os.path.abspath(__file__))
     tag_sha = subprocess.run(
@@ -197,8 +220,7 @@ def cmd_apply(a):
         elif r["action"] == "delete":
             git(a.worktree, "rm", "--quiet", "--", p)
         else:
-            shutil.copy2(os.path.join(a.dir, "files", p), os.path.join(a.worktree, p))
-            git(a.worktree, "add", "--", p)
+            copy_prepared(a, a.worktree, p, tree_mode(a.worktree, "HEAD", p))
     # Lockfiles always start from our side, whether or not they conflicted.
     for p in LOCKS:
         if (
@@ -216,6 +238,7 @@ def cmd_apply(a):
             problems.append(f"{p}: no prepared resolution")
             continue
         b = stage_blobs(a.worktree, p)
+        m = stage_modes(a.worktree, p)
         if b["3"] != r["theirs"] or b["2"] != r["ours"]:
             problems.append(
                 f"{p}: changed since it was prepared (ours {r['ours'][:10]} -> {b['2'][:10]})"
@@ -224,8 +247,7 @@ def cmd_apply(a):
         if r["action"] == "delete":
             git(a.worktree, "rm", "--quiet", "--", p)
         else:
-            shutil.copy2(os.path.join(a.dir, "files", p), os.path.join(a.worktree, p))
-            git(a.worktree, "add", "--", p)
+            copy_prepared(a, a.worktree, p, m["2"] or m["3"])
     for p in sorted(
         p for p, r in prepared.items() if r["code"] != "extra" and p not in current
     ):
@@ -296,6 +318,13 @@ def cmd_check(a):
         full = os.path.join(wt, p)
         if os.path.isfile(full) and MARKER.search(open(full, "rb").read()):
             problems.append(f"markers: {p}")
+        # A resolved file keeps one side's mode (e.g. an executable CI script stays executable).
+        staged = git(wt, "ls-files", "-s", "--", p).split()
+        sides = {tree_mode(wt, "HEAD", p), tree_mode(wt, "MERGE_HEAD", p)} - {""}
+        if staged and sides and staged[0] not in sides:
+            problems.append(
+                f"mode: {p} is {staged[0]}, both sides have {'/'.join(sorted(sides))}"
+            )
     try:
         import yaml
     except ImportError:

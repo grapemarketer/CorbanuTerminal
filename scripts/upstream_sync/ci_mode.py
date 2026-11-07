@@ -155,6 +155,14 @@ CO_BEGIN = (
     "# BEGIN sync-branch security owners (upstream sync; revert before the final PR)"
 )
 CO_END = "# END sync-branch security owners"
+# Dependency policy: a slice PR must not change these without the security owner (SG1).
+DEPENDENCY_POLICY = (
+    "codex-rs/Cargo.toml",
+    "codex-rs/deny.toml",
+    "codex-rs/.cargo/audit.toml",
+    "MODULE.bazel",
+    ".github/workflows/cargo-deny.yml",
+)
 
 
 def codeowners(action, wt, owner=None):
@@ -182,6 +190,7 @@ def codeowners(action, wt, owner=None):
         block = (
             [CO_BEGIN]
             + [f"{codeowners_pattern(spec)} {owner}" for spec in footprint.NAMED]
+            + [f"{codeowners_pattern(spec)} {owner}" for spec in DEPENDENCY_POLICY]
             + [CO_END]
         )
         text = text.rstrip("\n") + "\n\n" + "\n".join(block) + "\n"

@@ -1,6 +1,6 @@
 # Upstream OpenAI Codex sync: sprint plan
 
-Status: plan, 2026-11-06. Program issue: #1532. Starting point: #94 by @goodalexander (OpenAI Codex `rust-v0.147.0`
+Status: active (slot 2, D304), updated 2026-11-07. Program issue: #1532. Starting point: #94 by @goodalexander (OpenAI Codex `rust-v0.147.0`
 sync, closed 2026-10-29 with thanks; Task Node `task_6853a901e19885ca5aa6c75c9a44bee8`). Owner decisions on #1532:
 D273 (do it now as a dedicated, owned program), D274 (target `rust-v0.165.0`, fixed at the start, after re-scoping),
 D275 (follow upstream's removals; rebuild our permission and sandbox behaviour on the new path in a "needs security
@@ -284,7 +284,9 @@ reels, code-blind functional runs).
     after a successful open) and one value in between, each made with a known fixture passphrase through a
     throwaway keyring or fallback store (no native Keychain; test-isolation rules apply);
   - one zip archive per compression method we accept today (stored, deflate, deflate64, bzip2) and one with a
-    method we reject; these stand in for the untrusted skill and plugin bundles `zip` reads;
+    method we reject (it must fail with a clean error unless the security owner approves that decoder; then only its
+    expected result changes, not the fixture); these stand in for the untrusted skill and plugin bundles `zip` reads.
+
   Tests copy each fixture to a temp dir, check the decrypted or extracted contents against stored expected values
   (not only that the file opens), and check that a vault file above work factor 16 comes back re-encrypted at 16.
   The accepted decoder set may grow only with the security owner's approval and must not shrink. Rollback (vault

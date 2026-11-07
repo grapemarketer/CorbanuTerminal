@@ -18,8 +18,8 @@ skeleton merge is up as #1690 into it.
 | `cargo metadata --locked`, `bazel mod deps`, workflows parse | pass (glitch); actionlint on the Mac adds only two shellcheck infos in `sync-package-ci.yml` |
 | SG1 | cargo-deny on the skeleton tree: advisories, bans, licenses, sources ok. Package diff vs `main`: 1,153 → 1,153 third-party crates (44 added, 44 removed, 83 changed); new git sources `CorbanuCore/rusty_v8`, `hyperium/h3`, `microsoft/mxc`; no personal fork |
 | `rusty_v8` (D317) | [`CorbanuCore/rusty_v8`](rusty_v8-provenance.md) at `350c5a85`, refs protected; archive SHA-256 unchanged |
-| `codex-voice-host` (D316) | `voice-host` in the Cargo workspace `exclude` list, so no Cargo lane builds it. `codex-rs/voice-host/BUILD.bazel` still defines the Bazel target; the Bazel lane is skipped by the CI mode, and the integrator excludes the target before that lane returns (S4) |
-| CI mode and CODEOWNERS | applied by the skeleton command (commits `0def6a25`, `0ae27125`); CODEOWNERS is request-only until D318. #1690 also carries `a6ebe265` (stale `code-mode-runtime` feature exception dropped from `verify_cargo_workspace_manifests.py`, Tier 0) |
+| `codex-voice-host` (D316) | `voice-host` in the Cargo workspace `exclude` list and in `.bazelignore`, so neither Cargo nor Bazel lanes build it |
+| CI mode and CODEOWNERS | applied by the skeleton command (commits `0def6a25`, `0ae27125`); CODEOWNERS is request-only until D318. #1690 also carries `a6ebe265` (stale `code-mode-runtime` feature exception dropped from `verify_cargo_workspace_manifests.py`, Tier 0) and `c14aaa86` (review fixes: `run-bazel-ci.sh` mode 100755, `.bazelignore` for `voice-host`, CODEOWNERS covers the dependency-policy files, unused `juberti-oai/rust-sdks` source and duplicate ignores dropped) |
 | Governed records (D304) | [active plan, slot 2](../../plans/active/upstream-sync-rust-v0.167.0.md); sprints PF-85-S00..S06 |
 
 Known red lanes on sync PRs until their slices land (expected; a red lane on a slice whose own paths are
@@ -55,7 +55,7 @@ All lanes that ran on this commit passed (CodeQL was cancelled; it runs on `main
 shards, 0 failed; core security tests 1,613 on Linux and 1,678 on macOS), `tmux smoke` (84 tests),
 `corbanu-terminal-ci`. The last `windows-security-probes` run on `main` (`d874e0e1`) passed 395 tests.
 
-Baseline on the cut SHA `781b935f` (results recorded on #1627): `main`'s push lanes for that commit, plus
+Baseline on the cut SHA `781b935f` (results to be recorded on #1627): `main`'s push lanes for that commit, plus
 `windows-security-probes`, `credential-boundary-canary` and both security contracts dispatched on
 `sync/upstream-rust-v0.167.0` while it still pointed at `781b935f`, before the skeleton merge (runs 42354273115,
 42354275358, 42354277670, 42354280028). `orchestrate-tui-matrix` has no manual trigger;

@@ -72,6 +72,15 @@ they build still have conflict markers; a red security lane on a slice PR whose 
 real failure. Package CI tests exactly the packages listed;
 to cover "codex-core and its dependencies", list them.
 
+Skipping `rust-ci` also skips `rust-ci-core-security`, which has no manual trigger. Until the workspace compiles,
+S2 runs the `codex-core` tests (security tests included) through package CI; the lane itself runs through
+`gh workflow run rust-ci.yml --ref sync/upstream-<tag>` once the workspace compiles, before SG2 (plan §6, S3).
+`corbanu-terminal-ci` runs on every branch push, `sync/**` and `sync-ci/**` included, and stays red until the
+workspace compiles.
+
+The CODEOWNERS block lists the named security paths plus the dependency-policy files (`codex-rs/Cargo.toml`,
+`deny.toml`, `.cargo/audit.toml`, `MODULE.bazel`, `cargo-deny.yml`).
+
 ## Security paths
 
 `security_paths.txt` is one git pathspec per line, so `git diff A B -- $(cat scripts/upstream_sync/security_paths.txt)`

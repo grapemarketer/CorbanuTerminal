@@ -47,7 +47,7 @@ updated: 2026-11-07
 ## Remaining
 
 - [ ] Slice PRs per the ledger; security-owner review on security paths.
-- [ ] `age` 0.11 / reduced `zip` decoders decided with a backward-compatibility test on existing vault files and archives (D319).
+- [ ] D319 fixtures (plan §6 S1) generated from `main` and committed before any `age`/`zip` change; then the security owner's decision.
 - [ ] Migration renumbering with an upgrade test from the latest released state DB.
 - [ ] Main merge #1.
 - [ ] Code-blind functional design frozen before test-result disclosure, or non-user-facing N/A reason recorded.

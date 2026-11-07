@@ -8,7 +8,7 @@ execution_order: 1
 owner: "Upstream-sync integrator (maintainer)"
 parallel_lane: "upstream-sync"
 write_scope: "codex-rs/Cargo.toml, codex-rs/Cargo.lock, codex-rs/deny.toml, MODULE.bazel, MODULE.bazel.lock, .github/workflows/, .github/actions/, .github/scripts/, .github/CODEOWNERS, docs/management/upstreamSync/, scripts/upstream_sync/"
-integration_gate: "Merged-tree work (skeleton, Tier 0, CI mode, ledger) lands only on sync/upstream-rust-v0.167.0 by PR (ruleset) and reaches main only through the PF-85-S05 final PR with SG1-SG3. Governed records, docs/management/upstreamSync/ and scripts/upstream_sync/ also land on main through reviewed docs/scripts PRs."
+integration_gate: "Merged-tree work (skeleton, Tier 0, CI mode, ledger) lands only on sync/upstream-rust-v0.167.0 by PR (ruleset) and reaches main only through the PF-85-S05 final PR with SG1-SG3. Governed records, docs/management/upstreamSync/ and scripts/upstream_sync/ also land on main through reviewed docs/scripts PRs. Received by the upstream-sync integrator, who reruns cargo metadata --locked, cargo deny --locked check and the workflow parse check on the combined tree."
 worktree: "/Volumes/CorbanuDrive/Corbanu/worktrees/sync-upstream-rust-v0.167.0"
 branch: "sync/upstream-rust-v0.167.0"
 base_commit: "781b935ff783178f146d02815f8fc01332ae21a4"
