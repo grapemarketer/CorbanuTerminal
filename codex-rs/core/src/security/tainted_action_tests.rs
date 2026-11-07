@@ -12042,9 +12042,11 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
 /// #1704: a command writing variables named by its operands (zparseopts,
 /// zstyle, zsh modules, `read`, `set -A`, declarations, `printf -v`) asks
 /// when a word names a table of code run by name (zsh's `functions`, alias
-/// tables, `commands`, bash's `BASH_ALIASES`/`BASH_CMDS`), however the name
-/// is given; so does a write to one in an expansion. The review-6 forms
-/// (each ran its payload in zsh 5.9) and the class. Only adds prompts.
+/// tables, `commands`, bash's `BASH_ALIASES`/`BASH_CMDS`), or where it
+/// takes a name from a word the classifier cannot see (an expansion, a
+/// glob); so does a write to one in an expansion. The review-6 and
+/// review-7 forms (each ran its payload in zsh 5.9) and the class. Only
+/// adds prompts.
 #[test]
 fn issue1704_code_table_writers_fail_closed() {
     for shell in ["bash", "zsh"] {
@@ -12091,6 +12093,34 @@ fn issue1704_code_table_writers_fail_closed() {
             // The name from a value.
             "t=functions; zparseopts -a $t -- f:",
             "t=aliases; set -A \"$t\" x 'tee -a ~/.zshrc'",
+            // Review 7: a name the classifier cannot see, where one goes.
+            "set -- -f 'tee -a ~/.zshrc'; n=$(printf %s func tions); zparseopts -a $n -- f:; -f",
+            "zstyle :x y f 'tee -a ~/.zshrc'; zstyle -a :x y \"$(printf %s func tions)\"; f",
+            "n=$(printf %s com mands); set -A $n ls ./x; ls",
+            "zparseopts -a ${:-func}tions -- f:",
+            "touch functions; zparseopts -a functio[n]s -- f:",
+            "zparseopts -D -- \"f:=$n\"",
+            "zparseopts -a functi{on,}s -- f:",
+            "zstyle -g $n :x y",
+            "set -eA `cat n` x",
+            "set +A $n x",
+            "zformat -f $n x y",
+            "pcre_match -a$n x y",
+            "zstat -A $n x",
+            "getln -A $n",
+            "wait -n -p $n",
+            "compgen -V $n -W x",
+            "eval 'zparseopts -a $n -- f:'",
+            "zlistattr x $n",
+            "zgetattr x user.y $n",
+            // The ~ ^ + flags before a table's name.
+            ": ${~functions[f]::=./x}; f",
+            ": ${^commands[ls]::=./x}; ls",
+            ": ${^^~~aliases[x]::=./x}; x",
+            // zsh/attr writes attribute names (chosen by whoever sets
+            // them) into an array by name.
+            "zlistattr x functions",
+            "zgetattr x user.y functions",
             // In expansions, and tables of programs.
             ": ${(AA)=aliases::=x 'tee -a ~/.zshrc'}",
             ": ${BASH_ALIASES[x]:='tee -a ~/.zshrc'}",
@@ -12119,6 +12149,17 @@ fn issue1704_code_table_writers_fail_closed() {
             "echo ${commands[git]}",
             "(( $+commands[git] )) && echo yes",
             "aliases[ll]='ls -l'",
+            // Operands that are not names stay quiet.
+            "set -- \"$@\"",
+            "set -e -o pipefail -- $args",
+            "zparseopts -D -E -a opts -- h=help -verbose=verbose",
+            "zstyle ':x' y \"$v\"",
+            "zstyle -s ':completion:*' menu style",
+            "zstat -A info \"$f\"",
+            "zlistattr \"$f\" attrs",
+            "zgetattr \"$f\" \"$attr\" value",
+            "stat -c %A \"$f\"",
+            "wait $pid",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
