@@ -2001,8 +2001,7 @@ impl Classifier {
             // reads as the shell does (`alias b=bash` then `b run.sh`).
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
-            let strict = self.not_shell == 0 && self.rebuilt == 0;
-            if aliases.read(&words) || code_tables::writes_table(&words, &simple.words, strict) {
+            if aliases.read(&words) || code_tables::writes_table(&words, &simple.words, None) {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(

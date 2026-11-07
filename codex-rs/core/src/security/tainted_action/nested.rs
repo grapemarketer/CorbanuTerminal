@@ -611,8 +611,22 @@ impl Classifier {
             // command writing a table by name (`zparseopts -a functions`,
             // `set -A aliases …`), nor any other write to one: they fail
             // closed (#1704).
-            found.unreadable |=
-                code_tables::writes_table(&texts, &texts, self.not_shell == 0 && self.rebuilt == 0);
+            // #1704: words that may be any or several where a writer reads
+            // its options count only in text read as shell at this
+            // reading's own level (not `awk '{print $2}'` read again as
+            // code), as for #937's arithmetic.
+            let seen: Option<Vec<code_tables::Seen>> =
+                (level == 0 && self.not_shell == 0 && self.rebuilt == 0).then(|| {
+                    command
+                        .words
+                        .iter()
+                        .map(|word| {
+                            work::step();
+                            code_tables::Seen::of(word)
+                        })
+                        .collect()
+                });
+            found.unreadable |= code_tables::writes_table(&texts, &texts, seen.as_deref());
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);

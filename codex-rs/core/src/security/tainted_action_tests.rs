@@ -12384,13 +12384,13 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
     }
 }
 
-/// #1704, round 8 of #1698's review: a word the classifier cannot see
-/// where a writer reads its options may be an option taking a name (`o=-A;
-/// set $o commands ls ./x` defines `ls`), or split into several words
-/// (`set $(cat f)`); so may one before a name (`zstyle -a $(cat f)`). The
-/// classifier cannot tell a quoted word from one that splits, so either
-/// asks. `zselect` and `zsystem flock` read options after operands. Only
-/// adds prompts.
+/// #1704, round 8 of #1698's review: where a writer reads its options, a
+/// word the classifier cannot see may be an option taking a name (`o=-A;
+/// set $o commands ls ./x` defines `ls`) or, unquoted, several words
+/// (`set $(cat f)`); so may an unquoted one before a name (`zstyle -a
+/// $(cat f)`). One word with a name after it asks too (`"$o"` then
+/// `functions`). Read with quotes, in text read as shell. `zselect` and
+/// `zsystem flock` read options after operands. Only adds prompts.
 #[test]
 fn issue1704_hidden_words_where_writers_read_options_ask() {
     for shell in ["bash", "zsh"] {
@@ -12401,42 +12401,44 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "o=$(cat f); zstyle $o :x y functions; f",
             "set $(cat f); ls",
             "zstyle -a $(cat f); f",
+            "zselect -t 0 -r 0 -A $n",
+            "zsystem flock -t 0 -f $n file",
             // The class: an option, an option's value, a pattern.
             "set -$o commands ls ./x",
             "set -e \"$o\" commands ls ./x",
             "set -o $(cat f)",
             "set ?A commands ls ./x",
             "set *~a/b",
+            "set ^*.png",
+            "set -.#A commands ls ./x",
             "zstyle -$o :x y functions",
-            "zstyle -s \"$c\" y n",
+            "zstyle \"$o\" :x y functions",
+            "zstyle -s $c y n",
             "printf $o 'BASH_CMDS[ls]' ./x",
-            "printf \"$fmt\" x",
+            "printf \"$o\" 'BASH_CMDS[ls]' ./x",
             "print $o 'functions[f]' 'tee -a ~/.zshrc'",
             "print -r $(cat f)",
             "zstat $o functions x",
-            "zstat -A info \"$f\"",
+            "zstat \"$o\" \"$n\" x",
             "stat -f %m $(cat f)",
             "zformat $o $n x",
             "pcre_match $o $n x",
             "compadd -X $(cat f) x",
             "sysread -i $fd line",
-            // Before a name a split may move.
+            // Before a name several words may move.
             "getopts $(cat f)",
             "zlistattr $(cat f)",
-            "zlistattr \"$f\" attrs",
             "zgetattr x $(cat f)",
             "zgetattr \"$f\" \"$attr\" value",
-            "zregexparse $(cat f)",
-            // Options after operands (round 8).
-            "zselect -t 0 -r 0 -A $n",
-            "zsystem flock -t 0 -f $n file",
+            // Options after operands.
             "zselect 0 -A $n",
             "zselect -r 0 -a$n",
             "zsystem flock -f $n x",
             "zsystem flock -t 1 -f \"$(cat n)\" x",
-            // Behind wrappers, `eval`.
-            "builtin set $o commands ls ./x",
-            "eval 'set $o commands ls ./x'",
+            // Behind wrappers, `eval`, `sh -c`.
+            "builtin zstyle $o :x y functions",
+            "eval 'zstyle $o :x y functions'",
+            "sh -c 'zstyle $o :x y functions'",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
         }
@@ -12445,22 +12447,31 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "set -euo pipefail",
             "set x $y",
             "printf '%s\\n' \"$x\"",
+            "printf \"$fmt\" x",
             "printf -- \"$x\"",
+            "printf '* -text\\n' > f",
+            "printf '<%s>' x",
             "print -r -- $x",
+            "print -r \"$x\"",
             "stat -c %s \"$f\"",
+            "stat -f %m \"$f\"",
             "stat -f %m ~/x",
             "set -e */x",
+            "print -l *.png",
+            "set x.# y",
             "zstat -A info x \"$f\"",
+            "zgetattr \"$f\" user.y value",
             "zstyle ':completion:*' menu select",
-            "zstyle -s ':completion:*' menu style",
+            "zstyle -s \"$c\" y n",
             "zstyle :x y \"$v\"",
             "wait $pid",
             "wait -n $!",
             "zselect -t 10 -r $fd",
             "zsystem flock -t 1 \"$f\"",
             "getopts ab: opt",
-            // Text read loosely: an awk program joined with `-F'\\t'`.
+            // awk programs, read again as code, are not shell.
             "gh pr checks 1 | awk -F'\\t' '{print $2}' | sort",
+            "awk '/^x$/{getline; print NR\": \"$0}' f",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
@@ -12476,6 +12487,10 @@ fn issue1704_option_checks_are_linear() {
     });
     work::assert_linear("options among operands", |scale| {
         let line = format!("zselect {}", "0 -t 1 ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("words after one unseen", |scale| {
+        let line = format!("print \"$o\" {}", "x ".repeat(400 * scale));
         let _ = kind(&["zsh", "-lc", &line]);
     });
     work::assert_linear("many zstyles", |scale| {
@@ -12599,9 +12614,8 @@ fn issue1704_code_table_writers_fail_closed() {
             "zparseopts -D -E -a opts -- h=help -verbose=verbose",
             "zstyle ':x' y \"$v\"",
             "zstyle -s ':completion:*' menu style",
-            "zstat -A info -- \"$f\"",
-            "zlistattr f attrs",
-            "zgetattr f user.y value",
+            "zstat -A info \"$f\"",
+            "zlistattr \"$f\" attrs",
             "stat -c %A \"$f\"",
             "wait $pid",
         ] {
