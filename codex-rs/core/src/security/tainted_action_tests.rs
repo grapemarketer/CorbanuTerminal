@@ -11275,6 +11275,12 @@ fn issue1606_git_value_before_a_wrapper_folder_option_asks() {
             // As before.
             "env -iC ~ git log --output=.zshenv",
             "docker exec -w ~ c git log --output=.zshenv",
+            // Review 1: git before a wrapper and its folder option, a
+            // wrapper's long option value spelled `git`, and `=git` after it.
+            "=git submodule foreach env -iC ~ git log --output=.zshenv",
+            "git bisect run sudo -D ~ git log --output=.zshenv",
+            "sudo --user git -D ~ git log --output=.zshenv",
+            "env -iC ~ =git log --output=.zshenv",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
@@ -11315,6 +11321,16 @@ fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
             "alias x='echo x >> =mytool'",
             "alias x='cp a =mytool'",
             "sh -c \"cp x =mytool\"",
+            // Review 1: partly quoted, behind zsh's precommand modifiers or
+            // a wrapper, and `--` before eval's or trap's text.
+            "echo x | tee -a =\"mytool\"",
+            "cp x =my'tool'",
+            "eval 'cp x =\"mytool\"'",
+            "echo x | noglob tee =mytool",
+            "nocorrect cp x =mytool",
+            "command cp x =mytool",
+            "eval -- 'cp x =mytool'",
+            "trap -- 'cp x =mytool' EXIT",
         ] {
             assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
         }
@@ -11350,4 +11366,23 @@ fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
         ),
         Some(Persistence)
     );
+}
+
+/// #1620: reading the text `eval`, `trap` and `alias` run stays linear.
+#[test]
+fn issue1620_code_text_checks_are_linear() {
+    for (label, unit) in [
+        ("eval words", "eval echo x; "),
+        ("eval arguments", "eval a b c d e f g h; "),
+        ("trap values", "trap 'echo x' 1 2 3; "),
+        ("alias values", "alias a=b c='d e' f=g; "),
+        ("writer operands", "cp a b c d e f; "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let _ = kind(&["zsh", "-lc", &unit.repeat(100 * scale)]);
+        });
+    }
+    work::assert_linear("one long eval", |scale| {
+        let _ = kind(&["zsh", "-lc", &format!("eval {}", "x ".repeat(2000 * scale))]);
+    });
 }

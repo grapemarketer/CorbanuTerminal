@@ -567,16 +567,20 @@ impl Classifier {
             // `git` before it (`env -u git -iC ~ git log`) hides none; but
             // not where the command is git and the option its own.
             if let Some(from) = elsewhere_from
-                && !command_at.as_ref().is_some_and(|(at, program)| {
-                    *at < from && (program == "git" || git_helpers::git_name(program).is_some())
-                })
+                && !own_git_folder(&texts, command_at.as_ref(), from)
                 && let Some(at) = (from + 1..texts.len()).find(|at| {
                     work::step();
                     let program = name(&texts[*at]);
-                    program == "git" || git_helpers::git_name(&program).is_some()
+                    program == "git"
+                        || git_helpers::git_name(&program).is_some()
+                        || indirect::equals_git(&texts[*at])
                 })
                 && outputs::output_files(
-                    &name(&texts[at]),
+                    &if indirect::equals_git(&texts[at]) {
+                        "git".to_string()
+                    } else {
+                        name(&texts[at])
+                    },
                     &texts[at + 1..],
                     /*unchecked*/ false,
                 )
@@ -1701,22 +1705,64 @@ fn cut_matters(words: &[Word]) -> bool {
     })
 }
 
-/// #1620: whether a writer's operand is a word zsh reads as the installed
-/// program it names (`tee -a =mytool`, `cp x =mytool`, `curl -o =mytool`).
-/// Not a quoted word: an option's quoted value (`curl --proto '=https'`) is
-/// not expanded.
-fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
-    command_at.is_some_and(|(index, name)| {
-        WRITERS.contains(&name.as_str())
-            && words
-                .get(index + 1..)
-                .unwrap_or_default()
-                .iter()
-                .any(|word| {
-                    work::step();
-                    !word.quoted && outputs::zsh_program_path(&word.text)
-                })
+/// #1606: whether the folder option at `from` is git's own: the command
+/// is git, with nothing before it, and only its global options (and their
+/// values) come between them (`git -c k=v -C ~ log`). Not a git after a
+/// wrapper or a subcommand (`=git submodule foreach env -iC ~ git log`),
+/// and not one a wrapper's option value spells (`sudo --user git -D ~`).
+fn own_git_folder(texts: &[String], command_at: Option<&(usize, String)>, from: usize) -> bool {
+    const VALUED: &[&str] = &[
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    ];
+    let Some((0, program)) = command_at else {
+        return false;
+    };
+    if !(program == "git" || git_helpers::git_name(program) == Some(None))
+        || !texts.get(from).is_some_and(|word| word.starts_with("-C"))
+    {
+        return false;
+    }
+    let mut value_next = false;
+    texts.get(1..from).unwrap_or_default().iter().all(|word| {
+        work::step();
+        let option = std::mem::take(&mut value_next) || word.starts_with('-');
+        value_next = VALUED.contains(&word.as_str());
+        option
     })
+}
+
+/// #1620: whether a writer's operand is a word zsh reads as the installed
+/// program it names (`tee -a =mytool`, `cp x ="mytool"`, `curl -o
+/// =mytool`), after zsh's precommand modifiers (`noglob tee =mytool`). An
+/// option's quoted value (`curl --proto '=https'`) is not expanded.
+fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
+    let Some((mut index, mut program)) = command_at.cloned() else {
+        return false;
+    };
+    while unknown_folder::MODIFIERS.contains(&program.as_str()) {
+        work::step();
+        index += 1;
+        let Some(word) = words.get(index) else {
+            return false;
+        };
+        program = name(&word.text);
+    }
+    WRITERS.contains(&program.as_str())
+        && words
+            .get(index + 1..)
+            .unwrap_or_default()
+            .iter()
+            .any(|word| {
+                work::step();
+                word.equals_first && outputs::zsh_program_path(&word.text)
+            })
 }
 
 /// #1620: whether the command line `eval` (its words joined), `trap` or
@@ -1729,7 +1775,10 @@ fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)
     };
     let args = &texts[index + 1..];
     let lines: Vec<&str> = match name.as_str() {
-        "eval" => return writes_in(&args.join(" ")),
+        "eval" => {
+            let args = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+            return writes_in(&args.join(" "));
+        }
         "trap" => args.iter().map(String::as_str).collect(),
         "alias" => args
             .iter()
