@@ -2821,7 +2821,7 @@ impl Classifier {
         if let Some((index, name)) = &command
             && name == "eval"
         {
-            self.path_programs(&words[index + 1..], None, &cwd, depth);
+            self.path_programs(&words[index + 1..], /*command*/ None, &cwd, depth);
         }
         self.unseen_folder = outer_unseen_folder;
     }
