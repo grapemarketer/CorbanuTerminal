@@ -810,13 +810,9 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
     // `.git\hooks` arrives as Core passes it to this backend.
     let profile = PermissionProfile::workspace_write();
     let cmd = system32_exe("cmd.exe").display().to_string();
-    let script = format!(
-        "(echo planted> \"{config}\") & (echo planted> \"{hook}\") & (mkdir \"{objects}\") & (echo ok> \"{allowed}\")",
-        config = git.join("config").display(),
-        hook = hooks.join("pre-commit").display(),
-        objects = git.join("objects").display(),
-        allowed = workspace.join("allowed.txt").display(),
-    );
+    // Relative to the workspace (the cwd): the runner quotes arguments the
+    // C runtime's way, which cmd doesn't read, so no quotes inside.
+    let script = "(echo planted> .git\\config) & (echo planted> .git\\hooks\\pre-commit) & (mkdir .git\\objects) & (echo ok> allowed.txt)".to_string();
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let runtime = current_thread_runtime();
     let exit_code = runtime.block_on(async {
