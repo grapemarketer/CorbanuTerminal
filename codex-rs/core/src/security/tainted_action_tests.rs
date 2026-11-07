@@ -11937,6 +11937,13 @@ fn issue1685_review2_forms_ask() {
             "set -Afunctions f 'tee -a ~/.zshrc'; f",
             "set -xAfunctions f 'tee -a ~/.zshrc'; f",
             "read -A -r functions < x",
+            // Review 5: behind zsh's modifiers, `zparseopts`, and a
+            // whole-table assignment in an expansion.
+            "noglob set -A functions f 'tee -a ~/.zshrc'; f",
+            "print -r 'f:x' | IFS=: noglob read -A functions; f",
+            "set -- -f 'tee -a ~/.zshrc'; zparseopts -A functions -- f:; -f",
+            ": ${(AA)=functions::=f print\\ -r\\ --\\ ~/.zshrc}; f",
+            ": ${functions::=x}",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
         }
@@ -11948,6 +11955,7 @@ fn issue1685_review2_forms_ask() {
             "ls -A functions",
             "set -- functions",
             "read -r functions < x",
+            "firebase deploy --only=functions",
             "grep -rn functions src",
             "jq '.functions[0]' f.json",
         ] {

@@ -608,10 +608,10 @@ impl Classifier {
             let mut tables = 0;
             // An array form (`aliases+=(x '…')`) is not read: it fails
             // closed.
-            let array_setter = indirect::command_word(&texts)
-                .is_some_and(|(_, name)| matches!(name.as_str(), "set" | "read"));
-            // In `set`/`read`: an option holding `A` (`-A`, `+A`, `-rA`)
-            // was given; `--` ends them.
+            let array_setter = sets_arrays(&texts);
+            // In `set`/`read`/`zparseopts` (also behind zsh's precommand
+            // modifiers): an option holding `A` (`-A`, `+A`, `-rA`) was
+            // given; `--` ends them.
             let mut array_option = false;
             let mut options_end = false;
             'tables: for (at, text) in texts.iter().enumerate() {
@@ -2243,10 +2243,26 @@ fn code_table_values(text: &str) -> (Vec<&str>, bool) {
     (values, false)
 }
 
+/// #1685: whether the command is `set`, `read` or `zparseopts`, which set
+/// an array named after an `A` option, also behind zsh's precommand
+/// modifiers and assignments (`IFS=: noglob read -A functions`).
+fn sets_arrays(texts: &[String]) -> bool {
+    let mut from = 0;
+    while let Some((at, name)) = indirect::command_word(&texts[from..]) {
+        work::step();
+        if !unknown_folder::MODIFIERS.contains(&name.as_str()) {
+            return matches!(name.as_str(), "set" | "read" | "zparseopts");
+        }
+        from += at + 1;
+    }
+    false
+}
+
 /// #1685: whether a word may set zsh's `functions` table other than by an
 /// assignment to an entry ([`code_table_values`]): a subscript named
 /// elsewhere (`printf -v 'functions[f]' …`, `${functions[f]::=…}`, `read
-/// 'functions[f]'`) or a reference (`typeset -n r=functions`). (The table
+/// 'functions[f]'`), a whole-table assignment (`${(AA)=functions::=…}`)
+/// or a reference (`typeset -n r=functions`). (The table
 /// after an array option, `set -A functions f …`, is found by the caller;
 /// alias tables by `aliases.rs`.)
 fn sets_functions_otherwise(text: &str) -> bool {
@@ -2262,7 +2278,13 @@ fn sets_functions_otherwise(text: &str) -> bool {
         if at == 0 && !code_table_values(text).0.is_empty() {
             return false;
         }
-        rest.starts_with('[') || (before == Some('=') && rest.is_empty())
+        // A whole-table assignment in an expansion (`${(AA)=functions::=…}`,
+        // `${functions:=…}`) too.
+        rest.starts_with('[')
+            || rest.starts_with('=')
+            || rest.starts_with(":=")
+            || rest.starts_with("::=")
+            || (before == Some('=') && rest.is_empty() && !text.starts_with('-'))
     })
 }
 
