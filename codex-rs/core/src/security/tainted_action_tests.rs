@@ -8984,19 +8984,25 @@ fn issue_1132_many_short_saved_targets_are_linear() {
     });
 }
 
-/// #1132: an over-limit output list becomes one unknown target, so a
-/// harmless known list stays quiet but the same command with an unknown
-/// destination is rejected when the line runs a script.
+/// #1132: an unsafe or over-limit output list becomes one unknown target, so
+/// a harmless known list stays quiet but an unknown destination is rejected
+/// when the line runs a script.
 #[test]
-fn issue_1132_oversized_saved_targets_are_unseen_code() {
+fn issue_1132_unsafe_or_oversized_saved_targets_are_unseen_code() {
     let (_dir, cwd) = issue_885_fixture();
-    let classify = |count| {
-        let script = format!("sed p{}; bash r.sh", " >a".repeat(count));
+    let classify = |script: String| {
         classify_fixture(&shell_in(&cwd, &[SCRIPT_BASH, "-c", &script]))
     };
 
-    assert_eq!(classify(64), None);
-    assert_eq!(classify(65), Some(ProtectedActionKind::UnseenCode));
+    assert_eq!(classify(format!("sed p{}; bash r.sh", " >a".repeat(64))), None);
+    assert_eq!(
+        classify(format!("sed p{}; bash r.sh", " >a".repeat(65))),
+        Some(ProtectedActionKind::UnseenCode)
+    );
+    assert_eq!(
+        classify("sed p >'*.sh'; bash r.sh".to_string()),
+        Some(ProtectedActionKind::UnseenCode)
+    );
 }
 
 /// Sharing target judgement must keep both known and unknown destinations
