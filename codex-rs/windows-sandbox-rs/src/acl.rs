@@ -1698,6 +1698,10 @@ const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
 #[path = "acl_delete_child.rs"]
 mod delete_child;
 
+/// D311/D313: the pieces of our own tree walk.
+#[path = "acl_walk.rs"]
+pub(crate) mod walk;
+
 #[cfg(test)]
 #[path = "acl_tests.rs"]
 mod tests;
