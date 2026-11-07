@@ -390,6 +390,19 @@ impl Classifier {
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
             let command_at = indirect::command_word(&texts);
+            // #1620: zsh expands `=mytool` in any word, so a writer's operand
+            // names the installed program too (`tee -a =mytool`, `cp x
+            // =mytool`). And the text `eval`, `trap` and `alias` run is a
+            // command line read at this level: its redirection targets and
+            // writers' operands count (`eval "echo x >> =mytool"`). The same
+            // gate as above.
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && (writes_zsh_program(&texts, command_at.as_ref())
+                    || code_writes_zsh_program(&texts, command_at.as_ref()))
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a command word spelled as a pattern (`c? ~`, `[c]d ~`,
             // `{c,}d ~`) may be `cd`, `eval` or `source`; a `cd` behind
             // zsh's precommand modifiers (`noglob cd ~`) is not followed.
@@ -550,13 +563,18 @@ impl Classifier {
             // exec -w ~ c git log --output=f`, `env -iC ~ git config -f f`):
             // read from the first git, when it is after the folder option
             // (git's own `-C` is followed by `judge_outputs`).
+            // #1606: the first git after it, so an option value spelled
+            // `git` before it (`env -u git -iC ~ git log`) hides none; but
+            // not where the command is git and the option its own.
             if let Some(from) = elsewhere_from
-                && let Some(at) = (0..texts.len()).find(|at| {
+                && !command_at.as_ref().is_some_and(|(at, program)| {
+                    *at < from && (program == "git" || git_helpers::git_name(program).is_some())
+                })
+                && let Some(at) = (from + 1..texts.len()).find(|at| {
                     work::step();
                     let program = name(&texts[*at]);
                     program == "git" || git_helpers::git_name(&program).is_some()
                 })
-                && at > from
                 && outputs::output_files(
                     &name(&texts[at]),
                     &texts[at + 1..],
@@ -1680,6 +1698,54 @@ fn cut_matters(words: &[Word]) -> bool {
                 work::step();
                 judged(part)
             })
+    })
+}
+
+/// #1620: whether a writer's operand is a word zsh reads as the installed
+/// program it names (`tee -a =mytool`, `cp x =mytool`, `curl -o =mytool`).
+fn writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)>) -> bool {
+    command_at.is_some_and(|(index, name)| {
+        WRITERS.contains(&name.as_str())
+            && texts[index + 1..].iter().any(|text| {
+                work::step();
+                outputs::zsh_program_path(text)
+            })
+    })
+}
+
+/// #1620: whether the command line `eval` (its words joined), `trap` or
+/// `alias` (each value) runs writes such a program: a redirection target or
+/// a writer's operand (`eval "echo x >> =mytool"`, `alias x='tee =mytool'`).
+/// Read with its quotes, so `eval "awk 'NR>=10' f"` writes nothing.
+fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)>) -> bool {
+    let Some((index, name)) = command_at else {
+        return false;
+    };
+    let args = &texts[index + 1..];
+    let lines: Vec<&str> = match name.as_str() {
+        "eval" => return writes_in(&args.join(" ")),
+        "trap" => args.iter().map(String::as_str).collect(),
+        "alias" => args
+            .iter()
+            .map(|arg| arg.split_once('=').map_or(arg.as_str(), |(_, value)| value))
+            .collect(),
+        _ => return false,
+    };
+    lines.into_iter().any(|line| {
+        work::step();
+        writes_in(line)
+    })
+}
+
+/// #1620: see [`code_writes_zsh_program`].
+fn writes_in(line: &str) -> bool {
+    quoted::commands(line).commands.iter().any(|command| {
+        work::step();
+        let texts: Vec<String> = command.words.iter().map(|word| word.text.clone()).collect();
+        command.writes_to.iter().any(|word| {
+            work::step();
+            outputs::zsh_program_path(&word.text)
+        }) || writes_zsh_program(&texts, indirect::command_word(&texts).as_ref())
     })
 }
 
