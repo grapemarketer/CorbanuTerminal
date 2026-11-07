@@ -201,7 +201,11 @@ unsandboxed. For an explicitly configured read-only path nested deeper in a
 writable root (`w\a\b`, say), each folder between the root and it (`w\a`)
 also denies the sandbox `DELETE`, and that folder's parent denies Everyone
 `FILE_DELETE_CHILD`, so a command can't move or rename the folder away and
-recreate the read-only path (#1506 item 3, D263). Commands can still write
+recreate the read-only path (#1506 item 3, D263). An explicitly configured
+read-only path that doesn't exist yet is created (as a folder) before the
+command starts and protected the same way, however the command was started
+(#1686); a skip-missing entry applies only to a path that exists, and a
+root's top-level `.codex` is covered by D262 below. Commands can still write
 inside those folders but can't delete or rename the folders themselves; the
 default `.git`, `.codex` and `.agents` protections sit directly in the root
 and don't add these. A `.codex` or `.agents` folder at the top of a writable

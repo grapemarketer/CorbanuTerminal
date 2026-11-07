@@ -8,10 +8,11 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
-/// A configured read-only path that doesn't exist yet reaches the legacy
-/// backend as an extra deny-write path, which it creates before the command
-/// starts, so a command can't create it writable first. A skip-missing
-/// entry applies only to a path that exists, so it isn't passed on.
+/// A configured read-only path that doesn't exist yet is among the extra
+/// deny-write paths resolved for the legacy backend (which `command/exec`
+/// and the exec server pass on); the backend creates such paths before the
+/// command starts. A skip-missing entry applies only to a path that exists,
+/// so it isn't passed on.
 #[test]
 fn missing_read_only_paths_reach_the_restricted_token_backend() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");

@@ -332,21 +332,78 @@ fn link_above_carve_out_finds_links_below_the_root() {
     );
 }
 
-/// A configured read-only path that doesn't exist yet (Core passes it as an
-/// extra deny-write path) is created before the command starts and
-/// protected like one that exists: the command can't write in it, nor move
-/// it or the folder above it away and recreate it.
+/// #1686: a configured read-only path that doesn't exist yet is created
+/// before the command starts and protected like one that exists, whether it
+/// comes as an extra deny-write path (as `command/exec` passes it) or only
+/// in the profile (as the shell tool and unified exec do): the command can't
+/// write in it, nor move it or the folder above it away and recreate it.
+/// Before, a path that came only in the profile was dropped while missing.
 #[test]
 fn legacy_missing_read_only_path_is_created_and_protected() {
     let _guard = legacy_process_test_guard();
-    let test_root = user_owned_test_root();
-    let workspace = test_root.path().join("workspace");
-    fs::create_dir_all(&workspace).expect("create workspace");
-    let read_only = workspace.join("a\\ro");
-    let carve_outs = [AbsolutePathBuf::from_absolute_path(&read_only).expect("absolute")];
+    let results: Vec<_> = [true, false]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            let read_only = workspace.join("a\\ro");
+            missing_read_only_path_outcome(&workspace, &read_only, as_deny_write_path)
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [true, false].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            true,
+            false,
+            false,
+            Some("after\r\n".to_string())
+        ))
+    );
+}
+
+/// Runs the #1686 script with `read_only` configured read-only (and, with
+/// `as_deny_write_path`, also passed as an extra deny-write path).
+fn missing_read_only_path_outcome(
+    workspace: &Path,
+    read_only: &Path,
+    as_deny_write_path: bool,
+) -> (bool, Result<i32, String>, bool, bool, bool, Option<String>) {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(workspace),
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(read_only),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+        vec![absolute(read_only)]
+    } else {
+        Vec::new()
+    };
     let started = run_script(
-        &PermissionProfile::workspace_write(),
-        &workspace,
+        &profile,
+        workspace,
         &carve_outs,
         HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
         concat!(
@@ -359,14 +416,12 @@ fn legacy_missing_read_only_path_is_created_and_protected() {
         ),
     );
 
-    assert_eq!(
-        (
-            started,
-            read_only.is_dir(),
-            read_only.join("config.toml").exists(),
-            workspace.join("a-moved").exists(),
-            fs::read_to_string(workspace.join("a\\other.txt")).ok(),
-        ),
-        (Ok(0), true, false, false, Some("after\r\n".to_string()))
-    );
+    (
+        as_deny_write_path,
+        started,
+        read_only.is_dir(),
+        read_only.join("config.toml").exists(),
+        workspace.join("a-moved").exists(),
+        fs::read_to_string(workspace.join("a\\other.txt")).ok(),
+    )
 }

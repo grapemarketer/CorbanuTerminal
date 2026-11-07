@@ -403,6 +403,31 @@ fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+/// #1686: the explicit read-only paths of the writable roots that don't
+/// exist (a dangling link counts, and then can't be created, so the command
+/// doesn't start). Skip-missing entries aren't explicit here, and a root's
+/// top-level `.codex` is left to D262, as when Core passes the paths itself.
+fn missing_explicit_read_only_paths(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    current_dir: &Path,
+    env_map: &HashMap<String, String>,
+) -> Vec<PathBuf> {
+    let mut missing: Vec<PathBuf> = permissions
+        .writable_roots_for_cwd(current_dir, env_map)
+        .into_iter()
+        .flat_map(|root| {
+            let dot_codex = root.root.join(".codex");
+            root.read_only_subpaths
+                .into_iter()
+                .filter(move |path| *path != dot_codex)
+        })
+        .filter(|path| !path.exists() && permissions.is_explicit_read_only_path(path, current_dir))
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
 /// `gitdir: .` must not relabel the workspace itself). All paths canonical.
 fn strictly_inside_a_root(path: &Path, roots: &[PathBuf]) -> bool {
@@ -506,8 +531,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
     let mut delete_child_denies = Vec::new();
     // D263's, which the command must not start without.
     let mut required_delete_child_denies = Vec::new();
+    // #1686: so must configured read-only paths that reach the backend only
+    // through the profile (the shell tool and unified exec pass no extra
+    // deny-write paths).
+    let missing_read_only = missing_explicit_read_only_paths(permissions, current_dir, env_map);
     unsafe {
-        for path in additional_deny_write_paths {
+        for path in additional_deny_write_paths.iter().chain(&missing_read_only) {
             // Explicit carveouts must exist before the command starts so the
             // sandbox cannot create them under a writable parent first.
             if !path.exists() {
