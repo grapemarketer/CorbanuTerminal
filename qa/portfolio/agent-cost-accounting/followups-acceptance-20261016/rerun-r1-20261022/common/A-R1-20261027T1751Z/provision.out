@@ -1,0 +1,97 @@
+PF83BEGIN
+/etc/sudoers.d/agms-codeblind: parsed OK
+[provision] hosts: 1 moonshot entry; openai -> 162.159.140.245
+pfctl: Use of -f option, could result in flushing of rules
+present in the main ruleset added by the system at startup.
+See /etc/pf.conf for further details.
+
+No ALTQ support in kernel
+ALTQ related functions disabled
+pass out quick on lo0 inet proto tcp from any to 127.0.0.1 port = 18443 user = 610 flags S/SA keep state
+pass out quick on lo0 inet proto tcp from any to 127.0.0.1 port = 18443 user = 611 flags S/SA keep state
+pass out quick on lo0 inet proto tcp from any to 127.0.0.1 port = 18443 user = 612 flags S/SA keep state
+pass out quick on lo0 inet proto tcp from any to 127.0.0.1 port = 18443 user = 613 flags S/SA keep state
+block drop out log quick proto tcp all user = 610
+block drop out log quick proto tcp all user = 611
+block drop out log quick proto tcp all user = 612
+block drop out log quick proto tcp all user = 613
+block drop out log quick proto udp all user = 610
+block drop out log quick proto udp all user = 611
+block drop out log quick proto udp all user = 612
+block drop out log quick proto udp all user = 613
+pass in quick on en0 inet proto tcp from 192.168.64.1 to (en0) port = 22 flags any keep state
+pass out quick on en0 inet proto tcp from (en0) port = 22 to 192.168.64.1 flags any keep state
+pass out quick on en0 inet proto udp from any port = 68 to 192.168.64.1 port = 67 keep state
+pass in quick on en0 inet proto icmp from 192.168.64.1 to (en0) icmp-type echoreq keep state
+pass out quick on en0 inet proto tcp from (en0) to <__automatic_38c8f7b1_0> port = 443 flags S/SA keep state
+block drop log quick on en0 all
+[provision] lo0: lo0
+[provision] users: uid=610(agmx0) gid=610(agmsexec) groups=610(agmsexec),12(everyone),61(localaccounts),701(com.apple.sharepoint.group.1),100(_lpoperator);uid=611(agmx1) gid=610(agmsexec) groups=610(agmsexec),12(everyone),61(localaccounts),701(com.apple.sharepoint.group.1),100(_lpoperator);uid=612(agmx2) gid=610(agmsexec) groups=610(agmsexec),12(everyone),61(localaccounts),701(com.apple.sharepoint.group.1),100(_lpoperator);uid=613(agmx3) gid=610(agmsexec) groups=610(agmsexec),12(everyone),61(localaccounts),701(com.apple.sharepoint.group.1),100(_lpoperator);
+[provision] staff member check: no agmx1 is NOT a member of staff
+/Users/neo 700 neo:staff
+/Users/neo_1 700 neo2:staff
+/opt/homebrew 755 neo2:admin
+/opt/homebrew/bin 750 neo2:admin
+/opt/agms 755 root:wheel
+/opt/agms/pkg 555 root:wheel
+/opt/agms/pkg/bin/corbanu 555 root:wheel
+0
+61a15c4c74ba5b4ffe1ccc61eccea4c0a877ef12ccab864866fdf0ff4131b711  pkg/bin/codex-code-mode-host
+e942b095de975f95ca3fa1f09b9576f6bb408d91499e05235e35ab37b9d6aa42  pkg/bin/corbanu
+b1613b8e122aa68df0db46b72d3b5c1d6c8bd9cd5c33bdf6cee2b835e17d5529  pkg/codex-package.json
+94e3706786495a29882454105caf6ef32978bf362fcaa0eae8faee9f25409f62  pkg/codex-resources/telegram/dist/AGENTS.md.template
+7b2486a9fb015dc0864851fd6095b7fdd75a57ca9587a3a7d0540513ff05128b  pkg/codex-resources/telegram/dist/corbanu-terminal-telegram.service
+ece6bb7f40216ac0af6eeb0ec433264d4bcf868e39b5d65a06337c6138bf69d6  pkg/codex-resources/telegram/dist/org.corbanu.terminal.telegram.plist
+a5467b26fdadc62e34b0bfd2f73725fda579ad934ba273951cd02f21b94e0645  pkg/codex-resources/telegram/install-telegram-task.ps1
+ce9c2a653f88efb4d888edeeca036bf908ebc364990783851bb015d9203ceb4b  pkg/codex-resources/telegram/setup-telegram.sh
+db6fe1a78eaceaff3b0f0cde25fc25afe466d61b0bf76b4ebe35812e4bc8dd71  pkg/codex-resources/zsh/bin/zsh
+23f6388ad50e96c06c25c56f42d17e4d31278723563d2c51e0e1bbae48635faf  bin/agms-launch
+30dd8ce05a459270a0b7e61808a7525ac9bbbe1274295021d357225dfb55143b  bin/agms-probe
+613567a1191aa407514d601f4ded86cbd4d02e24f9221f4b775225f15ead1ddc  bin/agms-product
+dd52866083d97d88124a02c77439d5c20caa0c5bea2cec254239f36f067a56b2  bin/agms-realtime-driver
+624da9649f5692a8025c39a41773c2096148020a2b7f7ec0b06a5b6d0f6fb1d5  bin/agms-tui
+02c365ffc7b2b3870b06f0ece8e847df7a8a60ddb2ae9f7547c1106e5f47d12e  bin/tmux
+b731a5b552f2100fd2044ad03bba9235fcd5bd9609225488cfe6c3a10e92eb83  etc/expected.json
+6b6ed0f0ffe00087132d028951b1df268b94273b9af9cedc9cdabfa39b42227f  etc/fixture.tar
+23cb57485513c944391c4029da5cd6591add75b4ceab4a53a78e7b34130188b6  etc/mediation-ca.pem
+05e903b11cf46e8b464d4d0a99c100a62aba19b8f1105fa2612953db03ca9ea8  etc/product-config.toml
+a0f824f720159d0da7f3d7f4a1e8844229a6a84d54cf280a094a1ffb08c2b3e2  etc/tmux.conf
+dc4044d36ac3868205ff2dc71cee36805969c6896c683852a6f9d705dc2d7c0c  /opt/agms/packet/answers.md
+c03044a22f6d4c695a749b700186c0cbb288ef7ee6426bd73577e3717bdd2e0b  /opt/agms/packet/amendment-r1.md
+a7f571d40bb352a6cd6d97422b4296c3aa49887fdd21f4a6853eaafef37716e2  /opt/agms/packet/navigation.md
+c1133a5dfcc67f4818767c560546495a5640ac41caa80f585094b074cfe17ac7  /opt/agms/packet/screens/s07-vercel-request.txt
+9ac6bf50018e5accad17087fdb0111519be54a53164dad75aa0552146528e5e8  /opt/agms/packet/screens/s08-skip-first-screen.txt
+e38701bab04beb5b0918f07cb844120fe4ee61b9808138a3772f251b366a2c04  /opt/agms/packet/screens/s08-fast-tier-first-screen.txt
+e79a97c5dfac9a83c1c3649c7bedaaa5c9577cab3c2f734ea863ded829f90c7e  /opt/agms/packet/screens/s07-moonshot-k3-first-screen.txt
+07d822d4dfbcd4786ed139e28a9c5fed0dfb74739b19751b206fe9c148c4a463  /opt/agms/packet/screens/s08-declared-basis-technical.txt
+e79347baebbb1d41a26ec01222e9cf3065ad100216e49fa2e5e4f17aa250ca31  /opt/agms/packet/screens/s07-moonshot-k3-technical.txt
+a1dea5f233ac8dae71131d36298444d9e2b6e9aab041c2f71ae6faf8847584a5  /opt/agms/packet/screens/s08-restart-notice.txt
+5f9b8aa70263143c638ae571db9d7f9ff1b0bd678d5ecee702c603ce2b5efe04  /opt/agms/packet/screens/s07-corbanu-api-request.txt
+941e95556f5b8038ca9fcaff513bd190b2316fb0fd4ed2cdd6afb42121e3c8b6  /opt/agms/packet/screens/s08-skip-reopen-screen.txt
+0c91c646bd9861d8aeb83a34b832987bf162fa5a5c55f889fc97cf78b760ee60  /opt/agms/packet/screens/s07-moonshot-k2-first-screen.txt
+e5cf160a2524d8a26b03237e70e64a1e6c597f66e664c0e9ff8166b304473e52  /opt/agms/packet/screens/s09-chatgpt-priority-tier-first-screen.txt
+91fb58392a1a96391f62673bd4decff16c9d0a09fa2ff56a7b933366b8b16a1f  /opt/agms/packet/screens/s08-restart-first-screen.txt
+c611929fc643d339f685bb4475df64fb8c24fa11bab4a5761453ee95074ff279  /opt/agms/packet/screens/s09-image-first-screen.txt
+17042fa6cdbb7dc05b9a7c4764150ec2f15af53a78452ade4bf8e31b58579a7f  /opt/agms/packet/screens/README.md
+49ec4ab3c5fa8efbfe511eeac251259c8a6106472c4dd78b90e0a02bd36015df  /opt/agms/packet/screens/s09-chatgpt-uncatalogued-first-screen.txt
+32bbbd80f05356f93950a75d81b8ad2c6e81b59726b5e7845af0eedba3de079b  /opt/agms/packet/screens/s07-vercel-technical-attempt2.txt
+19d14658228d9dee99402d98066523eb3e3870a46c4aad330a17d029e4d5a513  /opt/agms/packet/screens/s06-01-side-review-technical.txt
+88ac3f4a3cde8ff7e5215ec39a510e9c71a5b85e8bbc2eb30c936ba11721ce43  /opt/agms/packet/screens/s07-moonshot-k3-request.txt
+09abdec3a80d5087279827d0c12c9a88962fb462c0ea0faadab7aa9f1f483a23  /opt/agms/packet/screens/s07-corbanu-api-first-screen.txt
+db6a0d211c020c1e011c1ed419c4ac114ca8c1cc8d60a99a8955a9327dc0add2  /opt/agms/packet/screens/s07-corbanu-api-technical.txt
+7f5c02841a345cc1064ba14c390486c2af04e9d123057227b677c7180700a778  /opt/agms/packet/screens/s09-image-technical.txt
+d1ed0c0469bd1a66ce6e039b5207ba0eb8363d0a3200ec6887cf19169f93c6a7  /opt/agms/packet/screens/s09-chatgpt-catalogued-first-screen.txt
+864e98fb1670339d5885d49c5c0ee8d567390e68944388b72ebd9aa679455acd  /opt/agms/packet/screens/s08-restart-reopen-warmup-request.txt
+489f32bf3cb6b774febb2e020427c28c347e8177372ed6cce98031ab31d13abc  /opt/agms/packet/screens/s07-moonshot-k2-technical.txt
+6284c0cac9b93df86ba1aabfe2dcf4311f04a7c2573e1d4dff4f33f95cbf1621  /opt/agms/packet/screens/s09-chatgpt-image-first-screen.txt
+e2bdc80970820987097d0d749c94ba5540807b8d181242f8de64501ea960c630  /opt/agms/packet/screens/s08-resume-same-conversation.txt
+2336bb753e7fffe25a37c5e89e3f473e9abe80b210cb34791e63b595f2895345  /opt/agms/packet/screens/s07-vercel-first-screen.txt
+237c925e5094a86ada6eff7595ce58732a7772ff4cd4312c3bf8243dcb159a9b  /opt/agms/packet/screens/s07-corbanu-api-other-conversations.txt
+f11c7ab702c1db9857404af2aba157c8185b8d9eaac66c7651f89b4a63d58f1a  /opt/agms/packet/screens/s08-fast-tier-technical.txt
+f750b006046cb5036f92fd6f4f8d910ccd8aa33f88b33c72ffefd0f6cc01bfd6  /opt/agms/packet/design-cases.md
+ec84bf71f63864245374eaf6282f052136f4f009b3447fe3b67671e4b153bd39  /opt/agms/packet/prompts/A-R1.md
+68fc54210a01b706f795a6775d1e562ffb8646c0a6db4e429125107b0a4f81e5  /opt/agms/packet/prompts/C-R1.md
+991e5804e4b598b31f51301fc17a7cdea3e89161663c862ceef7a88c017ba983  /opt/agms/packet/executor-prompt.md
+b7c82e3c73332c0f6d23956f6f2cc029d5f9ec118e4c99a6f82ba9c1217ba168  /opt/agms/packet/environment-r1.md
+2a73b6503429dc5a6d989b313e996a9041f5dc60b2c130e329dd39e1d71f105e  /opt/agms/packet/amendments.md
+[provision] done

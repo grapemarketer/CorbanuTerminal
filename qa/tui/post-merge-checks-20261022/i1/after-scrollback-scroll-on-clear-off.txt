@@ -1,0 +1,72 @@
+
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i1-noclear/ws │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Write the numbers 1 to 60, one per line, each followed by a short fruit name. No other text.
+
+
+• 1 apple
+  2 fig
+  3 kiwi
+  4 plum
+  5 pear
+  6 lime
+  7 apple
+  8 fig
+  9 kiwi
+  10 plum
+  11 pear
+  12 lime
+  13 apple
+  14 fig
+  15 kiwi
+  16 plum
+  17 pear
+  18 lime
+  19 apple
+  20 fig
+  21 kiwi
+  22 plum
+  23 pear
+  24 lime
+  25 apple
+  26 fig
+  27 kiwi
+  28 plum
+  29 pear
+  30 lime
+  31 apple
+  32 fig
+  33 kiwi
+  34 plum
+  35 pear
+  36 lime
+  37 apple
+  38 fig
+  39 kiwi
+  40 plum
+  41 pear
+  42 lime
+  43 apple
+  44 fig
+  45 kiwi
+  46 plum
+  47 pear
+  48 lime
+  49 apple
+  50 fig
+  51 kiwi
+  52 plum
+  53 pear
+  54 lime
+  55 apple
+  56 fig
+  57 kiwi
+  58 plum
+  59 pear
+  60 lime

@@ -42,10 +42,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::instrument;
 use url::Url;
 
 mod catalog_cache;
+mod catalog_flight;
 mod remote_installed_plugin_sync;
 mod share;
 
@@ -919,10 +921,18 @@ pub(crate) async fn fetch_and_cache_remote_plugin_catalog(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     scope: RemotePluginScope,
+    requested_at: Instant,
 ) -> Result<(), RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let plugins = fetch_directory_plugins_for_scope(config, auth, scope).await?;
-    catalog_cache::write_cached_directory_plugins(codex_home, config, auth, scope, &plugins);
+    // A download that started after this refresh was requested is as fresh as a new one.
+    catalog_flight::fetch_directory_plugins_shared(
+        Some(codex_home),
+        config,
+        auth,
+        scope,
+        catalog_flight::CatalogFetchReuse::started_since(requested_at),
+    )
+    .await?;
     Ok(())
 }
 
@@ -931,7 +941,14 @@ pub async fn fetch_and_cache_global_remote_plugin_catalog(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<(), RemotePluginCatalogError> {
-    fetch_and_cache_remote_plugin_catalog(codex_home, config, auth, RemotePluginScope::Global).await
+    fetch_and_cache_remote_plugin_catalog(
+        codex_home,
+        config,
+        auth,
+        RemotePluginScope::Global,
+        Instant::now(),
+    )
+    .await
 }
 
 pub fn invalidate_cached_remote_plugin_catalog_scopes(
@@ -944,6 +961,7 @@ pub fn invalidate_cached_remote_plugin_catalog_scopes(
         return;
     };
     for scope in scopes {
+        catalog_flight::invalidate(codex_home, config, auth, *scope);
         catalog_cache::remove_cached_directory_plugins(codex_home, config, auth, *scope);
     }
 }
@@ -1881,26 +1899,37 @@ async fn fetch_directory_plugins_for_scope_with_cache(
     scope: RemotePluginScope,
     cache_mode: RemotePluginCatalogCacheMode,
 ) -> Result<DirectoryPluginsFetchOutcome, RemotePluginCatalogError> {
-    if cache_mode == RemotePluginCatalogCacheMode::PreferCache
-        && let Some(codex_home) = codex_home
-        && let Some(cached) =
-            catalog_cache::load_cached_directory_plugins(codex_home, config, auth, scope)
-    {
-        return Ok(DirectoryPluginsFetchOutcome {
-            plugins: cached.plugins,
-            cache_refresh_needed: matches!(
-                cached.freshness,
-                catalog_cache::RemotePluginCatalogCacheFreshness::Stale
-            ),
-        });
-    }
+    let requested_at = Instant::now();
+    let reuse = match cache_mode {
+        RemotePluginCatalogCacheMode::PreferCache => {
+            if let Some(codex_home) = codex_home
+                && let Some(cached) =
+                    catalog_cache::load_cached_directory_plugins(codex_home, config, auth, scope)
+            {
+                return Ok(DirectoryPluginsFetchOutcome {
+                    plugins: cached.plugins,
+                    cache_refresh_needed: matches!(
+                        cached.freshness,
+                        catalog_cache::RemotePluginCatalogCacheFreshness::Stale
+                    ),
+                });
+            }
+            // No cache: any download already running, or completed since the miss, will do.
+            catalog_flight::CatalogFetchReuse {
+                join_started_since: None,
+                reuse_completed_since: Some(requested_at),
+            }
+        }
+        RemotePluginCatalogCacheMode::ForceRefetch => {
+            catalog_flight::CatalogFetchReuse::started_since(requested_at)
+        }
+    };
 
-    let plugins = fetch_directory_plugins_for_scope(config, auth, scope).await?;
-    if let Some(codex_home) = codex_home {
-        catalog_cache::write_cached_directory_plugins(codex_home, config, auth, scope, &plugins);
-    }
+    let plugins =
+        catalog_flight::fetch_directory_plugins_shared(codex_home, config, auth, scope, reuse)
+            .await?;
     Ok(DirectoryPluginsFetchOutcome {
-        plugins,
+        plugins: Arc::unwrap_or_clone(plugins),
         cache_refresh_needed: false,
     })
 }

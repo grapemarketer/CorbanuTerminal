@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: echo remembered >> ../outside-notes.txt
+
+
+◦ Running echo remembered >> ../outside-notes.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Security level Aggressive blocks writing `../outside-notes.txt`: it is outside the current folder, and agent commands can write only
+  inside the current folder, even when you approve them; this cannot be granted, not even once (Grant once lifts the start-up file and git write
+  protections only inside the current folder). To allow it, a person can switch to Permissive in /security (it applies after a restart).
+
+  $ echo remembered >> ../outside-notes.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `echo remembered >> ../outside-notes.txt`
+  3. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it. Options that last beyond this request: choose with ↑/↓, then enter.
+  Press enter to confirm or esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

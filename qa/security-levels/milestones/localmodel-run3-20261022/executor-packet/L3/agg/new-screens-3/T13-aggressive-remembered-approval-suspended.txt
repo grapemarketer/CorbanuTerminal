@@ -1,0 +1,31 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: echo remembered >> ../outside-notes.txt
+
+
+◦ Running echo remembered >> ../outside-notes.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: A remembered approval (don't ask again for commands that start with `/bin/bash -c 'echo remembered >> ../outside-notes.txt'`) was not
+  applied because security level Aggressive is on: approvals and allow rules saved outside Aggressive are suspended while it is active, so you are
+  asked instead. They are kept and apply again when you return to a less strict level.
+
+  $ echo remembered >> ../outside-notes.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `echo remembered >> ../outside-notes.txt`
+  3. No, and tell Corbanu Terminal what to do differently (esc)
+  4. Grant once: also let it write hooks and start-up files (review first) (g)
+
+  A letter in brackets only highlights its option; enter confirms it. Options that last beyond this request: choose with ↑/↓, then enter.
+  Press enter to confirm or esc to cancel

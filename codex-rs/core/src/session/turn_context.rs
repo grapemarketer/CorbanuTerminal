@@ -343,6 +343,7 @@ pub struct TurnContext {
     pub(crate) explicit_tool_budget_state: Arc<ExplicitToolBudgetState>,
     pub(crate) malformed_tool_call_state: Arc<MalformedToolCallState>,
     pub(crate) repeated_tool_call_state: Arc<RepeatedToolCallState>,
+    pub(crate) pending_tool_calls: Arc<crate::tools::parallel::PendingToolCalls>,
     pub(crate) server_model_warning_emitted: AtomicBool,
     pub(crate) provider_cache_pressure_warning_emitted: AtomicBool,
     pub(crate) model_verification_emitted: AtomicBool,
@@ -607,6 +608,7 @@ impl TurnContext {
             explicit_tool_budget_state: Arc::clone(&self.explicit_tool_budget_state),
             malformed_tool_call_state: Arc::clone(&self.malformed_tool_call_state),
             repeated_tool_call_state: Arc::clone(&self.repeated_tool_call_state),
+            pending_tool_calls: Arc::clone(&self.pending_tool_calls),
             server_model_warning_emitted: AtomicBool::new(
                 self.server_model_warning_emitted.load(Ordering::Relaxed),
             ),
@@ -950,6 +952,7 @@ impl Session {
             explicit_tool_budget_state: Arc::new(ExplicitToolBudgetState::default()),
             malformed_tool_call_state: Arc::new(MalformedToolCallState::default()),
             repeated_tool_call_state: Arc::new(RepeatedToolCallState::default()),
+            pending_tool_calls: Arc::default(),
             server_model_warning_emitted: AtomicBool::new(false),
             provider_cache_pressure_warning_emitted: AtomicBool::new(false),
             model_verification_emitted: AtomicBool::new(false),

@@ -721,7 +721,8 @@ fn attempt_text(q: &ObservationQuote) -> Vec<String> {
         },
     ];
     // #824: a realtime session is admitted when it starts; its end is
-    // recorded when it closes, and its usage never is.
+    // recorded when it closes. #889 D223: its tokens are what its finished
+    // responses reported, and it has no price.
     if is_realtime(q) {
         lines.push(format!(
             "Realtime session ended: {}",
@@ -729,7 +730,7 @@ fn attempt_text(q: &ObservationQuote) -> Vec<String> {
                 .session_ended_at_ms
                 .map_or_else(|| "not recorded".to_string(), utc_instant)
         ));
-        lines.push(format!("Realtime session: {REALTIME_UNKNOWN}."));
+        lines.push(format!("Realtime session: {}.", realtime_usage_text(&[q])));
     }
     // Zero counts quote as zero under a record with no rates; any money at
     // all means a rate applied.
@@ -1423,6 +1424,13 @@ fn inspection_pages_for(
     }
     // Plain first screen: the total stays first, then one line per provider
     // and model, then the auditing detail below a divider.
+    let gap_line = ready.recording_gap.then(|| {
+        recording_gap_line(if period.is_some() {
+            "this period"
+        } else {
+            "this day"
+        })
+    });
     let heading = period.map_or_else(
         || day_heading(ready.utc_day, Utc::now().timestamp() / 86_400),
         |period| format!("This conversation, {period} (UTC):"),
@@ -1457,6 +1465,10 @@ fn inspection_pages_for(
         next_step,
     );
     pages[0].text.splice(0..0, overview);
+    // #314 (D228): right under the heading, before any figure it qualifies.
+    if let Some(line) = gap_line {
+        pages[0].text.insert(1, line);
+    }
     // Provider/model groups first, then each request, then the auditing
     // groups (own/descendant attempts, attribution, unknown parents).
     let mut links = std::mem::take(&mut pages[0].links);
@@ -1712,7 +1724,8 @@ const REOPEN_WARMUP_KIND: &str = "Kind: Reopen warm-up — sent when this conver
 /// `accounting::REALTIME_SESSION_LABEL`, pinned by core's
 /// `realtime_session_label_is_stable`); a label can carry an owner prefix
 /// before it, such as `side:`. A WebRTC call (`realtime:` alone) is recorded
-/// at its creation and is not named a session here.
+/// at its creation and is not named a session here: the end it may carry
+/// (#955) is its client control channel's, not the media call's.
 const REALTIME_SESSION_LABEL: &str = "realtime:ws:";
 
 /// Whether this attempt is a realtime WebSocket session.
@@ -1728,9 +1741,33 @@ fn realtime_session(quotes: &[&ObservationQuote]) -> bool {
     quotes.iter().any(|quote| is_realtime(quote))
 }
 
-/// Why a realtime session has no token counts or cost: they are unknown, not
-/// zero.
-const REALTIME_UNKNOWN: &str = "its token counts and cost are unknown, not zero: a realtime session's usage is not reported to this client";
+/// Why a realtime session with no recorded tokens has no token counts or
+/// cost: they are unknown, not zero. A session recorded before #889 D223, on
+/// a protocol that reports no usage, or with no finished response has none.
+const REALTIME_UNKNOWN: &str =
+    "its token counts and cost are unknown, not zero: no token usage was recorded for it";
+
+/// #889 D223: what a realtime session's recorded tokens are, and why it has
+/// no cost figure.
+const REALTIME_REPORTED: &str = "its tokens are those the provider reported at the end of each response, so they may be low: a response cut short by the session's end reports none, and one whose report could not be read is not counted; its cost is unknown, not zero: Corbanu has no realtime prices";
+
+/// Whether a realtime attempt recorded any token count (#889 D223).
+fn realtime_tokens_recorded(quote: &ObservationQuote) -> bool {
+    let usage = &quote.usage;
+    [usage.input, usage.read, usage.output, usage.total]
+        .iter()
+        .any(Option::is_some)
+}
+
+/// The realtime session's usage note: reported tokens with no price, or
+/// tokens and cost unknown.
+fn realtime_usage_text(quotes: &[&ObservationQuote]) -> &'static str {
+    if quotes.iter().any(|quote| realtime_tokens_recorded(quote)) {
+        REALTIME_REPORTED
+    } else {
+        REALTIME_UNKNOWN
+    }
+}
 
 /// The request page's kind line: when the session started and ended.
 fn realtime_session_kind(quotes: &[&ObservationQuote]) -> String {
@@ -1744,33 +1781,44 @@ fn realtime_session_kind(quotes: &[&ObservationQuote]) -> String {
         .filter_map(|quote| quote.usage.session_ended_at_ms)
         .max()
         .map_or_else(|| "not recorded".to_string(), utc_instant);
-    format!("Kind: Realtime session — started {started}, ended {ended}; {REALTIME_UNKNOWN}.")
+    format!(
+        "Kind: Realtime session — started {started}, ended {ended}; {}.",
+        realtime_usage_text(quotes)
+    )
 }
 
-/// "Realtime sessions: 1 session; token counts and cost unknown …" for the
-/// first screen, or nothing when no request here is one.
+/// "Realtime: 1 session; tokens as the provider reported them …" for the
+/// first screen, or nothing when no request here is one. A session's cost is
+/// always unknown, never zero (#889 D223).
 fn realtime_session_line<'a>(
     quotes: impl IntoIterator<Item = &'a ObservationQuote>,
 ) -> Option<String> {
-    let mut requests: Vec<Uuid> = quotes
-        .into_iter()
-        .filter(|quote| is_realtime(quote))
-        .map(|quote| quote.attempt.request_id)
-        .collect();
-    if requests.is_empty() {
+    // Each session request, and whether it recorded any token count.
+    let mut sessions: std::collections::BTreeMap<Uuid, bool> = std::collections::BTreeMap::new();
+    for quote in quotes.into_iter().filter(|quote| is_realtime(quote)) {
+        *sessions.entry(quote.attempt.request_id).or_default() |= realtime_tokens_recorded(quote);
+    }
+    let total = sessions.len();
+    if total == 0 {
         return None;
     }
-    requests.sort_unstable();
-    requests.dedup();
-    let noun = if requests.len() == 1 {
-        "session"
+    let reported = sessions.values().filter(|reported| **reported).count();
+    let noun = if total == 1 { "session" } else { "sessions" };
+    const REPORTED: &str = "tokens as the provider reported them at the end of each response";
+    const NO_PRICES: &str = "cost unknown, not zero — Corbanu has no realtime prices";
+    Some(if reported == 0 {
+        let pronoun = if total == 1 { "it" } else { "them" };
+        format!(
+            "Realtime: {total} {noun}; token counts and cost unknown, not zero — no token usage was recorded for {pronoun}."
+        )
+    } else if reported == total {
+        format!("Realtime: {total} {noun}; {REPORTED}; {NO_PRICES}.")
     } else {
-        "sessions"
-    };
-    Some(format!(
-        "Realtime: {} {noun}; token counts and cost unknown, not zero — a realtime session's usage is not reported to this client.",
-        requests.len()
-    ))
+        format!(
+            "Realtime: {total} {noun}; {REPORTED} for {reported}, none recorded for {}; {NO_PRICES}.",
+            total - reported
+        )
+    })
 }
 
 /// "Reopen warm-up: 1 request, estimated $0.024812. Sent when …" for the
@@ -1778,26 +1826,30 @@ fn realtime_session_line<'a>(
 fn reopen_warmup_line<'a>(
     quotes: impl IntoIterator<Item = &'a ObservationQuote>,
 ) -> Option<String> {
+    let (warmups, requests) = reopen_warmups(quotes);
+    if requests == 0 {
+        return None;
+    }
+    let noun = if requests == 1 { "request" } else { "requests" };
+    Some(format!(
+        "Reopen warm-up: {requests} {noun}, {}. Sent when this conversation was reopened or forked, to prime the model's cache.",
+        short_cost(&warmups)
+    ))
+}
+
+/// The reopen warm-up attempts among `quotes`, and how many requests they are.
+fn reopen_warmups<'a>(
+    quotes: impl IntoIterator<Item = &'a ObservationQuote>,
+) -> (Vec<&'a ObservationQuote>, usize) {
     let warmups: Vec<&ObservationQuote> = quotes
         .into_iter()
         .filter(|quote| quote.attempt.turn.contains(REOPEN_PREWARM_LABEL))
         .collect();
-    if warmups.is_empty() {
-        return None;
-    }
     let mut requests: Vec<Uuid> = warmups.iter().map(|q| q.attempt.request_id).collect();
     requests.sort_unstable();
     requests.dedup();
-    let noun = if requests.len() == 1 {
-        "request"
-    } else {
-        "requests"
-    };
-    Some(format!(
-        "Reopen warm-up: {} {noun}, {}. Sent when this conversation was reopened or forked, to prime the model's cache.",
-        requests.len(),
-        short_cost(&warmups)
-    ))
+    let count = requests.len();
+    (warmups, count)
 }
 
 const NO_PRICE: &str = "Estimated cost: no price available";
@@ -2465,6 +2517,15 @@ fn route_line(quotes: &[&ObservationQuote], named: bool) -> String {
         }
         Err(_) => format!("• {route} — cost unavailable."),
     }
+}
+
+/// #314 (D228): said when accounting failed to record at least one request of
+/// this conversation on the day (or on a day of the period) shown, so its
+/// totals never read as complete. Missing work is never free work.
+fn recording_gap_line(span: &str) -> String {
+    format!(
+        "Totals for {span} may be incomplete: Corbanu failed to record at least one request of this conversation or its subagents, which may still have been billed. The cause is in Corbanu's accounting log; check your provider's bill."
+    )
 }
 
 /// The first screen: one line per provider and model, stating how it is paid

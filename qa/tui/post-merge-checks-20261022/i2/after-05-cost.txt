@@ -1,0 +1,40 @@
+  issues.
+
+• Mock reply #2.
+
+╭────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     mock-ws-1   /model to change                │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i2-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+• You’re continuing from this point in a new conversation
+
+⚠ Reopening or forking this conversation sent a warm-up request to prime the model's cache. It is billed like any
+  request; /cost lists it as a reopen warm-up. To skip it, set skip_reopen_warmup = true in config.toml.
+
+
+› first message alpha edited
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #4.
+
+
+  Cost — this conversation
+  Requested UTC day: 2026-10-22
+
+› Today (UTC) in this conversation:
+  • mockws · mock-ws-1 — Billing basis not declared. 2 requests, 2,408 tokens. Counted neither as money spent nor as
+  subscription work.
+  Reopen warm-up: 1 request, billing basis not declared. Sent when this conversation was reopened or forked, to
+  prime the model's cache.
+  Other conversations on this day, not included above: 2 requests in 1 conversation.
+  • mockws · mock-ws-1 — Billing basis not declared. 2 requests, 2,408 tokens. Counted neither as money spent nor as
+  subscription work.
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

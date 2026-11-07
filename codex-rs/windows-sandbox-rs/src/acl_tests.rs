@@ -1,5 +1,6 @@
 //! PF-27-S07: removing the `CODEX_HOME` new-file deny leaves everything else.
 
+use super::add_deny_delete_ace;
 use super::add_deny_read_ace;
 use super::add_deny_read_ace_for_new_files;
 use super::add_deny_write_ace;
@@ -11,10 +12,13 @@ use crate::winutil::to_wide;
 use pretty_assertions::assert_eq;
 use std::ffi::c_void;
 use std::path::Path;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::AdjustTokenPrivileges;
 use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
@@ -26,9 +30,16 @@ use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::ImpersonateSelf;
 use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::RevertToSelf;
+use windows_sys::Win32::Security::SecurityImpersonation;
+use windows_sys::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
+use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::System::Threading::GetCurrentThread;
+use windows_sys::Win32::System::Threading::OpenThreadToken;
 
 const SANDBOX_GROUP: &str = "S-1-5-21-2718281828-3141592653-1618033988-1001";
 const OTHER_SID: &str = "S-1-5-21-2718281828-3141592653-1618033988-1002";
@@ -147,6 +158,114 @@ fn pf_27_s07_lock_file_gets_its_own_deny() {
         assert!(remove_deny_read_ace_for_new_files(dir, group.as_ptr()).expect("remove"));
     }
     assert!(explicit_deny(&file), "{}", dacl_sddl(&file));
+}
+
+/// #1542 item 3: a sandbox `DELETE` deny that can't be written (here, a
+/// folder whose DACL gives its owner no `WRITE_DAC`, written without
+/// privileges) is an error, so D263
+/// doesn't start a command without it; one that is written, or already
+/// there, is not.
+#[test]
+fn d263_delete_deny_that_cannot_be_written_is_an_error() {
+    let dir = tempfile::tempdir().expect("dir");
+    let group = LocalSid::from_string(SANDBOX_GROUP).expect("group SID");
+    let open = dir.path().join("open");
+    let locked = dir.path().join("locked");
+    std::fs::create_dir(&open).expect("open dir");
+    std::fs::create_dir(&locked).expect("locked dir");
+    let whoami = std::process::Command::new("whoami.exe")
+        .arg("/user")
+        .output()
+        .expect("run whoami");
+    let whoami = String::from_utf8_lossy(&whoami.stdout);
+    let user = whoami
+        .split_whitespace()
+        .find(|token| token.starts_with("S-1-"))
+        .unwrap_or_else(|| panic!("unexpected whoami output: {whoami:?}"));
+    // OWNER RIGHTS (S-1-3-4) replaces the owner's implicit WRITE_DAC.
+    let output = std::process::Command::new("icacls.exe")
+        .arg(&locked)
+        .args(["/inheritance:r", "/grant:r", "*S-1-3-4:(RX)"])
+        .arg(format!("*{user}:(RX)"))
+        .output()
+        .expect("run icacls");
+    assert!(
+        output.status.success(),
+        "icacls: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // SAFETY: a valid SID and existing paths; the thread reverts to the
+    // process token before the block ends.
+    let (locked_result, first, second) = unsafe {
+        let unprivileged = WithoutPrivileges::start();
+        let locked_result =
+            add_deny_delete_ace(&locked, group.as_ptr()).map_err(|err| err.to_string());
+        drop(unprivileged);
+        (
+            locked_result,
+            add_deny_delete_ace(&open, group.as_ptr()).map_err(|err| err.to_string()),
+            add_deny_delete_ace(&open, group.as_ptr()).map_err(|err| err.to_string()),
+        )
+    };
+    assert_eq!(
+        (
+            locked_result
+                .as_ref()
+                .is_err_and(|err| err.contains("could not deny the sandbox DELETE")),
+            first,
+            second,
+        ),
+        (true, Ok(true), Ok(false)),
+        "locked: {locked_result:?}"
+    );
+}
+
+/// Impersonates this process's own token with every privilege disabled on
+/// the current thread until dropped, so an elevated runner's privileges
+/// (such as restore) can't write a DACL the test made unwritable.
+struct WithoutPrivileges;
+
+impl WithoutPrivileges {
+    fn start() -> Self {
+        // SAFETY: plain Win32 calls on the current thread; the token handle is
+        // closed here and the impersonation ends in `drop`, also when an
+        // assertion below fails.
+        unsafe {
+            assert_ne!(ImpersonateSelf(SecurityImpersonation), 0, "ImpersonateSelf");
+            let guard = Self;
+            let mut token: HANDLE = 0;
+            assert_ne!(
+                OpenThreadToken(
+                    GetCurrentThread(),
+                    TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                    /*openasself*/ 1,
+                    &mut token,
+                ),
+                0,
+                "OpenThreadToken"
+            );
+            let disabled = AdjustTokenPrivileges(
+                token,
+                /*disableallprivileges*/ 1,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            CloseHandle(token);
+            assert_ne!(disabled, 0, "AdjustTokenPrivileges");
+            guard
+        }
+    }
+}
+
+impl Drop for WithoutPrivileges {
+    fn drop(&mut self) {
+        // SAFETY: ends this thread's impersonation.
+        unsafe {
+            RevertToSelf();
+        }
+    }
 }
 
 /// Whether `path`'s SDDL has an explicit (not inherited) deny for the group.

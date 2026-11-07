@@ -146,6 +146,7 @@ fn day(own: Vec<ObservationQuote>, others: Option<OtherConversations>) -> Inspec
         empty_day: requests
             .is_empty()
             .then_some(codex_state::accounting::EmptyDay::NotRecorded),
+        recording_gap: false,
         requests,
         other_conversations: others,
     })

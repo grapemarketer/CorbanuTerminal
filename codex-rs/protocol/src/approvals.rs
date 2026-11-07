@@ -222,6 +222,29 @@ pub struct GuardianAssessmentEvent {
     pub action: GuardianAssessmentAction,
 }
 
+/// An [`ExecApprovalRequestEvent`] that nobody waits for any more (its
+/// request timed out or was cancelled; the action was already refused), so
+/// clients should close its prompt (#722, D279).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExecApprovalRequestWithdrawnEvent {
+    /// `call_id` of the withdrawn request.
+    pub call_id: String,
+    /// `approval_id` of the withdrawn request, when it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_id: Option<String>,
+    /// Turn of the withdrawn request.
+    pub turn_id: String,
+}
+
+impl ExecApprovalRequestWithdrawnEvent {
+    pub fn effective_approval_id(&self) -> String {
+        self.approval_id
+            .clone()
+            .unwrap_or_else(|| self.call_id.clone())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated command execution item.

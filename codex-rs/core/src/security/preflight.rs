@@ -177,9 +177,10 @@ impl Preflight {
     }
 
     /// Takes the inventory again with the same key and reports any change.
+    /// Corbanu's own history stores and databases do not count (#802).
     pub fn recheck(&self, sources: &InventorySources, flags: ReadinessFlags) -> (Self, Drift) {
         let next = Self::run_with_key(sources, flags, self.key);
-        let drift = drift(self, &next);
+        let drift = drift(self, &next, &sources.codex_home);
         (next, drift)
     }
 }
@@ -256,25 +257,77 @@ fn readiness(inventory: &Inventory, flags: ReadinessFlags) -> Vec<ReadinessItem>
     items
 }
 
-fn drift(before: &Preflight, after: &Preflight) -> Drift {
-    let ids = |preflight: &Preflight| preflight.inventory.finding_ids();
-    let (old, new) = (ids(before), ids(after));
+/// #802: the Corbanu home's history stores, which Corbanu itself writes
+/// while it runs (and for some seconds after start-up).
+const RUNTIME_STORES: [&str; 5] = [
+    "sessions",
+    "archived_sessions",
+    "history.jsonl",
+    "shell_snapshots",
+    "log",
+];
+
+/// Whether `entry` is one of Corbanu's own history stores or state
+/// database files (`-wal`, `-shm` and `-journal` included, #1428), not a
+/// symlink. A protected launch denies these whatever they hold and whether
+/// or not they exist (see [`CORBANU_HOME_STORES`] and [`database_glob`]),
+/// so Corbanu's own writes to them leave the review true and are not drift.
+/// A symlink there still counts, and so does a database file that is not a
+/// regular file with a single link, and a folder named like a database (the
+/// glob does not deny what it holds).
+fn runtime_store(entry: &ManifestEntry, codex_home: &std::path::Path) -> bool {
+    let plain_file = entry.regular && entry.links.is_none_or(|links| links == 1);
+    entry.scope == Scope::CorbanuHome
+        && !entry.symlink
+        && ((plain_file && is_database_file(codex_home, &entry.path))
+            || ((plain_file || entry.len.is_none())
+                && entry.path.parent() == Some(codex_home)
+                && entry
+                    .path
+                    .file_name()
+                    .is_some_and(|name| RUNTIME_STORES.iter().any(|store| name == *store))))
+}
+
+fn drift(before: &Preflight, after: &Preflight, codex_home: &std::path::Path) -> Drift {
     let entries = |preflight: &Preflight| {
-        preflight
-            .inventory
-            .manifest
-            .entries
-            .iter()
-            .map(|entry| (entry.finding_id.clone(), entry.clone()))
-            .collect::<BTreeMap<_, _>>()
+        preflight.inventory.manifest.entries.iter().fold(
+            BTreeMap::<String, Vec<ManifestEntry>>::new(),
+            |mut entries, entry| {
+                entries
+                    .entry(entry.finding_id.clone())
+                    .or_default()
+                    .push(entry.clone());
+                entries
+            },
+        )
     };
     let (old_entries, new_entries) = (entries(before), entries(after));
+    // A database finding holds one entry per file (#1428): it is ignored
+    // only when every one of them is a runtime store.
+    let counts = |entries: &BTreeMap<String, Vec<ManifestEntry>>, id: &String| {
+        !entries
+            .get(id)
+            .is_some_and(|entries| entries.iter().all(|entry| runtime_store(entry, codex_home)))
+    };
+    let ids = |preflight: &Preflight| preflight.inventory.finding_ids();
+    let (old, new) = (ids(before), ids(after));
     Drift {
-        added: new.difference(&old).cloned().collect(),
-        removed: old.difference(&new).cloned().collect(),
+        added: new
+            .difference(&old)
+            .filter(|id| counts(&new_entries, id))
+            .cloned()
+            .collect(),
+        removed: old
+            .difference(&new)
+            .filter(|id| counts(&old_entries, id))
+            .cloned()
+            .collect(),
         changed: old
             .intersection(&new)
-            .filter(|id| old_entries.get(*id) != new_entries.get(*id))
+            .filter(|id| {
+                old_entries.get(*id) != new_entries.get(*id)
+                    && (counts(&old_entries, id) || counts(&new_entries, id))
+            })
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()

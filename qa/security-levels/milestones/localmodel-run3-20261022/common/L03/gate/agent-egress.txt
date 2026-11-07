@@ -1,0 +1,9 @@
+curl: (6) Could not resolve host: github.com
+rc=6 github.com
+curl: (6) Could not resolve host: raw.githubusercontent.com
+rc=6 raw.githubusercontent.com
+curl: (6) Could not resolve host: codeload.github.com
+rc=6 codeload.github.com
+curl: (6) Could not resolve host: example.com
+rc=6 example.com
+rc=0 api.z.ai

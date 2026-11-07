@@ -146,6 +146,10 @@ pub(crate) struct SecurityLevelPicker {
     /// Aggressive need before they can be chosen on this Windows machine;
     /// `None` once it is set up and elsewhere.
     pub(super) windows_sandbox_steps: Option<String>,
+    /// #594 (D225): why Aggressive cannot run from here on Linux (the
+    /// Corbanu home is reached through a link agent commands could
+    /// replace), with the recovery; `None` elsewhere.
+    pub(super) aggressive_home_link: Option<String>,
 }
 
 /// Core's `[security]` levels from the session's config layers, and the
@@ -223,6 +227,7 @@ impl SecurityLevelPicker {
             moderate: crate::security::moderate::Facts::default(),
             before_restart: BeforeRestart::default(),
             windows_sandbox_steps: None,
+            aggressive_home_link: None,
         }
     }
 
@@ -240,6 +245,12 @@ impl SecurityLevelPicker {
     /// sandbox is set up; `steps` says how.
     pub(crate) fn set_windows_sandbox_steps(&mut self, steps: Option<String>) {
         self.windows_sandbox_steps = steps;
+    }
+
+    /// #594 (D225): Aggressive is not offered while the Corbanu home is
+    /// reached through a link agent commands could replace.
+    pub(crate) fn set_aggressive_home_link(&mut self, blocker: Option<String>) {
+        self.aggressive_home_link = blocker;
     }
 
     /// #691/#783: why `level` cannot be chosen yet and how to set the Windows
@@ -435,6 +446,14 @@ impl SecurityLevelPicker {
                     }
                     if target == ChosenLevel::Moderate
                         && let Some(blocker) = crate::security::moderate::blocker(self.moderate)
+                    {
+                        self.preflight_note = Some(format!("Not saved: {blocker}"));
+                        return;
+                    }
+                    // #594 (D225): also a review reached another way (after
+                    // a credential migration).
+                    if target == ChosenLevel::Aggressive
+                        && let Some(blocker) = &self.aggressive_home_link
                     {
                         self.preflight_note = Some(format!("Not saved: {blocker}"));
                         return;
@@ -842,6 +861,12 @@ impl SecurityLevelPicker {
                     note: self.windows_sandbox_note(level),
                 }
             }
+            // #594 (D225): also a saved Aggressive's review.
+            ChosenLevel::Aggressive if self.aggressive_home_link.is_some() => Screen::List {
+                note: self.aggressive_home_link.as_ref().map(|blocker| {
+                    format!("Aggressive cannot be chosen here. {blocker} Nothing changed.")
+                }),
+            },
             ChosenLevel::Moderate
                 if self.stored == StoredLevel::Chosen(ChosenLevel::Moderate)
                     && !self.moderate_core_behind(ChosenLevel::Moderate) =>
@@ -960,6 +985,9 @@ impl SecurityLevelPicker {
                             if self.windows_sandbox_steps.is_some() =>
                         {
                             "  needs the Windows sandbox set up"
+                        }
+                        ChosenLevel::Aggressive if self.aggressive_home_link.is_some() => {
+                            "  needs CORBANU_HOME set to the real folder"
                         }
                         level if level == self.active => "  (active)",
                         _ => "",
@@ -2206,3 +2234,7 @@ mod issue_816_tests;
 #[cfg(test)]
 #[path = "security_level_picker_issue_1047_tests.rs"]
 mod issue_1047_tests;
+
+#[cfg(test)]
+#[path = "security_level_picker_issue_594_tests.rs"]
+mod issue_594_tests;

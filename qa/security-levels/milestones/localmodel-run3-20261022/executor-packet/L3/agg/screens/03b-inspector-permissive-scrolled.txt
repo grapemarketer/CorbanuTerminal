@@ -1,0 +1,31 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+○ Permissive: no protection added by /security
+Observed 20s ago, policy generation 0.0
+  [on] Secretless launch: environment allowlist and launch checks armed [observed: this process]
+  [on] Output gate: managed secrets are removed from output [observed: this process]
+  [off] Model key broker: off: Core reads provider keys itself (broker_model_auth) [observed: this process]
+  [unobserved] Credential broker: on in config; its health is not observed here [resolved: features]
+  [off] Untrusted content: labelled, but Core is Permissive: protected actions are not gated [observed: session]
+  [off] Protected boundary: no preflight applies (protected_mode_preflight off, or not Aggressive) [resolved: launch preflight]
+
+Grants
+  Held: none. Grants are never saved: a restart, level change, revocation or the kill switch ends them [observed: Core policy]
+
+Agents
+  [on] main session: Permissive [observed: Core policy]
+  [set] Nested agents: refuse (default): agent commands that start `corbanu exec` or `review` are refused while Aggressive is enforced [configured: /
+      security]
+
+Not contained
+  [off] MCP servers: none configured [resolved: config]
+  [not contained] Hooks: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [resolved: features]
+  [not contained] `!` shell commands: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [fixed]
+  [not contained] App-server command/exec: runs outside the OS sandbox with the environment allowlist; allowed because you configured or started it
+↑/↓ scroll · r refresh · esc back to /security

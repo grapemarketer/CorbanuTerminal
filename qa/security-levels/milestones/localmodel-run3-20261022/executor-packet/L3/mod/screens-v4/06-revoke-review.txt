@@ -1,0 +1,45 @@
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Grants and kill switch
+Core's level: Moderate · Kill switch: off
+
+Revoke all active authority?
+Ends now, in every session of this Corbanu Terminal on this Corbanu home: every grant, every "for this session" approval, and the credential broker's
+open channels. Work already running is not stopped.
+Saved in security_state.json: revoked authority does not come back after a restart. The level stays Moderate; the kill switch is unchanged.
+It does not suspend saved "don't ask again" rules: the commands they cover still run without asking, as before (under Moderate inside the sandbox;
+protected actions after untrusted content still ask). They are kept in rules/default.rules in the Corbanu home.
+
+enter confirm · esc cancel, nothing changes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

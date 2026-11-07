@@ -28,6 +28,7 @@ use crate::linux_run_main::RegistryLock;
 use crate::linux_run_main::synthetic_mount_registry_root;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::permissions::FileSystemDenyGlob;
 use codex_protocol::permissions::PinnedWritableRoot;
 use codex_protocol::permissions::credential_glob_exempts_templates;
 use codex_protocol::permissions::credential_rule_roots;
@@ -311,7 +312,7 @@ pub(crate) fn create_bwrap_command_args(
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
     let unreadable_globs =
-        file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
+        file_system_sandbox_policy.get_unreadable_glob_scans_with_cwd(sandbox_policy_cwd);
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below, an
     // unlistable directory (#506) its own mount, and a path that may not be
@@ -479,7 +480,7 @@ fn create_filesystem_args_with_pins(
     glob_scan_max_depth: Option<usize>,
     pins: Option<WritableRootPins>,
 ) -> Result<BwrapArgs> {
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
+    let unreadable_globs = file_system_sandbox_policy.get_unreadable_glob_scans_with_cwd(cwd);
     // #536: for a session's command, no writable root held by another may
     // lead outside every root holding it, including the roots computed here.
     let checked = match pins {
@@ -550,7 +551,7 @@ fn create_filesystem_args_with_pins(
     // to the existing matches we can see before constructing the mount overlay;
     // core tool helpers still evaluate the original patterns directly at read time.
     unreadable_roots.extend(
-        expand_unreadable_globs_with_ripgrep(&unreadable_globs, cwd, glob_scan_max_depth)?
+        expand_unreadable_globs(&unreadable_globs, cwd, glob_scan_max_depth, ripgrep_files)?
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf),
     );
@@ -1421,10 +1422,16 @@ fn append_metadata_path_masks_for_writable_root(
     }
 }
 
-fn expand_unreadable_globs_with_ripgrep(
-    patterns: &[String],
+type GlobFileScanner = fn(&Path, &[String], Option<usize>) -> Result<Vec<AbsolutePathBuf>>;
+/// Search root, credential rule, depth, and whether it is a database-entry
+/// scan (#732).
+type ScanGroup = (AbsolutePathBuf, bool, Option<usize>, bool);
+
+fn expand_unreadable_globs(
+    patterns: &[FileSystemDenyGlob],
     cwd: &Path,
     max_depth: Option<usize>,
+    scan_files: GlobFileScanner,
 ) -> Result<Vec<AbsolutePathBuf>> {
     if patterns.is_empty() || max_depth == Some(0) {
         return Ok(Vec::new());
@@ -1436,16 +1443,27 @@ fn expand_unreadable_globs_with_ripgrep(
     // The whole credential rule's globs are scanned apart: their matches
     // leave out the template names (#442, Travis 2026-10-12), which other
     // globs still cover.
-    let rule_roots = credential_rule_roots(patterns);
-    let mut patterns_by_search_root: BTreeMap<(AbsolutePathBuf, bool), Vec<String>> =
-        BTreeMap::new();
+    let plain_patterns: Vec<String> = patterns.iter().map(|glob| glob.pattern.clone()).collect();
+    let rule_roots = credential_rule_roots(&plain_patterns);
+    // #732: depth is part of the group identity. A generic glob sharing this
+    // root (even the identical pattern text) retains its own recursive scan.
+    // #732 (D226): a database-entry scan lists only its folder's own entries.
+    let mut patterns_by_search_root: BTreeMap<ScanGroup, Vec<String>> = BTreeMap::new();
     for pattern in patterns {
-        if let Some((search_root, glob)) = split_pattern_for_ripgrep(pattern, cwd)
+        let database_directory = pattern
+            .database_entries_directory()
+            .map_err(|message| CodexErr::Fatal(message.to_string()))?;
+        let scan = match database_directory {
+            Some(directory) => Some((directory.clone(), "*.sqlite*".to_string(), Some(1), true)),
+            None => split_pattern_for_ripgrep(&pattern.pattern, cwd)
+                .map(|(root, glob)| (root, glob, max_depth, false)),
+        };
+        if let Some((search_root, glob, depth, database)) = scan
             && search_root.as_path().is_dir()
         {
-            let credential = credential_glob_exempts_templates(pattern, &rule_roots);
+            let credential = credential_glob_exempts_templates(&pattern.pattern, &rule_roots);
             patterns_by_search_root
-                .entry((search_root, credential))
+                .entry((search_root, credential, depth, database))
                 .or_default()
                 .push(glob);
         }
@@ -1455,8 +1473,12 @@ fn expand_unreadable_globs_with_ripgrep(
     // overlay needs the resolved target to prevent a readable symlink path from
     // bypassing an unreadable glob match.
     let mut expanded_paths = BTreeSet::new();
-    for ((search_root, credential), globs) in patterns_by_search_root {
-        for path in ripgrep_files(search_root.as_path(), &globs, max_depth)? {
+    for ((search_root, credential, depth, database), globs) in patterns_by_search_root {
+        // #732 (D226): ripgrep still opens each subfolder at `--max-depth 1`
+        // (ripgrep 14.1), so an unreadable one failed the scan; listing the
+        // folder itself never opens a subfolder.
+        let scan: GlobFileScanner = if database { glob_files } else { scan_files };
+        for path in scan(search_root.as_path(), &globs, depth)? {
             if credential
                 && path
                     .as_path()
@@ -2360,7 +2382,10 @@ mod tests {
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::GlobPattern { pattern },
+            path: FileSystemPath::GlobPattern {
+                pattern,
+                scan: None,
+            },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         }
@@ -4553,7 +4578,14 @@ mod tests {
             std::fs::write(root.join(name), "x").expect("write");
         }
         let expand = |globs: Vec<String>| {
-            expand_unreadable_globs_with_ripgrep(&globs, root, /*max_depth*/ None)
+            let globs: Vec<FileSystemDenyGlob> = globs
+                .into_iter()
+                .map(|pattern| FileSystemDenyGlob {
+                    pattern,
+                    scan: None,
+                })
+                .collect();
+            expand_unreadable_globs(&globs, root, /*max_depth*/ None, ripgrep_files)
                 .expect("expand")
                 .into_iter()
                 .map(|path| path.as_path().file_name().expect("name").to_os_string())
@@ -5335,3 +5367,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "database_glob_tests.rs"]
+mod database_glob_tests;

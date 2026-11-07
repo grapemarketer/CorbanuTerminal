@@ -186,19 +186,73 @@ fn nested_agents_setting_round_trips_and_fails_closed() {
 fn claude_panes_are_refused_while_a_protected_level_is_active_or_saved() {
     use ChosenLevel::Aggressive;
     use ChosenLevel::Permissive;
-    assert_eq!(external_agent_block_reason_in(Permissive, Permissive), None);
-    for (active, stored) in [
-        (Aggressive, Aggressive),
-        (Aggressive, Permissive),
-        (Permissive, Aggressive),
+    assert_eq!(
+        external_agent_block_reason_in(Permissive, Permissive, Permissive),
+        None
+    );
+    for (active, stored, live) in [
+        (Aggressive, Aggressive, Permissive),
+        (Aggressive, Permissive, Permissive),
+        (Permissive, Aggressive, Permissive),
+        // #1468: Core's live level counts too.
+        (Permissive, Permissive, Aggressive),
     ] {
-        let reason = external_agent_block_reason_in(active, stored)
+        let reason = external_agent_block_reason_in(active, stored, live)
             .expect("a protected level refuses Claude panes");
         assert!(
             reason.starts_with("Claude panes are off under security level Aggressive")
                 && reason.contains("outside Corbanu's sandbox")
                 && reason.contains("/security"),
             "{reason}"
+        );
+    }
+}
+
+/// #1468 (from #807's review): a level in force only in Core's live policy
+/// refuses Claude panes and permission changes as a saved or active one
+/// does; Moderate refuses panes but leaves `/permissions` alone.
+#[test]
+fn issue_1468_core_live_level_counts_for_panes_and_permission_changes() {
+    use ChosenLevel::Aggressive;
+    use ChosenLevel::Moderate;
+    use ChosenLevel::Permissive;
+    let reason = external_agent_block_reason_in(Permissive, Permissive, Moderate)
+        .expect("live Moderate refuses Claude panes");
+    assert!(
+        reason.starts_with("Claude panes are off under security level Moderate"),
+        "{reason}"
+    );
+    // The message names the strictest level.
+    let reason = external_agent_block_reason_in(Moderate, Permissive, Aggressive)
+        .expect("a protected level refuses Claude panes");
+    assert!(
+        reason.starts_with("Claude panes are off under security level Aggressive"),
+        "{reason}"
+    );
+    {
+        let _levels = test_levels::set_with_live(Permissive, Permissive, Aggressive);
+        assert!(external_agent_block_reason().is_some());
+    }
+    let _levels = test_levels::set(Permissive, Permissive);
+    assert_eq!(external_agent_block_reason(), None);
+
+    assert_eq!(
+        permission_change_block_reason_in([Permissive, Permissive, Permissive]),
+        None
+    );
+    assert_eq!(
+        permission_change_block_reason_in([Permissive, Permissive, Moderate]),
+        None
+    );
+    for levels in [
+        [Aggressive, Permissive, Permissive],
+        [Permissive, Aggressive, Permissive],
+        [Permissive, Permissive, Aggressive],
+    ] {
+        assert!(
+            permission_change_block_reason_in(levels)
+                .is_some_and(|reason| reason.starts_with("Security level Aggressive manages")),
+            "{levels:?}"
         );
     }
 }

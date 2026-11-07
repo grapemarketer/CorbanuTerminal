@@ -1,0 +1,13 @@
+{
+  "built_at": "2026-10-22T04:50:00Z",
+  "commit": "11443dc2b5",
+  "branch": "main",
+  "what_is_new": "Main at #1292 (green): #1273 xargs/launcher git checks (#1268/#1269), #1279 one-pass CLI word checks (#1275), #1249/#1254/#1262 follow-ons, #1263 sender line, #1278/#1292 flakes, contributor #1271 #1272 #1282 #951 #991 #1005 #1100 #1210, #1281 handoff, #1285 PF-84 code-blind record.",
+  "signing_identity": "Developer ID Application: Travis Good (K5N2T25C23)",
+  "launcher_target": "/Volumes/CorbanuDrive/Corbanu/.codex-work/integration-build-20260922a/integration-package-dev/bin/corbanu",
+  "corbanu_sha256": "ea563d6b6d9241c8b36655091617b887eb257a9a133e05b1d077b5cbd68340ee",
+  "developer_marker": true,
+  "build_target_dir": "/Volumes/CorbanuDrive/Corbanu/.codex-work/corbanu-terminal/target-dev-active",
+  "previous_binary": "integration-package-dev/bin/corbanu.prev-333f0b8db7",
+  "toolchain": "1.99.1"
+}

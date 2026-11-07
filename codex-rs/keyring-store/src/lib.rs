@@ -421,7 +421,8 @@ mod bounded_operation_tests {
     #[test]
     fn bounded_operation_returns_its_result() {
         let gate = Arc::new(KeyringOperationGate::default());
-        let result = run_bounded_keyring_operation(gate, "load", Duration::from_secs(1), || {
+        // 10s, not 1s: a no-op worker took over 1s on a loaded Windows runner.
+        let result = run_bounded_keyring_operation(gate, "load", Duration::from_secs(10), || {
             Ok("stored-value".to_string())
         });
 
@@ -447,9 +448,12 @@ mod bounded_operation_tests {
 
         let follow_up_ran = Arc::new(AtomicBool::new(false));
         let follow_up_ran_in_worker = Arc::clone(&follow_up_ran);
+        // Timeouts and deadlines below are 10s and the fail-fast bound 2s:
+        // a loaded Windows nightly runner took over 1s to run a no-op worker.
+        // Each still separates "failed fast"/"recovered" from waiting it out.
         let started = Instant::now();
         let error =
-            run_bounded_keyring_operation(gate, "save", Duration::from_secs(1), move || {
+            run_bounded_keyring_operation(gate, "save", Duration::from_secs(10), move || {
                 follow_up_ran_in_worker.store(true, Ordering::SeqCst);
                 Ok(())
             })
@@ -460,11 +464,11 @@ mod bounded_operation_tests {
                 .to_string()
                 .contains("prior keyring operation timed out")
         );
-        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(2));
         assert!(!follow_up_ran.load(Ordering::SeqCst));
         release_sender.send(()).expect("release first worker");
 
-        let recovery_deadline = Instant::now() + Duration::from_secs(1);
+        let recovery_deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let recovered = {
                 let state = gate_for_recovery
@@ -482,8 +486,13 @@ mod bounded_operation_tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
-        run_bounded_keyring_operation(gate_for_recovery, "load", Duration::from_secs(1), || Ok(()))
-            .expect("keyring should be retried after late success");
+        run_bounded_keyring_operation(
+            gate_for_recovery,
+            "load",
+            Duration::from_secs(10),
+            || Ok(()),
+        )
+        .expect("keyring should be retried after late success");
     }
 
     #[test]

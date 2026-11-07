@@ -1,0 +1,18 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Grants and kill switch
+Core's level: Moderate · Kill switch: off
+
+No grants are held now.
+> Revoke all active authority
+  Turn the kill switch on
+
+↑/↓ choose · enter review · esc back to the levels

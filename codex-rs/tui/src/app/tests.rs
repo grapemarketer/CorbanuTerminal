@@ -4,8 +4,16 @@ async fn accounting_fixture(
     app: &mut App,
     path: &std::path::Path,
 ) -> anyhow::Result<(ThreadId, i64)> {
+    accounting_fixture_at(app, path, chrono::Utc::now().timestamp_millis()).await
+}
+
+/// `accounting_fixture`, with the ledger written at `now` rather than the clock.
+async fn accounting_fixture_at(
+    app: &mut App,
+    path: &std::path::Path,
+    now: i64,
+) -> anyhow::Result<(ThreadId, i64)> {
     use codex_state::accounting::*;
-    let now = chrono::Utc::now().timestamp_millis();
     let owner = ThreadId::new();
     let db = codex_state::StateRuntime::init(
         codex_state::SqliteConfig::from_sqlite_home(path.abs()),
@@ -211,6 +219,98 @@ async fn accounting_inspect_app_thread_switch_stale_reply() -> anyhow::Result<()
     } if id == other));
     app.state_db.as_ref().unwrap().close().await;
     Ok(())
+}
+
+/// #1518: a ledger written while the clock read ahead (here, three hours) is
+/// intact once the clock is set right, yet newer than it. `/cost` names the
+/// clock rather than calling the evidence corrupt.
+#[tokio::test]
+async fn accounting_inspect_app_clock_behind_ledger_names_the_clock() -> anyhow::Result<()> {
+    let path = tempdir()?;
+    let (mut app, mut rx, _ops) = make_test_app_with_channels().await;
+    let ahead = chrono::Utc::now().timestamp_millis() + 3 * 3_600_000;
+    accounting_fixture_at(&mut app, path.path(), ahead).await?;
+    let day = chrono::Utc::now().timestamp_millis() / 86_400_000;
+    let loaded = accounting_load(&mut app, &mut rx, day).await;
+    let AppEvent::AccountingInspectorLoaded {
+        result: Err(message),
+        ..
+    } = &loaded
+    else {
+        panic!("expected a refused read, got {loaded:?}");
+    };
+    assert_eq!(
+        message,
+        &super::event_dispatch::clock_behind_ledger_message(3 * 3_600_000)
+    );
+    app.handle_accounting_inspector_event(loaded);
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    assert!(
+        rendered.contains("your system clock is behind the newest recorded usage"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("corrupt"), "{rendered}");
+    app.state_db.as_ref().unwrap().close().await;
+    Ok(())
+}
+
+/// #1522: a view whose UTC day starts after the clock (opened while the clock
+/// read ahead, refreshed after it was set back) names the clock, not damage.
+#[tokio::test]
+async fn accounting_inspect_app_day_after_clock_names_the_clock() -> anyhow::Result<()> {
+    let path = tempdir()?;
+    let (mut app, mut rx, _ops) = make_test_app_with_channels().await;
+    accounting_fixture(&mut app, path.path()).await?;
+    // Two days ahead, so the test holds even if it runs across UTC midnight.
+    let ahead = chrono::Utc::now().timestamp_millis() / 86_400_000 + 2;
+    let loaded = accounting_load(&mut app, &mut rx, ahead).await;
+    let AppEvent::AccountingInspectorLoaded {
+        result: Err(message),
+        ..
+    } = &loaded
+    else {
+        panic!("expected a refused read, got {loaded:?}");
+    };
+    assert!(
+        message.starts_with(
+            "Unavailable — your system clock reads earlier than the day this view shows ("
+        ),
+        "{message}"
+    );
+    app.handle_accounting_inspector_event(loaded);
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    assert!(
+        rendered.contains("your system clock reads earlier"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("corrupt"), "{rendered}");
+    app.state_db.as_ref().unwrap().close().await;
+    Ok(())
+}
+
+#[test]
+fn accounting_clock_before_day_message_states_the_lag() {
+    let rendered = [30_000, 3 * 3_600_000 - 5_000, 6 * 86_400_000]
+        .map(super::event_dispatch::clock_before_day_message)
+        .join("\n")
+        // The command name depends on the build's features.
+        .replace(crate::chatwidget::cost_command(), "<cost command>");
+    insta::assert_snapshot!("accounting_clock_before_day_messages", rendered);
+}
+
+#[test]
+fn accounting_clock_behind_message_states_the_lag() {
+    let rendered = [
+        30_000,
+        89_000,
+        58 * 60_000,
+        3 * 3_600_000 - 5_000,
+        47 * 3_600_000,
+        6 * 86_400_000,
+    ]
+    .map(super::event_dispatch::clock_behind_ledger_message)
+    .join("\n");
+    insta::assert_snapshot!("accounting_clock_behind_ledger_messages", rendered);
 }
 
 #[tokio::test]
@@ -6509,6 +6609,49 @@ async fn assignment_unreachable_watchdog_pauses_after_four_cadences() {
 }
 
 #[tokio::test]
+async fn assignment_for_one_hour_keeps_the_whole_hour() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    write_test_whip(&app, "watchdog", "Keep managing.");
+    let manager_pane_id = app
+        .claude_panes
+        .create_pane_with_role(
+            crate::claude_panes::ClaudeProviderProfileKind::ClaudePlan,
+            app.config.cwd.to_path_buf(),
+            app.config.codex_home.as_ref(),
+            /*spawn_role*/ None,
+            Some("Manager".to_string()),
+        )
+        .expect("create manager");
+    let worker_pane_id = app
+        .claude_panes
+        .create_pane_with_role(
+            crate::claude_panes::ClaudeProviderProfileKind::ClaudePlan,
+            app.config.cwd.to_path_buf(),
+            app.config.codex_home.as_ref(),
+            /*spawn_role*/ None,
+            Some("Worker".to_string()),
+        )
+        .expect("create worker");
+    // No clock override: the real clock moves between reads, as in the product.
+    assert_eq!(app.orchestrate_now_override, None);
+    app.handle_orchestrate_command(format!(
+        "attach {worker_pane_id} watchdog --mode review --holder {manager_pane_id} --for 1h"
+    ));
+
+    let execution_duration_s =
+        app.orchestrate_whips
+            .get("assignment-1")
+            .and_then(|whip| match &whip.kind {
+                crate::orchestrate::WhipKind::Assignment {
+                    execution_duration_s,
+                    ..
+                } => *execution_duration_s,
+                crate::orchestrate::WhipKind::LegacyNudge => None,
+            });
+    assert_eq!(execution_duration_s, Some(3600));
+}
+
+#[tokio::test]
 async fn assignment_restart_lifecycle_waits_one_cadence_then_continues() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     write_test_whip(&app, "restart-loop", "Continue the recovery work.");
@@ -11274,6 +11417,93 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
         "turn completion should clear inactive-thread approval badge immediately"
     );
 
+    Ok(())
+}
+
+/// #867 (AGG-R14 result 2): when the security kill switch stops a sub-agent the model spawned,
+/// the thread on screen (its parent, waiting for it) names it, and `/agent` lists it as stopped
+/// until its next turn starts. The parent's own stop and a sub-agent's other warnings add nothing.
+#[tokio::test]
+async fn issue_867_kill_switch_names_a_stopped_sub_agent() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let main_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
+    let agent_thread_id =
+        ThreadId::from_string("01a14100-0000-0000-0000-000000000202").expect("valid thread");
+    app.primary_thread_id = Some(main_thread_id);
+    app.active_thread_id = Some(main_thread_id);
+    app.thread_event_channels
+        .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+    app.thread_event_channels
+        .insert(agent_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+    app.upsert_agent_picker_thread(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.upsert_agent_picker_thread(
+        agent_thread_id,
+        Some("Robie".to_string()),
+        Some("explorer".to_string()),
+        /*is_closed*/ false,
+    );
+    let warning = |thread_id: ThreadId, message: &str| {
+        ServerNotification::Warning(codex_app_server_protocol::WarningNotification {
+            thread_id: Some(thread_id.to_string()),
+            message: message.to_string(),
+        })
+    };
+    let stopped = crate::legacy_core::security_revocation::KILL_SWITCH_STOPPED;
+    let mut drain = || {
+        let mut rendered = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered.push(lines_to_single_string(&cell.display_lines(/*width*/ 100)));
+            }
+        }
+        rendered
+    };
+    let agent_list = |app: &mut App| {
+        app.chat_widget
+            .show_selection_view(app.agent_picker_selection_view_params(/*selected*/ None));
+        render_bottom_popup(&app.chat_widget, /*width*/ 100)
+    };
+
+    app.enqueue_thread_notification(agent_thread_id, warning(agent_thread_id, "other"))
+        .await?;
+    assert!(!app.agent_navigation.is_kill_switch_stopped(agent_thread_id));
+    let _ = drain();
+
+    app.enqueue_thread_notification(agent_thread_id, warning(agent_thread_id, stopped))
+        .await?;
+    assert!(app.agent_navigation.is_kill_switch_stopped(agent_thread_id));
+    let notice = drain().join("\n");
+    assert_snapshot!(
+        "issue_867_kill_switch_names_a_stopped_sub_agent",
+        format!("{notice}\n\n{}", agent_list(&mut app))
+    );
+
+    // The parent's own stop names nobody (its own notice says it).
+    app.enqueue_thread_notification(main_thread_id, warning(main_thread_id, stopped))
+        .await?;
+    assert!(!app.agent_navigation.is_kill_switch_stopped(main_thread_id));
+    assert!(
+        drain().iter().all(|cell| !cell.contains("also stopped")),
+        "the parent itself is not named"
+    );
+
+    // The sub-agent's next turn clears it.
+    app.enqueue_thread_notification(
+        agent_thread_id,
+        turn_started_notification(agent_thread_id, "turn-next"),
+    )
+    .await?;
+    assert!(!app.agent_navigation.is_kill_switch_stopped(agent_thread_id));
+    assert!(
+        !agent_list(&mut app).contains("kill switch"),
+        "cleared by the next turn"
+    );
     Ok(())
 }
 

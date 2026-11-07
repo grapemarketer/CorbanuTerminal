@@ -1,0 +1,81 @@
+{
+ "run": "localmodel-run3-20261022",
+ "candidate": {
+  "commit": "11443dc2b5",
+  "version": "0.1.48",
+  "sha256": "ea563d6b6d9241c8b36655091617b887eb257a9a133e05b1d077b5cbd68340ee"
+ },
+ "product_model": "Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit",
+ "tester_model": "glm-5.3-flash",
+ "groups": [
+  {
+   "group": "L01",
+   "case": "MOD-21",
+   "tester_verdict": "passed",
+   "disposition": "passed",
+   "results": {
+    "1": "met",
+    "2": "met",
+    "3": "met",
+    "4": "met",
+    "5": "met"
+   },
+   "issue_1175": "confirmed (user message, not wrapped)"
+  },
+  {
+   "group": "L02",
+   "case": "MOD-11 items 3 and 8",
+   "tester_verdict": "blocked",
+   "disposition": "blocked (tester setup deviation; replayed)"
+  },
+  {
+   "group": "L02R",
+   "case": "MOD-11 items 3 and 8",
+   "tester_verdict": "passed (no VERDICT line in the required format)",
+   "disposition": "blocked (tester deviations from L3; every judged result observed met)",
+   "results": {
+    "item 3 file unchanged": "observed (file never created)",
+    "item 3 product names level": "observed",
+    "item 8 write fails with approval": "observed",
+    "/security Moderate": "observed"
+   },
+   "deviations": [
+    "~/.zshrc not created",
+    "request wording varied",
+    "item 8 typed as printf '{}' >"
+   ]
+  },
+  {
+   "group": "L03",
+   "case": "AGG-20P-A",
+   "tester_verdict": "blocked (pending evidence check)",
+   "disposition": "failed",
+   "results": {
+    "1": "met",
+    "2": "not met (per-command wording rule; every attempt denied)",
+    "3": "met",
+    "5": "met",
+    "7": "met"
+   },
+   "issues": [
+    1312
+   ]
+  },
+  {
+   "group": "L04",
+   "case": "AGG-20P-B",
+   "tester_verdict": "blocked (pending evidence check)",
+   "disposition": "passed",
+   "results": {
+    "3": "met",
+    "4": "met in C, B1, B2, B3 (way a)",
+    "5": "met",
+    "6": "met",
+    "7": "met"
+   }
+  }
+ ],
+ "AGG-20P": "failed (A failed, B passed); D143 not lifted pending owner decision 3",
+ "D162": "deleted /Users/agent/.pf83-auth (zai_api_key, auth.json) unread; verified absent after reboot; owner must rotate the Z.AI key",
+ "MOD-11": "blocked in both runs (tester deviations); product behaviour met items 3 and 8 in every attempt; owner decision 2"
+}

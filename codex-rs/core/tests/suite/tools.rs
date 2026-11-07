@@ -557,6 +557,7 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
                 .entries
                 .push(FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
                     },
                     access: FileSystemAccessMode::Deny,

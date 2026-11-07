@@ -1559,6 +1559,7 @@ impl App {
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
+        chat_widget.maybe_prompt_planted_project_metadata();
 
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).map_err(|err| {
@@ -2195,6 +2196,17 @@ See the Corbanu Terminal keymap documentation for supported actions and examples
             }
         };
         let exit_resumable_thread = app.exit_resumable_thread();
+        // D243 (#1412): the conversation on screen at quit is the one
+        // `resume --last` reopens.
+        if matches!(exit_reason, ExitReason::UserRequested)
+            && let Some(thread) = exit_resumable_thread.as_ref()
+        {
+            crate::quit_thread_record::record_quit_thread(
+                app.config.codex_home.as_ref(),
+                thread.thread_id,
+                chrono::Utc::now().timestamp(),
+            );
+        }
         let thread_id = exit_resumable_thread
             .as_ref()
             .map(|thread| thread.thread_id)

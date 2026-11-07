@@ -136,6 +136,14 @@ pub fn sessions_run_here(codex_home: &Path, thread: Option<ThreadId>) -> bool {
     super::transition::trees_run_on(codex_home, thread)
 }
 
+/// #807: the strictest level in force now in the live policy of the
+/// sessions of this process on `codex_home` (also right after a person
+/// confirms a level in `/security`); `None` when none runs here (no session
+/// yet, or a remote app server).
+pub fn strictest_live_level(codex_home: &Path) -> Option<SecurityLevel> {
+    super::transition::strictest_live_level(codex_home)
+}
+
 /// Whether a downgrade to `target` rewrites `[security] level` in the user's
 /// `config.toml` (it sets a stricter level there).
 pub fn downgrade_rewrites_user_config(codex_home: &Path, target: SecurityLevel) -> bool {

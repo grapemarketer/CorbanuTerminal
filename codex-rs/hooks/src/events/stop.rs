@@ -652,6 +652,7 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             error: None,
+            start_failed: false,
         }
     }
 }

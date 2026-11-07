@@ -4,3 +4,11 @@ rustflags = ["-C", "linker=dylint-link"]
 # For Rust versions 1.74.0 and onward, the following alternative can be used
 # (see https://github.com/rust-lang/cargo/pull/12535):
 # linker = "dylint-link"
+
+# `cargo test` builds the Dylint driver, which clones rust-clippy and checks
+# out `master`, now named `main` (#1479). Same workaround as
+# `add_clippy_master_ref` in wrapper_common.py; remove both together.
+[env]
+GIT_CONFIG_COUNT = "1"
+GIT_CONFIG_KEY_0 = "remote.origin.fetch"
+GIT_CONFIG_VALUE_0 = "+refs/heads/*ain:refs/remotes/*aster"

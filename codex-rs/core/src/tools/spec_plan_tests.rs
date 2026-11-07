@@ -2983,6 +2983,10 @@ async fn issue820_custom_official_responses_tools_match_builtin() {
         "https://api.openai.com/v1/",
         "https://api.openai.com:443/v1",
         "https://API.OPENAI.COM/v1",
+        // #863 item 3: the fully qualified host and OpenAI's regional domains.
+        "https://api.openai.com./v1",
+        "https://eu.api.openai.com/v1",
+        "https://jp.api.openai.com/v1/",
     ] {
         let custom = probe(|turn| {
             issue820_use_custom_provider(turn, base_url, "responses");
@@ -3023,6 +3027,8 @@ async fn issue820_other_responses_endpoints_keep_provider_neutral_tools() {
         "https://openrouter.ai/api/v1",
         "https://example.openai.azure.com/openai/v1",
         "https://api.openai.com.example.test/v1",
+        "https://xx.api.openai.com/v1",
+        "https://eu.api.openai.com:8443/v1",
         "https://api.openai.com@provider.example/v1",
         "https://provider.example/api.openai.com/v1",
         "http://api.openai.com/v1",

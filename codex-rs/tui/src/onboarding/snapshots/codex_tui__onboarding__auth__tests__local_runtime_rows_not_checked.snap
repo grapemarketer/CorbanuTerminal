@@ -1,0 +1,37 @@
+---
+source: tui/src/onboarding/auth.rs
+assertion_line: 2994
+expression: visible
+---
+  Choose a provider account for Corbanu Terminal
+
+  1. Provider: OpenAI Codex Account
+     Sign in with device code
+
+  2. Provider: Anthropic Claude Account
+     Use Claude subscription access; long-lived token recommended or Claude Code
+login
+
+  3. Corbanu API
+     Queue protected wallet and API-key setup; it runs after Done
+
+  4. Provider: Amazon Bedrock
+     Use this provider without an enrollment step
+
+> 5. Provider: Ollama
+     Local (not checked)
+
+  6. Provider: LM Studio
+     Local (not checked)
+
+  7. Done
+     Configure a usable provider or queue Corbanu API first
+
+
+
+
+
+
+
+
+  Use ↑/↓ to choose · Press enter to continue

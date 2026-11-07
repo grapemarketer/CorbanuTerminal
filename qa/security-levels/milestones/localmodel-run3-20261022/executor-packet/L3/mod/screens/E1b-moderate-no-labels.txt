@@ -1,0 +1,45 @@
+╰─────────────────────────────────────────────────────────╯
+
+Switch to Moderate?
+Moderate needs the untrusted-content labels (the source_envelopes feature): without them Corbanu refuses every model request under Moderate. Turn
+source_envelopes on and restart Corbanu Terminal first.
+Moderate keeps your own approval, sandbox and network settings and adds these, in Corbanu Terminal sessions and their child agents:
+• Sandbox
+  Moderate: agent commands always stay in your own sandbox, even when you approve a request to run outside it, and "retry without sandbox?" is not
+    offered; commands you allowed with "don't ask again" skip the prompt but stay in it. Your own sandbox, approval, network and web search settings
+    are kept (if your settings turn the sandbox off, commands outside the protected-file rules run without one)
+• Protected files
+  Moderate: agent commands cannot read the credential files in your home folder (such as .ssh, .aws, .gnupg, .kube, .docker, .netrc, .npmrc and the
+    macOS keychain folder) or Corbanu's sign-in, vault, config, history and state, and cannot write files that run code later (your shell and git
+    start-up files, git hooks and config, the project's .codex and .agents) or Corbanu's own files. Your fresh approval of one command lifts this for
+    that command, except Corbanu's runtime files and what secretless_agent_launch keeps; a remembered or automatic approval never does. A
+    project's .env files are not covered (Aggressive covers them)
+• Untrusted content
+  Moderate: tool, MCP, web, agent and memory output reaches the model labelled untrusted; after it, protected actions (the vault, credentials,
+    security settings, disclosure, value transfer, code you have not seen, MCP calls that change or send data, tools Corbanu has not classified) need
+    your fresh approval, and cached, remembered or automatic approvals don't count; with approvals off they are refused
+• Secrets
+  Moderate: only allowlisted environment variables reach agent commands, and the vault store, sign-in files and config stay unreadable to them even
+    when you approve (secretless_agent_launch); managed secrets and stored vault credentials are removed from command output (secret_output_gate)
+• Model keys
+  Moderate: from the next start, provider API keys from the environment or the vault are held by the isolated credential broker, which sends model
+    requests for Corbanu (sign-in tokens are passed to it; command, AWS and header sign-ins are not brokered; realtime and websockets are off); if it
+    cannot start, model requests are refused, never sent directly (broker_model_auth; `broker_model_auth = false` in your own config keeps it off)
+• Child agents
+  Moderate: agents started in this Corbanu Terminal (/spawn and the agent tools) run with Moderate enforced; Claude panes are refused because Claude
+    Code runs outside the sandbox, unless contained_external_agents and secretless_agent_launch run them in it
+• Kill switch
+  Moderate: /security → g stops the work in every pane and refuses model turns until you turn it off
+Not available in this build:
+Financial preview and approvals (PF-38, PF-39), Isolated retrieval (PF-31), Screened search routing (PF-32), Brokered browser login (PF-37),
+Quarantine (PF-34), Untrusted-content detectors (PF-35, PF-36), Agent Sweep (PF-40)
+Unchanged: model and provider, your approval, sandbox, network and web search settings, MCP servers, apps and hooks (they run outside the sandbox),
+and wallet scopes.
+Core's level becomes Moderate as soon as you confirm, in this session and the others of this Corbanu Terminal: agent commands always stay in the
+sandbox; unless you approve that one command, they cannot read credential files in your home folder or Corbanu's sign-in, vault, config, history and
+state, or write files that run code later; after untrusted content, protected actions need your fresh approval; grants and "for session" approvals
+end. Model keys through the credential broker start when you restart Corbanu Terminal (you can restart right after saving); commands already running
+keep the permissions they started with.
+Your config.toml is not modified.
+
+esc back, nothing changes · i inspect

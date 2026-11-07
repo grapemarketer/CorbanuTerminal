@@ -1,0 +1,48 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: kimi
+Model: kimi-k2.7-code
+Billing: Pay per use
+Estimated cost: $0.011027 (rounded)
+Tokens: 11,572 tokens
+—— Details ——
+Billed cost: kimi doesn't report its charges, so any cost here is an estimate — check kimi's bill.
+Request: 7942db8e-2ad4-4197-873b-95c69d4a9ff0
+Attempt: e7932be6-66a6-4fbe-ba66-5b8b33a92c00
+Thread: 01a1419b-2ad4-7521-8a4f-1203ab26f944
+Turn: 01a1419b-666e-7150-b8a6-0321a7493683
+Account: default
+Opaque scope: f2db2fd6-7dda-4d11-bfb8-ae95ccd3f705
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T22:07:46.405Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Estimated token cost for recorded attempts: $0.011027 (rounded)
+Billing basis: pay per use
+Input: 11561
+Noncached input (derived for inclusive input): 11561 (derived)
+Cache read: 0 (reported)
+Cache write: 0 (reported)
+Output: 11
+Reasoning (subset, not separately billed): 8
+Total (not separately billed): 11572
+Noncached input cost: $0.010983 (rounded); exact USD 0.01098295
+Cache read cost: $0.000000; exact USD 0
+Cache write cost: $0.000000; exact USD 0
+Output cost: $0.000044; exact USD 0.000044
+Known subtotal exact USD: 0.01102695
+Price ID: f9476dfc-d1e1-4b82-99f4-4e7622ba51a3
+Price source: NativeCatalog; reference 58223fc7-4865-5065-b185-e6e77d9aa5b1
+Price currency/unit: Usd / PerMillionTokens
+Price observed/approved: 2026-10-15T22:07:46.405Z / 2026-10-15T22:07:46.405Z
+Price effective interval: [2026-10-15T22:07:46.405Z, unbounded)
+Noncached input rate: 0.95 USD per million tokens
+Cache read rate: 0.19 USD per million tokens
+Cache write rate: 0.95 USD per million tokens
+Output rate: 4 USD per million tokens
+Evidence revision 3; source c8a764a1-6c6c-4701-aa39-68255b3068c1; sequence 3; presence patch
+{"input":11561,"read":0,"write":0,"output":11,"reasoning":8,"total":11572}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

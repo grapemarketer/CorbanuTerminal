@@ -182,6 +182,21 @@ fn trace_turn_timing(label: &str, start: Instant) {
     }
 }
 
+/// Why a turn is refused before anything of it is recorded: the kill switch
+/// (#445), or (#1331, D171) a named sign-in account removed or signed out
+/// while the session ran on it, whose model request would be refused with
+/// the same error.
+pub(crate) async fn turn_refusal(sess: &Session, turn_context: &TurnContext) -> Option<CodexErr> {
+    if let Err(err) = sess.services.model_client().refuse_under_kill_switch() {
+        return Some(err);
+    }
+    codex_model_provider::named_sign_in_account(turn_context.provider.info())?;
+    if turn_context.provider.auth().await.is_some() {
+        return None;
+    }
+    turn_context.provider.api_auth().await.err()
+}
+
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
 ///
@@ -208,7 +223,9 @@ pub(crate) async fn run_turn(
     trace_turn_timing("run_turn_start", turn_started_at);
     // Issue #445: with the kill switch on, the turn is refused before its
     // input is recorded, so nothing of it reaches the model later either.
-    if let Err(err) = sess.services.model_client().refuse_under_kill_switch() {
+    // #1331 (D171): so is a turn on a named account that was removed or
+    // signed out meanwhile, so it is not recorded as a turn on that account.
+    if let Some(err) = turn_refusal(sess.as_ref(), turn_context.as_ref()).await {
         sess.track_turn_codex_error(turn_context.as_ref(), &err);
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), err.to_codex_protocol_error())
             .await;
@@ -343,6 +360,9 @@ pub(crate) async fn run_turn(
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
         TurnDiffTracker::with_environment_display_roots(display_roots),
     ));
+    turn_context
+        .pending_tool_calls
+        .set_turn_diff_tracker(&turn_diff_tracker);
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -2360,6 +2380,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::ImageGenerationEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::ExecApprovalRequestWithdrawn(_)
         | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
@@ -2714,15 +2735,28 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(Ok(response_input)) => {
+                let call_id = match &response_input {
+                    ResponseInputItem::FunctionCallOutput { call_id, .. }
+                    | ResponseInputItem::McpToolCallOutput { call_id, .. }
+                    | ResponseInputItem::CustomToolCallOutput { call_id, .. }
+                    | ResponseInputItem::ToolSearchOutput { call_id, .. } => Some(call_id.clone()),
+                    ResponseInputItem::Message { .. } => None,
+                };
                 let response_item = response_input.into();
-                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
-                    .await;
+                // Check before recording (#1536): a turn killed after recording
+                // the output would skip it, and the abort path skips outputs
+                // already in history.
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     &response_item,
                 )
                 .await;
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
+                    .await;
+                if let Some(call_id) = call_id {
+                    turn_context.pending_tool_calls.complete(&call_id);
+                }
             }
             Ok(Err(err)) if matches!(err.details(), CodexErrorDetails::Fatal(_)) => {
                 fatal.get_or_insert(err);

@@ -18,3 +18,10 @@ changed here.
 
 Everything else in the frozen method above (the unit of comparison, the classes, the tie-break and the predeclared
 rules) is the template for the next parity run, written and frozen before its first group.
+
+## Owner decision D161 (2026-10-22)
+
+- Milestone runs use Tart (one fresh clone of `corbanu-qa-base` per group), as the D139 three-attempt runs
+  ([moderate-vm-parity3-20261021/](moderate-vm-parity3-20261021/README.md)) recommended. UTM "macOS 3" is no longer
+  the milestone VM. D162: its real Z.AI key file and `auth.json` were deleted on 2026-10-22
+  ([localmodel-run3-20261022/](localmodel-run3-20261022/README.md#d162-the-real-zai-key-in-utm-macos-3)); the owner rotates the key.

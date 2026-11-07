@@ -258,6 +258,7 @@ async fn submission_includes_configured_active_permission_profile() {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
                     access: FileSystemAccessMode::Deny,

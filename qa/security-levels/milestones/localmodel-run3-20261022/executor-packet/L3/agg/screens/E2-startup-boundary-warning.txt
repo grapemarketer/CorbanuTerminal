@@ -1,0 +1,16 @@
+Restarting Corbanu Terminal to apply the saved security level…
+⚠ Security level Aggressive is enforced, but the protected boundary is not clean (1 blocker). Earlier conversations cannot be resumed. See /security:
+    Isolation: agent commands can still read /etc/codex/config.toml; it was not found when Corbanu Terminal started (another folder or config layer,
+  or a new file). Remove it, or restart from the folder that holds it
+
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T223941Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Find and fix a bug in @filename
+
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/cap-20261010T223941Z/fixture/workspace · Corbanu Terminal · TPS: -- tok/s

@@ -1,0 +1,45 @@
+
+Switch to Aggressive?
+These settings replace yours in Corbanu Terminal sessions and their child agents:
+"now" shows this session; web search, environment, shell and roles are as loaded at launch.
+• Sandbox now: commands can write to the current folder, /private/tmp, /Users/agmx0/runs/cap-20261010T224124Z/tmp; approved or allow-listed commands
+    can run outside the sandbox; permission-request tools are off
+  Aggressive: write only in the current folder (where the Corbanu home and the nested-launch registry stay read-only): no extra writable folders, no /
+    tmp or $TMPDIR; approved commands stay inside it too; escalation and permission-request tools are off
+• Approvals now: on-request (reviewer: you)
+  Aggressive: untrusted: you approve every command that is not known read-only (reviewer: you, never auto-review)
+• Network now: off inside the sandbox, on for commands that run outside it; web search cached
+  Aggressive: off for agent commands; web search off
+• Vault now: the vault store and sign-in file are readable to agent commands; secret-like environment variables are passed through (KEY, SECRET,
+    TOKEN, VAULT, PASSWORD, PASSPHRASE, CREDENTIAL); login profiles and shell snapshots are not used
+  Aggressive: the vault store and sign-in file are unreadable to agent commands, and direct `corbanu vault …` commands are refused; secret-like
+    environment variables (KEY, SECRET, TOKEN, VAULT, PASSWORD, PASSPHRASE, CREDENTIAL) are removed, and login profiles and shell snapshots are not
+    used
+• Model keys now: Corbanu reads provider keys itself (broker_model_auth off)
+  Aggressive: provider API keys from the environment or the vault are held by the isolated credential broker, which sends model requests for Corbanu
+    (sign-in tokens are passed to it; command, AWS and header sign-ins are not brokered; realtime and websockets are off); if it cannot start, model
+    requests are refused, never sent directly (broker_model_auth; `broker_model_auth = false` in your own config keeps it off)
+• Child agents now: spawned agents get this session's values
+  Aggressive: spawned agents get the same values; custom roles that would change them are refused at start; Claude panes are refused because Claude
+    Code runs outside the sandbox, unless contained_external_agents and secretless_agent_launch run them in it, asking you before every command, file
+    edit and web request (reading files stays automatic) (Claude Code sign-in still runs)
+• Nested agents: refuse. An agent command that starts another agent (`corbanu exec`, `review`, `resume`, `fork`, a new session, `app-server` or `mcp-
+    server`) is refused.
+Press n to switch between refuse and pass. Nested launches read this when they start.
+Preflight passed: no known raw-secret route stays open to agents or the model.
+Controls ready: 6 of 6 (OS sandbox, Secretless agent launch, Isolated credential broker, Secret output gate, Untrusted-content labels, Vault)
+Credential files denied to agent commands after restart: ~/Library/Keychains, ~/runs/cap-20261010T224124Z/fixture/workspace/.env
+Corbanu history and state denied to agent commands after restart: sessions, 4 databases
+Conversations recorded before the restart cannot be resumed under Aggressive.
+Limits: Only fixed locations are checked; secrets in other files, under innocent names, are not found. Values are matched by name, by common key
+shapes and against Corbanu's own secret variables; other encodings are missed. The vault is not opened; whether its key unlocks it is checked when a
+credential is used. Browser profiles and keychains are listed, not read. MCP servers, hooks and notify commands run outside the sandbox; only their
+configured secrets are checked.
+Unchanged: model and provider, MCP servers, apps and hooks (they run outside the sandbox), wallet scopes, and commands you have already allowed
+permanently (they skip the prompt but stay sandboxed). `corbanu exec` that you start yourself and IDE sessions are not covered yet, except that they
+also hold provider keys in the credential broker.
+The rows above take effect when you restart Corbanu Terminal (you can restart right after saving); this session keeps its current settings until then.
+Your config.toml is not modified.
+Core's level becomes Aggressive as soon as you confirm, in this session and the others of this Corbanu Terminal: agent commands cannot open protected
+paths, sensitive surfaces need a grant, external content reaches the model labelled untrusted, and memory summaries stop; grants and "for session"
+↑/↓ scroll · n refuse/pass · enter confirm and save · esc back, nothing changes · i inspect

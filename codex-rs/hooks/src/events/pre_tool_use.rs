@@ -34,6 +34,10 @@ pub struct PreToolUseRequest {
     pub matcher_aliases: Vec<String>,
     pub tool_use_id: String,
     pub tool_input: Value,
+    /// Fail closed when a matching hook cannot start (#722, D245): the hook
+    /// blocks the tool instead of being skipped. Set for turns that may run
+    /// remotely, where hooks run on this host with the remote cwd.
+    pub block_if_hook_cannot_start: bool,
 }
 
 #[derive(Debug)]
@@ -51,7 +55,18 @@ struct PreToolUseHandlerData {
     block_reason: Option<String>,
     additional_contexts_for_model: Vec<AdditionalContext>,
     updated_input: Option<Value>,
+    /// Why the hook command could not start, if it could not.
+    start_failure: Option<String>,
 }
+
+/// Shell exit codes for a hook command that was not found or not executable.
+#[cfg(not(windows))]
+const SHELL_CANNOT_EXECUTE_EXIT_CODES: &[i32] = &[126, 127];
+/// Shell exit codes for a hook command that was not found or not executable
+/// (`cmd.exe` reports an unknown command as 9009).
+#[cfg(windows)]
+const SHELL_CANNOT_EXECUTE_EXIT_CODES: &[i32] = &[126, 127, 9009];
+const START_FAILURE_DETAIL_MAX_CHARS: usize = 300;
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
@@ -96,17 +111,25 @@ pub(crate) async fn run(
     let input_json = match command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
-            let hook_events = common::serialization_failure_hook_events_for_tool_use(
+            let mut hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
                 Some(request.turn_id.clone()),
                 format!("failed to serialize pre tool use hook input: {error}"),
                 &request.tool_use_id,
             );
-            return serialization_failure_outcome(hook_events);
+            let block_reason = request
+                .block_if_hook_cannot_start
+                .then(|| cannot_start_block_reason("its input could not be prepared"));
+            if let Some(reason) = &block_reason {
+                for event in &mut hook_events {
+                    mark_blocked(&mut event.run, reason);
+                }
+            }
+            return serialization_failure_outcome(hook_events, block_reason);
         }
     };
 
-    let results = dispatcher::execute_handlers(
+    let mut results = dispatcher::execute_handlers(
         shell,
         matched,
         input_json,
@@ -115,6 +138,11 @@ pub(crate) async fn run(
         parse_completed,
     )
     .await;
+    if request.block_if_hook_cannot_start {
+        for result in &mut results {
+            block_on_start_failure(result, &request.cwd);
+        }
+    }
 
     let should_block = results.iter().any(|result| result.data.should_block);
     let block_reason = results
@@ -192,6 +220,44 @@ fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json:
     })
 }
 
+fn cannot_start_block_reason(cause: &str) -> String {
+    format!(
+        "the hook could not start on this machine ({cause}). On remote work a hook that cannot \
+         start blocks the action instead of being skipped"
+    )
+}
+
+/// Turns a hook that could not start into a block (#722, D245).
+fn block_on_start_failure(
+    result: &mut dispatcher::ParsedHandler<PreToolUseHandlerData>,
+    cwd: &AbsolutePathBuf,
+) {
+    let Some(cause) = result.data.start_failure.as_deref() else {
+        return;
+    };
+    // The usual remote cause: hooks get the remote cwd, which this host lacks.
+    let reason = if cwd.as_path().is_dir() {
+        cannot_start_block_reason(cause)
+    } else {
+        cannot_start_block_reason(&format!(
+            "its working folder {} does not exist here: {cause}",
+            cwd.display()
+        ))
+    };
+    result.data.should_block = true;
+    result.data.updated_input = None;
+    mark_blocked(&mut result.completed.run, &reason);
+    result.data.block_reason = Some(reason);
+}
+
+fn mark_blocked(run: &mut HookRunSummary, reason: &str) {
+    run.status = HookRunStatus::Blocked;
+    run.entries.push(HookOutputEntry {
+        kind: HookOutputEntryKind::Feedback,
+        text: reason.to_string(),
+    });
+}
+
 fn parse_completed(
     handler: &ConfiguredHandler,
     run_result: CommandRunResult,
@@ -203,6 +269,30 @@ fn parse_completed(
     let mut block_reason = None;
     let mut additional_contexts_for_model = Vec::new();
     let mut updated_input = None;
+    let start_failure = if run_result.start_failed {
+        run_result.error.clone()
+    } else if run_result.error.is_none()
+        && run_result
+            .exit_code
+            .is_some_and(|code| SHELL_CANNOT_EXECUTE_EXIT_CODES.contains(&code))
+    {
+        run_result.exit_code.map(|code| {
+            match run_result
+                .stderr
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+            {
+                Some(line) => {
+                    let line: String = line.chars().take(START_FAILURE_DETAIL_MAX_CHARS).collect();
+                    format!("hook exited with code {code}: {line}")
+                }
+                None => format!("hook exited with code {code}"),
+            }
+        })
+    } else {
+        None
+    };
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -305,16 +395,20 @@ fn parse_completed(
             block_reason,
             additional_contexts_for_model,
             updated_input,
+            start_failure,
         },
         completion_order: 0,
     }
 }
 
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToolUseOutcome {
+fn serialization_failure_outcome(
+    hook_events: Vec<HookCompletedEvent>,
+    block_reason: Option<String>,
+) -> PreToolUseOutcome {
     PreToolUseOutcome {
         hook_events,
-        should_block: false,
-        block_reason: None,
+        should_block: block_reason.is_some(),
+        block_reason,
         additional_contexts: Vec::new(),
         updated_input: None,
     }
@@ -373,6 +467,7 @@ mod tests {
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -404,6 +499,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: Some(serde_json::json!({ "command": "echo rewritten" })),
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -458,6 +554,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -489,6 +586,7 @@ mod tests {
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -523,6 +621,7 @@ mod tests {
                     limit: Default::default(),
                 }],
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -560,6 +659,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -587,6 +687,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -623,6 +724,7 @@ mod tests {
                     limit: AdditionalContextLimit::from_config(Some(13)),
                 }],
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -656,6 +758,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -677,6 +780,7 @@ mod tests {
                 block_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -704,6 +808,7 @@ mod tests {
                 block_reason: Some("blocked by policy".to_string()),
                 additional_contexts_for_model: Vec::new(),
                 updated_input: None,
+                start_failure: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -780,6 +885,7 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             error: None,
+            start_failed: false,
         }
     }
 
@@ -796,6 +902,7 @@ mod tests {
             matcher_aliases: Vec::new(),
             tool_use_id: tool_use_id.to_string(),
             tool_input: serde_json::json!({ "command": "echo hello" }),
+            block_if_hook_cannot_start: false,
         }
     }
 }

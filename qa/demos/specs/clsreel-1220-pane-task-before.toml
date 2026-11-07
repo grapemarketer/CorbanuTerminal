@@ -1,0 +1,148 @@
+# Before #1220 (build 9750861c2a): an agent's task to a pane the person opened arrived as if the person had typed it.
+id = "clsreel-1220-pane-task-before"
+feature = "Before #1220: an agent's task arrived as your input"
+expected = "On the build before #1220, the Manager's task to the Helper pane the person opened shows in Helper as the person's own message."
+model = "glm-5.3-flash"
+provider = "zai"
+config = """
+approval_policy = "on-request"
+suppress_unstable_features_warning = true
+
+[security]
+version = 1
+level = "moderate"
+
+[features]
+security_levels = true
+protected_mode_preflight = true
+secretless_agent_launch = true
+isolated_credential_broker = true
+secret_output_gate = true
+source_envelopes = true
+url_destination_policy = true
+"""
+
+[credentials]
+ZAI_API_KEY = "provider/zai_api_key"
+
+[fixtures]
+"notes.txt" = "Meeting notes: ship v2 on Friday.\n"
+
+[[steps]]
+wait = "Corbanu Terminal \\(v"
+[[steps]]
+wait = "model:\\s+glm-5\\.3-flash"
+[[steps]]
+pause = 1.0
+[[steps]]
+type = "/panes"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Create User Pane"
+[[steps]]
+pause = 1.0
+[[steps]]
+key = "Down"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Select Model and Effort"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Select Reasoning Level"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Name Corbanu Terminal pane"
+[[steps]]
+key = "BSpace"
+repeat = 12
+[[steps]]
+type = "Helper"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Created and switched to Corbanu Terminal pane Helper"
+[[steps]]
+pause = 1.5
+[[steps]]
+type = "/panes"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "› Corbanu Terminal - Main"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "via zai default"
+[[steps]]
+pause = 1.0
+[[steps]]
+type = "/orchestrate"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "› Helper +Corbanu Terminal; idle"
+[[steps]]
+pause = 1.5
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Choose who manages Worker Helper"
+[[steps]]
+pause = 1.5
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "The assignment brief was sent to the new pane"
+[[steps]]
+pause = 2.0
+[[steps]]
+type = "/panes"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Corbanu Terminal - Manager"
+[[steps]]
+key = "Down"
+repeat = 2
+[[steps]]
+wait = "› +•? ?Corbanu Terminal - Manager"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = '''Spec source: Draft with Manager\.(?:(?!Working).)*\n• (?:(?!Working).)*\n› '''
+timeout = 240
+compress = 3
+[[steps]]
+pause = 2.0
+[[steps]]
+type = "Assign Helper one task: run cat notes.txt and report what it says."
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Worker's latest completed output"
+timeout = 300
+compress = 4
+[[steps]]
+pause = 1.0
+[[steps]]
+type = "/panes"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = "Corbanu Terminal - Helper +glm-5\\.3-flash; idle"
+timeout = 120
+[[steps]]
+key = "Down"
+[[steps]]
+wait = "› +•? ?Corbanu Terminal - Helper"
+[[steps]]
+key = "Enter"
+[[steps]]
+wait = '''› Assigned by Manager[\s\S]*\n› '''
+timeout = 60
+[[steps]]
+pause = 6.0

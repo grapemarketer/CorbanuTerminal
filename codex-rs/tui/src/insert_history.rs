@@ -51,7 +51,8 @@ pub enum HistoryLineWrapPolicy {
 /// Raw lines intentionally remain unbroken so terminal selection copies their source faithfully.
 /// Zellij does not constrain soft-wrapped continuation rows to Codex's scroll region, so its raw
 /// path appends history through the terminal and reserves blank rows for the next viewport draw.
-/// The standard path also takes it when its scroll region would be a single row (#1039).
+/// The standard path also takes it when its scroll region would be a single row (#1039) or
+/// empty, because the viewport fills the screen (#1082).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InsertHistoryMode {
     Standard,
@@ -165,7 +166,9 @@ where
     // a single row (for example the first line written above a viewport at the top of a freshly
     // cleared screen), `CSI 1;1 r` is invalid and terminals ignore it, so the line is written
     // into the viewport's first row and the next draw erases it. Append through the terminal
-    // instead. (A viewport filling the screen, `CSI 1;0 r`, keeps the standard path.)
+    // instead. #1082: so does a viewport filling the screen: there is no region at all, and
+    // `CSI 1;0 r` selects the whole screen, so the line would land inside the viewport and the
+    // diff-based redraw would leave it over the composer.
     let standard_scroll_amount = if area.bottom() < screen_size.height {
         wrapped_lines.min(screen_size.height - area.bottom())
     } else {
@@ -173,7 +176,7 @@ where
     };
     let mode = if mode == InsertHistoryMode::Standard
         && wrapped_lines > 0
-        && area.top().saturating_add(standard_scroll_amount) == 1
+        && area.top().saturating_add(standard_scroll_amount) <= 1
     {
         InsertHistoryMode::ZellijRaw
     } else {
@@ -183,6 +186,8 @@ where
         InsertHistoryMode::ZellijRaw => {
             // The existing viewport is immediately replaced in the same draw pass. Clear it
             // before terminal scrolling can move composer contents into scrollback.
+            // `clear_after_position` erases row by row, so a viewport filling the screen does
+            // not copy the composer or popup into tmux scrollback (#1340).
             terminal.clear_after_position(area.as_position())?;
             let writer = terminal.backend_mut();
             queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
@@ -1101,6 +1106,109 @@ mod tests {
         assert!(
             rows[1..].iter().all(|row| !row.contains("history line")),
             "history must not be written into the viewport, rows: {rows:?}"
+        );
+    }
+
+    /// #1082: with the viewport filling the screen there is no history region; the standard
+    /// path's `CSI 1;0 r` selected the whole screen and wrote the line inside the viewport, where
+    /// the diff-based redraw left it over the composer. It now goes to scrollback.
+    #[test]
+    fn vt100_full_screen_viewport_sends_history_to_scrollback() {
+        let width: u16 = 50;
+        let height: u16 = 4;
+        let backend = VT100Backend::with_scrollback(width, height, /*scrollback*/ 10);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ width, /*height*/ height,
+        ));
+        draw_composer(&mut term);
+
+        insert_history_lines(&mut term, vec![Line::from("inserted history line")])
+            .expect("insert history");
+        draw_composer(&mut term);
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        assert_eq!(term.viewport_area, Rect::new(0, 0, width, height));
+        assert_eq!(
+            rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>(),
+            vec![
+                "",
+                "› Will this algorithm scale well?",
+                "",
+                "  Side from main thread · ctrl + c to close",
+            ],
+            "the composer must be intact, with no history inside it"
+        );
+        let screen = term.backend_mut().vt100_mut().screen_mut();
+        screen.set_scrollback(1);
+        let top = screen.rows(0, width).next().unwrap_or_default();
+        assert_eq!(
+            top.trim_end(),
+            "inserted history line",
+            "kept in scrollback"
+        );
+    }
+
+    /// #1340: inserting history while the viewport fills the screen must not erase the whole
+    /// screen from the home position, which tmux (`scroll-on-clear`, default on) saves into
+    /// scrollback: each batch used to leave a copy of the popup there. Scrollback holds each
+    /// history line once, in order, and nothing else.
+    #[test]
+    fn vt100_full_screen_viewport_batches_leave_no_popup_copy_in_scrollback() {
+        let width: u16 = 50;
+        let height: u16 = 4;
+        let backend = VT100Backend::with_scrollback(width, height, /*scrollback*/ 20);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ width, /*height*/ height,
+        ));
+        draw_composer(&mut term);
+
+        for batch in [
+            ["line 1", "line 2"],
+            ["line 3", "line 4"],
+            ["line 5", "line 6"],
+        ] {
+            insert_history_lines(&mut term, batch.into_iter().map(Line::from).collect())
+                .expect("insert history");
+            draw_composer(&mut term);
+        }
+
+        assert_eq!(
+            term.backend().scroll_on_clear_saves(),
+            &[] as &[String],
+            "no whole-screen erase while inserting history"
+        );
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        assert_eq!(
+            rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>(),
+            vec![
+                "",
+                "› Will this algorithm scale well?",
+                "",
+                "  Side from main thread · ctrl + c to close",
+            ],
+            "the composer must be intact"
+        );
+        let screen = term.backend_mut().vt100_mut().screen_mut();
+        screen.set_scrollback(usize::MAX);
+        let scrolled = screen.scrollback();
+        let history: Vec<String> = (1..=scrolled)
+            .rev()
+            .map(|offset| {
+                screen.set_scrollback(offset);
+                screen
+                    .rows(0, width)
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            history,
+            vec!["line 1", "line 2", "line 3", "line 4", "line 5", "line 6"],
+            "scrollback holds each history line once"
         );
     }
 

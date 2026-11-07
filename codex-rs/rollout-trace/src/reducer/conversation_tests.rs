@@ -1286,3 +1286,45 @@ fn inference_start_rejects_unknown_codex_turn() -> anyhow::Result<()> {
 
     expect_replay_error(&temp, "referenced unknown codex turn turn-missing")
 }
+
+#[test]
+fn json_tool_call_summary_is_cut_on_a_char_boundary() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({ "input": [message("user", "say hello in Japanese")] }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    // `{"cmd":"echo ` is 13 bytes and every following char is 3 bytes, so the
+    // 240-byte summary limit falls inside a char.
+    let arguments =
+        serde_json::to_string(&json!({ "cmd": format!("echo {}", "こんにちは".repeat(20)) }))?;
+    let response = writer.write_json_payload(
+        RawPayloadKind::InferenceResponse,
+        &json!({
+            "response_id": "resp-1",
+            "output_items": [{
+                "type": "function_call",
+                "name": "shell",
+                "arguments": arguments,
+                "call_id": "call-1"
+            }]
+        }),
+    )?;
+    append_inference_completion(&writer, "inference-1", "resp-1", response)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let item_id = &rollout.inference_calls["inference-1"].response_item_ids[0];
+    let parts = &rollout.conversation_items[item_id].body.parts;
+    let [ConversationPart::Json { summary, .. }] = parts.as_slice() else {
+        panic!("expected one JSON part, got {parts:?}");
+    };
+    // 13 + 75 * 3 = 238 bytes is the longest prefix of whole chars within 240.
+    assert_eq!(summary, &format!("{}...", &arguments[..238]));
+
+    Ok(())
+}

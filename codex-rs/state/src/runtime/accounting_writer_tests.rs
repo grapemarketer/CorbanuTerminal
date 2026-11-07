@@ -258,6 +258,19 @@ async fn a_refused_record_is_an_error_and_not_kept() -> anyhow::Result<()> {
         "{error:#}"
     );
     assert_eq!(pending_records(&path), Vec::<PathBuf>::new());
+    // #314 (D228): the refused record's day is marked for the conversation
+    // it was recorded under, whether or not anything still waits for it.
+    let marked: Vec<(String, i64)> =
+        sqlx::query_as("SELECT thread_id, utc_day FROM draft_accounting_gap_days")
+            .fetch_all(runtime.pool.as_ref())
+            .await?;
+    assert_eq!(
+        marked,
+        vec![(
+            owner.to_string(),
+            i64::from(misowned.dispatched_at_ms).div_euclid(86_400_000)
+        )]
+    );
     // The writer goes on with later records.
     let next = attempt(owner);
     assert_eq!(

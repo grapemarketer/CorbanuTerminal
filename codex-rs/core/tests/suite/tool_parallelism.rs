@@ -153,41 +153,68 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    // A timing check: under Wine-exec every shell command starts through
-    // Wine, which alone takes most of the bound (1.7 s against 1.6 s on
-    // nightly-ci, #636), so it could not tell parallel from serial there.
-    skip_if_wine_exec!(
-        Ok(()),
-        "shell start-up under Wine exceeds the parallel-timing bound"
-    );
+    // Not qualified under Wine-exec, where every command starts through
+    // Wine (#636).
+    skip_if_wine_exec!(Ok(()), "shell start-up under Wine is not qualified here");
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
-    let shell_args = json!({
-        "command": "sleep 0.25",
-        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
-        "login": false,
-        "timeout_ms": 1_000,
-    });
-    let args_one = serde_json::to_string(&shell_args)?;
-    let args_two = serde_json::to_string(&shell_args)?;
+    // Unified exec is on by default off Windows, so `exec_command` is the
+    // model-visible shell tool. The legacy `shell_command` stays registered
+    // hidden, and hidden tools run serially, so the old wall-clock check on
+    // it only passed because two short sleeps fit inside the bound (#1448).
+    // Assert the overlap directly, as upstream does (openai/codex#56006).
+    let shell_args = |call_id: &str| {
+        json!({
+            "cmd": format!(": > {call_id}.started; while [ ! -f release ]; do sleep 0.01; done; echo {call_id}"),
+            "login": false,
+            "yield_time_ms": 30_000,
+        })
+        .to_string()
+    };
+    let args_one = shell_args("call-1");
+    let args_two = shell_args("call-2");
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
-        ev_function_call("call-1", "shell_command", &args_one),
-        ev_function_call("call-2", "shell_command", &args_two),
+        ev_function_call("call-1", "exec_command", &args_one),
+        ev_function_call("call-2", "exec_command", &args_two),
         ev_completed("resp-1"),
     ]);
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let responses = mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_parallel_duration(duration);
+    let release_commands = async {
+        // Longer than upstream's 5 s: a loaded runner can be slow to start
+        // both shells, and the wait ends as soon as both have.
+        let overlap = tokio::time::timeout(Duration::from_secs(20), async {
+            while !test.cwd.path().join("call-1.started").exists()
+                || !test.cwd.path().join("call-2.started").exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        fs::write(test.cwd.path().join("release"), "")?;
+        overlap.map_err(|_| anyhow::anyhow!("shell commands did not overlap"))
+    };
+    let (turn_result, overlap_result) =
+        tokio::join!(run_turn(&test, "run exec_command twice"), release_commands);
+    overlap_result?;
+    turn_result?;
+
+    for call_id in ["call-1", "call-2"] {
+        let output = responses
+            .function_call_output_text(call_id)
+            .expect("missing exec output");
+        assert!(output.contains("Process exited with code 0"), "{output}");
+        assert!(output.contains(&format!("Output:\n{call_id}")), "{output}");
+    }
 
     Ok(())
 }
@@ -210,27 +237,35 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
         "sleep_after_ms": 300
     })
     .to_string();
+    // `exec_command`, not the hidden (serial) legacy `shell_command`: with
+    // the latter this turn ran serially and only fit the bound by luck (#1448).
     let shell_args = serde_json::to_string(&json!({
-        "command": "sleep 0.25",
+        "cmd": "sleep 0.25",
         // Avoid user-specific shell startup cost in timing assertions.
         "login": false,
-        "timeout_ms": 1_000,
+        // The call returns when the process exits; a short yield could
+        // return "still running" under load and fail the exit-code check.
+        "yield_time_ms": 10_000,
     }))?;
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
         ev_function_call("call-1", "test_sync_tool", &sync_args),
-        ev_function_call("call-2", "shell_command", &shell_args),
+        ev_function_call("call-2", "exec_command", &shell_args),
         ev_completed("resp-1"),
     ]);
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let responses = mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "mix tools").await?;
     assert_parallel_duration(duration);
+    let output = responses
+        .function_call_output_text("call-2")
+        .expect("missing exec output");
+    assert!(output.contains("Process exited with code 0"), "{output}");
 
     Ok(())
 }

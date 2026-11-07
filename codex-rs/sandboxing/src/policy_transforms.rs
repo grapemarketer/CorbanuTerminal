@@ -41,8 +41,8 @@ pub fn normalize_additional_permissions(
                             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
                             .unwrap_or(path),
                     },
-                    FileSystemPath::GlobPattern { pattern } => {
-                        FileSystemPath::GlobPattern { pattern }
+                    FileSystemPath::GlobPattern { pattern, scan } => {
+                        FileSystemPath::GlobPattern { pattern, scan }
                     }
                     FileSystemPath::Special { value } => FileSystemPath::Special { value },
                 };
@@ -308,8 +308,10 @@ fn deny_entry_constrains_accepted_grant(
                 return false;
             };
             match &deny_entry.path {
-                FileSystemPath::GlobPattern { pattern } => glob_static_prefix_path(pattern, cwd)
-                    .is_some_and(|prefix| paths_overlap(prefix.as_path(), grant_path.as_path())),
+                FileSystemPath::GlobPattern { pattern, .. } => {
+                    glob_static_prefix_path(pattern, cwd)
+                        .is_some_and(|prefix| paths_overlap(prefix.as_path(), grant_path.as_path()))
+                }
                 FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {
                     resolve_permission_path(&deny_entry.path, cwd).is_some_and(|deny_path| {
                         paths_overlap(deny_path.as_path(), grant_path.as_path())
@@ -366,8 +368,9 @@ fn materialize_cwd_dependent_entry(
                 missing_path_behavior: entry.missing_path_behavior,
             })
             .unwrap_or_else(|| entry.clone()),
-        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+        FileSystemPath::GlobPattern { pattern, scan } => FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: scan.clone(),
                 pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
                     .to_string_lossy()
                     .into_owned(),

@@ -1,0 +1,12 @@
+# AGMS milestone profile: the "Aggressive ships" feature flags. The security level is chosen by the person in /security.
+suppress_unstable_features_warning = true
+
+[features]
+security_levels = true
+protected_mode_preflight = true
+secretless_agent_launch = true
+isolated_credential_broker = true
+secret_output_gate = true
+source_envelopes = true
+url_destination_policy = true
+contained_external_agents = true

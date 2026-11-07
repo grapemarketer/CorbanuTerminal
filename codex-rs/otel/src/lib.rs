@@ -5,6 +5,7 @@ pub(crate) mod provider;
 pub(crate) mod trace_context;
 
 mod otlp;
+mod otlp_http_client;
 mod targets;
 
 use crate::metrics::Result as MetricsResult;

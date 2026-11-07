@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/provider_manager.rs
+assertion_line: 1257
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&chat, 80)"
+---
+  Ollama
+  Enabled · local (not checked)
+  Local server: not checked; the first request shows whether it is running.
+
+› 1. Deactivate  Exclude this provider from use; credentials are kept.
+
+  Press enter to confirm or esc to go back

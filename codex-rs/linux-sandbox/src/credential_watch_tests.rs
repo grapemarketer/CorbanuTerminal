@@ -13,7 +13,10 @@ fn deny_globs(globs: Vec<String>) -> FileSystemSandboxPolicy {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             })

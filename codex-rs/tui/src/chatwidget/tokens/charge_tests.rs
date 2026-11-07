@@ -177,6 +177,7 @@ fn day(quotes: Vec<ObservationQuote>) -> InspectionDay {
         requests,
         other_conversations: Some(OtherConversations::default()),
         empty_day: None,
+        recording_gap: false,
     })
 }
 

@@ -514,6 +514,11 @@ impl TextArea {
         }
     }
 
+    /// Whether `event` is one of the keys this editor takes as a newline.
+    pub(crate) fn is_insert_newline_key(&self, event: KeyEvent) -> bool {
+        self.editor_keymap.insert_newline.is_pressed(event)
+    }
+
     pub fn input_with_keymap(&mut self, event: KeyEvent, keymap: &EditorKeymap) {
         if keymap.insert_newline.is_pressed(event) {
             self.insert_str("\n");

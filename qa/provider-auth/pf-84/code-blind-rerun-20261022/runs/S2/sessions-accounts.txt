@@ -1,0 +1,15 @@
+== rollout-2026-10-22T08-58-32-01a162d5-5e06-7672-91eb-0a666615a08b.jsonl
+  08:58:58 turn provider=zai account=work
+  08:59:59 turn provider=zai account=personal
+  09:00:52 turn provider=zai account=work
+  09:01:13 turn provider=zai account=work
+== rollout-2026-10-22T09-01-39-01a162d8-3750-7c70-b936-b491482fcd17.jsonl
+  09:01:43 turn provider=zai account=personal
+== rollout-2026-10-22T09-02-19-01a162d8-d29b-7480-b98c-79453479b3bb.jsonl
+  09:02:23 turn provider=zai account=default
+== rollout-2026-10-22T09-03-31-01a162d9-ed8f-7b92-ad15-79609db12d4a.jsonl
+  09:03:32 turn provider=zai account=work
+  09:04:14 turn provider=zai account=work
+  09:06:21 turn provider=zai account=personal
+== rollout-2026-10-22T09-05-31-01a162db-c18e-7b73-895c-93fdb5128f66.jsonl
+  09:05:32 turn provider=zai account=personal

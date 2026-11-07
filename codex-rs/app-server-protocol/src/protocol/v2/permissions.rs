@@ -315,7 +315,7 @@ impl From<CoreFileSystemPath> for FileSystemPath {
             CoreFileSystemPath::Path { path } => Self::Path {
                 path: LegacyAppPathString::from_abs_path(&path),
             },
-            CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            CoreFileSystemPath::GlobPattern { pattern, .. } => Self::GlobPattern { pattern },
             CoreFileSystemPath::Special { value } => Self::Special {
                 value: value.into(),
             },
@@ -335,7 +335,10 @@ impl TryFrom<FileSystemPath> for CoreFileSystemPath {
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
                     .to_abs_path()?,
             },
-            FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            FileSystemPath::GlobPattern { pattern } => Self::GlobPattern {
+                pattern,
+                scan: None,
+            },
             FileSystemPath::Special { value } => Self::Special {
                 value: value.into(),
             },

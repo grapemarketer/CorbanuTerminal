@@ -431,3 +431,96 @@ async fn issue1127_custom_native_send_followup_to_another_account_are_refused() 
         .collect();
     assert_eq!(captured, Vec::new());
 }
+
+#[tokio::test]
+async fn issue1016_custom_native_spawn_default_model_keeps_source_and_ciphertext() {
+    let (mut session, mut turn) = custom_source_context().await;
+    let mut config = (*turn.config).clone();
+    // Use a different model so the route exercises model selection, not inheritance.
+    config.agent_default_subagent_model = Some("gpt-5.6-terra".to_string());
+    set_turn_config(&mut turn, config);
+    let manager = install_live_root(&mut session, &turn).await;
+    let threads_before: std::collections::HashSet<_> =
+        manager.list_thread_ids().await.into_iter().collect();
+    let operations_before = manager.captured_ops();
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let spawned = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "opaque-default-model",
+                "task_name": "issue1016_default_model",
+                "fork_turns": "none",
+            })),
+        ))
+        .await
+        .expect("a default model must preserve the custom source provider");
+    let (text, _) = expect_text_output(spawned);
+    let result: serde_json::Value = serde_json::from_str(&text).expect("spawn JSON");
+    assert_eq!(
+        json!({
+            "model_provider": result["model_provider"],
+            "model": result["model"],
+            "task_name": result["task_name"],
+        }),
+        json!({
+            "model_provider": "myopenai",
+            "model": "gpt-5.6-terra",
+            "task_name": "/root/issue1016_default_model",
+        })
+    );
+    let child = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.thread_id,
+            &turn.session_source,
+            "issue1016_default_model",
+        )
+        .await
+        .expect("child reference");
+    let child_config = manager
+        .get_thread(child)
+        .await
+        .expect("child")
+        .config_snapshot()
+        .await;
+    assert_eq!(
+        (child_config.model_provider_id, child_config.model),
+        ("myopenai".to_string(), "gpt-5.6-terra".to_string())
+    );
+    let threads_after: std::collections::HashSet<_> =
+        manager.list_thread_ids().await.into_iter().collect();
+    let mut expected_threads = threads_before;
+    assert!(
+        expected_threads.insert(child),
+        "spawn must create a new child"
+    );
+    assert_eq!(threads_after, expected_threads);
+    let operations_after = manager.captured_ops();
+    let new_operations = operations_after
+        .strip_prefix(operations_before.as_slice())
+        .expect("spawn must preserve all prior captured operations");
+    let [(actual_child, Op::InterAgentCommunication { communication })] = new_operations else {
+        panic!("spawn must add exactly one captured communication operation");
+    };
+    assert_eq!(*actual_child, child);
+    assert_eq!(
+        json!({
+            "content": communication.content,
+            "encrypted_content": communication.encrypted_content,
+            "trigger_turn": communication.trigger_turn,
+            "recipient": communication.recipient.as_str(),
+        }),
+        json!({
+            "content": "",
+            "encrypted_content": "opaque-default-model",
+            "trigger_turn": true,
+            "recipient": "/root/issue1016_default_model",
+        })
+    );
+}

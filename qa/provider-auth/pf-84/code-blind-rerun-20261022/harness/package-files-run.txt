@@ -1,0 +1,9 @@
+755 61a15c4c74ba5b4ffe1ccc61eccea4c0a877ef12ccab864866fdf0ff4131b711 ./bin/codex-code-mode-host
+755 ba9feaa443ec18f29abc73a27137cc8f4696899ea4a1c3dada84c8d2df280006 ./bin/corbanu
+644 b1613b8e122aa68df0db46b72d3b5c1d6c8bd9cd5c33bdf6cee2b835e17d5529 ./codex-package.json
+644 94e3706786495a29882454105caf6ef32978bf362fcaa0eae8faee9f25409f62 ./codex-resources/telegram/dist/AGENTS.md.template
+644 7b2486a9fb015dc0864851fd6095b7fdd75a57ca9587a3a7d0540513ff05128b ./codex-resources/telegram/dist/corbanu-terminal-telegram.service
+644 ece6bb7f40216ac0af6eeb0ec433264d4bcf868e39b5d65a06337c6138bf69d6 ./codex-resources/telegram/dist/org.corbanu.terminal.telegram.plist
+644 a5467b26fdadc62e34b0bfd2f73725fda579ad934ba273951cd02f21b94e0645 ./codex-resources/telegram/install-telegram-task.ps1
+755 ce9c2a653f88efb4d888edeeca036bf908ebc364990783851bb015d9203ceb4b ./codex-resources/telegram/setup-telegram.sh
+755 db6fe1a78eaceaff3b0f0cde25fc25afe466d61b0bf76b4ebe35812e4bc8dd71 ./codex-resources/zsh/bin/zsh

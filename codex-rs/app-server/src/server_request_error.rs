@@ -2,13 +2,23 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 pub(crate) const TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON: &str = "turnTransition";
 
+/// Core stopped waiting for the request (#722, D279).
+pub(crate) const WITHDRAWN_PENDING_REQUEST_ERROR_REASON: &str = "withdrawn";
+
 pub(crate) fn is_turn_transition_server_request_error(error: &JSONRPCErrorError) -> bool {
+    pending_request_error_reason(error) == Some(TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON)
+}
+
+pub(crate) fn is_withdrawn_server_request_error(error: &JSONRPCErrorError) -> bool {
+    pending_request_error_reason(error) == Some(WITHDRAWN_PENDING_REQUEST_ERROR_REASON)
+}
+
+fn pending_request_error_reason(error: &JSONRPCErrorError) -> Option<&str> {
     error
         .data
         .as_ref()
         .and_then(|data| data.get("reason"))
         .and_then(serde_json::Value::as_str)
-        == Some(TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON)
 }
 
 #[cfg(test)]

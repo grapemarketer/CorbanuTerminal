@@ -387,7 +387,7 @@ async fn accounting_responses_ws_native_redirects_are_never_attributed() -> anyh
     Ok(())
 }
 #[tokio::test]
-async fn accounting_responses_ws_native_endpoint_and_cached_auth_mismatch_are_sent_unrecorded()
+async fn accounting_responses_ws_native_endpoint_is_unrecorded_and_a_switched_auth_reconnects()
 -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let mut gate = Gate::start().await?;
@@ -428,9 +428,26 @@ async fn accounting_responses_ws_native_endpoint_and_cached_auth_mismatch_are_se
         .await?;
     warmup.complete().await?;
     gate.next().await?.complete().await?;
-    core_test_support::assert_accounting_gap(&terminal(&test).await?);
-    counts(&gate, (1, 1, 1, 0));
-    absent(&test.codex.state_db().unwrap()).await?;
+    // #1311 (D171): the request is never sent on the connection opened with
+    // the subscription's tokens; a new one is opened with the API key, so the
+    // request is attributable and recorded, with no accounting gap.
+    let events = terminal(&test).await?;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EventMsg::Error(_))
+                || matches!(
+                    event,
+                    EventMsg::Warning(warning)
+                        if warning.message.starts_with("Developer accounting could not record")
+                )),
+        "{events:?}"
+    );
+    counts(&gate, (2, 1, 1, 0));
+    assert_eq!(
+        turn_attempts(&test.codex.state_db().unwrap()).await?.len(),
+        1
+    );
     stop(&test).await;
     Ok(())
 }

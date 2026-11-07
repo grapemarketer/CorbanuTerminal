@@ -1,0 +1,9 @@
+Run complete.
+
+- Preflight: passed; candidate and packet hashes matched.
+- Case executed: NA-06 only, using prepared home `zai3`.
+- Product added `added` through `/providers`; the key was masked and the account appeared with kind/fingerprint.
+- Rename failed: Enter on the visibly highlighted `Rename` action unexpectedly started a new session on `added`. Required fallback was taken.
+- Final CLI checks: `renamed` was absent and unusable; `added` still worked and returned `nold`.
+- Report: `$AGMS_RUN/evidence/result.md`
+- Verdict: `VERDICT NA-06: failed`

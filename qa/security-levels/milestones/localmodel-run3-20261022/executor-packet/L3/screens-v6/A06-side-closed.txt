@@ -1,0 +1,22 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace          │
+╰──────────────────────────────────────────────────────────╯
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+
+› Reply with the single word OK.
+
+
+• OK
+
+  OK
+
+
+› Use /skills to list available skills
+
+  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen default · ~/run/fixture/workspace · Corbanu Terminal · TPS: 0.1 tok/s

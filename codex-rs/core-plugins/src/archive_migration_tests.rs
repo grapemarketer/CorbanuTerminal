@@ -313,3 +313,55 @@ fn archive_migration_bzip2_regular_file() {
     );
     println!("ZIP_CASE=bzip2_regular_file; method12; exact owned synthetic payload");
 }
+
+#[test]
+fn archive_migration_symlink_members_are_skipped() {
+    let temp = tempfile::tempdir().unwrap();
+    let dest = temp.path().join("destination");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::write(&outside, b"unchanged").unwrap();
+    let bytes = archive(&[
+        ("bundle/link", b"../outside", 0o120777),
+        ("bundle/regular", b"../outside", 0o100755),
+    ]);
+    extract(&bytes, &dest).unwrap();
+    assert_eq!(std::fs::read(dest.join("regular")).unwrap(), b"../outside");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"unchanged");
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 1);
+    assert!(std::fs::symlink_metadata(dest.join("link")).is_err());
+    println!("ZIP_CASE=symlink_member_skipped; no link payload output; regular file preserved");
+}
+
+#[test]
+fn archive_migration_unsafe_symlink_member_names_are_rejected() {
+    for name in ["bundle/../../outside", "/bundle/link"] {
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("destination");
+        std::fs::create_dir(&dest).unwrap();
+        assert!(extract(&archive(&[(name, b"target", 0o120777)]), &dest).is_err());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn archive_migration_disabled_lzma_is_rejected_without_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let dest = temp.path().join("destination");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel"), b"unchanged").unwrap();
+    // Valid method-14 ZIP generated and independently decoded with Python zipfile.
+    let bytes = include_bytes!("fixtures/archive-lzma.zip");
+    let result = extract(bytes, &dest);
+    assert!(result.is_err(), "LZMA must remain disabled: {result:?}");
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read(outside.join("sentinel")).unwrap(),
+        b"unchanged"
+    );
+    println!("ZIP_CASE=disabled_lzma; method14; rejected; no destination or outside writes");
+}

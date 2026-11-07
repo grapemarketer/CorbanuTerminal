@@ -1,0 +1,40 @@
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     mock-ws-1   /model to change                │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i2-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+
+› first message alpha
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #2.
+
+╭────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     mock-ws-1   /model to change                │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i2-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+• You’re continuing from this point in a new conversation
+
+⚠ Reopening or forking this conversation sent a warm-up request to prime the model's cache. It is billed like any
+  request; /cost lists it as a reopen warm-up. To skip it, set skip_reopen_warmup = true in config.toml.
+
+
+› first message alpha edited
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #4.
+
+
+› Implement {feature}
+
+  mock-ws-1 via mockws default · /Volumes/CorbanuDrive/Corbanu/.codex-work/tui-qa2/runs/i2-after/ws · Corbanu Terminal …

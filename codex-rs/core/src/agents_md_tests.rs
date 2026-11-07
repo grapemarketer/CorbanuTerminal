@@ -622,6 +622,45 @@ async fn doc_larger_than_limit_is_truncated() {
     assert_eq!(res, huge[..LIMIT]);
 }
 
+/// A cut at the byte limit backs off to a character boundary instead of
+/// splitting a multi-byte character into U+FFFD, which would also take the
+/// text past the limit.
+#[tokio::test]
+async fn doc_larger_than_limit_is_truncated_at_a_char_boundary() {
+    const LIMIT: usize = 1024;
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    // 3000 bytes of valid UTF-8; byte 1024 falls inside the 342nd character.
+    let huge = "日".repeat(/*n*/ 1000);
+    fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
+
+    let res = get_user_instructions(&make_config(&tmp, LIMIT, /*instructions*/ None).await)
+        .await
+        .expect("doc expected");
+
+    assert!(res.len() <= LIMIT, "{} bytes exceed LIMIT", res.len());
+    assert_eq!(res, "日".repeat(/*n*/ 341));
+}
+
+/// The remaining budget left for a later project doc is cut on a character
+/// boundary too.
+#[tokio::test]
+async fn total_byte_limit_truncates_later_project_docs_at_a_char_boundary() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    fs::write(repo.path().join(".git"), "").unwrap();
+    fs::write(repo.path().join("AGENTS.md"), "root").unwrap();
+    let nested = repo.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "a—b").unwrap();
+
+    let mut config = make_config(&repo, /*limit*/ 6, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+
+    let loaded = load_agents_md(&config).await.expect("project instructions");
+
+    assert_eq!(loaded.text(), "root\n\na");
+}
+
 #[tokio::test]
 async fn total_byte_limit_truncates_later_project_docs() {
     let repo = tempfile::tempdir().expect("tempdir");

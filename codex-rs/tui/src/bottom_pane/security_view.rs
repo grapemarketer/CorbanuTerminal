@@ -95,6 +95,14 @@ impl SecurityView {
         self
     }
 
+    /// #594 (D225): why Aggressive cannot be chosen from here, if it cannot.
+    pub(crate) fn with_aggressive_home_link(mut self, blocker: Option<String>) -> Self {
+        if let Some(picker) = self.picker.as_mut() {
+            picker.set_aggressive_home_link(blocker);
+        }
+        self
+    }
+
     /// PF-24-S02: Core's configured levels, and where "restart now" goes.
     pub(crate) fn with_confirmation(
         mut self,

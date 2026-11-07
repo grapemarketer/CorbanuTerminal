@@ -1,0 +1,7 @@
+I'll start by reading the frozen case files and verifying the required preflight.
+Preflight and candidate identity passed. Both assigned cases were executed:
+
+- **ST-02: failed** — d5-2 was plain (`no · account`, no `Account usage:`) instead of showing `· account default` with usage. Other directly judged ST-02 checks passed; relay checks are for the integrator.
+- **ESC-04: passed** — onboarding reached the composer, `frone` replied, fr1-2 was plain, and `account list` showed no named accounts. Relay check is for the integrator.
+
+Full evidence and timestamps: `$AGMS_RUN/evidence/result.md`

@@ -6,8 +6,8 @@ expression: "render_bottom_popup(&chat, 120)"
   <https://developers.openai.com/codex/windows>
 
 › 1. Set up default sandbox (requires Administrator permissions)
-  2. Use non-admin sandbox (higher risk if prompt injected)       Commands can delete or move files outside your
-                                                                  workspace
+  2. Use non-admin sandbox (higher risk if prompt injected)       Doesn't block reading your files; its network block
+                                                                  can be bypassed
   3. Quit
 
   Press enter to confirm or esc to go back

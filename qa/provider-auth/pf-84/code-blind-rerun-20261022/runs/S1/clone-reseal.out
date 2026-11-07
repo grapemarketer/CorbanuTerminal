@@ -1,0 +1,7 @@
+pf enabled
+Token : 15678564961497699071
+No ALTQ support in kernel
+ALTQ related functions disabled
+resealed: pf Enabled; rules 19; dns listening
+curl: (6) Could not resolve host: example.com
+example.com rc=6

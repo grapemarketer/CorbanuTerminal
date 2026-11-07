@@ -1,0 +1,21 @@
+Request
+Requested UTC day: 2026-10-15
+Provider: Vercel
+Model: Vercel GLM 5.3 Flash
+Billing: Pay per use
+Cost: at least $0.001397 (rounded) (1 attempt had incomplete usage; charged by Vercel)
+Price basis: 1 attempt priced from the charge Vercel reported; 1 attempt with no price — Vercel reported no charge for 1 attempt
+Next step for requests with incomplete usage: check the bill from Vercel. Their provider did not report every token count, so the estimate is missing or
+only a lower bound.
+Tokens: 8,584+ tokens
+—— Details ——
+Billed cost: at least $0.001397 (rounded) (1 failed attempt reported no usage; a refused request is normally not charged) — as stated by the provider with
+each response
+Request: c065b131-ee6e-4e25-b7f7-c589d135db6b
+Snapshot is not current; newer activity is unverified
+—— Open ——
+→ Technical details (attempt 1)
+→ Technical details (attempt 2)
+Back
+Refresh
+Close

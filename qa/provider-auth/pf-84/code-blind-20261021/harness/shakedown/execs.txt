@@ -1,0 +1,36 @@
+=== zai3 exec --account work
+corbanu
+SHAKE-OK
+tokens used
+7,004
+SHAKE-OK
+=== zai3 exec
+corbanu
+SHAKE-OK
+tokens used
+7,609
+SHAKE-OK
+=== zaione exec
+corbanu
+SHAKE-OK
+tokens used
+7,523
+SHAKE-OK
+=== custom exec --account work
+corbanu
+SHAKE-OK
+tokens used
+6,993
+SHAKE-OK
+=== custom exec
+corbanu
+SHAKE-OK
+tokens used
+5,655
+SHAKE-OK
+=== oai1 exec
+Reply with exactly SHAKE-OK
+2026-10-21T21:57:41.636158Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+2026-10-21T21:57:41.832079Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+ERROR: unexpected status 401 Unauthorized: Incorrect API key provided (test relay)., url: wss://api.openai.com/v1/responses
+ERROR: unexpected status 401 Unauthorized: Incorrect API key provided (test relay)., url: wss://api.openai.com/v1/responses

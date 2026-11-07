@@ -164,6 +164,29 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
     fn delete(&self) -> std::io::Result<bool>;
+
+    /// #1311 (D171): reads the stored auth, changes it and saves it. `None`,
+    /// writing nothing, when none is stored. This default reads and saves
+    /// separately; a named account's vault store does both under one lock so
+    /// a removal by another process in between is never undone.
+    fn update(
+        &self,
+        change: &mut dyn FnMut(&mut AuthDotJson) -> std::io::Result<()>,
+    ) -> std::io::Result<Option<AuthDotJson>> {
+        let Some(mut auth) = self.load()? else {
+            return Ok(None);
+        };
+        change(&mut auth)?;
+        self.save(&auth)?;
+        Ok(Some(auth))
+    }
+
+    /// D171: whether this is a named account's store, where a missing
+    /// sign-in means the account was removed, so a sign-in held in memory is
+    /// never written back.
+    fn is_named_account(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Debug)]

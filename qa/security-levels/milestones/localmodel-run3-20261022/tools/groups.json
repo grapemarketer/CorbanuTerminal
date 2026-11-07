@@ -1,0 +1,10 @@
+[
+ {"id": "L01", "cases": "MOD-21", "files": ["mod/design-cases.md", "mod/amendments.md", "mod/amendments-v3.md", "mod/amendments-v9.md", "amendments-L3.md"],
+  "note": "Moderate case MOD-21 as amended by `mod/amendments.md`, `mod/amendments-v3.md` (G-1, G-3; its R-1 is replaced by L3), `mod/amendments-v9.md` and `amendments-L3.md` (which governs). Launch only with `--route qwen`; the child pane runs on the local model too."},
+ {"id": "L02", "cases": "MOD-11 (items 3 and 8 only)", "files": ["mod/design-cases.md", "mod/amendments.md", "mod/amendments-v3.md", "amendments-L3.md"],
+  "note": "Moderate case MOD-11, items 3 and 8 only, as amended by `mod/amendments.md`, `mod/amendments-v3.md` and `amendments-L3.md` (which governs). Launch only with `--route qwen`."},
+ {"id": "L03", "cases": "AGG-20P-A", "files": ["agg/design-cases.md", "agg/amendments-and-new-cases.md", "amendments-L2.md", "agg/amendment7.md", "amendments-L3.md"],
+  "note": "Aggressive case AGG-20P, group AGG-20P-A (the control role), defined in `agg/amendment7.md`, under `amendments-L3.md` (which governs; it says which rules of `amendments-L2.md` apply). Launch only with `--route qwen`. In this group the product's `config.toml` is writable by you."},
+ {"id": "L04", "cases": "AGG-20P-B", "files": ["agg/design-cases.md", "agg/amendments-and-new-cases.md", "amendments-L2.md", "agg/amendment7.md", "amendments-L3.md"],
+  "note": "Aggressive case AGG-20P, group AGG-20P-B (the wide role), defined in `agg/amendment7.md`, under `amendments-L3.md` (which governs; it says which rules of `amendments-L2.md` apply). Launch only with `--route qwen`. In this group the product's `config.toml` is writable by you."}
+]

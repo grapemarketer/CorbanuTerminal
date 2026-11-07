@@ -360,7 +360,7 @@ fn provider_sign_in_restriction_error(
 /// restrictions it was built with rule it out (it is left unchanged). Only
 /// in a process that left the default login in place at startup (see
 /// `codex_login::leave_default_login_unenforced`): a new session on the
-/// default account (`/providers` → *Use default account for this session*),
+/// default account (`/providers` → *Start a new session on the default account*),
 /// a spawned agent on it, or a resumed or forked default-login thread. A
 /// mid-session provider switch to it is refused at the first request with
 /// the same reason (the provider's `api_auth`).

@@ -1,14 +1,16 @@
 //! Native HTTP/sideband/SQLite regressions for #889 item 2. No media or live provider.
 use super::provider_bound;
-use super::realtime_ledger;
 use super::realtime_ledger_exists;
-use super::realtime_ledger_session_with;
+use super::realtime_ledger_session_with_events;
 use super::realtime_ledger_settled;
+use super::realtime_ledger_settled_within;
 use super::realtime_websocket_params;
 use crate::realtime_conversation as realtime;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::protocol::ConversationStartTransport;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -28,6 +30,8 @@ struct Sideband {
     accepted: Receiver<()>,
     connected: Receiver<()>,
     end: Sender<SidebandEnd>,
+    /// Lets a [`Handshake::Gated`] connection answer its handshake.
+    release: Sender<()>,
     server: JoinHandle<()>,
 }
 
@@ -35,6 +39,8 @@ struct Sideband {
 enum Handshake {
     Complete,
     Pending,
+    /// The handshake is answered once the test sends on `release`.
+    Gated,
 }
 
 impl Drop for Sideband {
@@ -53,16 +59,22 @@ async fn sideband_handshake(handshake: Handshake) -> anyhow::Result<Sideband> {
     let (connected_tx, connected) = async_channel::bounded(4);
     let (accepted_tx, accepted) = async_channel::bounded(4);
     let (end, end_rx) = async_channel::bounded(4);
+    let (release, release_rx) = async_channel::bounded(4);
     let server = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         while let Ok((socket, _)) = listener.accept().await {
             let connected = connected_tx.clone();
             let accepted = accepted_tx.clone();
             let end = end_rx.clone();
+            let release = release_rx.clone();
             connections.spawn(async move {
                 let _ = accepted.send(()).await;
-                if matches!(handshake, Handshake::Pending) {
-                    std::future::pending::<()>().await;
+                match handshake {
+                    Handshake::Complete => {}
+                    Handshake::Pending => std::future::pending::<()>().await,
+                    Handshake::Gated => {
+                        let _ = release.recv().await;
+                    }
                 }
                 let Ok(mut ws) = tokio_tungstenite::accept_async(socket).await else {
                     return;
@@ -91,8 +103,17 @@ async fn sideband_handshake(handshake: Handshake) -> anyhow::Result<Sideband> {
         accepted,
         connected,
         end,
+        release,
         server,
     })
+}
+
+/// A sideband URL nothing listens on: connecting to it is refused.
+async fn closed_sideband_endpoint() -> anyhow::Result<String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}/v1", listener.local_addr()?);
+    drop(listener);
+    Ok(endpoint)
 }
 
 async fn call_server(status: u16) -> wiremock::MockServer {
@@ -129,11 +150,40 @@ async fn session(
     Arc<crate::session::session::Session>,
     Arc<codex_state::StateRuntime>,
 )> {
-    realtime_ledger_session_with(home, cwd, endpoint, accounting, |config| {
-        config.experimental_realtime_ws_base_url = Some(sideband.endpoint.clone());
+    let (owner, db, _events) =
+        session_with_events(home, cwd, endpoint, &sideband.endpoint, accounting).await?;
+    Ok((owner, db))
+}
+
+async fn session_with_events(
+    home: &std::path::Path,
+    cwd: &std::path::Path,
+    endpoint: &str,
+    sideband_endpoint: &str,
+    accounting: crate::config::AccountingMode,
+) -> anyhow::Result<(
+    Arc<crate::session::session::Session>,
+    Arc<codex_state::StateRuntime>,
+    Receiver<Event>,
+)> {
+    realtime_ledger_session_with_events(home, cwd, endpoint, accounting, |config| {
+        config.experimental_realtime_ws_base_url = Some(sideband_endpoint.to_string());
         config.experimental_realtime_webrtc_call_base_url = Some(endpoint.to_string());
     })
     .await
+}
+
+/// The realtime errors the session has emitted so far.
+fn realtime_errors(events: &Receiver<Event>) -> Vec<String> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event.msg {
+            EventMsg::RealtimeConversationRealtime(realtime) => match realtime.payload {
+                codex_api::RealtimeEvent::Error(error) => Some(error),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 async fn connected(sideband: &Sideband) -> anyhow::Result<()> {
@@ -150,7 +200,7 @@ async fn start(owner: &Arc<crate::session::session::Session>, sub_id: &str) -> a
 async fn stopped(owner: &crate::session::session::Session) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(5), async {
         while owner.conversation.running_state().await.is_some() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await?;
@@ -380,9 +430,11 @@ async fn pf_889_webrtc_replacement_shutdown_and_stale_stop_keep_attempt_identity
         })
         .await?;
     assert!(owner.conversation.running_state().await.is_some());
+    // Waiting for a second end must time out: the old cancellation adds none.
+    let (_, after_cancel) =
+        realtime_ledger_settled_within(&db, /*count*/ 2, Duration::from_millis(500)).await?;
     assert_eq!(
-        realtime_ledger(&db).await?.1,
-        observations,
+        after_cancel, observations,
         "old cancellation adds no duplicate end"
     );
     owner.conversation.shutdown().await?;
@@ -434,5 +486,162 @@ async fn pf_889_webrtc_http_failure_does_not_invent_sideband_end() -> anyhow::Re
             .all(|o| o["patch"]["session_ended_at_ms"].is_null())
     );
     assert!(sideband.accepted.is_empty());
+    Ok(())
+}
+
+/// #1000 item 1: a sideband that cannot connect ends its session once, on the
+/// creation attempt, and says why.
+#[tokio::test]
+async fn pf_889_webrtc_sideband_connect_failure_ends_once_with_an_error() -> anyhow::Result<()> {
+    let http = call_server(/*status*/ 200).await;
+    let endpoint = format!("{}/v1", http.uri());
+    let sideband_endpoint = closed_sideband_endpoint().await?;
+    let home = tempfile::tempdir()?;
+    let test_cwd = tempfile::tempdir()?;
+    let (owner, db, events) = session_with_events(
+        home.path(),
+        test_cwd.path(),
+        &endpoint,
+        &sideband_endpoint,
+        provider_bound(&endpoint),
+    )
+    .await?;
+    let ended_after = chrono::Utc::now().timestamp_millis();
+    start(&owner, "webrtc-fixture").await?;
+    stopped(&owner).await?;
+    let (attempts, observations) = realtime_ledger_settled(&db, /*count*/ 1).await?;
+    assert_end(&attempts, &observations, ended_after);
+    let errors = realtime_errors(&events);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(errors[0].contains("realtime websocket"), "{errors:#?}");
+    // Nothing more arrives later.
+    let (_, settled) =
+        realtime_ledger_settled_within(&db, /*count*/ 2, Duration::from_millis(500)).await?;
+    assert_eq!(settled, observations);
+    Ok(())
+}
+
+/// #1000 item 1: a session closed while its sideband was connecting stops as
+/// soon as the connection opens, ending once, without an error.
+#[tokio::test]
+async fn pf_889_webrtc_session_inactive_when_sideband_connects_ends_once() -> anyhow::Result<()> {
+    let http = call_server(/*status*/ 200).await;
+    let endpoint = format!("{}/v1", http.uri());
+    let sideband = sideband_handshake(Handshake::Gated).await?;
+    let home = tempfile::tempdir()?;
+    let test_cwd = tempfile::tempdir()?;
+    let (owner, db, events) = session_with_events(
+        home.path(),
+        test_cwd.path(),
+        &endpoint,
+        &sideband.endpoint,
+        provider_bound(&endpoint),
+    )
+    .await?;
+    start(&owner, "webrtc-fixture").await?;
+    tokio::time::timeout(Duration::from_secs(5), sideband.accepted.recv()).await??;
+    let input_task_done = {
+        let state = owner.conversation.state.lock().await;
+        let state = state.as_ref().expect("running state");
+        state
+            .realtime_active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        state.input_task.is_finished()
+    };
+    assert!(!input_task_done, "the sideband is still connecting");
+    let ended_after = chrono::Utc::now().timestamp_millis();
+    sideband.release.send(()).await?;
+    // The handshake completed: the task returned from the post-connect check,
+    // not from a failed connection.
+    connected(&sideband).await?;
+    let (attempts, observations) = realtime_ledger_settled(&db, /*count*/ 1).await?;
+    assert_end(&attempts, &observations, ended_after);
+    // The input task returns instead of running the session.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !owner
+            .conversation
+            .state
+            .lock()
+            .await
+            .as_ref()
+            .expect("running state")
+            .input_task
+            .is_finished()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    realtime::handle_close(&owner, "webrtc-fixture".into()).await;
+    let (_, settled) =
+        realtime_ledger_settled_within(&db, /*count*/ 2, Duration::from_millis(500)).await?;
+    assert_eq!(settled, observations, "closing adds no second end");
+    assert_eq!(realtime_errors(&events), Vec::<String>::new());
+    Ok(())
+}
+
+/// #1000 item 1: a sideband task whose session is already inactive returns
+/// without connecting.
+#[tokio::test]
+async fn pf_889_webrtc_sideband_task_for_inactive_session_does_not_connect() -> anyhow::Result<()> {
+    let sideband = sideband().await?;
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let model_client = session.services.model_client().as_ref().clone();
+    let api_provider = model_client
+        .provider_info()
+        .to_api_provider(/*auth_mode*/ None)?;
+    let (_text_tx, text_rx) = async_channel::bounded(1);
+    let (handoff_tx, handoff_output_rx) = async_channel::bounded(1);
+    let (_audio_tx, audio_rx) = async_channel::bounded(1);
+    let (events_tx, events_rx) = async_channel::bounded(1);
+    let (transcript_tail_tx, _transcript_tail_rx) = async_channel::bounded(1);
+    let before = chrono::Utc::now().timestamp_millis();
+    let task =
+        realtime::run_webrtc_sideband_input_task(realtime::RealtimeWebrtcSidebandInputTask {
+            model_client,
+            client: codex_api::RealtimeWebsocketClient::new(api_provider)
+                .with_webrtc_sideband_base_url(sideband.endpoint.clone()),
+            session_config: codex_api::RealtimeSessionConfig {
+                instructions: "fixture".into(),
+                initial_items: Vec::new(),
+                model: None,
+                session_id: None,
+                event_parser: codex_api::RealtimeEventParser::V1,
+                session_mode: codex_api::RealtimeSessionMode::Conversational,
+                output_modality: codex_protocol::protocol::RealtimeOutputModality::Audio,
+                voice: codex_protocol::protocol::RealtimeVoice::Alloy,
+            },
+            call_id: "rtc_fixture".into(),
+            sideband_headers: http::HeaderMap::new(),
+            input_channels: realtime::RealtimeInputChannels {
+                text_rx,
+                handoff_output_rx,
+                audio_rx,
+            },
+            events_tx,
+            handoff_state: realtime::RealtimeHandoffState {
+                output_tx: handoff_tx,
+                last_output: Arc::new(tokio::sync::Mutex::new(None)),
+                stream: Arc::new(tokio::sync::Mutex::new(Default::default())),
+                client_managed_handoffs: false,
+                codex_responses_as_items: false,
+                codex_response_item_prefix: None,
+                codex_response_handoff_mode: Default::default(),
+                codex_response_handoff_channel_prefixes: Arc::new(Default::default()),
+                session_kind: realtime::RealtimeSessionKind::V1,
+                event_parser: codex_api::RealtimeEventParser::V1,
+            },
+            session_kind: realtime::RealtimeSessionKind::V1,
+            event_parser: codex_api::RealtimeEventParser::V1,
+            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            flush_transcript_tail_on_session_end: false,
+            transcript_tail_tx,
+            stop_token: tokio_util::sync::CancellationToken::new(),
+        });
+    // A task that connected would run until stopped; this one must return.
+    let ended = tokio::time::timeout(Duration::from_secs(5), task).await?;
+    assert!(ended >= before);
+    assert!(events_rx.is_empty(), "no error for an inactive session");
+    assert!(sideband.accepted.is_empty(), "nothing connected");
     Ok(())
 }

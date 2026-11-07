@@ -115,8 +115,8 @@ async fn accounting_responses_bootstrap_is_lazy_and_once() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn accounting_responses_auth_route_eligibility() -> anyhow::Result<()> {
-    assert!(legacy_eligible(&provider(), Some(&auth())));
-    assert!(!legacy_eligible(&provider(), /*auth*/ None));
+    assert!(legacy_eligible(&provider(), Some(AuthMode::ApiKey)));
+    assert!(!legacy_eligible(&provider(), /*auth_mode*/ None));
     for kind in 0..4 {
         let mut provider = provider();
         match kind {
@@ -131,7 +131,7 @@ async fn accounting_responses_auth_route_eligibility() -> anyhow::Result<()> {
             3 => provider.wire_api = WireApi::Chat,
             _ => unreachable!(),
         }
-        assert!(!legacy_eligible(&provider, Some(&auth())));
+        assert!(!legacy_eligible(&provider, Some(AuthMode::ApiKey)));
     }
     let fixture = Fixture::new().await?;
     fixture.resolve().await?;
@@ -147,6 +147,73 @@ async fn accounting_responses_auth_route_eligibility() -> anyhow::Result<()> {
             .is_none()
     );
     assert!(fixture.deferred.check().is_err());
+    Ok(())
+}
+
+#[test]
+fn issue_889_auth_modes_preserve_responses_eligibility() {
+    let provider = provider();
+    for auth_mode in [
+        None,
+        Some(AuthMode::ApiKey),
+        Some(AuthMode::Chatgpt),
+        Some(AuthMode::ChatgptAuthTokens),
+        Some(AuthMode::Headers),
+        Some(AuthMode::AgentIdentity),
+        Some(AuthMode::PersonalAccessToken),
+        Some(AuthMode::BedrockApiKey),
+    ] {
+        assert_eq!(
+            legacy_eligible(&provider, auth_mode),
+            auth_mode == Some(AuthMode::ApiKey),
+            "{auth_mode:?}"
+        );
+        assert!(eligible(&provider, auth_mode), "{auth_mode:?}");
+    }
+}
+
+#[tokio::test]
+async fn issue_889_resolve_path_excludes_non_key_modes_before_and_after_admission()
+-> anyhow::Result<()> {
+    for auth_mode in [
+        None,
+        Some(AuthMode::Chatgpt),
+        Some(AuthMode::ChatgptAuthTokens),
+        Some(AuthMode::Headers),
+        Some(AuthMode::AgentIdentity),
+        Some(AuthMode::PersonalAccessToken),
+        Some(AuthMode::BedrockApiKey),
+    ] {
+        let fixture = Fixture::new().await?;
+        let provider = provider();
+        let endpoint = format!("{ENDPOINT}/responses");
+        assert!(
+            fixture
+                .deferred
+                .resolve_path(&provider, auth_mode, &endpoint, "responses")
+                .await?
+                .is_none(),
+            "{auth_mode:?}"
+        );
+        assert!(!fixture.deferred.sampling.initialized());
+        assert!(fixture.deferred.check().is_ok());
+        assert!(
+            fixture
+                .deferred
+                .resolve_path(&provider, Some(AuthMode::ApiKey), &endpoint, "responses")
+                .await?
+                .is_some()
+        );
+        assert!(
+            fixture
+                .deferred
+                .resolve_path(&provider, auth_mode, &endpoint, "responses")
+                .await?
+                .is_none(),
+            "{auth_mode:?}"
+        );
+        assert!(fixture.deferred.check().is_err());
+    }
     Ok(())
 }
 
@@ -350,7 +417,10 @@ async fn accounting_responses_role_overlay_preserves_binding() -> anyhow::Result
     assert_eq!(config.model_provider, provider());
     assert_eq!(config.model_provider_id, "openai");
     assert_eq!(config.accounting, fixture.deferred.mode);
-    assert!(legacy_eligible(&config.model_provider, Some(&auth())));
+    assert!(legacy_eligible(
+        &config.model_provider,
+        Some(AuthMode::ApiKey)
+    ));
     let endpoint = format!("{ENDPOINT}/responses");
     let sampling = fixture
         .deferred
@@ -392,8 +462,7 @@ fn accounting_responses_billed_charge_is_recorded_only_from_vercel() -> anyhow::
     Ok(())
 }
 
-// Source-informed candidate baseline oracle for issue814 option(b).
-// Pure synthetic usage-to-ledger-Patch translation only; no DB, provider or money action.
+// An invalid reasoning count must not discard valid usage or the Vercel charge.
 #[test]
 fn issue814_responses_excess_reasoning_retains_valid_usage_and_vercel_charge() -> anyhow::Result<()>
 {
@@ -544,7 +613,7 @@ async fn issue814_replay_rejection_is_atomic_and_normalized_report_retains_charg
     use codex_state::accounting::Decimal;
     use codex_state::accounting::Dialect;
     use codex_state::accounting::Presence;
-    // This is a disposable synthetic ledger, with no transport, credential or charge action.
+    // Reject the raw report atomically, then persist its normalized usage and charge.
     let fixture = Fixture::new().await?;
     let owner = fixture.deferred.session.thread_id;
     let store = AccountingStore::open(&fixture.db, /*as_of*/ 0).await?;

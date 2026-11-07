@@ -1674,6 +1674,7 @@ mod tests {
     use crate::protocol::WriteParams;
     use crate::protocol::WriteResponse;
     use crate::protocol::WriteStatus;
+    use crate::test_tracing::ScopedTestSubscriber;
 
     async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
     where
@@ -1768,8 +1769,7 @@ mod tests {
                 .with_tracer(tracer)
                 .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
         );
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
+        let _subscriber_guard = ScopedTestSubscriber::set_default(subscriber);
         let parent_span = tracing::info_span!("process-start-parent");
         let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
             .expect("parent span should have trace context");
@@ -2552,13 +2552,16 @@ mod tests {
             finish_rx.await.expect("test should finish");
         });
 
+        // A client that stops draining notifications blocks forever on the
+        // full event channel, so generous bounds still catch that; 1 s was
+        // too tight for 256 notifications on a loaded CI runner (#1448).
         let client = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(10),
             ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
                 websocket_url,
                 client_name: "test-client".to_string(),
-                connect_timeout: Duration::from_secs(1),
-                initialize_timeout: Duration::from_secs(1),
+                connect_timeout: Duration::from_secs(5),
+                initialize_timeout: Duration::from_secs(5),
                 resume_session_id: Some("session-1".to_string()),
                 http_client_factory: codex_http_client::HttpClientFactory::new(
                     codex_http_client::OutboundProxyPolicy::ReqwestDefault,
@@ -2570,7 +2573,7 @@ mod tests {
         .expect("explicit resume should connect");
         assert_eq!(client.session_id().as_deref(), Some("session-1"));
 
-        timeout(Duration::from_secs(1), initialized_rx)
+        timeout(Duration::from_secs(10), initialized_rx)
             .await
             .expect("initialized notification should not time out")
             .expect("initialized notification should signal");

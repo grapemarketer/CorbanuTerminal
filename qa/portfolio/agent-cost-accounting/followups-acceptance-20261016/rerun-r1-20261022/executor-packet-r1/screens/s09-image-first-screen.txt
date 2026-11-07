@@ -1,0 +1,43 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• OpenAI · GPT-6 Luna — Pay per use. 4 requests, 74,903 tokens. Estimated cost: $0.004695 (rounded).
+• OpenAI · gpt-image-2 — Pay per use. 1 request, 277 tokens. Estimated cost: $0.007110.
+Other conversations on this day, not included above: 4 requests in 1 conversation.
+• OpenAI · GPT-6 Luna — Pay per use. 4 requests, 69,542 tokens. Estimated cost: $0.004373 (rounded).
+Other conversations' estimated cost: $0.004373 (rounded).
+To see those requests, open that conversation with /resume and run /cost there.
+Costs are estimates from published prices; OpenAI doesn't report its charges — check OpenAI's bill.
+Select a provider below to see its requests.
+—— Details ——
+Estimated token cost for recorded attempts: $0.011805 (rounded)
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T02:46:39.123Z; ledger current to: 2026-10-15T02:45:29.005Z (70118 ms behind)
+Retention: request detail kept since 2026-07-17T02:46:39.123Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: 0.01180533
+Input: 74,535
+Noncached input (derived for inclusive input): 14,703
+Cache read: 38,758
+Cache write: 21,074
+Output: 645
+Reasoning (subset, not separately billed): 184 + not reported by 1 attempt
+Total (not separately billed): 75,180
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ OpenAI · GPT-6 Luna — estimated $0.004695 (rounded) (4 requests)
+→ OpenAI · gpt-image-2 — estimated $0.007110 (1 request)
+→ Request 1 · OpenAI · GPT-6 Luna · estimated $0.001465 (rounded)
+→ Request 2 · OpenAI · GPT-6 Luna · estimated $0.002310 (rounded)
+→ Request 3 · OpenAI · GPT-6 Luna · estimated $0.000652 (rounded)
+→ Request 4 · OpenAI · gpt-image-2 · estimated $0.007110
+→ Request 5 · OpenAI · GPT-6 Luna · estimated $0.000268 (rounded)
+→ Root's own attempts (5 attempts)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

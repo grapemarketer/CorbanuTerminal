@@ -5,6 +5,7 @@ import { ThreadEvent } from "../src/index";
 import {
   assistantMessage,
   responseCompleted,
+  responseCompletedWithoutUsage,
   responseStarted,
   sse,
   startResponsesTestProxy,
@@ -53,6 +54,52 @@ describe("Codex", () => {
             output_tokens: 5,
             reasoning_output_tokens: 0,
           },
+        },
+      ]);
+      expect(thread.id).toEqual(expect.any(String));
+    } finally {
+      cleanup();
+      await close();
+    }
+  });
+
+  it("returns a null usage when the provider reports no usage", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(responseStarted(), assistantMessage("Hi!"), responseCompletedWithoutUsage()),
+      ],
+    });
+    const { client, cleanup } = createMockClient(url);
+
+    try {
+      const thread = client.startThread();
+      const result = await thread.runStreamed("Hello, world!");
+
+      const events: ThreadEvent[] = [];
+      for await (const event of result.events) {
+        events.push(event);
+      }
+
+      expect(events).toEqual([
+        {
+          type: "thread.started",
+          thread_id: expect.any(String),
+        },
+        {
+          type: "turn.started",
+        },
+        {
+          type: "item.completed",
+          item: {
+            id: "item_0",
+            type: "agent_message",
+            text: "Hi!",
+          },
+        },
+        {
+          type: "turn.completed",
+          usage: null,
         },
       ]);
       expect(thread.id).toEqual(expect.any(String));

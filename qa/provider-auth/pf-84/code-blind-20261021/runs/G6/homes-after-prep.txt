@@ -1,0 +1,6 @@
+=== zainokey
+264 zainokey/config.toml
+0 zainokey/secrets/.vault.lock
+44 zainokey/secrets/keyring-fallback/30e6f5b0603495258a8d9dcd802531878606e0ee37661dd025dadb29abe39db2.key
+709 zainokey/secrets/local.age
+0e7fa668bfc457ec02622d9a13e9daddd1c01a42851281f43e944aa95091bf40  zainokey/config.toml

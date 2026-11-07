@@ -1,0 +1,45 @@
+  afterward on the pier at Mallaig. It was the wind. It got into the house the way water gets into stone, and it never left. Thomas understood. He had
+  stopped hearing it years before she arrived. She took the ferry and did not come back, and he sent her a card every Christmas, and she sent one
+  back, and that was the whole of the marriage as it continued.
+
+  In February of his thirty-first year, the brig Hjördis came out of the dark. She was Danish, old, carrying timber, and the weather that night was
+  the kind Thomas called honest — a full gale from the southwest, steady, no tricks in it, the kind you could set a watch by. The light was working.
+  It had never once failed on his watch. But the Hjördis had lost her steering a mile out, and the sea was doing what it wanted with her.
+
+  Thomas saw her masthead light wander across the line of the beam and then turn, slowly, toward the shore north of the tower. He was out the door in
+  oilskins and boots before he had finished thinking about it. The causeway was under water. He went along the cliff path instead, the lamp above him
+  swinging its white sector over his head every four seconds, and he watched her strike. It was not a great crash. It was a long grinding sound,
+  timber on rock, going on much longer than seemed possible.
+
+  He had a rope coiled at the top of the path, part of the station's old line-throwing gear, and he waited for a shape in the water and threw. He was
+  forty-two then and still strong. He pulled four men out of the surf that night, one after another, hauling them up the cliff face with his arms and
+  the rope and nothing else. A fifth went under and did not come up. Thomas searched the rocks below the tower for three days afterward, and Iain came
+  out on the boat and helped, and they never found him. The other four sat in Thomas's kitchen in blankets, drinking tea, not speaking, until the
+  ferry came.
+
+  The Danish consulate sent a letter. The widow of the man who was lost sent one too. Thomas kept both in the drawer under the tide tables, where he
+  kept the things he did not want to look at and could not throw away.
+
+  He retired at sixty-five, when the Northern Lighthouse Board automated the station. The last night, he climbed the steps, wound a mechanism that no
+  longer needed winding, and sat in the lantern room while the lens turned above him. Then he went down the ninety-three steps and did not look back.
+
+
+› Reply with exactly: pong
+
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: on
+
+Turn the kill switch off?
+Turns are sent to the model again, in Codex and Claude panes. Messages from other agents that waited reach Codex panes with their next turn (turning
+it off does not start one); tasks held for Claude panes are sent now. Protected actions can be approved again and grants can be issued. Revoked grants
+and approvals do not come back; stopped replies and commands do not restart.
+The level stays Aggressive: turning the kill switch off never lowers it.
+
+› Back (the kill switch stays on)
+  Turn the kill switch off
+
+↑/↓ choose · enter confirm · esc cancel, nothing changes

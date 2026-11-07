@@ -218,20 +218,80 @@ async fn environment_proxy_route_honors_no_proxy_in_a_subprocess() {
         "127.0.0.1",
         /*expect_proxy*/ false,
         /*proxy_tls*/ false,
+        /*transport_default*/ false,
     )
     .await;
     assert_no_proxy_subprocess(
         "unrelated.example",
         /*expect_proxy*/ true,
         /*proxy_tls*/ false,
+        /*transport_default*/ false,
     )
     .await;
     assert_no_proxy_subprocess(
         "unrelated.example",
         /*expect_proxy*/ true,
         /*proxy_tls*/ true,
+        /*transport_default*/ false,
     )
     .await;
+}
+
+/// #722 (D247): NO_PROXY IP ranges apply to an IP-literal host, as in the HTTP client.
+#[tokio::test]
+async fn environment_proxy_route_honors_no_proxy_ip_ranges_in_a_subprocess() {
+    assert_no_proxy_subprocess(
+        "unrelated.example,127.0.0.0/8",
+        /*expect_proxy*/ false,
+        /*proxy_tls*/ false,
+        /*transport_default*/ false,
+    )
+    .await;
+    assert_no_proxy_subprocess(
+        "10.0.0.0/8",
+        /*expect_proxy*/ true,
+        /*proxy_tls*/ false,
+        /*transport_default*/ false,
+    )
+    .await;
+}
+
+/// #722 (D247): the transport-default route reads NO_PROXY from the environment.
+#[tokio::test]
+async fn transport_default_route_honors_no_proxy_ip_ranges_in_a_subprocess() {
+    assert_no_proxy_subprocess(
+        "unrelated.example,127.0.0.0/8",
+        /*expect_proxy*/ false,
+        /*proxy_tls*/ false,
+        /*transport_default*/ true,
+    )
+    .await;
+}
+
+#[test]
+fn no_proxy_ranges_match_only_ip_hosts_inside_them() {
+    let matches = |no_proxy: &str, url: &str| {
+        no_proxy_range_matches(
+            no_proxy,
+            &url.into_client_request().expect("request should build"),
+        )
+    };
+    assert!(matches("172.16.0.0/12", "ws://172.31.255.1/x"));
+    assert!(matches(
+        " example.com , 10.0.0.0/8 ",
+        "wss://10.2.3.4:8443/x"
+    ));
+    assert!(matches("0.0.0.0/0", "ws://203.0.113.9/x"));
+    assert!(matches("fd00::/8", "ws://[fd12::1]:9000/x"));
+    assert!(matches("::1/128", "ws://[::1]/x"));
+    assert!(!matches("[::1]/128", "ws://[::1]/x"));
+    assert!(!matches("10.0.0.0/+8", "ws://10.0.0.1/x"));
+    assert!(!matches("172.16.0.0/12", "ws://172.32.0.1/x"));
+    assert!(!matches("10.0.0.0/8", "ws://exec-server.internal/x"));
+    assert!(!matches("10.0.0.0/8", "ws://[::ffff:10.0.0.1]/x"));
+    assert!(!matches("10.0.0.0/33", "ws://10.0.0.1/x"));
+    assert!(!matches("10.0.0.1", "ws://10.0.0.1/x"));
+    assert!(!matches("fd00::/8", "ws://10.0.0.1/x"));
 }
 
 #[tokio::test]
@@ -272,17 +332,27 @@ async fn no_proxy_subprocess_probe() {
         } else {
             test_tls_configs().0
         };
-    let (inner, _) = connect(
-        request,
-        WebSocketConfig::default(),
-        Some(tls_config),
-        OutboundProxyRoute::Proxy {
-            url: proxy_url,
-            no_proxy: Some(no_proxy),
-        },
-        TcpNodelay::Enabled,
+    // A bypassed target that is routed through the proxy anyway would wait on a
+    // proxy nobody serves; fail instead of hanging.
+    let (inner, _) = tokio::time::timeout(
+        Duration::from_secs(30),
+        connect(
+            request,
+            WebSocketConfig::default(),
+            Some(tls_config),
+            if std::env::var_os("CODEX_WEBSOCKET_NO_PROXY_PROBE_TRANSPORT_DEFAULT").is_some() {
+                OutboundProxyRoute::TransportDefault
+            } else {
+                OutboundProxyRoute::Proxy {
+                    url: proxy_url,
+                    no_proxy: Some(no_proxy),
+                }
+            },
+            TcpNodelay::Enabled,
+        ),
     )
     .await
+    .expect("websocket handshake should not wait on an unserved proxy")
     .expect("websocket handshake should succeed");
     let mut websocket = WebSocketConnection { inner };
     websocket
@@ -428,7 +498,12 @@ async fn start_echo_websocket_server(
     (address, task)
 }
 
-async fn assert_no_proxy_subprocess(no_proxy: &str, expect_proxy: bool, proxy_tls: bool) {
+async fn assert_no_proxy_subprocess(
+    no_proxy: &str,
+    expect_proxy: bool,
+    proxy_tls: bool,
+    transport_default: bool,
+) {
     let (target_acceptor, proxy_acceptor, certificate) = if proxy_tls {
         let (_, acceptor, certificate) = test_tls_configs();
         (Some(acceptor.clone()), Some(acceptor), Some(certificate))
@@ -521,6 +596,10 @@ async fn assert_no_proxy_subprocess(no_proxy: &str, expect_proxy: bool, proxy_tl
             .env("CODEX_WEBSOCKET_NO_PROXY_PROBE_URL", target_url)
             .env("CODEX_WEBSOCKET_NO_PROXY_PROBE_PROXY", proxy_url);
         command.env_remove("CODEX_WEBSOCKET_NO_PROXY_PROBE_CA_DER");
+        command.env_remove("CODEX_WEBSOCKET_NO_PROXY_PROBE_TRANSPORT_DEFAULT");
+        if transport_default {
+            command.env("CODEX_WEBSOCKET_NO_PROXY_PROBE_TRANSPORT_DEFAULT", "1");
+        }
         if let Some(certificate) = certificate {
             let certificate_hex = certificate
                 .as_ref()

@@ -360,6 +360,15 @@ just test -p codex-tui
 Avoid `--all-features` for routine local runs because it increases build time
 and `target/` disk usage by compiling additional feature combinations.
 
+Run tests with `just test`, for example `just test -p codex-core`. It runs
+them against a disposable home, unsets provider credentials such as
+`OPENAI_API_KEY`, turns off native credential-store calls (see
+[test isolation](./development/test-isolation.md)), and sets
+`RUST_MIN_STACK=8388608` (8 MiB). Plain `cargo test -p codex-core` does none of
+that isolation; in a debug build it also needs `RUST_MIN_STACK=8388608` (as CI
+and Bazel set), because many tests overflow the default 2 MiB test-thread stack
+without it.
+
 ## Tracing
 
 The TUI records diagnostics in bounded local stores by default. Set `log_dir`

@@ -1,0 +1,40 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: myopenai
+Model: GPT-6 Luna
+Billing: Pay per use
+Estimated cost: no price available
+Next step for requests with no price: check the bill from myopenai. No published price covers them, so no cost is shown for them here.
+Tokens: tokens not reported
+—— Details ——
+Billed cost: myopenai doesn't report its charges, so any cost here is an estimate — check myopenai's bill.
+Request: c968f148-91bb-4dfa-b809-01ee8a81cacd
+Attempt: 6d0ad145-8aae-4bbd-9b5f-a7721ea328d7
+Thread: 01a13d6f-e83a-7fb2-8fe2-0e0953593dea
+Turn: 01a13d70-0e5f-74f2-b610-f770d7ab1f30
+Account: default
+Model: gpt-6-luna
+Opaque scope: 5d8032e5-d9d6-40dd-96c8-7deb31fedcce
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T02:41:56.554Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Token cost: unavailable — no applicable price; recorded usage is not a zero-cost claim.
+Billing basis: pay per use (set in your config)
+Input: unknown — no retained numeric evidence
+Noncached input (derived for inclusive input): unknown — no retained numeric evidence
+Cache read: unknown — no retained numeric evidence
+Cache write: unknown — no retained numeric evidence
+Output: unknown — no retained numeric evidence
+Reasoning (subset, not separately billed): unknown — no retained numeric evidence
+Total (not separately billed): unknown — no retained numeric evidence
+Noncached input cost: unknown — no retained numeric evidence
+Cache read cost: unknown — no retained numeric evidence
+Cache write cost: unknown — no retained numeric evidence
+Output cost: unknown — no retained numeric evidence
+Known subtotal exact USD: none — no price for these attempts
+Price: none recorded — this request records only its billing basis: pay per use; set in your config
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

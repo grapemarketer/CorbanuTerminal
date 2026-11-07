@@ -1,0 +1,6 @@
+Execution complete. Report: `$AGMS_RUN/evidence/result.md`
+
+- Preflight and identity checks passed for isolation, candidate binary, and frozen packet digests.
+- **NA-06: failed** — account `added` was created, but the rename to `renamed` did not complete after a tester navigation error; subsequent rename/list/exec expectations failed.
+- **NA-07: passed** — session/default selection and replacement/removal behaved as expected. The removed-account turn `ufour` showed the expected fatal account error; relay results are marked for the integrator.
+- Both cases ended with `agms-tui stop`.

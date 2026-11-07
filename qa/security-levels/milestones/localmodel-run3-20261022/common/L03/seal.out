@@ -1,0 +1,19 @@
+tmux 3.7c
+pfctl: Use of -f option, could result in flushing of rules
+present in the main ruleset added by the system at startup.
+See /etc/pf.conf for further details.
+
+pf enabled
+Token : 10209762182871762950
+No ALTQ support in kernel
+ALTQ related functions disabled
+sealed: host 192.168.64.1; pf Enabled; rules 7
+api.z.ai -> 47.251.69.60 47.251.169.173 
+github.com unresolvable: [Errno 8] nodename nor servname provided, or not known
+/Users/Shared 777 root:wheel
+/Users/admin 750 admin:staff
+/Users/agent 700 agent:staff
+/Users/neo 700 neo:staff
+/Users/neo_1 700 neo2:staff
+/opt/homebrew/bin 755 neo2:admin
+/Users/agent/.pf83-auth 700 agent:staff

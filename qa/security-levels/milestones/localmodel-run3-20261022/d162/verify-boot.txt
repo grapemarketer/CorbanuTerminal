@@ -1,0 +1,8 @@
+verification boot 2026-10-22T07:48:48Z
+guest 2026-10-22T07:48:58Z uptime:  0:48  up 10 secs, 0 users, load averages: 8.38 1.85 0.66
+/Users/agent/.pf83-auth: absent after reboot
+synced
+no shutdown after 2 min (as in earlier UTM records); power off after sync 2026-10-22T07:51:10Z
+UUID                                 Status   Name
+7EB8B75C-21B4-4DB3-9B9F-497C621BEA47 stopped  macOS 2
+4B1BAF7F-F655-4BF9-81DC-7DEFABA23BA6 stopped  macOS 3

@@ -1,0 +1,17 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace              │
+╰──────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Permissive
+
+  Permissive  (active)
+  Moderate
+> Aggressive
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · esc close · i inspect

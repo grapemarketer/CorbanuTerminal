@@ -1,0 +1,2 @@
+Error: openai has no account `t1`
+rc=1

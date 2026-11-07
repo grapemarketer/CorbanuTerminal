@@ -1,0 +1,53 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: Corbanu API
+Model: DeepSeek V4.1 Flash
+Billing: Pay per use
+Cost: $0.002145, charged by Corbanu API
+Price basis: the charge Corbanu API reported with the response (usage.corbanu_charge_usd)
+Tokens: 9,289 tokens
+—— Details ——
+Billed cost: $0.002145 — as stated by the provider with each response
+Request: f788dd2a-7ab8-432c-86e2-17ea46794671
+Attempt: 9d015b1b-03ca-4cf3-b1d3-8d77f1ac04a9
+Thread: 01a13ceb-1430-7683-9363-8ce77d9840b6
+Turn: 01a13ceb-3fc5-74f2-b793-8166a40567bd
+Provider: pfterminal-plan
+Account: default
+Model: corbanu/deepseek-v4.1-flash
+Opaque scope: 7a273521-2698-4775-b1d0-7b59cc8890d1
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T00:16:52.781Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Token cost for recorded attempts: $0.002145, charged by Corbanu API
+Billing basis: pay per use
+Input: 9286
+Noncached input (derived for inclusive input): unknown — no retained numeric evidence
+Cache read: 0 (reported)
+Cache write: unknown — no retained numeric evidence
+Output: 3
+Reasoning (subset, not separately billed): 0 (reported)
+Total (not separately billed): 9289
+Noncached input cost: unknown — no retained numeric evidence
+Cache read cost: $0.000000; exact USD 0
+Cache write cost: unknown — no retained numeric evidence
+Output cost: $0.000002 (rounded); exact USD 0.00000198
+Published-price estimate (not used — Corbanu API reported its charge): not available — the response did not report every token count its published price
+needs
+Known subtotal exact USD: 0.002145
+Price ID: cac12086-7a13-419c-baee-dc4d0b5ea8b9
+Price source: NativeCatalog; reference 09505bc1-781b-5218-aead-3152fe8376ed
+Price currency/unit: Usd / PerMillionTokens
+Price observed/approved: 2026-10-15T00:16:52.781Z / 2026-10-15T00:16:52.781Z
+Price effective interval: [2026-10-15T00:16:52.781Z, unbounded)
+Noncached input rate: 0.22 USD per million tokens
+Cache read rate: 0.007 USD per million tokens
+Rate unavailable for Cache write
+Output rate: 0.66 USD per million tokens
+Evidence revision 3; source e355c084-0909-46c6-a0f4-1478577e9550; sequence 3; presence patch
+{"input":9286,"read":0,"output":3,"reasoning":0,"total":9289,"billed_usd":"0.002145"}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

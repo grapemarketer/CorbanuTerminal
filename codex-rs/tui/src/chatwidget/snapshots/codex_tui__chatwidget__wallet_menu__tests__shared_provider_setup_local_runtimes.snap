@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/wallet_menu.rs
+assertion_line: 2130
+expression: rendered
+---
+
+  Set up providers
+  Configure more than one provider, then choose Done.
+
+  local runtime
+› Ollama — local runtime     Local (not checked) · active · select as current provider
+  LM Studio — local runtime  Local (not checked) · active · select as current provider
+
+  Press enter to confirm or esc to go back

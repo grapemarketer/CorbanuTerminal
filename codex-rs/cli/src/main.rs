@@ -2050,7 +2050,61 @@ fn parse_multitool_cli() -> MultitoolCli {
                 "corbanu [OPTIONS] [PROMPT]\n       corbanu [OPTIONS] <COMMAND> [ARGS]",
             );
     }
-    MultitoolCli::from_arg_matches(&command.get_matches()).unwrap_or_else(|err| err.exit())
+    let matches = command.try_get_matches().unwrap_or_else(|err| {
+        let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+        if let Some(message) = secret_argument_error(&err, &args) {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("{message}");
+            }
+            std::process::exit(2);
+        }
+        err.exit()
+    });
+    MultitoolCli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
+}
+
+/// D175: `corbanu login` and `corbanu account` read keys and tokens from
+/// stdin only. A value they do not expect may be one passed on the command
+/// line by mistake, so their usage error does not repeat it.
+fn secret_argument_error(err: &clap::Error, args: &[std::ffi::OsString]) -> Option<String> {
+    use clap::error::ContextKind;
+    use clap::error::ContextValue;
+    use clap::error::ErrorKind;
+    // A value attached to an on/off flag (`--with-api-key=<key>`) is a
+    // `TooManyValues` error; a rejected value names it as well.
+    if !matches!(
+        err.kind(),
+        ErrorKind::UnknownArgument
+            | ErrorKind::InvalidSubcommand
+            | ErrorKind::TooManyValues
+            | ErrorKind::InvalidValue
+            | ErrorKind::ValueValidation
+    ) {
+        return None;
+    }
+    if !args
+        .iter()
+        .any(|arg| matches!(arg.to_str(), Some("login" | "account")))
+    {
+        return None;
+    }
+    // An unknown flag without a value is safe to name.
+    if matches!(err.kind(), ErrorKind::UnknownArgument)
+        && let Some(ContextValue::String(flag)) = err.get(ContextKind::InvalidArg)
+        && flag.starts_with('-')
+        && !flag.contains('=')
+    {
+        return None;
+    }
+    Some(
+        "error: unexpected or invalid argument (not shown, in case it is a key or token)\n\n\
+         Keys and tokens are read from stdin, never from the command line, for example \
+         `printenv OPENAI_API_KEY | corbanu login --with-api-key` or \
+         `printenv ZAI_API_KEY | corbanu account add zai <name>`. If you typed a key, it may \
+         be in your shell history.\n\nFor more information, try '--help'."
+            .to_string(),
+    )
 }
 
 fn profile_v2_for_subcommand<'a>(

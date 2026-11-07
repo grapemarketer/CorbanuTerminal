@@ -1,0 +1,34 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+◐ Moderate set; off or not observed: Credential broker
+Observed 2s ago, policy generation 0.1
+
+Level
+  Saved: Moderate [configured: /security]
+  Core config: Permissive [configured: config layers]
+  [set] Active this run: Moderate: Core's level was Moderate at launch; your own sandbox, approval and network settings apply (runtime controls below
+      show what Core enforces now) [resolved: launch check]
+  [on] Live policy: Moderate in force; next start Moderate; kill switch off; generation 0.1 [observed: Core policy]
+
+This session
+  [set] Sandbox: commands can write to the current folder, /private/tmp, /Users/tester/run/tmp;
+      under Moderate approved and allow-listed commands stay inside the sandbox; permission-request tools are off [resolved: session config]
+  [set] Approvals: on-request (reviewer: you) [resolved: session config]
+  [set] Network: off for agent commands; web search cached [resolved: session config]
+  [set] Vault: the vault store and sign-in file are unreadable (Moderate and secretless_agent_launch, also when you approve a command) to agent
+      commands; only allowlisted environment variables reach agent commands (for example PATH, HOME, locale, terminal, proxy and tool locations;
+      secretless_agent_launch); set others explicitly in shell_environment_policy.set; login profiles and shell snapshots are not used [resolved:
+      session config]
+  [set] Model keys: held by the isolated credential broker (broker_model_auth on) [resolved: session config]
+  [set] Child agents: spawned agents get this session's values [resolved: session config]
+  [set] Sandbox backend: macOS Seatbelt [resolved: platform]
+↑/↓ scroll · r refresh · esc back to /security

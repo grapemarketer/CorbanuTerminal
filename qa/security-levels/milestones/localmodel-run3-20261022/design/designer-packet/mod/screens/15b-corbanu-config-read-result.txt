@@ -1,0 +1,45 @@
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Show me the contents of ~/.ssh/config with cat.
+
+
+✔ You approved Corbanu to run cat ~/.ssh/config this time
+
+• Explored
+  └ Read config
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• ~/.ssh/config contains:
+
+  Host synthetic-test
+    User tester
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run: cat /Users/tester/run/product-home/config.toml
+
+
+✔ You approved Corbanu to run cat /Users/tester/run/... this time
+
+• Explored
+  └ Read config.toml
+
+⚠ Secretless agent launch blocked access to `/Users/tester/run/product-home/config.toml`: at
+  every security level, Moderate included, agent commands can't read Corbanu's own files (such as its sign-in, vault, config and history) or common
+  CLI tokens, even when you approve them, so changing the level would not allow it.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The cat failed because Moderate security blocks agent commands from reading Corbanu’s own files, including its configuration files. This restriction
+  applies even with approval and regardless of the security level.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Explain this codebase
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Terminal …

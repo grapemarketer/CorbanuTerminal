@@ -5,6 +5,7 @@ use crate::history_cell::plain_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
+use crate::provider_named_accounts::NamedSignInState;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
@@ -201,6 +202,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         "<none>".to_string(),
         refreshing_rate_limits,
         /*account_usage*/ None,
+        /*named_sign_in*/ None,
     )
     .0
 }
@@ -225,6 +227,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     agents_summary: String,
     refreshing_rate_limits: bool,
     account_usage: Option<StatusAccountUsage>,
+    named_sign_in: Option<NamedSignInState>,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
@@ -246,6 +249,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         agents_summary,
         refreshing_rate_limits,
         account_usage,
+        named_sign_in,
     );
 
     (
@@ -275,6 +279,7 @@ impl StatusHistoryCell {
         agents_summary: String,
         refreshing_rate_limits: bool,
         account_usage: Option<StatusAccountUsage>,
+        named_sign_in: Option<NamedSignInState>,
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
         let permission_profile = config.permissions.effective_permission_profile();
@@ -342,16 +347,30 @@ impl StatusHistoryCell {
             || account_usage
                 .as_ref()
                 .is_some_and(StatusAccountUsage::provider_has_named_account);
+        // PF-84-S06: a named sign-in account describes itself; D171 (#1286):
+        // one removed or signed out while the session ran is not presented
+        // as the session's account. #1251: from the answer the background
+        // check cached (`None` while unknown), never the vault.
+        let named_sign_in = codex_model_provider::named_sign_in_account(&config.model_provider)
+            .map(|account| (account, named_sign_in));
+        // With a remote app server the account lives on the remote host, so
+        // this home's vault does not tell.
+        let session_account_gone = remote_connection.is_none()
+            && named_sign_in
+                .as_ref()
+                .is_some_and(|(_, state)| state == &Some(NamedSignInState::NoSignIn));
         let model_provider = format_model_provider(
             config,
             runtime_model_provider_base_url,
             active_account,
             provider_has_named_account,
+            session_account_gone,
         );
         let account_usage = account_usage.filter(|_| provider_has_named_account);
         let show_chatgpt_usage_link = config.model_provider.requires_openai_auth;
         let account = compose_account_display(account_display);
-        let account_value = status_account_value(config, account_display);
+        let account_value =
+            status_account_value(config, account_display, named_sign_in, remote_connection);
         let security = crate::security::view::status_summary(
             config.security_level,
             crate::legacy_core::security_level_change::configured_level(config),
@@ -745,21 +764,30 @@ fn status_approval_label(
 fn status_account_value(
     config: &Config,
     account_display: Option<&StatusAccountDisplay>,
+    named_sign_in: Option<(codex_login::NamedChatgptAccount, Option<NamedSignInState>)>,
+    remote_connection: Option<&RemoteConnectionStatus>,
 ) -> Option<String> {
     let provider = &config.model_provider;
     // PF-84-S06: a named sign-in account describes itself, never the default
     // login (kind, email hint and plan only).
-    if let Some(account) = codex_model_provider::named_sign_in_account(provider) {
-        let summary = codex_login::named_account_summary(&config.codex_home, &account)
-            .ok()
-            .flatten();
-        return Some(match summary {
-            Some(summary) => format!(
+    if let Some((account, state)) = named_sign_in {
+        return Some(match state {
+            Some(NamedSignInState::SignedIn(summary)) => format!(
                 "{} (account {})",
                 crate::provider_named_accounts::describe_sign_in(&summary),
                 account.name
             ),
-            None => format!("account {} is not signed in", account.name),
+            // D171 (#1286): removed or signed out, also while the session ran.
+            // Short, as the line is cut at the card's width.
+            Some(NamedSignInState::NoSignIn) if remote_connection.is_none() => format!(
+                "account {name} has no sign-in: `corbanu login --account {name}` or `/providers`",
+                name = account.name
+            ),
+            Some(NamedSignInState::NoSignIn | NamedSignInState::Unreadable) => {
+                format!("account {} is not signed in", account.name)
+            }
+            // #1251: not known yet; the background check fills it in.
+            None => format!("account {}", account.name),
         });
     }
     if provider.auth.is_some() {
@@ -796,6 +824,9 @@ fn status_account_value(
         }
         // Other providers report their own stored key here (#462).
         StatusAccountDisplay::ApiKey { .. } => format!("{} API key configured", provider.name),
+        StatusAccountDisplay::NotConfigured { provider } => {
+            format!("{provider} not configured (set it up in /providers)")
+        }
     })
 }
 
@@ -1040,6 +1071,7 @@ fn format_model_provider(
     runtime_base_url: Option<&str>,
     active_account: Option<&str>,
     provider_has_named_account: bool,
+    session_account_gone: bool,
 ) -> Option<String> {
     let provider = &config.model_provider;
     let name = provider.name.trim();
@@ -1077,8 +1109,20 @@ fn format_model_provider(
         Some(base_url) => format!("{provider_name} - {base_url}"),
         None => provider_name.to_string(),
     };
-    if let Some(account) = account {
-        value.push_str(&format!(" · account {account}"));
+    match account {
+        // D171 (#1286): the session's account was removed or signed out; the
+        // Account line names it and its recovery.
+        Some(account)
+            if session_account_gone
+                && provider
+                    .account
+                    .as_ref()
+                    .is_some_and(|session| session.name == account) =>
+        {
+            value.push_str(" · account unavailable");
+        }
+        Some(account) => value.push_str(&format!(" · account {account}")),
+        None => {}
     }
     Some(value)
 }

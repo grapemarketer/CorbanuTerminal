@@ -1,0 +1,48 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: OpenAI
+Model: gpt-image-2
+Billing: Pay per use
+Estimated cost: $0.007110
+Tokens: 277 tokens
+—— Details ——
+Billed cost: OpenAI doesn't report its charges, so any cost here is an estimate — check OpenAI's bill.
+Request: c0ed8819-48a1-4ae1-9b6c-a38fe8b1863e
+Attempt: e9122b03-70f7-41c2-8bf1-a08b2573c056
+Thread: 01a13d72-e646-7642-9749-d79b95ddd306
+Turn: image:0f7dbfa8-7375-4c9c-b755-ec3edeaee87e
+Provider: openai
+Account: default
+Opaque scope: cfbedd10-8968-4e3e-8018-60850bd14710
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T02:45:17.906Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Estimated token cost for recorded attempts: $0.007110
+Billing basis: pay per use
+Input: 48
+Noncached input (derived for inclusive input): 48 (derived)
+Cache read: 0 (reported)
+Cache write: 0 (reported)
+Output: 229
+Reasoning (subset, not separately billed): unknown — no retained numeric evidence
+Total (not separately billed): 277
+Noncached input cost: $0.000240; exact USD 0.00024
+Cache read cost: $0.000000; exact USD 0
+Cache write cost: none — 0 tokens
+Output cost: $0.006870; exact USD 0.00687
+Known subtotal exact USD: 0.00711
+Price ID: 1ae8c26b-8543-4cc3-aae7-de5d66b511ac
+Price source: NativeCatalog; reference cceebc67-db54-5d6a-94b7-7e3d846e3595
+Price currency/unit: Usd / PerMillionTokens
+Price observed/approved: 2026-10-15T02:45:17.906Z / 2026-10-15T02:45:17.906Z
+Price effective interval: [2026-10-15T02:45:17.906Z, unbounded)
+Noncached input rate: 5 USD per million tokens
+Cache read rate: 1.25 USD per million tokens
+Rate unavailable for Cache write
+Output rate: 30 USD per million tokens
+Evidence revision 1; source d65ac9e0-d455-4494-9d80-d33505c4ba01; sequence 1; presence patch {"input":48,"read":0,"write":0,"output":229,"total":277}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

@@ -1,0 +1,9 @@
+╰───────────────────────────────────────────────────╯
+› Reply with the single word OK.
+• OK
+⚠ Reopening this conversation sent a warm-up request to prime the model's cache. It is billed like any request; /cost lists it as a reopen warm-up. To skip it,
+  set skip_reopen_warmup = true in config.toml.
+• Already viewing /Users/tester/run/workspace
+6eb3-76f3-aee4-3b289e9a3f1d.jsonl.
+› Summariz   ecent commits
+  GPT-6 Luna default · /Users/tester/run/workspace · Corbanu Terminal · TPS: -- tok/s

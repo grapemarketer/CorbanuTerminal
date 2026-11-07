@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/provider_manager.rs
+assertion_line: 1248
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&chat, 80)"
+---
+  Providers
+  Configure providers and control whether they are eligible for use.
+  Configured means credentials are present, not verified by the provider.
+
+› 1. OpenAI     Enabled · configured
+  2. Ollama     Enabled · local (not checked)
+  3. LM Studio  Enabled · local (not checked)
+
+  r recover credentials · Enter manage · Esc back
+  Press enter to confirm or esc to go back

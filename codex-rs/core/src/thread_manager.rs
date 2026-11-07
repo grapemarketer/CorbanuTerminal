@@ -1347,6 +1347,13 @@ impl ThreadManager {
             .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
             .unwrap_or_default()
     }
+
+    /// The captured-ops log. `send_op` locks it right before it hands an op to the thread, so
+    /// a test that holds it stops a sender at the hand-off.
+    #[cfg(test)]
+    pub(crate) fn ops_log_for_tests(&self) -> Option<SharedCapturedOps> {
+        self.state.ops_log.clone()
+    }
 }
 
 impl ThreadManagerState {

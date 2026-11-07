@@ -188,14 +188,16 @@ impl Session {
     /// `reopened`: the session resumes or forks a saved conversation (#403).
     /// Its warm-up is a paid request the user did not ask for, so it is
     /// labelled as a reopen warm-up, announced once sent, and skipped
-    /// entirely when `skip_reopen_warmup` is set.
+    /// entirely when `skip_reopen_warmup` is set. `skip_startup_warmup` skips
+    /// every warm-up, for clients that start a thread only for realtime (#1045).
     pub(crate) async fn schedule_startup_prewarm(
         self: &Arc<Self>,
         base_instructions: String,
         reopened: bool,
     ) {
-        let skip_reopen_warmup = reopened && self.get_config().await.skip_reopen_warmup;
-        if skip_reopen_warmup || !self.services.model_client().responses_websocket_enabled() {
+        let config = self.get_config().await;
+        let skip_warmup = config.skip_startup_warmup || (reopened && config.skip_reopen_warmup);
+        if skip_warmup || !self.services.model_client().responses_websocket_enabled() {
             // Without websocket prewarm, resolve auth once so Agent Identity bootstrap can
             // register or engage this session's bearer fallback before the first user request.
             let model_client = self.services.model_client();
@@ -388,15 +390,21 @@ async fn schedule_startup_prewarm_inner(
 /// reopens or forks (#403): resumed or forked history, started by the user's
 /// client. A sub-agent, reviewer or internal worker given copied history is
 /// not: the user opened nothing.
+///
+/// `reopened_by_prompt_edit` (#1038): editing the first message continues in
+/// a conversation with no history, which is a reopen all the same.
 pub(crate) fn is_reopen(
     history: &codex_protocol::protocol::InitialHistory,
     source: &codex_protocol::protocol::SessionSource,
+    reopened_by_prompt_edit: bool,
 ) -> bool {
     use codex_protocol::protocol::InitialHistory;
-    matches!(
-        history,
-        InitialHistory::Resumed(_) | InitialHistory::Forked(_)
-    ) && !source.is_non_root_agent()
+    let reopened = match history {
+        InitialHistory::Resumed(_) | InitialHistory::Forked(_) => true,
+        InitialHistory::New => reopened_by_prompt_edit,
+        InitialHistory::Cleared => false,
+    };
+    reopened && !source.is_non_root_agent()
 }
 
 /// What a reopened conversation says after its warm-up request is sent (#403).

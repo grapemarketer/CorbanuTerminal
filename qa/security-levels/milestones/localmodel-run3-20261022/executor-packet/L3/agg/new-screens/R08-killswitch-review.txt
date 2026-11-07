@@ -1,0 +1,45 @@
+  in /security, then restart for it to apply.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Write a 700-word story about a lighthouse keeper, in plain prose.
+
+
+• The light had been in Thomas Kell's family for sixty years, first his father, then him. The tower stood on a rock called Skerrinish, eight hundred
+  meters end to end at low tide, and the sea owned everything else. Thomas kept the lamp lit from one hour before dusk to one hour after dawn, every
+  night, in every kind of weather, for thirty-one years.
+
+  His mornings began the same way. He climbed the ninety-three steps to the lantern room, wound the clockwork that turned the lens, wiped the glass
+  with a rag dampened with vinegar, and checked the mercury bath that let the lens float and spin. The lamp itself had been converted to electric in
+  1971, but the old habits stayed. His father had taught him to trim a wick by feel, and Thomas could still do it with his eyes closed, though there
+  was no wick to trim. He did it anyway, some evenings, just to feel the shape of the work.
+
+  The island was not really an island in good weather. A causeway of rock and shingle surfaced at half tide, and the supply boat came every second
+  Tuesday with diesel, tinned food, paraffin for the stove, and whatever Thomas had written on the order form the week before. He wrote the same
+  things most weeks: bread flour, tea, mackerel hooks, a newspaper he was usually two weeks behind in reading. The boat's skipper, a man named Iain,
+  had been making the run since Thomas was a boy, and the two of them had worn through most topics of conversation years ago. What remained was a kind
+  of companionable silence, the two of them sitting in the wheelhouse with tea, watching the water, saying nothing, agreeing with it.
+
+  Thomas had married once, in his thirties, to a woman from the mainland named Bridget. She lasted four winters. It was not the loneliness, she said
+  afterward on the pier at Mallaig. It was the wind. It got into the house the way water gets into stone, and it never left. Thomas understood. He had
+  stopped hearing it years before she arrived. She took the ferry and did not come back, and he sent her a card every Christmas, and she sent one
+  back, and that was the whole of the marriage as it continued.
+
+  In February of his thirty-first year, the brig Hjördis came out of the dark. She was Danish, old, carrying timber, and the weather that night was
+  the kind Thomas called honest — a full gale from the southwest, steady, no tricks in it, the kind you could set a watch by. The light was working.
+  It had never once failed on his watch. But the Hjördis had lost her steering a mile out, and the sea was doing what it wanted with her.
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: off
+
+Turn the kill switch on?
+Everything "Revoke all" ends, and work running now in every pane of this Corbanu Terminal stops, Claude panes included: a reply in progress is
+cancelled and its commands are stopped, as when you interrupt it, and background terminals end.
+Until you turn it off here: this Corbanu Terminal sends nothing to the model (each new turn is refused with a message saying so), messages from other
+agents wait (Codex panes get them with their first turn after you turn it off; tasks for Claude panes are sent when you turn it off), no grant can
+be issued, protected actions after untrusted content are refused, the browser and memory writes are refused, and the credential broker stays closed.
+Another Corbanu Terminal on this home takes the switch when it next starts.
+Saved in security_state.json: it holds after a restart. The level stays Aggressive.
+
+enter confirm · esc cancel, nothing changes

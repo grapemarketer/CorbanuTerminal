@@ -84,6 +84,7 @@ fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,

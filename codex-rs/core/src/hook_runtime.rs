@@ -180,6 +180,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         matcher_aliases: tool_name.matcher_aliases().to_vec(),
         tool_use_id,
         tool_input: tool_input.clone(),
+        block_if_hook_cannot_start: turn_context.environments.may_run_remotely(),
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_pre_tool_use(&request);

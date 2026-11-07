@@ -166,6 +166,15 @@ impl LaunchPlan {
                 "Security level Moderate needs the source_envelopes feature: without it Corbanu refuses every model request. Turn it on, or choose Permissive in /security.".to_string(),
             );
         }
+        // #594 (D225): a home reached through a link agent commands could
+        // replace (Linux).
+        if let Some(warning) = super::home_link::moderate_startup_warning(
+            &self.codex_home,
+            &config.permissions.file_system_sandbox_policy(),
+            config.cwd.as_path(),
+        ) {
+            config.startup_warnings.push(warning);
+        }
         ChosenLevel::Moderate
     }
 
@@ -325,11 +334,16 @@ pub(crate) async fn verify_aggressive(
     if failures.is_empty() {
         return Ok(());
     }
-    Err(format!(
+    Err(not_fully_applied(codex_home, &failures))
+}
+
+/// Why Aggressive refuses to start (or to keep running in a new folder).
+pub(crate) fn not_fully_applied(codex_home: &Path, failures: &[String]) -> String {
+    format!(
         "Security level Aggressive could not be fully applied:\n  {}\nFix the setting, or choose Permissive by editing {}.",
         failures.join("\n  "),
         level::state_path(codex_home).display()
-    ))
+    )
 }
 
 /// Every later config build (onboarding reload, resume/fork, new cwd) must

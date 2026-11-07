@@ -30,6 +30,7 @@ use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -131,9 +132,11 @@ impl ToolOrchestrator {
                 .as_ref()
                 .map(ActiveNetworkApproval::execution_proxy),
         };
+        let unlabelled_mark = codex_windows_sandbox::unlabelled_roots_mark();
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
             .await;
+        warn_unlabelled_writable_roots(tool, req, tool_ctx, attempt, unlabelled_mark).await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);
@@ -941,7 +944,9 @@ impl ToolOrchestrator {
         );
         // D48 (c): a person's approval of a known tool's command after
         // untrusted content lifts no rule but would allow user namespaces:
-        // held back too, and the person is told why.
+        // held back too, and the person is told why (#943 item 18: only the
+        // namespaces, where no rule would have been lifted).
+        let rules_held_back = git_held_back;
         if !git_held.is_empty()
             && user_namespaces_warned_at.is_some()
             && approved_by == Some(ApprovalResolutionSource::User)
@@ -949,7 +954,12 @@ impl ToolOrchestrator {
             git_held_back = true;
         }
         if git_held_back {
-            warn(tool_ctx, &git_held_note(&git_held)).await;
+            let withheld = if rules_held_back {
+                Withheld::Rules
+            } else {
+                Withheld::Namespaces
+            };
+            warn(tool_ctx, &git_held_note(&git_held, withheld)).await;
         }
         // A person's approval of this command when asked about it now: it
         // counts for nothing below while the git check's findings stand
@@ -987,6 +997,28 @@ impl ToolOrchestrator {
                     let cwds: Vec<&std::path::Path> = cwds.iter().map(AsRef::as_ref).collect();
                     let opened =
                         crate::security::protected_additional::opened(check, additional, &cwds);
+                    // #943 (#1503 review): where the run is refused only
+                    // because the findings discount the person's approval,
+                    // the refusal alone would read as if none was given: the
+                    // person is told why (unless the rules note above was).
+                    if opened.is_some()
+                        && !rules_held_back
+                        && !git_held.is_empty()
+                        && approved_by == Some(ApprovalResolutionSource::User)
+                    {
+                        let counted = crate::security::protected_additional::Check {
+                            writes:
+                                crate::security::protected_additional::ReadOnlyScope::after_approval(
+                                    level, /*by_person*/ true,
+                                ),
+                            ..check
+                        };
+                        if crate::security::protected_additional::opened(counted, additional, &cwds)
+                            .is_none()
+                        {
+                            warn(tool_ctx, &git_held_note(&git_held, Withheld::Writes)).await;
+                        }
+                    }
                     refuse_opened(opened, level, tool_ctx).await?;
                 }
                 (Some(exec_server), materialized)
@@ -1013,20 +1045,6 @@ impl ToolOrchestrator {
             user_namespaces_warned_at.is_some() && approved_by_person_now,
             user_namespaces_warned_at,
         );
-        // A retry of this run (after a sandbox or network denial) reuses
-        // these permissions: the same approved command, so the same answer.
-        if user_namespaces_allowed {
-            crate::security::user_namespaces::note_allowed_run(
-                tool_ctx.session.thread_id(),
-                &turn_ctx.sub_id,
-                &tool_ctx.call_id,
-            );
-            tracing::info!(
-                target: "codex_core::security::tainted_action",
-                call_id = %tool_ctx.call_id,
-                "user namespaces allowed for this run by the person's approval of its request to run outside the sandbox (Moderate)"
-            );
-        }
         let (denied_exec_server_permissions, permissions) = if !user_namespaces_allowed
             && crate::security::user_namespaces::rule_applies(
                 protected_level,
@@ -1216,6 +1234,22 @@ impl ToolOrchestrator {
                 person_asked: approved_by == Some(ApprovalResolutionSource::User),
             });
         }
+        // #1048: only a round that reaches its first attempt gets an
+        // allowed-run note. A stale round never ran; its note must not hide
+        // a later denial for the same call. A sandbox/network retry reuses
+        // these permissions and this one note.
+        if user_namespaces_allowed {
+            crate::security::user_namespaces::note_allowed_run(
+                tool_ctx.session.thread_id(),
+                &turn_ctx.sub_id,
+                &tool_ctx.call_id,
+            );
+            tracing::info!(
+                target: "codex_core::security::tainted_action",
+                call_id = %tool_ctx.call_id,
+                "user namespaces allowed for this run by the person's approval of its request to run outside the sandbox (Moderate)"
+            );
+        }
         let initial_attempt_start = Instant::now();
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
             tool,
@@ -1293,8 +1327,12 @@ impl ToolOrchestrator {
                     post_taint.is_some(),
                     network_approval_context.is_some(),
                 );
+                // #943 item 3: never after the note above: the rules it kept
+                // deny reads, which keep the run in the sandbox (an external
+                // sandbox, which takes no rules, never reaches this retry),
+                // and under Moderate (D48) it never leaves it.
                 if unsandboxed_allowed && !git_held.is_empty() {
-                    warn(tool_ctx, &git_held_note(&git_held)).await;
+                    warn(tool_ctx, &git_held_note(&git_held, Withheld::Rules)).await;
                 }
                 let unsandboxed_allowed = unsandboxed_allowed && git_held.is_empty();
                 // Under `Never` or `OnRequest`, do not retry without sandbox;
@@ -1676,8 +1714,22 @@ async fn git_refresh(
     held
 }
 
-/// Why an approval or grant didn't lift the protected-file rules (#874).
-fn git_held_note(held: &[String]) -> String {
+/// What an approval or grant didn't do while the git check's findings stand
+/// (#874).
+#[derive(Clone, Copy)]
+enum Withheld {
+    /// Lift the protected-file rules.
+    Rules,
+    /// Let the command create user namespaces only (a D48 approval, which
+    /// lifts no rule).
+    Namespaces,
+    /// Let the command's additional permissions write to a read-only path
+    /// (#513, Moderate).
+    Writes,
+}
+
+/// Why an approval or grant didn't do `withheld` (#874).
+fn git_held_note(held: &[String], withheld: Withheld) -> String {
     const SHOWN: usize = 20;
     let mut shown = held
         .iter()
@@ -1688,10 +1740,19 @@ fn git_held_note(held: &[String]) -> String {
     if held.len() > SHOWN {
         shown.push_str(&format!(" and {} more", held.len() - SHOWN));
     }
+    let withheld = match withheld {
+        Withheld::Rules => {
+            "doesn't lift the protected-file rules for this command (nor run it outside the \
+             sandbox, nor let it create user namespaces)"
+        }
+        Withheld::Namespaces => "doesn't let this command create user namespaces",
+        Withheld::Writes => {
+            "doesn't let this command's additional permissions write to read-only paths"
+        }
+    };
     format!(
-        "The approval doesn't lift the protected-file rules for this command (nor run it \
-         outside the sandbox, nor let it create user namespaces) while the project's git \
-         folder still holds what Corbanu reported: {shown}."
+        "The approval {withheld} while the project's git folder still holds what Corbanu \
+         reported: {shown}."
     )
 }
 
@@ -1879,6 +1940,57 @@ where
         "post-taint protected action needs fresh human approval"
     );
     Some(crate::security::tainted_action::PostTaintAction { kind, state })
+}
+
+/// #734: after a run in the non-admin Windows sandbox, tells the person
+/// (once per thread) about each writable root of the run that it couldn't
+/// label Low during the run (since `mark`), so left read-only to its
+/// commands. Display only.
+async fn warn_unlabelled_writable_roots<Rq, Out, T>(
+    tool: &T,
+    req: &Rq,
+    tool_ctx: &ToolCtx,
+    attempt: &SandboxAttempt<'_>,
+    mark: u64,
+) where
+    T: ToolRuntime<Rq, Out>,
+{
+    // The elevated backend labels nothing; a run it took (by level, or for
+    // the network proxy) records no failure after `mark` but another
+    // thread's concurrent run might, so it is left out where known.
+    if attempt.sandbox != SandboxType::WindowsRestrictedToken
+        || attempt.windows_sandbox_level != WindowsSandboxLevel::RestrictedToken
+    {
+        return;
+    }
+    let failed = codex_windows_sandbox::unlabelled_roots_since(mark);
+    if failed.is_empty() {
+        return;
+    }
+    let Ok(cwd) = attempt.sandbox_cwd.to_abs_path() else {
+        return;
+    };
+    let Ok(workspace_roots) = attempt
+        .workspace_roots
+        .iter()
+        .map(PathUri::to_abs_path)
+        .collect::<std::io::Result<Vec<_>>>()
+    else {
+        return;
+    };
+    let effective = codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy(
+        &attempt.permissions.file_system_sandbox_policy(),
+        tool.additional_permissions(req),
+    );
+    let writable =
+        codex_windows_sandbox::legacy_writable_roots(&effective, &workspace_roots, cwd.as_path());
+    for message in crate::tools::writable_root_notices::unlabelled_writable_root_warnings(
+        tool_ctx.session.thread_id(),
+        &failed,
+        &writable,
+    ) {
+        warn(tool_ctx, &message).await;
+    }
 }
 
 /// #739: tells the person `message` (a warning in the transcript).
@@ -2750,3 +2862,8 @@ mod tests {
 #[cfg(test)]
 #[path = "orchestrator_stale_tests.rs"]
 mod stale_tests;
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+#[path = "orchestrator_namespace_note_tests.rs"]
+mod namespace_note_tests;

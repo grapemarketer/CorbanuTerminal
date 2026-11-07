@@ -137,6 +137,30 @@ async fn a_day_before_the_conversation_started_has_no_requests() -> anyhow::Resu
     Ok(())
 }
 
+/// #314 (D228): a day a request of the conversation went unrecorded is a
+/// day it sent one, so a gap marker moves the start as a record does, and
+/// the day reads as possibly incomplete.
+#[tokio::test]
+async fn a_recording_gap_is_evidence_of_the_start() -> anyhow::Result<()> {
+    let path = home();
+    let (runtime, owner) = fixture(&path, 300 * DAY, NOW).await?;
+    assert_eq!(
+        empty(&runtime, owner, /*day*/ 298, NOW).await?,
+        before(/*started_day*/ 300)
+    );
+    AccountingStore::record_gap(&runtime, owner, 299 * DAY + 1, 299 * DAY + 1).await?;
+    assert_eq!(
+        empty(&runtime, owner, /*day*/ 298, NOW).await?,
+        before(/*started_day*/ 299)
+    );
+    let day =
+        inspection(AccountingStore::inspect_day(&runtime, owner, /*utc_day*/ 299, NOW).await?);
+    assert_eq!(day.empty_day, Some(EmptyDay::NotRecorded));
+    assert!(day.recording_gap);
+    runtime.close().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_day_with_requests_is_not_an_empty_day() -> anyhow::Result<()> {
     let path = home();

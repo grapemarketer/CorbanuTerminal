@@ -37,6 +37,7 @@ const INTERRUPT_CALL_ID: &str = "interrupt-worker";
 const INITIAL_PROMPT: &str = "spawn a durable worker";
 const INITIAL_TASK: &str = "inspect the repository";
 const NESTED_TASK: &str = "inspect the nested repository";
+const GRANDCHILD_FINAL_ANSWER_SENDER: &str = "Sender: /root/worker/grandchild";
 const QUEUE_PROMPT: &str = "queue context for the durable worker";
 const QUEUED_MESSAGE: &str = "queue-only context from an earlier parent turn";
 const FOLLOWUP_PROMPT: &str = "continue the durable worker";
@@ -74,6 +75,56 @@ fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     decoded_body(request)
         .and_then(|body| String::from_utf8(body).ok())
         .is_some_and(|body| body.contains(text))
+}
+
+/// One line per request the mock server saw, for timeout diagnostics.
+async fn received_request_summary(server: &wiremock::MockServer) -> String {
+    let requests = server.received_requests().await.unwrap_or_default();
+    let markers = [
+        INITIAL_PROMPT,
+        INITIAL_TASK,
+        NESTED_TASK,
+        SPAWN_CALL_ID,
+        NESTED_CALL_ID,
+        QUEUE_CALL_ID,
+        GRANDCHILD_FINAL_ANSWER_SENDER,
+    ];
+    let lines: Vec<String> = requests
+        .iter()
+        .enumerate()
+        .map(|(idx, request)| {
+            let model = decoded_body(request)
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                .and_then(|body| {
+                    body.get("model")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let seen: Vec<&str> = markers
+                .iter()
+                .copied()
+                .filter(|marker| body_contains(request, marker))
+                .collect();
+            format!(
+                "#{idx} {} model={model} markers={seen:?}",
+                request.url.path()
+            )
+        })
+        .collect();
+    format!("{} requests:\n{}", lines.len(), lines.join("\n"))
+}
+
+/// Whether the request's last input item is the grandchild's final answer to
+/// the worker.
+fn ends_with_grandchild_final_answer(request: &wiremock::Request) -> bool {
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .and_then(|body| body["input"].as_array()?.last().map(Value::to_string))
+        .is_some_and(|item| {
+            item.contains(GRANDCHILD_FINAL_ANSWER_SENDER)
+                && item.contains("Message Type: FINAL_ANSWER")
+        })
 }
 
 fn request_has_model(request: &wiremock::Request, model: &str) -> bool {
@@ -215,6 +266,23 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         )
         .await;
     }
+    // If the grandchild's final answer is queued after the worker's
+    // continuation request was built but while that turn still accepts queued
+    // messages, the worker sends one more request in the same turn, ending
+    // with that answer. Without a response for it the worker ends `Errored` on
+    // a 404 (#1448). Match only a request that ends with the answer (and is
+    // not a later follow-up), so this spare mock cannot answer later worker
+    // requests whose history merely contains it.
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, ROLE_MODEL)
+                && ends_with_grandchild_final_answer(request)
+                && !body_contains(request, FOLLOWUP_TASK)
+        },
+        sse(vec![ev_completed("resp-worker-grandchild-answer")]),
+    )
+    .await;
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -291,14 +359,15 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     let worker_thread = initial.thread_manager.get_thread(worker_thread_id).await?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if matches!(
-            worker_thread.agent_status().await,
-            AgentStatus::Completed(_)
-        ) {
+        let status = worker_thread.agent_status().await;
+        if matches!(status, AgentStatus::Completed(_)) {
             break;
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for worker completion");
+            anyhow::bail!(
+                "timed out waiting for worker completion; last status {status:?}; {}",
+                received_request_summary(&server).await
+            );
         }
         sleep(Duration::from_millis(10)).await;
     }

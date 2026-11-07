@@ -46,6 +46,102 @@ const MAX_IDENTICAL_TOOL_RESULTS: u32 = 3;
 /// refusals and is stuck.
 const STOP_TURN_AFTER_REFUSED_REPEATS: u32 = 8;
 
+/// Direct tool calls of a turn whose output may not be recorded yet. When an
+/// interrupt hard-aborts a turn that missed the grace period, the abort path
+/// records each call's abort output from here, so the model still sees how
+/// long the call ran instead of the bare `aborted` placeholder that history
+/// normalization would insert (#1467). A call whose tool already finished keeps
+/// its real output, so a finished-then-killed call (for example a patch that was
+/// applied) is not reported as aborted (D244).
+#[derive(Default)]
+pub(crate) struct PendingToolCalls {
+    calls: std::sync::Mutex<Vec<PendingToolCall>>,
+    /// The running turn's file-change tracker, so the abort path can send the
+    /// turn's file-change summary as a regular turn end does (D282).
+    turn_diff_tracker: std::sync::Mutex<Option<SharedTurnDiffTracker>>,
+}
+
+impl std::fmt::Debug for PendingToolCalls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingToolCalls")
+            .field("calls", &*self.lock())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct PendingToolCall {
+    call: ToolCall,
+    started: Instant,
+    finished_output: Option<ResponseInputItem>,
+}
+
+impl PendingToolCalls {
+    fn register(&self, call: &ToolCall, started: Instant) {
+        self.lock().push(PendingToolCall {
+            call: call.clone(),
+            started,
+            finished_output: None,
+        });
+    }
+
+    /// Keeps the output a call's tool returned until the turn records it.
+    fn finish(&self, call_id: &str, output: &ResponseInputItem) {
+        if let Some(pending) = self
+            .lock()
+            .iter_mut()
+            .find(|pending| pending.call.call_id == call_id)
+        {
+            pending.finished_output = Some(output.clone());
+        }
+    }
+
+    /// Forgets a call once its output is in history.
+    pub(crate) fn complete(&self, call_id: &str) {
+        self.lock()
+            .retain(|pending| pending.call.call_id != call_id);
+    }
+
+    /// Takes the outputs of every remaining call: the tool's own output when it
+    /// finished, else its abort output timed up to `cancelled_at`.
+    pub(crate) fn take_unrecorded_outputs(&self, cancelled_at: Instant) -> Vec<ResponseInputItem> {
+        std::mem::take(&mut *self.lock())
+            .into_iter()
+            .map(|pending| {
+                pending.finished_output.unwrap_or_else(|| {
+                    let secs = cancelled_at
+                        .saturating_duration_since(pending.started)
+                        .as_secs_f32()
+                        .max(0.1);
+                    ToolCallRuntime::aborted_response(&pending.call, secs).into_response()
+                })
+            })
+            .collect()
+    }
+
+    /// Remembers the running turn's file-change tracker (D282).
+    pub(crate) fn set_turn_diff_tracker(&self, tracker: &SharedTurnDiffTracker) {
+        *self
+            .turn_diff_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(tracker));
+    }
+
+    /// The tracker [`Self::set_turn_diff_tracker`] stored, if any.
+    pub(crate) fn turn_diff_tracker(&self) -> Option<SharedTurnDiffTracker> {
+        self.turn_diff_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PendingToolCall>> {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 struct ToolCallTimingGuard {
     started_at: Instant,
     execution_started_at: Arc<OnceLock<Instant>>,
@@ -117,13 +213,18 @@ impl ToolCallRuntime {
         let call = self.router.resolve_flat_tool_call(call);
         let error_call = call.clone();
         let source = call.direct_source();
+        let pending_tool_calls = Arc::clone(&self.step_context.turn.pending_tool_calls);
+        pending_tool_calls.register(&call, Instant::now());
         let future = self.handle_tool_call_with_source(call, source, cancellation_token);
         async move {
-            match future.await {
-                Ok(response) => Ok(response.into_response()),
-                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
-            }
+            let call_id = error_call.call_id.clone();
+            let output = match future.await {
+                Ok(response) => response.into_response(),
+                Err(FunctionCallError::Fatal(message)) => return Err(CodexErr::Fatal(message)),
+                Err(other) => Self::failure_response(error_call, other),
+            };
+            pending_tool_calls.finish(&call_id, &output);
+            Ok(output)
         }
         .in_current_span()
     }
@@ -1486,5 +1587,36 @@ mod tests {
         assert_eq!(vec![ToolCallOutcome::Aborted], actual);
 
         Ok(())
+    }
+
+    #[test]
+    fn abort_message_reports_wall_time_for_shell_tools() {
+        let call = |tool_name| ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let secs = 1.5;
+
+        for name in ["shell_command", "unified_exec"] {
+            assert_eq!(
+                "Wall time: 1.5 seconds\naborted by user",
+                ToolCallRuntime::abort_message(&call(codex_tools::ToolName::plain(name)), secs)
+            );
+        }
+        assert_eq!(
+            "aborted by user after 1.5s",
+            ToolCallRuntime::abort_message(
+                &call(codex_tools::ToolName::namespaced("mcp", "shell_command")),
+                secs
+            )
+        );
+        assert_eq!(
+            "aborted by user after 1.5s",
+            ToolCallRuntime::abort_message(&call(codex_tools::ToolName::plain("other")), secs)
+        );
     }
 }

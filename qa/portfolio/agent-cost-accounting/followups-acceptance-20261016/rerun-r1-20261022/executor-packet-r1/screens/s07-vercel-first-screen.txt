@@ -1,0 +1,43 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• Vercel · Vercel GLM 5.3 Flash — Pay per use. 1 request, 8,584+ tokens. Billed by Vercel: at least $0.001397 (rounded) (1 failed attempt reported no
+usage; a refused request is normally not charged).
+No other conversation recorded requests on this day.
+Next step for requests with incomplete usage: check the bill from Vercel. Their provider did not report every token count, so the estimate is missing or
+only a lower bound.
+Costs marked "charged by Vercel" are the charges Vercel reported with those responses; other costs are estimates from published prices; Vercel stated no
+charge for this work — check Vercel's bill.
+Select a provider below to see its requests.
+—— Details ——
+Known token cost: $0.001397 (rounded) + unknown costs (charged by Vercel)
+Full recorded estimate: unavailable (1 of 2 billed attempts incomplete)
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Billed cost: at least $0.001397 (rounded) (1 failed attempt reported no usage; a refused request is normally not charged) — as stated by the provider with
+each response
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T00:19:45.695Z; ledger current to: 2026-10-15T00:16:53.662Z (172033 ms behind)
+Retention: request detail kept since 2026-07-17T00:19:45.695Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: 0.0013967
+Input: 8,558 + not reported by 1 attempt
+Noncached input (derived for inclusive input): not reported (2 attempts)
+Cache read: not reported (1 attempt)
+Cache write: not reported (2 attempts)
+Output: 26 + not reported by 1 attempt
+Reasoning (subset, not separately billed): 23 + not reported by 1 attempt
+Total (not separately billed): 8,584 + not reported by 1 attempt
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ Vercel · Vercel GLM 5.3 Flash — billed at least $0.001397 (rounded) (1 failed attempt reported no usage; a refused request is normally not charged) (1
+request)
+→ Request 1 · Vercel · Vercel GLM 5.3 Flash · billed at least $0.001397 (rounded) (1 failed attempt reported no usage; a refused request is normally not
+charged)
+→ Root's own attempts (2 attempts)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

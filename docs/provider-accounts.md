@@ -33,6 +33,14 @@ one that turn ran on, as a resume does.
 - `--account default` always means today's credentials, also with the feature
   off.
 
+In `/providers`, an account's _Start a new session on this account_ (and a
+provider's _Start a new session on the default account_) starts a new
+session on it; the conversation you were in is not moved and stays in
+`/resume`. Like `--account`, that choice holds for the rest of this TUI, so a
+`/resume` there opens a conversation of that provider on it (see below);
+another session resumes it on its own account. _Make default_ changes only
+what new sessions use.
+
 ## Fail closed
 
 A missing account is an error, never the default account. The session
@@ -78,7 +86,8 @@ apply.
   above, prefixed with "This conversation ran on zai account `ghost` and
   resumes on it:". Inside a session, `/resume` shows it and stays on the
   current conversation; there the recovery is "add it or pick another account
-  in `/providers`".
+  in `/providers`". A TUI started with `--account` of that provider resumes
+  on the launch account instead (see below).
 - **The recorded provider has no credentials in this home:** the TUI exits
   and says how to set them up (`corbanu -c model_provider="zai"`), instead of
   the configured provider's sign-in. If this home does not define that
@@ -88,7 +97,18 @@ apply.
 refuses it before the fork is chosen, even though the fork would run on the
 source conversation's account; `--account` picks another one.
 
-An explicit `--account` of the same provider still wins. With the feature off,
+A conversation that ran on more than one account (for example its first
+turns on `work`, a later one on `personal` after `--account personal`)
+resumes on the account of its most recent turn.
+
+An explicit `--account` of the same provider still wins, also when the
+recorded account is gone. Inside a TUI started with it (or after _Start a
+new session on this account_ in `/providers`), `/resume` opens the
+conversation on the selected account and shows a one-line notice naming
+both, such as "This conversation ran on zai account `work`, which is no
+longer available; it resumes on `personal`, the account selected for this
+session (with `--account` or in `/providers`)." `corbanu resume --account`
+and forks switch without a notice. With the feature off,
 the resume is refused and names the recorded account (`--account
 <provider>:default` resumes on the default credentials). A fork of a saved
 conversation follows the same rule, decided by the fork's own configuration
@@ -141,6 +161,20 @@ say which was used on their `Price basis` line. Codex Auto Review, the
 automatic approval reviewer, is one of these on an OpenAI API key: OpenAI
 doesn't publish a price for it, and `/cost` says so.
 
+A realtime voice session over a WebSocket shows in `/cost` as one request with
+its start and end times and the input, cached-input, output and total tokens
+OpenAI reported at the end of each response. Those counts may be low: a
+response cut short by the session's end reports none, and a report that could
+not be read is not counted. Its cost is unknown, not zero (`no price
+available`, never $0): Corbanu has no realtime price table, so no rate is
+applied even when the session's model has a catalogue price. Sessions recorded
+by earlier versions, and sessions with no recorded tokens, show their token
+counts and cost as unknown. A WebRTC realtime call shows as one request, the
+call's creation, with its tokens unknown. The end time recorded with it is when
+the client's control channel to the call closed, which can be before the media
+call itself ends (for example if that channel fails to connect), so `/cost`
+does not show it as the session's end.
+
 A day with nothing recorded for the conversation says "no requests recorded"
 only when the whole UTC day ends before the conversation started (as dated by
 the clock that also dates its requests). Otherwise it
@@ -185,8 +219,8 @@ AWS SDK chain).
 
 While the vault holds a named Bedrock account, `/model` in a session on
 another provider also offers Bedrock's models, so an account chosen with
-_Use for this session_ (or `--account amazon-bedrock:<name>`) can be reached.
-Picking one without choosing an account (there, or with a
+_Start a new session on this account_ (or `--account amazon-bedrock:<name>`)
+can be reached. Picking one without choosing an account (there, or with a
 `[provider_accounts]` default) uses Bedrock's `default` account.
 
 ## OpenAI: ChatGPT and API-key sign-in accounts
@@ -258,6 +292,15 @@ fingerprint.
   as Z.AI) can still sign in, select and use a named ChatGPT account.
 - A named account with no usable sign-in is refused with the reason and its
   recovery; a request is never sent without its credentials.
+- An account removed or signed out while a session runs on it (from any
+  terminal, for example `corbanu account remove openai work`) is not used
+  again: the session's next request is refused with "account `work` has no
+  sign-in (it may have been removed or signed out)" and the recovery
+  (`corbanu login --account work`, or another account in `/providers` or with
+  `--account`), never sent on the sign-in the session still held or on the
+  default login. `/status` then shows `account unavailable` on the provider
+  line and the recovery on the Account line; Account usage still lists what
+  the session used on `work`.
 - Signing the same ChatGPT user in under two accounts (or as `default` and a
   named account) is allowed with a warning: they share that user's limits,
   and signing out of one can end the other's session.

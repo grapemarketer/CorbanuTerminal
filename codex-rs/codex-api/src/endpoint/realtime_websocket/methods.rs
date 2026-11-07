@@ -1101,6 +1101,7 @@ mod tests {
     use codex_protocol::protocol::RealtimeResponseCancelled;
     use codex_protocol::protocol::RealtimeResponseCreated;
     use codex_protocol::protocol::RealtimeResponseDone;
+    use codex_protocol::protocol::RealtimeResponseUsage;
     use codex_protocol::protocol::RealtimeTranscriptDelta;
     use codex_protocol::protocol::RealtimeTranscriptDone;
     use codex_protocol::protocol::RealtimeVoice;
@@ -1645,9 +1646,70 @@ mod tests {
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
             Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
-                response_id: None
+                response_id: None,
+                usage: None,
             }))
         );
+    }
+
+    /// #889 D223: `response.done` carries the response's token counts as
+    /// OpenAI reports them; a count that is not an exact nonnegative integer
+    /// leaves the whole report unread.
+    #[test]
+    fn parse_realtime_v2_response_done_usage() {
+        let done = |usage: Value| {
+            let payload = json!({
+                "type": "response.done",
+                "response": {"id": "resp_1", "usage": usage}
+            })
+            .to_string();
+            match parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2) {
+                Some(RealtimeEvent::ResponseDone(done)) => done.usage,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            done(json!({
+                "total_tokens": 253,
+                "input_tokens": 132,
+                "output_tokens": 121,
+                "input_token_details": {
+                    "text_tokens": 119,
+                    "audio_tokens": 13,
+                    "cached_tokens": 64,
+                    "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 0}
+                },
+                "output_token_details": {"text_tokens": 30, "audio_tokens": 91}
+            })),
+            Some(RealtimeResponseUsage {
+                input_tokens: Some(132),
+                cached_input_tokens: Some(64),
+                output_tokens: Some(121),
+                total_tokens: Some(253),
+            })
+        );
+        // Only what was stated.
+        assert_eq!(
+            done(json!({"input_tokens": 132, "output_tokens": 121})),
+            Some(RealtimeResponseUsage {
+                input_tokens: Some(132),
+                cached_input_tokens: None,
+                output_tokens: Some(121),
+                total_tokens: None,
+            })
+        );
+        for unusable in [
+            json!({"input_tokens": -1, "output_tokens": 121}),
+            json!({"input_tokens": 1.5, "output_tokens": 121}),
+            json!({"input_tokens": "132", "output_tokens": 121}),
+            json!({"input_tokens": 132, "input_token_details": {"cached_tokens": "64"}}),
+            json!({"input_tokens": 132, "input_token_details": 64}),
+            json!({}),
+            json!(null),
+            json!([132]),
+        ] {
+            assert_eq!(done(unusable.clone()), None, "{unusable}");
+        }
     }
 
     #[test]

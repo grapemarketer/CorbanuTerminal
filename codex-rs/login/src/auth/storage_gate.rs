@@ -108,6 +108,21 @@ impl AuthStorageBackend for GatedAuthStorage {
     fn delete(&self) -> std::io::Result<bool> {
         self.inner.delete()
     }
+
+    fn update(
+        &self,
+        change: &mut dyn FnMut(&mut AuthDotJson) -> std::io::Result<()>,
+    ) -> std::io::Result<Option<AuthDotJson>> {
+        self.inner.update(&mut |auth| {
+            self.protect(auth)?;
+            change(auth)?;
+            self.protect(auth)
+        })
+    }
+
+    fn is_named_account(&self) -> bool {
+        self.inner.is_named_account()
+    }
 }
 
 fn auth_values(auth: &AuthDotJson) -> Vec<(&'static str, Zeroizing<String>)> {

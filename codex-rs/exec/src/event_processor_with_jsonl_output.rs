@@ -11,7 +11,6 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_protocol::models::WebSearchAction;
@@ -52,15 +51,15 @@ use crate::exec_events::TodoListItem;
 use crate::exec_events::TurnCompletedEvent;
 use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
-use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
+use crate::json_usage::JsonUsage;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_item_id: AtomicU64,
     raw_to_exec_item_id: HashMap<String, String>,
     running_todo_list: Option<RunningTodoList>,
-    last_total_token_usage: Option<ThreadTokenUsage>,
+    token_usage: JsonUsage,
     last_critical_error: Option<ThreadErrorEvent>,
     final_message: Option<String>,
     emit_final_message_on_shutdown: bool,
@@ -85,7 +84,7 @@ impl EventProcessorWithJsonOutput {
             next_item_id: AtomicU64::new(0),
             raw_to_exec_item_id: HashMap::new(),
             running_todo_list: None,
-            last_total_token_usage: None,
+            token_usage: JsonUsage::default(),
             last_critical_error: None,
             final_message: None,
             emit_final_message_on_shutdown: false,
@@ -112,19 +111,6 @@ impl EventProcessorWithJsonOutput {
                 .to_string()
             })
         );
-    }
-
-    fn usage_from_last_total(&self) -> Usage {
-        let Some(usage) = self.last_total_token_usage.as_ref() else {
-            return Usage::default();
-        };
-        Usage {
-            input_tokens: usage.total.input_tokens,
-            cached_input_tokens: usage.total.cached_input_tokens,
-            cache_write_input_tokens: usage.total.cache_write_input_tokens,
-            output_tokens: usage.total.output_tokens,
-            reasoning_output_tokens: usage.total.reasoning_output_tokens,
-        }
     }
 
     pub fn map_todo_items(plan: &[codex_app_server_protocol::TurnPlanStep]) -> Vec<TodoItem> {
@@ -414,6 +400,7 @@ impl EventProcessorWithJsonOutput {
         &mut self,
         notification: ServerNotification,
     ) -> CollectedThreadEvents {
+        self.token_usage.observe(&notification);
         let mut events = Vec::new();
         let status = match notification {
             ServerNotification::ConfigWarning(notification) => {
@@ -498,10 +485,7 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ModelVerification(_) => CodexStatus::Running,
-            ServerNotification::ThreadTokenUsageUpdated(notification) => {
-                self.last_total_token_usage = Some(notification.token_usage);
-                CodexStatus::Running
-            }
+            ServerNotification::ThreadTokenUsageUpdated(_) => CodexStatus::Running,
             ServerNotification::TurnCompleted(notification) => {
                 if let Some(running) = self.running_todo_list.take() {
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
@@ -523,7 +507,7 @@ impl EventProcessorWithJsonOutput {
                         }
                         self.emit_final_message_on_shutdown = true;
                         events.push(ThreadEvent::TurnCompleted(TurnCompletedEvent {
-                            usage: self.usage_from_last_total(),
+                            usage: self.token_usage.for_thread(&notification.thread_id),
                         }));
                         CodexStatus::InitiateShutdown
                     }
@@ -595,6 +579,38 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
+    fn usage_is_valid(&self) -> bool {
+        self.token_usage.is_valid()
+    }
+
+    fn mark_forked_usage_thread(&mut self, thread_id: &str) {
+        self.token_usage.mark_forked(thread_id);
+    }
+
+    fn invalidate_usage(&mut self) {
+        self.token_usage.invalidate();
+    }
+
+    fn register_usage_thread(&mut self, thread_id: &str, parent_thread_id: &str) {
+        self.token_usage
+            .register_thread(thread_id, parent_thread_id);
+    }
+
+    fn observe_unselected_notification(
+        &mut self,
+        notification: &ServerNotification,
+        selected_thread_id: &str,
+    ) {
+        let thread_id = match notification {
+            ServerNotification::ThreadTokenUsageUpdated(notification) => &notification.thread_id,
+            _ => return,
+        };
+        // In particular, do not accept a stale turn's selected-thread report.
+        if thread_id != selected_thread_id {
+            self.token_usage.observe(notification);
+        }
+    }
+
     fn print_config_summary(
         &mut self,
         _: &Config,

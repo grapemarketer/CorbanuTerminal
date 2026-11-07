@@ -1,0 +1,13 @@
+agmx0 home entries left: 0
+agmx1 home entries left: 0
+agmx2 home entries left: 0
+agmx3 home entries left: 0
+placeholder key file: absent
+mediator leaf key: absent
+synthetic credential files left anywhere: 0
+tunnel stopped
+2026-10-21T23:28:36Z
+deleted pf84-cb1-run
+Source Name            Disk  Size  Accessed       State  
+local  corbanu-qa-base 50 GB 28 GB 14 minutes ago stopped
+2026-10-21T23:28:38Z

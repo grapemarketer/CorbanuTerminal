@@ -93,6 +93,8 @@ mod hooks_mcp;
 mod image_rollout;
 mod issue_1087;
 mod issue_1139;
+#[path = "issue_1355_tests.rs"]
+mod issue_1355;
 mod issue_443;
 mod issue_445;
 mod issue_505;
@@ -149,6 +151,7 @@ mod permissions_messages;
 mod personality;
 mod pf_23_s01;
 mod pf_25_s01;
+mod plan_glm_reasoning;
 mod plugins;
 mod prompt_cache_key;
 mod prompt_caching;

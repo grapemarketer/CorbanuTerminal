@@ -186,6 +186,7 @@ async fn maintain_on_connection(conn: &mut SqliteConnection, as_of_ms: i64) -> a
         }
     }
     gc_snapshots(conn).await?;
+    crate::runtime::accounting::gap_days::expire(conn, as_of_ms, REPLAY_MS).await?;
     sqlx::query("DELETE FROM draft_accounting_tombstones WHERE expires_at_ms <= ?")
         .bind(as_of_ms)
         .execute(&mut *conn)
@@ -413,6 +414,7 @@ async fn remove_owner_on_connection(
             .execute(&mut *conn)
             .await?;
     }
+    crate::runtime::accounting::gap_days::remove_owner(conn, &thread.to_string()).await?;
     Ok(())
 }
 

@@ -123,6 +123,9 @@ def _rust_argument_comment_lint_aspect_impl(target, ctx):
         build_flags_files = build_flags_files,
         emit = ["dep-info", "metadata"],
         skip_expanding_rustc_env = True,
+        # Keep dependency flags off the Windows process command line, including
+        # when the lint driver runs on a different OS from the Rust target.
+        always_use_param_file = True,
     )
 
     if crate_info.is_test:

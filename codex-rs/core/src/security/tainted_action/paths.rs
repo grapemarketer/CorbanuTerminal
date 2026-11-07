@@ -5,10 +5,12 @@
 
 use super::ProtectedActionKind;
 use super::windows_paths;
+use super::windows_reads;
 use super::work;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -56,6 +58,29 @@ pub(crate) const USER_PERSISTENCE: &[&str] = &[
     ".local/bin",
     "Library/LaunchAgents",
 ];
+/// #1261 (D168): under Windows path rules, the user's places that run code
+/// at sign-in: the Startup folder and the PowerShell folders (profiles, and
+/// modules PowerShell loads by name), also under a OneDrive `Documents`.
+/// A `*` in an entry matches within one name.
+const WINDOWS_USER_PERSISTENCE: &[&str] = &[
+    "appdata/roaming/microsoft/windows/start menu/programs/startup",
+    "documents/windowspowershell",
+    "documents/powershell",
+    "onedrive*/documents/windowspowershell",
+    "onedrive*/documents/powershell",
+];
+/// #1261 (D168): the same for every user, below any drive's root: the
+/// common Startup folder, scheduled task files and the all-users PowerShell
+/// profiles.
+const WINDOWS_MACHINE_PERSISTENCE: &[&str] = &[
+    "programdata/microsoft/windows/start menu/programs/startup",
+    "windows/system32/tasks",
+    "windows/syswow64/tasks",
+    "windows/tasks",
+    "windows/system32/windowspowershell/v1.0/*profile.ps1",
+    "windows/syswow64/windowspowershell/v1.0/*profile.ps1",
+    "program files/powershell/7/*profile.ps1",
+];
 /// The same inside a workspace: git runs hooks and reads config outside the
 /// sandbox; project `.codex` and `.agents` set agent policy.
 pub(crate) const WORKSPACE_PERSISTENCE: &[&str] =
@@ -85,7 +110,17 @@ const PRIVACY_FOLDERS: &[&str] = &[
 
 pub(super) struct Homes {
     /// #1240: Windows path rules (see `windows_paths`) instead of POSIX ones.
+    /// #1261: on Windows both judgments use them.
     windows: bool,
+    /// #1240: the Windows view (cmd and PowerShell readings; it opens no
+    /// file).
+    view: bool,
+    /// #1261: folders (lowercase, as resolved) reached through a spelling
+    /// the first judgment may not resolve as the shell does: a network share
+    /// or device path (the Windows rules spell `\\host\c$` and `\\?\C:` as
+    /// `/c:`), a name Windows changes (`sub.`, `sub `, `sub:x`), the drive's
+    /// root (`/x`), a variable or `~`. No file below one is opened.
+    unread_folders: RefCell<HashSet<String>>,
     /// Original spellings, used to expand `$CODEX_HOME`, `$HOME` and `~`.
     codex_home_raw: String,
     user_home_raw: Option<String>,
@@ -101,17 +136,35 @@ pub(super) struct Homes {
 }
 
 impl Homes {
+    /// The homes for the first judgment: under POSIX path rules, or (#1261)
+    /// on Windows under Windows path rules.
     pub(super) fn new(codex_home: &Path, user_home: Option<&Path>) -> Self {
-        Self::with_rules(codex_home, user_home, /*windows*/ false)
+        Self::with_rules(
+            codex_home,
+            user_home,
+            /*windows*/ cfg!(windows),
+            /*view*/ false,
+        )
+    }
+
+    /// #1261: the first judgment's homes as on Windows, on any platform
+    /// (files are opened only on Windows).
+    #[cfg(test)]
+    pub(super) fn windows_first(codex_home: &Path, user_home: Option<&Path>) -> Self {
+        Self::with_rules(
+            codex_home, user_home, /*windows*/ true, /*view*/ false,
+        )
     }
 
     /// #1240: the homes under Windows path rules, for the classifier's
     /// Windows view.
     pub(super) fn windows(codex_home: &Path, user_home: Option<&Path>) -> Self {
-        Self::with_rules(codex_home, user_home, /*windows*/ true)
+        Self::with_rules(
+            codex_home, user_home, /*windows*/ true, /*view*/ true,
+        )
     }
 
-    fn with_rules(codex_home: &Path, user_home: Option<&Path>, windows: bool) -> Self {
+    fn with_rules(codex_home: &Path, user_home: Option<&Path>, windows: bool, view: bool) -> Self {
         let separators: &[char] = if windows { &['/', '\\'] } else { &['/'] };
         let raw = |path: &Path| {
             path.to_string_lossy()
@@ -137,6 +190,8 @@ impl Homes {
         }
         let homes = Self {
             windows,
+            view,
+            unread_folders: RefCell::new(HashSet::new()),
             codex_home_raw,
             user_home_raw,
             codex_homes: Vec::new(),
@@ -199,8 +254,35 @@ impl Homes {
     }
 
     /// Whether these are the Windows path rules.
-    pub(super) fn is_windows(&self) -> bool {
+    pub(super) fn windows_paths(&self) -> bool {
         self.windows
+    }
+
+    /// Whether this is the Windows view (#1240).
+    pub(super) fn is_windows_view(&self) -> bool {
+        self.view
+    }
+
+    /// Count one filesystem lookup. False, and the classification marked
+    /// incomplete, once the budget is spent.
+    pub(super) fn take_lookup(&self) -> bool {
+        if self.lookups.get() >= FS_LOOKUP_BUDGET {
+            self.exhausted.set(true);
+            return false;
+        }
+        self.lookups.set(self.lookups.get() + 1);
+        true
+    }
+
+    /// #1261: the plain local path (see `windows_reads`) that `word` names
+    /// run in `cwd` under Windows rules, as a drive letter and the names
+    /// below its root: `None` when it is not one, is spelled with a variable
+    /// or `~`, or the folder is one of `unread_folders`.
+    pub(super) fn windows_read_path(&self, word: &str, cwd: &str) -> Option<(char, Vec<String>)> {
+        if windows_reads::expanded_spelling(word) || self.unread_folder(cwd) {
+            return None;
+        }
+        windows_reads::plain_path(&self.expand_windows(word, cwd, /*places*/ false), cwd)
     }
 
     /// `normalize_path`, or its Windows counterpart.
@@ -213,7 +295,22 @@ impl Homes {
     /// relative word absolute against `cwd`. Keeps the word's case.
     pub(super) fn resolve(&self, word: &str, cwd: &str) -> String {
         if self.windows {
-            return self.resolve_windows(word, cwd);
+            return self.resolve_windows(word, cwd, /*places*/ false);
+        }
+        let word = self.expand_homes(word);
+        if word.starts_with('/') || cwd.is_empty() {
+            normalize_path(&word)
+        } else {
+            normalize_path(&format!("{cwd}/{word}"))
+        }
+    }
+
+    /// #1436: [`Self::resolve`]'s home spellings expanded, the word kept as
+    /// written otherwise: its path cleanup would drop `$X` from `$X/..`.
+    /// Under Windows rules, [`Self::resolve`] without a folder.
+    pub(super) fn expand_homes(&self, word: &str) -> String {
+        if self.windows {
+            return self.resolve_windows(word, "", /*places*/ false);
         }
         let mut word = word.to_string();
         for (name, value) in [
@@ -238,16 +335,37 @@ impl Homes {
                 word = format!("{}/{user}{tail}", parent.to_string_lossy());
             }
         }
-        if word.starts_with('/') || cwd.is_empty() {
-            normalize_path(&word)
-        } else {
-            normalize_path(&format!("{cwd}/{word}"))
-        }
+        word
     }
 
     /// [`Self::resolve`] under Windows rules: the same spellings, the Windows
     /// ones too (`%USERPROFILE%`, `$env:CODEX_HOME`, `~\`), and Windows roots.
-    fn resolve_windows(&self, word: &str, cwd: &str) -> String {
+    /// #1261: `places`: also expand `windows_paths::PLACE_VARIABLES`.
+    fn resolve_windows(&self, word: &str, cwd: &str, places: bool) -> String {
+        let expanded = self.expand_windows(word, cwd, places);
+        let resolved = windows_paths::join(cwd, &expanded);
+        // #1261: see `unread_folders`; everything below one is one too.
+        let unread = windows_reads::expanded_spelling(word)
+            || !windows_reads::plain_spelling(&expanded)
+            || windows_reads::starts_at_a_share(cwd)
+            || self.unread_folder(cwd);
+        if unread {
+            self.unread_folders
+                .borrow_mut()
+                .insert(resolved.to_lowercase());
+        }
+        resolved
+    }
+
+    /// #1261: whether `folder` (as resolved) is one of `unread_folders`.
+    fn unread_folder(&self, folder: &str) -> bool {
+        let folders = self.unread_folders.borrow();
+        !folders.is_empty() && folders.contains(&folder.to_lowercase())
+    }
+
+    /// The home spellings of `word` expanded under Windows rules (`places`:
+    /// see [`Self::resolve_windows`]).
+    fn expand_windows(&self, word: &str, cwd: &str, places: bool) -> String {
         let mut word = word.to_string();
         for (name, value) in [
             ("CODEX_HOME", Some(&self.codex_home_raw)),
@@ -266,6 +384,7 @@ impl Homes {
                 codex_home: &self.codex_home_raw,
                 user_home: self.user_home_raw.as_deref(),
                 cwd,
+                places,
             },
         );
         if let Some(home) = &self.user_home_raw
@@ -279,7 +398,18 @@ impl Homes {
                 word = format!("{}/{user}{tail}", windows_paths::parent(home));
             }
         }
-        windows_paths::join(cwd, &word)
+        word
+    }
+
+    /// #1261 (D168): [`Self::resolve`], with the Windows rules' variables for
+    /// start-up places (`%ProgramData%`, `$PROFILE`, ...) expanded to their
+    /// usual values: an extra reading, besides the one keeping them unknown.
+    pub(super) fn resolve_places(&self, word: &str, cwd: &str) -> String {
+        if self.windows {
+            self.resolve_windows(word, cwd, /*places*/ true)
+        } else {
+            self.resolve(word, cwd)
+        }
     }
 
     /// Classify a resolved path, also through its canonical form (symlinks,
@@ -327,7 +457,28 @@ impl Homes {
                             .get(at + 1)
                             .is_none_or(|next| !matches!(*next, "objects" | "refs" | "index"))
                     });
+                // #1261 (D168): Windows sign-in and scheduled places.
+                let windows_entry = |rest: &[&str], entries: &[&str]| {
+                    entries.iter().any(|entry| {
+                        let entry: Vec<&str> = entry.split('/').collect();
+                        let shared = rest.len().min(entry.len());
+                        rest[..shared]
+                            .iter()
+                            .zip(&entry)
+                            .all(|(got, want)| glob_any(want, got) || glob_any(got, want))
+                    })
+                };
+                let in_windows_place = self.windows
+                    && (self.user_homes.iter().any(|home| {
+                        below(&segments, home)
+                            .is_some_and(|rest| windows_entry(rest, WINDOWS_USER_PERSISTENCE))
+                    }) || segments.split_first().is_some_and(|(root, rest)| {
+                        root.ends_with(':')
+                            && !rest.is_empty()
+                            && windows_entry(rest, WINDOWS_MACHINE_PERSISTENCE)
+                    }));
                 in_user_home
+                    || in_windows_place
                     || in_git_dir
                     || (0..segments.len()).any(|start| {
                         WORKSPACE_PERSISTENCE.iter().any(|entry| {
@@ -364,7 +515,8 @@ impl Homes {
     /// Whether filesystem lookups may touch `path`.
     pub(super) fn lookups_allowed(&self, path: &str) -> bool {
         // #1240: Windows rules never look up (a lookup can follow a link or
-        // a mapped drive to a network share).
+        // a mapped drive to a network share); #1261: script and sed program
+        // files are opened only through `windows_reads`.
         if self.windows {
             return false;
         }
@@ -403,11 +555,9 @@ impl Homes {
             let found = match cached {
                 Some(found) => found,
                 None => {
-                    if self.lookups.get() >= FS_LOOKUP_BUDGET {
-                        self.exhausted.set(true);
+                    if !self.take_lookup() {
                         return None;
                     }
-                    self.lookups.set(self.lookups.get() + 1);
                     let found = std::fs::canonicalize(&existing)
                         .ok()
                         .map(|canonical| canonical.to_string_lossy().into_owned());
@@ -578,6 +728,10 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     // A leading wildcard never expands to a dot-name in the shell (no
     // `dotglob`), and treating `*` or `*.json` as protected would block
     // ordinary work: only an explicit prefix can name a protected file.
+    // #1261 (D167, Travis 2026-10-22): cmd and PowerShell wildcards do match
+    // dot-names (`type *rc` reads `.netrc`); this assumption is kept for them
+    // too, knowingly, because matching dot-names would make `*.json` and the
+    // like ask everywhere.
     if pattern.starts_with(['*', '?', '[']) {
         return pattern == name;
     }
@@ -587,13 +741,22 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
 /// The glob match itself, leading wildcards included. Iterative with one
 /// backtrack point, so it is linear-times-linear whatever the pattern.
 pub(super) fn glob_any(pattern: &str, name: &str) -> bool {
-    // Without glob characters the match below is equality: skip its two
-    // allocations, which every word's path checks pay many times over.
-    if !pattern
-        .bytes()
-        .any(|byte| matches!(byte, b'*' | b'?' | b'['))
-    {
-        return pattern == name;
+    // The pattern's text before its first glob character must start the
+    // name, and without glob characters the match below is equality. Checked
+    // first, byte by byte, this skips the match's two allocations and stops
+    // at the first difference: every word's path checks compare it with many
+    // short names, and a long word otherwise is read in full for each
+    // (#1275).
+    let (pattern_bytes, name_bytes) = (pattern.as_bytes(), name.as_bytes());
+    let mut at = 0;
+    loop {
+        work::step();
+        match pattern_bytes.get(at) {
+            None => return at == name_bytes.len(),
+            Some(b'*' | b'?' | b'[') => break,
+            Some(byte) if name_bytes.get(at) != Some(byte) => return false,
+            Some(_) => at += 1,
+        }
     }
     let pattern: Vec<char> = pattern.chars().collect();
     let name: Vec<char> = name.chars().collect();

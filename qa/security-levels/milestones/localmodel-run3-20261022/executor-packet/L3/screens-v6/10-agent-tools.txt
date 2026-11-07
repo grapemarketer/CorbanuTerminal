@@ -1,0 +1,45 @@
+• Explored
+  └ Read shakedown.txt
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Done — printf shakedown-ok > shakedown.txt ran cleanly (exit code 0, no output), and the resulting shakedown.txt contains exactly shakedown-ok.
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Without calling any tool, list the names of your child-agent tools and, for the one that starts a child, every parameter it accepts and the allowed
+  values of any role or agent type parameter, word for word from your tool description.
+
+
+• Child-agent tools
+
+  - spawn_agent_v1
+  - send_input_v1
+  - wait_agent_v1
+  - close_agent_v1
+  - resume_agent_v1
+
+  spawn_agent_v1 parameters
+
+  - agent_type — string: "Agent type override for the new agent. Omit to inherit your current model with a full-history fork; otherwise, default is
+    used."
+
+  - fork_context — boolean: "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt."
+  - items — array of structured input items ("Use this to pass explicit mentions (for example app:// connector paths)."), each entry with optional
+    audio_url, image_url, name, path, text, type
+
+  - message — string: "Initial plain-text task for the new agent. Use either message or items."
+  - model — string: "Model override for the new agent. Omit unless an explicit override is needed."
+  - reasoning_effort — string: "Reasoning effort override for the new agent. Omit to inherit the parent effort."
+  - service_tier — string: "Service tier override for the new agent. Omit unless explicitly requested."
+
+  Allowed agent_type values (word for word from the description):
+
+  - default — "Default agent."
+  - explorer — "Use explorer for specific codebase questions."
+
+
+› Run /review on my current changes
+
+  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen default · ~/run/fixture/workspace · Corbanu Terminal · TPS: ~4.3 tok/s

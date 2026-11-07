@@ -1,0 +1,37 @@
+{
+ "enforcement": "os-enforced",
+ "agent": "01a17e80-5fac-75c2-b568-fc527e0c9339",
+ "run_id": "acc-A-R1-agmx1-20261027T175348Z",
+ "case_id": "ACC-06",
+ "group": "A-R1",
+ "design_sha256": "e6ac8f9a58f0bf8044e167834f3e357d77eb7846a9ec77b8c4b0cf83c5b92294",
+ "candidate_sha256": "e942b095de975f95ca3fa1f09b9576f6bb408d91499e05235e35ab37b9d6aa42",
+ "policy": {
+  "path": "rerun-r1-20261022/common/A-R1-20261027T1751Z/policy-root-start.txt",
+  "sha256": "bfe1e9b3afa06d355d242e75cf7a0a45d5b6154070220cf29e36e558e40cfab5"
+ },
+ "tool_inventory": {
+  "path": "rerun-r1-20261022/candidate/stage-package-files.txt",
+  "sha256": "acb5594f91da7c80da5d318d74af59990a75847342eef844390e407ade0606f3"
+ },
+ "probe_evidence": {
+  "path": "rerun-r1-20261022/runs/acc-A-R1-agmx1-20261027T175348Z/evidence/preflight-executor.json",
+  "sha256": "40e9fb7a232c8d5a5f7afa0621e03e624cdbd0562f4bf3c8697fd456383ffa0b"
+ },
+ "gate": {
+  "path": "rerun-r1-20261022/runs/acc-A-R1-agmx1-20261027T175348Z/gate-check.txt",
+  "sha256": "56c97b7d54b1fcc3bc48cdb243ca0c572ae3d394256011b9450316524078a76c"
+ },
+ "packet_readable": true,
+ "candidate_launchable": true,
+ "actual_input_available": true,
+ "note": "Tart clone of corbanu-qa-base (one VM at a time); group run: the cases share one executor session and one preflight; no real key in the guest (host relays)",
+ "source_denied": true,
+ "history_denied": true,
+ "symlink_escape_denied": true,
+ "credentials_denied": true,
+ "cross_run_ipc_denied": true,
+ "network_restricted": true,
+ "package_readonly": true,
+ "children_confined": true
+}

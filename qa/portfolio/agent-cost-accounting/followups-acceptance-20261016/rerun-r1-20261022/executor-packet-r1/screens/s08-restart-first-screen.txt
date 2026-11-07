@@ -1,0 +1,37 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• OpenAI · GPT-6 Luna — Pay per use. 3 requests, 47,219 tokens. Estimated cost: $0.005172 (rounded).
+Reopen warm-up: 1 request, estimated $0.001465. Sent when this conversation was reopened or forked, to prime the model's cache.
+No other conversation recorded requests on this day.
+Costs are estimates from published prices; OpenAI doesn't report its charges — check OpenAI's bill.
+Select a provider below to see its requests.
+—— Details ——
+Estimated token cost for recorded attempts: $0.005172 (rounded)
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T02:35:40.973Z; ledger current to: 2026-10-15T02:35:21.605Z (19368 ms behind)
+Retention: request detail kept since 2026-07-17T02:35:40.973Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: 0.005171775
+Input: 47,214
+Noncached input (derived for inclusive input): 29,299
+Cache read: 0
+Cache write: 17,915
+Output: 5
+Reasoning (subset, not separately billed): 0
+Total (not separately billed): 47,219
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ OpenAI · GPT-6 Luna — estimated $0.005172 (rounded) (3 requests)
+→ Request 1 · OpenAI · GPT-6 Luna · estimated $0.001465 (rounded)
+→ Request 2 · OpenAI · GPT-6 Luna · estimated $0.002242 (rounded)
+→ Request 3 · Reopen warm-up · OpenAI · GPT-6 Luna · estimated $0.001465
+→ Root's own attempts (3 attempts)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

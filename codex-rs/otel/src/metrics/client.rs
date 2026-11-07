@@ -18,6 +18,7 @@ use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
 use opentelemetry_otlp::Protocol;
+use opentelemetry_otlp::RetryPolicy;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
@@ -548,6 +549,7 @@ fn build_otlp_metric_exporter(
 
             opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_temporality(temporality)
                 .with_metadata(MetadataMap::from_headers(header_map))
@@ -568,23 +570,22 @@ fn build_otlp_metric_exporter(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
+            let exporter_builder = opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_temporality(temporality)
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
+            let client =
+                crate::otlp::build_http_client(tls.as_ref(), OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
+                    .map_err(|err| MetricsError::InvalidConfig {
+                        message: err.to_string(),
+                    })?;
 
             exporter_builder
+                .with_http_client(client)
                 .build()
                 .map_err(|source| MetricsError::ExporterBuild { source })
         }

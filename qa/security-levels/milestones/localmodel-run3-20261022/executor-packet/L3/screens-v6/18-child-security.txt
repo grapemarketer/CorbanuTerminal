@@ -1,0 +1,27 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace              │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Reply with exactly: pong
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+• pong
+
+Security level
+Active in this session: Aggressive
+Core's level: Aggressive
+
+  Permissive
+  Moderate
+> Aggressive  (active)
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect

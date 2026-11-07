@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_api::AgentIdentityTelemetry;
@@ -381,9 +382,106 @@ struct ServerConversationState {
 
 type SharedServerConversationState = Arc<StdMutex<Option<ServerConversationState>>>;
 
+/// #1311 (D171): who a websocket connection was opened as (the ChatGPT
+/// account and user, or the API key), as a digest, never the credential. A
+/// session whose sign-in was replaced by another user's or another key never
+/// reuses a connection opened with the old one; a refreshed token of the same
+/// sign-in keeps it. Sign-ins without an account, user or API key (no
+/// `CodexAuth`, or externally supplied auth headers) use a digest of their
+/// configured provider headers and resolved API auth headers instead; the
+/// others also digest the configured provider headers (#1326, #1343). A
+/// brokered credential is invisible to Core, so brokered identities never
+/// match (#1343).
+#[derive(Clone, PartialEq, Eq)]
+struct ConnectionIdentity([u8; 32]);
+
+impl std::fmt::Debug for ConnectionIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ConnectionIdentity(..)")
+    }
+}
+
+impl ConnectionIdentity {
+    fn of(
+        auth: Option<&CodexAuth>,
+        provider_headers: &ApiHeaderMap,
+        api_auth: &dyn AuthProvider,
+    ) -> Self {
+        Self::with_broker_required(
+            codex_model_provider::model_key_broker_required(),
+            auth,
+            provider_headers,
+            api_auth,
+        )
+    }
+
+    /// [`Self::of`] with the process's broker state passed in, so tests can
+    /// cover a brokered process without installing a process-wide broker.
+    fn with_broker_required(
+        broker_required: bool,
+        auth: Option<&CodexAuth>,
+        provider_headers: &ApiHeaderMap,
+        api_auth: &dyn AuthProvider,
+    ) -> Self {
+        use sha2::Digest;
+        let mut digest = sha2::Sha256::new();
+        let mut field = |value: Option<&str>| match value {
+            Some(value) => {
+                digest.update([1]);
+                digest.update((value.len() as u64).to_le_bytes());
+                digest.update(value.as_bytes());
+            }
+            None => digest.update([0]),
+        };
+        let mode = auth.map(|auth| format!("{:?}", auth.auth_mode()));
+        let account_id = auth.and_then(CodexAuth::get_account_id);
+        let user_id = auth.and_then(CodexAuth::get_chatgpt_user_id);
+        let api_key = auth.and_then(CodexAuth::api_key);
+        field(mode.as_deref());
+        field(account_id.as_deref());
+        field(user_id.as_deref());
+        field(api_key);
+        if broker_required || api_key == Some(codex_model_provider::BROKERED_KEY_PLACEHOLDER) {
+            // The broker attaches the credential, so Core cannot tell two
+            // brokered sign-ins apart: never reuse a connection across them.
+            // In a brokered process this holds for every provider, including
+            // unbrokered command/AWS auth, so a socket would reconnect on
+            // every turn. That relies on websockets staying off under the
+            // credential broker (`responses_websocket_enabled`); revisit this
+            // before turning them on there (#1504).
+            static BROKERED: AtomicU64 = AtomicU64::new(0);
+            digest.update(b"brokered");
+            digest.update(BROKERED.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+        }
+        let mut headers = provider_headers.clone();
+        if account_id.is_none() && user_id.is_none() && api_key.is_none() {
+            // No semantic sign-in identity: the resolved auth headers are the
+            // sign-in. Apply them last, matching websocket handshake
+            // precedence. A semantic identity skips them so that a refreshed
+            // bearer token keeps the connection.
+            api_auth.add_auth_headers(&mut headers);
+        }
+        // Configured headers can carry the sign-in too. Hash bytes rather than
+        // an object's address or Debug output. Keep duplicate-value order, but
+        // ignore insertion order between header names.
+        let mut fields = headers.iter().collect::<Vec<_>>();
+        fields.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+        digest.update(b"api-auth-headers");
+        for (name, value) in fields {
+            digest.update((name.as_str().len() as u64).to_le_bytes());
+            digest.update(name.as_str().as_bytes());
+            digest.update((value.as_bytes().len() as u64).to_le_bytes());
+            digest.update(value.as_bytes());
+        }
+        Self(digest.finalize().into())
+    }
+}
+
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
+    /// Who `connection` was opened as.
+    identity: Option<ConnectionIdentity>,
     provenance: Option<crate::accounting::websocket::Provenance>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
@@ -1497,7 +1595,7 @@ impl ModelClient {
                 deferred
                     .resolve_path(
                         self.state.provider.info(),
-                        client_setup.auth.as_ref(),
+                        client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                         &client_setup
                             .api_provider
                             .url_for_path(RESPONSES_COMPACT_ENDPOINT),
@@ -1653,9 +1751,9 @@ impl ModelClient {
         ));
         let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
         // Creating the call is a model request the operator paid for, so it is
-        // recorded. Its response carries no usage - the realtime protocol this
-        // client parses carries none anywhere - so the attempt lands with its
-        // tokens unknown, which is what the provider actually said.
+        // recorded. Its response carries no usage, and the call's sideband
+        // reports are not recorded (#889 D223 covers WebSocket sessions), so
+        // the attempt lands with its tokens unknown.
         //
         // The route is read from the API client rather than restated: call
         // creation picks its path from the session's parser and appends the
@@ -1668,7 +1766,7 @@ impl ModelClient {
                 deferred
                     .resolve_path(
                         self.state.provider.info(),
-                        client_setup.auth.as_ref(),
+                        client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                         &call_url,
                         &call_route,
                     )
@@ -1714,10 +1812,11 @@ impl ModelClient {
     }
 
     /// #824: record a realtime WebSocket session that has just opened under
-    /// `base_url` as one request. A session is billed but this client never
-    /// sees its token usage, so the record states the route, model, provider
-    /// and start time now, the end time when the session closes
-    /// (`RealtimeSessionRecord::end`), and no token counts. `credential` is
+    /// `base_url` as one request. The record states the route, model,
+    /// provider and start time now, the tokens each finished response reports
+    /// (#889 D223, `RealtimeSessionRecord::observe_response`), the end time
+    /// when the session closes (`RealtimeSessionRecord::end`), and no price.
+    /// `credential` is
     /// the API key the session sends. `None` leaves the session unrecorded; it
     /// is never refused.
     pub(crate) async fn begin_realtime_session_record(
@@ -1756,7 +1855,12 @@ impl ModelClient {
         };
         let model = session_config.model.as_deref().unwrap_or_default();
         crate::accounting::realtime::RealtimeSessionRecord::begin(
-            &deferred, provider, credential, &url, &path, model,
+            &deferred,
+            provider,
+            credential.map(CodexAuth::auth_mode),
+            &url,
+            &path,
+            model,
         )
         .await
     }
@@ -1819,7 +1923,7 @@ impl ModelClient {
                 deferred
                     .resolve_path(
                         self.state.provider.info(),
-                        client_setup.auth.as_ref(),
+                        client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                         &client_setup
                             .api_provider
                             .url_for_path(MEMORIES_SUMMARIZE_ENDPOINT),
@@ -2464,7 +2568,13 @@ impl ModelClient {
                 tools.retain(|tool| tool.get("type").and_then(Value::as_str) != Some("web_search"));
             }
         }
-        let ambient_reasoning_effort = uses_zai_reasoning
+        // The Corbanu Plan gateway routes `z-ai/glm-5.2` to Ambient and forwards the request body
+        // unchanged (#1489), so that row needs Ambient's `reasoning` object; other Plan rows keep
+        // the OpenAI-style default.
+        let sends_ambient_reasoning = self.state.provider.info().is_ambient()
+            || (self.state.provider.info().is_pfterminal_plan()
+                && model_info.slug == AMBIENT_DEFAULT_MODEL);
+        let ambient_reasoning_effort = (uses_zai_reasoning || sends_ambient_reasoning)
             .then(|| {
                 Self::ambient_zai_reasoning_effort(
                     effort
@@ -2519,7 +2629,7 @@ impl ModelClient {
             .flatten();
         let provider_reasoning = if self.state.provider.info().is_openrouter() {
             Self::openrouter_reasoning(model_info, effort.as_ref())?
-        } else if self.state.provider.info().is_ambient() {
+        } else if sends_ambient_reasoning {
             Some(Self::ambient_reasoning(
                 selected_reasoning_effort.as_deref(),
             ))
@@ -2528,7 +2638,7 @@ impl ModelClient {
         } else {
             None
         };
-        let reasoning_effort = (!self.state.provider.info().is_ambient())
+        let reasoning_effort = (!sends_ambient_reasoning)
             .then_some(selected_reasoning_effort)
             .flatten();
         Ok(ChatCompletionsRequest {
@@ -2829,6 +2939,9 @@ impl ModelClient {
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
         // PF-27-S05: a websocket handshake cannot carry a signed broker frame.
+        // `ConnectionIdentity` also relies on this: brokered identities never
+        // match, so a socket under the broker would reconnect every turn
+        // (#1504).
         if !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
             || codex_model_provider::model_key_broker_required()
@@ -3124,8 +3237,19 @@ impl ModelClientSession {
         Ok(body.len())
     }
 
+    /// #1311 (D171): drops a connection (and the conversation state on it)
+    /// opened as another sign-in than the one this request uses.
+    fn drop_websocket_of_another_sign_in(&mut self, identity: &ConnectionIdentity) {
+        if self.websocket_session.connection.is_some()
+            && self.websocket_session.identity.as_ref() != Some(identity)
+        {
+            self.reset_websocket_session();
+        }
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
+        self.websocket_session.identity = None;
         self.websocket_session.provenance = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
@@ -3676,6 +3800,8 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
+        // A connection opened as another sign-in is replaced at the turn's
+        // first request (#1311).
         if self.websocket_session.connection.is_some() {
             return Ok(());
         }
@@ -3685,6 +3811,11 @@ impl ModelClientSession {
                 "failed to build websocket prewarm client setup: {err}"
             ))
         })?;
+        let identity = ConnectionIdentity::of(
+            client_setup.auth.as_ref(),
+            &client_setup.api_provider.headers,
+            client_setup.api_auth.as_ref(),
+        );
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
@@ -3708,6 +3839,7 @@ impl ModelClientSession {
             )
             .await?;
         self.websocket_session.connection = Some(connection);
+        self.websocket_session.identity = Some(identity);
         self.websocket_session.provenance = Some(provenance);
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
@@ -3731,6 +3863,7 @@ impl ModelClientSession {
         params: WebsocketConnectParams<'_>,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let WebsocketConnectParams {
+            identity,
             provenance,
             session_telemetry,
             api_provider,
@@ -3740,7 +3873,10 @@ impl ModelClientSession {
             request_route_telemetry,
         } = params;
         let needs_new = match self.websocket_session.connection.as_ref() {
-            Some(conn) => conn.is_closed().await,
+            Some(conn) => {
+                self.websocket_session.identity.as_ref() != Some(&identity)
+                    || conn.is_closed().await
+            }
             None => true,
         };
 
@@ -3769,6 +3905,7 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
+            self.websocket_session.identity = Some(identity);
             self.websocket_session.provenance = Some(provenance);
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
@@ -4412,6 +4549,12 @@ impl ModelClientSession {
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            let identity = ConnectionIdentity::of(
+                client_setup.auth.as_ref(),
+                &client_setup.api_provider.headers,
+                client_setup.api_auth.as_ref(),
+            );
+            self.drop_websocket_of_another_sign_in(&identity);
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -4476,6 +4619,7 @@ impl ModelClientSession {
             }
             match self
                 .websocket_connection(WebsocketConnectParams {
+                    identity,
                     provenance,
                     session_telemetry,
                     api_provider: client_setup.api_provider,
@@ -5012,7 +5156,10 @@ fn chat_replay_function_arguments(arguments: String) -> String {
 /// history) replays under the flat name this request offers for that exact
 /// tool (`flat_tool_names`, the request's own mapping), such as an MCP tool's
 /// `mcp__server__tool`, or the offered `*_v1` alias for a V1 agent tool;
-/// otherwise under its bare name, as before. A tool whose
+/// otherwise under its bare name, as before, except that an `mcp__*` tool
+/// this request does not offer (server removed, tool dropped by the tool
+/// limit) replays under a flat name no offered tool has: MCP tools are never
+/// offered under their bare name here, which a built-in may share. A tool whose
 /// preferred flat name a plain tool already takes is offered under a hashed
 /// name, so its earlier calls never appear as calls of the plain tool (#688).
 fn flatten_namespaced_history(
@@ -5059,9 +5206,21 @@ fn flatten_namespaced_history(
                     _ => return None,
                 };
                 offered.contains(alias).then_some(alias)
+            })
+            .map(str::to_string)
+            .or_else(|| {
+                tool_name
+                    .namespace
+                    .as_deref()
+                    .is_some_and(|namespace| namespace.starts_with("mcp__"))
+                    .then(|| {
+                        crate::tools::flat_tool_names::unoffered_flat_tool_name(
+                            &tool_name, &offered,
+                        )
+                    })
             });
         if let Some(flat) = flat {
-            *name = flat.to_string();
+            *name = flat;
         }
     }
 }
@@ -6779,6 +6938,7 @@ impl AuthRequestTelemetryContext {
 }
 
 struct WebsocketConnectParams<'a> {
+    identity: ConnectionIdentity,
     provenance: crate::accounting::websocket::Provenance,
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
@@ -6789,6 +6949,36 @@ struct WebsocketConnectParams<'a> {
 }
 
 async fn handle_unauthorized(
+    transport: TransportError,
+    auth_recovery: &mut Option<UnauthorizedRecovery>,
+    session_telemetry: &SessionTelemetry,
+    provider: &SharedModelProvider,
+) -> Result<UnauthorizedRecoveryExecution> {
+    match try_unauthorized_recovery(transport, auth_recovery, session_telemetry, provider).await {
+        Err(error) => Err(named_sign_in_revoked(provider).await.unwrap_or(error)),
+        recovered => recovered,
+    }
+}
+
+/// D171 (#1311): a named ChatGPT account removed or signed out while a
+/// request on it was in flight (its tokens were revoked, so the request got a
+/// 401) is reported with the account's recovery, as the next request would
+/// be, instead of a generic unauthorized error. The vault is read off the
+/// async workers.
+async fn named_sign_in_revoked(provider: &SharedModelProvider) -> Option<CodexErr> {
+    codex_model_provider::named_sign_in_account(provider.info())?;
+    let manager = provider.auth_manager()?;
+    let reason = tokio::task::spawn_blocking(move || manager.named_sign_in_unavailable())
+        .await
+        .ok()
+        .flatten()?;
+    Some(CodexErr::Fatal(format!(
+        "{}: {reason}",
+        provider.info().name
+    )))
+}
+
+async fn try_unauthorized_recovery(
     transport: TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
     session_telemetry: &SessionTelemetry,

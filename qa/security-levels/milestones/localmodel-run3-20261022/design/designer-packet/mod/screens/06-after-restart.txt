@@ -1,0 +1,14 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Explain this codebase
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Terminal …

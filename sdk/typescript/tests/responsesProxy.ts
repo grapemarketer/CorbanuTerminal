@@ -195,6 +195,15 @@ export function shell_call(): SseEvent {
   };
 }
 
+export function responseCompletedWithoutUsage(responseId: string = DEFAULT_RESPONSE_ID): SseEvent {
+  return {
+    type: "response.completed",
+    response: {
+      id: responseId,
+    },
+  };
+}
+
 export function responseFailed(errorMessage: string): SseEvent {
   return {
     type: "error",

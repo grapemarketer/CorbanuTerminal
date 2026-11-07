@@ -34,7 +34,10 @@ fn policy(work: &Path) -> FileSystemSandboxPolicy {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             })
@@ -227,6 +230,7 @@ fn own_env_star_glob_still_covers_templates() {
     let work = root(&dir);
     let own = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
         FileSystemPath::GlobPattern {
+            scan: None,
             pattern: format!(
                 "{}{sep}**{sep}.env.*",
                 work.to_string_lossy(),
@@ -261,6 +265,7 @@ fn only_the_denied_patterns_count() {
     std::fs::write(work.join(".envrc"), "").unwrap();
     let own = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
         FileSystemPath::GlobPattern {
+            scan: None,
             pattern: format!(
                 "{}{sep}**{sep}.env.*",
                 work.to_string_lossy(),
@@ -424,6 +429,7 @@ fn nested_folders_keep_their_own_patterns() {
     let sep = std::path::MAIN_SEPARATOR;
     let mut entries = vec![FileSystemSandboxEntry::new(
         FileSystemPath::GlobPattern {
+            scan: None,
             pattern: format!("{}{sep}**{sep}.env.*", work.to_string_lossy()),
         },
         FileSystemAccessMode::Deny,
@@ -433,7 +439,10 @@ fn nested_folders_keep_their_own_patterns() {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             }),
@@ -459,12 +468,14 @@ fn depth_counts_from_each_covered_folder() {
     let mut policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}{sep}**{sep}.env", work.to_string_lossy()),
             },
             FileSystemAccessMode::Deny,
         ),
         FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}{sep}**{sep}.env.*", inner.to_string_lossy()),
             },
             FileSystemAccessMode::Deny,

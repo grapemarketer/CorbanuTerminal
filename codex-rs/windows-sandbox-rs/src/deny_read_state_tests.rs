@@ -374,6 +374,7 @@ fn sec_win_304_s1_a_secret_hidden_from_the_scan_keeps_its_deny() {
     let cwd = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
     let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
+            scan: None,
             pattern: "**/*.env".to_string(),
         },
         access: FileSystemAccessMode::Deny,

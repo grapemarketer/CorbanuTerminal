@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+
+  Select Model and Effort
+  Corbanu Terminal Troll pane - Configured custom providers
+
+  Z.AI  [Other]
+
+› 1. Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen (current)  Configured runtime provider
+
+  Use Left/Right to switch providers. Press Enter to confirm or Esc to go back

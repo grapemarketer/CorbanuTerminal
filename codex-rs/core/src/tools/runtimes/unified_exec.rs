@@ -43,6 +43,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -64,6 +65,38 @@ use tracing::error;
 
 // Allow 5s for Guardian cleanup and 5s for controller processing after review.
 const REMOTE_NETWORK_POLICY_DECISION_MARGIN: Duration = Duration::from_secs(10);
+/// How long a remote network request may wait for the user to answer its
+/// prompt on this machine (#722, D246). Unanswered, the request is refused
+/// and the command ends as failed.
+const REMOTE_NETWORK_USER_DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Budget for this machine to decide one remote network request, or `None`
+/// to leave the decision to the remote proxy (#722, D246).
+///
+/// When the proxy has a policy decider (managed network requirements), a
+/// remote allowlist miss is routed here, so the user gets the same prompt and
+/// failure reporting as locally. Under Guardian that held before. Without a
+/// decider the remote proxy still refuses it silently (fail closed). Remote
+/// "limited" mode is not routed for the user: it keeps failing closed on the
+/// remote side, as before.
+fn remote_network_policy_decision_timeout(
+    routes_to_guardian: bool,
+    mode: NetworkMode,
+    hook_timeout: Duration,
+) -> Option<Duration> {
+    let review_timeout = if routes_to_guardian {
+        GUARDIAN_REVIEW_TIMEOUT
+    } else if mode == NetworkMode::Full {
+        REMOTE_NETWORK_USER_DECISION_TIMEOUT
+    } else {
+        return None;
+    };
+    Some(
+        hook_timeout
+            .saturating_add(review_timeout)
+            .saturating_add(REMOTE_NETWORK_POLICY_DECISION_MARGIN),
+    )
+}
 
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
@@ -458,15 +491,13 @@ impl UnifiedExecRuntime<'_> {
                 let mut launch = network.remote_launch_config().await.map_err(|err| {
                     ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
                 })?;
-                if routes_approval_to_guardian(&ctx.turn)
-                    && network.remote_policy_decider().is_some()
+                if network.remote_policy_decider().is_some()
+                    && let Some(timeout) = remote_network_policy_decision_timeout(
+                        routes_approval_to_guardian(&ctx.turn),
+                        launch.proxy.mode,
+                        ctx.session.hooks().max_permission_request_timeout(),
+                    )
                 {
-                    let timeout = ctx
-                        .session
-                        .hooks()
-                        .max_permission_request_timeout()
-                        .saturating_add(GUARDIAN_REVIEW_TIMEOUT)
-                        .saturating_add(REMOTE_NETWORK_POLICY_DECISION_MARGIN);
                     launch.policy_decision_timeout_ms =
                         Some(u64::try_from(timeout.as_millis()).map_err(|_| {
                             ToolError::Rejected(
@@ -684,6 +715,38 @@ mod tests {
             Vec::new(),
             /*shell*/ None,
         )
+    }
+
+    /// #722 (D246): remote network decisions reach this machine for the
+    /// user too, except in limited mode, which keeps failing closed remotely.
+    #[test]
+    fn remote_network_decisions_route_here_except_user_limited_mode() {
+        let hooks = Duration::from_secs(7);
+        let margin = REMOTE_NETWORK_POLICY_DECISION_MARGIN;
+        assert_eq!(
+            remote_network_policy_decision_timeout(
+                /*routes_to_guardian*/ false,
+                NetworkMode::Full,
+                hooks,
+            ),
+            Some(hooks + REMOTE_NETWORK_USER_DECISION_TIMEOUT + margin)
+        );
+        assert_eq!(
+            remote_network_policy_decision_timeout(
+                /*routes_to_guardian*/ false,
+                NetworkMode::Limited,
+                hooks,
+            ),
+            None
+        );
+        for mode in [NetworkMode::Full, NetworkMode::Limited] {
+            assert_eq!(
+                remote_network_policy_decision_timeout(
+                    /*routes_to_guardian*/ true, mode, hooks
+                ),
+                Some(hooks + GUARDIAN_REVIEW_TIMEOUT + margin)
+            );
+        }
     }
 
     #[test]

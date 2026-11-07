@@ -86,13 +86,22 @@ pub(super) fn other_conversations_lines(
             Err(_) => "Other conversations' cost: unavailable — exact arithmetic overflow.".into(),
         });
     }
+    let warmup_note = super::warmup_resume::note(&quotes);
+    if warmup_note.is_some() {
+        // #1000: name the warm-ups the note below refers to, beside the
+        // requests they are part of.
+        lines.push(match super::reopen_warmups(quotes.iter().copied()).1 {
+            1 => "Of these, 1 request is a reopen warm-up.".into(),
+            n => format!("Of these, {n} requests are reopen warm-ups."),
+        });
+    }
     if others.unavailable > 0 {
         lines.push(format!(
             "{} could not be read in full; their cost is unknown and not included.",
             counted(others.unavailable, "conversation")
         ));
     }
-    if let Some(note) = super::warmup_resume::note(&quotes) {
+    if let Some(note) = warmup_note {
         lines.push(RESUME_STEP_SAVED_TURNS.into());
         lines.push(note);
     } else {

@@ -14,12 +14,29 @@ branch: "qa/pf60-s10-acceptance"
 base_commit: "395ac0adcd96f4970220e569a1608141a3e748f3"
 depends_on: "PF-60-S06, PF-60-S07, PF-60-S08, PF-60-S09"
 created: 2026-10-10
-updated: 2026-10-16
+updated: 2026-10-27
 ---
 
 # PF-60-S10 — Isolated code-blind acceptance of the follow-ups
 
-**Status: completed** (accepted by Travis 2026-10-16 as recorded, 29 passed / 1 failed / 7 blocked; see Closure).
+**Status: completed.** Signed off by Travis on 2026-10-27 (D208): **35 passed / 0 failed / 2 blocked** of 37, after
+re-run R1 and owner decisions D113 and D207 (ACC-04, ACC-11 and ACC-14 passed by owner decision; on the record they stay
+blocked). Named limits: ACC-22 (advisory) and ACC-35 (needs real Moonshot spend, not granted). First run, accepted
+2026-10-16 as recorded: 29 / 1 / 7. See Final disposition and Closure.
+
+## Final disposition — 2026-10-27 (D207–D209)
+
+- **Re-run R1** ([record](../../../../qa/portfolio/agent-cost-accounting/followups-acceptance-20261016/rerun-r1-20261022/README.md),
+  PR #1411): ACC-06, ACC-15 and ACC-18 passed; ACC-11 and ACC-14 stayed blocked, each on one result not captured in the
+  case's own screens (the tester reported both passed). ACC-06's failure (#898) is confirmed fixed.
+- **D207:** ACC-11 and ACC-14 recorded as passed by owner decision, as D113 (2026-10-21) did for ACC-04. Owner acceptance
+  is not a clean pass: the record's dispositions for these three stay **blocked**, and the decisions are listed separately
+  ([dispositions.md](../../../../qa/portfolio/agent-cost-accounting/followups-acceptance-20261016/dispositions.md), last
+  section; `owner_decisions` in [results.json](../../../../qa/portfolio/agent-cost-accounting/followups-acceptance-20261016/results.json)).
+- **D208:** S10 signed off by Travis. Final disposition **35 passed, 0 failed, 2 blocked** of 37 (32 passed on the record,
+  3 by owner decision). Named limits: ACC-22 (advisory; starting condition not met) and ACC-35 (optional; needs real
+  Moonshot spend, D3 not granted).
+- **D209:** this page, the sprint index and the record (README, dispositions.md, results.json) carry these counts.
 
 ## Closure — 2026-10-16
 
@@ -90,6 +107,7 @@ Completed. PF-60-S10's isolated code-blind run ([record](../../../../qa/portfoli
       failed on harness faults; every isolation receipt is true.
 - [x] AC4: real keys (Z.AI, OpenAI, Moonshot) reached the product only through the relay; key scan 0 hits.
 - [x] AC5: every case has passed, failed or blocked; Travis accepted the 29/1/7 dispositions on 2026-10-16 (D24).
+      Final after re-run R1, D113 and D207: 35/0/2, signed off 2026-10-27 (D208).
 - [x] AC6: three independent evidence checks within the budget (the last, r3, failed on wording only; accepted as
       D26). `check.py` stops at the first unresolved case (ACC-04), as expected; accepted as recorded (Closure).
 

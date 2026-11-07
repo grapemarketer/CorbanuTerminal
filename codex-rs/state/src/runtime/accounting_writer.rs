@@ -296,7 +296,7 @@ impl Job {
 struct Spool {
     dir: PathBuf,
     process: String,
-    /// Held for the life of the process; see the module docs.
+    /// Held until the last owner drops; see the module docs.
     _lock: std::fs::File,
 }
 
@@ -1049,6 +1049,17 @@ async fn refuse(
         cause = %cause,
         "developer accounting failed; this record is not in the ledger"
     );
+    // #314 (D228): every refused record passes here, whoever sent it and
+    // whether or not anything still waits for it, so its day is marked here.
+    let dispatched = i64::from(job.attempt.dispatched_at_ms);
+    if let Err(error) = AccountingStore::record_gap(state, job.owner, dispatched, dispatched).await
+    {
+        tracing::warn!(
+            target: LOG_TARGET,
+            cause = %format_args!("{error:#}"),
+            "accounting: could not mark this record's day as incomplete"
+        );
+    }
     for file in &job.files {
         let _ = tokio::fs::remove_file(file).await;
     }

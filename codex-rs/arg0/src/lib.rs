@@ -13,7 +13,14 @@ use private_helper::PrivateHelper;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
+mod lock_file;
 mod private_helper;
+
+use lock_file::Arg0FileLock;
+
+#[cfg(all(test, unix))]
+#[path = "lock_lifetime_tests.rs"]
+mod lock_lifetime_tests;
 
 pub use private_helper::is_private_helper_argv1;
 
@@ -40,12 +47,12 @@ pub struct Arg0DispatchPaths {
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
     _temp_dir: TempDir,
-    _lock_file: File,
+    _lock_file: Arg0FileLock,
     paths: Arg0DispatchPaths,
 }
 
 impl Arg0PathEntryGuard {
-    fn new(temp_dir: TempDir, lock_file: File, paths: Arg0DispatchPaths) -> Self {
+    fn new(temp_dir: TempDir, lock_file: Arg0FileLock, paths: Arg0DispatchPaths) -> Self {
         Self {
             _temp_dir: temp_dir,
             _lock_file: lock_file,
@@ -428,7 +435,7 @@ fn prepare_path_entry_for_codex_aliases(
         .create(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock_file.try_lock()?;
+    let lock_file = Arg0FileLock::try_lock(lock_file)?;
 
     let exe = std::env::current_exe()?;
     for filename in &[
@@ -589,7 +596,7 @@ fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
+fn try_lock_dir(dir: &Path) -> std::io::Result<Option<Arg0FileLock>> {
     let lock_path = dir.join(LOCK_FILENAME);
     let lock_file = match File::options().read(true).write(true).open(&lock_path) {
         Ok(file) => file,
@@ -597,8 +604,8 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
         Err(err) => return Err(err),
     };
 
-    match lock_file.try_lock() {
-        Ok(()) => Ok(Some(lock_file)),
+    match Arg0FileLock::try_lock(lock_file) {
+        Ok(lock_file) => Ok(Some(lock_file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(err) => Err(err.into()),
     }
@@ -803,7 +810,7 @@ mod tests {
         let alias_path = temp_dir.path().join("codex-linux-sandbox");
         let path_entry = Arg0PathEntryGuard::new(
             temp_dir,
-            lock_file,
+            super::Arg0FileLock::try_lock(lock_file)?,
             Arg0DispatchPaths {
                 codex_self_exe: Some(PathBuf::from("/usr/bin/codex")),
                 codex_linux_sandbox_exe: Some(alias_path.clone()),
@@ -884,7 +891,7 @@ mod tests {
         let lock_file = create_lock(temp_dir.path())?;
         let path_entry = Arg0PathEntryGuard::new(
             temp_dir,
-            lock_file,
+            super::Arg0FileLock::try_lock(lock_file)?,
             Arg0DispatchPaths {
                 codex_self_exe: Some(PathBuf::from("/usr/bin/codex")),
                 codex_linux_sandbox_exe: Some(alias_path.clone()),

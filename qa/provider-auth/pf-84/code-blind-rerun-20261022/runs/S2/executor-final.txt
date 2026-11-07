@@ -1,0 +1,8 @@
+Group S2 complete.
+
+- Preflight: passed. Isolation probes `ok: true`; candidate SHA-256 and all packet SHA-256 values matched; `zai3` prepared.
+- PR-01: passed. All visible account/usage checkpoints matched; relay/files for the integrator.
+- GH-02: passed. Visible checks matched. `[advisory]` failed because the refusal did not mention `ghost`; this does not block. Relay/files for the integrator.
+- NA-05: passed. Resume opened on `personal` with the exact expected owner-decision notice, `r2` showed `<gid>` and `personal`, and `• rtwo` appeared. Relay/files for the integrator.
+
+Report: `<RUN>/evidence/result.md`

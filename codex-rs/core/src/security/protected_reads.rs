@@ -70,6 +70,98 @@ const DENIAL_MARKERS: [&str; 3] = [
     "read-only file system",
 ];
 
+/// #1296: whether commands run on Windows, where PowerShell and cmd spell
+/// paths (`C:\Users\me`, `$env:USERPROFILE`, `%USERPROFILE%`) and report
+/// denials (`Access is denied.`) their own way.
+const WINDOWS: bool = cfg!(windows);
+
+/// Whether `line` reports a denial (see [`DENIAL_MARKERS`]); `windows`
+/// (#1296) adds Windows' texts: cmd's (Win32's) `Access is denied.` and
+/// PowerShell's (.NET's) `Access to the path '…' is denied.`.
+fn is_denial_line(line: &str, windows: bool) -> bool {
+    let line = line.to_ascii_lowercase();
+    DENIAL_MARKERS.iter().any(|marker| line.contains(marker))
+        || (windows
+            && (line.contains("access is denied")
+                || (line.contains("access to the path") && line.contains("is denied"))))
+}
+
+/// #1296: cmd's bare `Access is denied.` names no path, so the denial is
+/// attributed to the protected path the command names.
+fn names_no_path(line: &str, windows: bool) -> bool {
+    windows
+        && line
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("access is denied")
+}
+
+/// The words of `command`, shell scripts split into words. #1296: with
+/// `windows`, a command no POSIX shell runs (PowerShell, cmd) is split as
+/// they split it: `\` is a path separator there, not an escape.
+fn command_words(command: &[String], windows: bool) -> Vec<String> {
+    let posix = !windows || command.first().is_some_and(|program| posix_shell(program));
+    command
+        .iter()
+        .flat_map(|argument| argument_words(argument, posix))
+        .collect()
+}
+
+/// The words of one argument of a command (see [`command_words`]).
+fn argument_words(argument: &str, posix: bool) -> Vec<String> {
+    if posix {
+        shlex::split(argument)
+            .unwrap_or_else(|| argument.split_whitespace().map(str::to_string).collect())
+    } else {
+        windows_words(argument)
+    }
+}
+
+/// #1296: whether `program` is a POSIX shell (Git for Windows' `bash.exe`).
+fn posix_shell(program: &str) -> bool {
+    let name = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    matches!(name, "bash" | "sh" | "zsh" | "dash" | "ksh")
+}
+
+/// #1296: `text` split into words as PowerShell and cmd split it, as far as
+/// paths go: at whitespace outside quotes; `'…'` and `"…"` quote (the quotes
+/// are dropped); `\` is kept.
+fn windows_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote = None;
+    for ch in text.chars() {
+        match quote {
+            Some(open) if ch == open => quote = None,
+            Some(_) => word.push(ch),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                started = true;
+            }
+            None if ch.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            None => {
+                word.push(ch);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
 /// How long the path lookups may take before no explanation is given.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -573,11 +665,18 @@ async fn off_thread<T: Send + 'static>(
         .ok()?
 }
 
-/// The explanation for a command that just failed with a known non-zero
-/// exit, when an output line reports a denial of a protected path the
-/// command names (or the command's folder is itself protected), or of a
-/// protected path the line itself reports (#621: a path the command built
-/// at run time, such as an interpreter's `os.listdir(...)`).
+/// The explanation for a command that just finished with a known exit,
+/// when an output line reports a denial of a protected path the command
+/// names (or the command's folder is itself protected), or of a protected
+/// path the line itself reports (#621: a path the command built at run
+/// time, such as an interpreter's `os.listdir(...)`).
+///
+/// #1312: also when the exit is 0: a later command on the same line
+/// (`echo x >> ../notes.txt; echo "exit=$?"`) can hide the denied one's
+/// failure. Then only a path the command itself names, and a denial line
+/// names too, is explained: output alone (a search printing old denial
+/// lines) proves nothing was denied. The keychain note, which has no denial
+/// line, needs a failed exit.
 ///
 /// #622: a denial explained here is also listed under the inspector's
 /// recent denials.
@@ -589,12 +688,11 @@ pub(crate) async fn denial_explanation(
     exit_code: Option<i32>,
     output: &str,
 ) -> Option<String> {
-    if !matches!(exit_code, Some(code) if code != 0) {
-        return None;
-    }
+    let failed = exit_code? != 0;
     // #736: a keychain command fails without a file denial: the keychain
     // service is out of reach of the sandbox.
-    if keychain_command(command)
+    if failed
+        && keychain_command(command)
         && ReadPolicyInputs::capture(session, turn).is_some_and(|inputs| inputs.keychain_closed)
     {
         super::inspection::record_sandbox_denial(
@@ -605,10 +703,7 @@ pub(crate) async fn denial_explanation(
     }
     let denial_lines: Vec<String> = output
         .lines()
-        .filter(|line| {
-            let line = line.to_ascii_lowercase();
-            DENIAL_MARKERS.iter().any(|marker| line.contains(marker))
-        })
+        .filter(|line| is_denial_line(line, WINDOWS))
         .map(str::to_string)
         .collect();
     if denial_lines.is_empty() {
@@ -619,7 +714,7 @@ pub(crate) async fn denial_explanation(
         // #839: listed under the inspector's recent denials, as under
         // Aggressive (#622).
         let (denied, explanation) =
-            moderate::denial_explanation(inputs, command, cwd, denial_lines).await?;
+            moderate::denial_explanation(inputs, command, cwd, denial_lines, failed).await?;
         let (what, outcome) = denied.inspected();
         super::inspection::record_refusal(session.thread_id(), what, outcome);
         return Some(explanation);
@@ -628,7 +723,9 @@ pub(crate) async fn denial_explanation(
     let (command, cwd) = (command.to_vec(), cwd.to_path_buf());
     let found = off_thread(move || {
         let matcher = inputs.matcher(&cwd)?;
-        if matcher.is_read_denied(&cwd) {
+        // #1312: the steps that go by the output or the folder alone, not
+        // by a path the command names, need a failed command.
+        if failed && matcher.is_read_denied(&cwd) {
             return Some(ProtectedNote::Read(cwd.display().to_string()));
         }
         let word = |denied: &dyn Fn(&Path) -> bool| {
@@ -639,6 +736,7 @@ pub(crate) async fn denial_explanation(
                 &inputs.codex_home,
                 denied,
                 Some(&denial_lines),
+                /*skip_patterns*/ !failed,
             )
         };
         let in_lines = |lines: &[String], accept: &dyn Fn(&Path) -> bool| {
@@ -658,7 +756,8 @@ pub(crate) async fn denial_explanation(
             // folder as `.` or by its name).
             .or_else(|| {
                 let name = cwd.file_name()?.to_str()?.to_string();
-                (matcher.is_listing_denied(&cwd)
+                (failed
+                    && matcher.is_listing_denied(&cwd)
                     && denial_lines.iter().any(|line| {
                         line.contains(&name) || line.contains(" .:") || line.contains("'.'")
                     }))
@@ -667,6 +766,9 @@ pub(crate) async fn denial_explanation(
             // #554: a folder above the home listed recursively (`find ~`,
             // `ls -aR ~`): the denial line names the home below it.
             .or_else(|| {
+                if !failed {
+                    return None;
+                }
                 unlistable_path_in_lines(
                     &command,
                     &cwd,
@@ -740,6 +842,9 @@ pub(crate) async fn denial_explanation(
             // of the command names (built at run time). Bounded: only the
             // first lines are looked at.
             .or_else(|| {
+                if !failed {
+                    return None;
+                }
                 let lines = &denial_lines[..denial_lines.len().min(MAX_REPORTED_LINES)];
                 in_lines(lines, &|path| matcher.is_read_denied(path)).map(ProtectedNote::Read)
             })
@@ -793,12 +898,8 @@ fn path_in_lines(
     }
     let mut bases = vec![cwd.to_path_buf()];
     bases.extend(
-        command
-            .iter()
-            .flat_map(|argument| {
-                shlex::split(argument)
-                    .unwrap_or_else(|| argument.split_whitespace().map(str::to_string).collect())
-            })
+        command_words(command, WINDOWS)
+            .into_iter()
             .map(|word| {
                 word.trim_matches(|c: char| matches!(c, ';' | '|' | '&' | '(' | ')'))
                     .to_string()
@@ -954,6 +1055,7 @@ pub(crate) async fn protected_note_in_command(
                 &inputs.codex_home,
                 denied,
                 /*denial_lines*/ None,
+                /*skip_patterns*/ false,
             )
         };
         word(&|path| matcher.is_read_denied(path))
@@ -1068,6 +1170,7 @@ fn kept_read_note(
             kept.is_some()
         },
         /*denial_lines*/ None,
+        /*skip_patterns*/ false,
     )?;
     Some(moderate_kept_read_note(&word, found.get()?))
 }
@@ -1250,6 +1353,8 @@ pub(crate) async fn notify(session: &Session, turn: &TurnContext, explanation: S
 /// The first word of `command` (shell scripts split into words) that names a
 /// path `denied` reports as unreadable, as the command spelled it. With
 /// `denial_lines`, only a word whose file name one of those lines mentions.
+/// #1323: with `skip_patterns` (the command exited 0), not a search pattern
+/// (`rg ".env" logs/` can print an old denial line naming `.env`).
 pub(super) fn denied_word(
     command: &[String],
     cwd: &Path,
@@ -1257,14 +1362,19 @@ pub(super) fn denied_word(
     codex_home: &Path,
     denied: impl Fn(&Path) -> bool,
     denial_lines: Option<&[String]>,
+    skip_patterns: bool,
 ) -> Option<String> {
-    command
-        .iter()
-        .flat_map(|argument| {
-            shlex::split(argument)
-                .unwrap_or_else(|| argument.split_whitespace().map(str::to_string).collect())
-        })
-        .flat_map(|whole| {
+    let words = command_words(command, WINDOWS);
+    let patterns = if skip_patterns {
+        search_patterns::search_pattern_indices(command, &words, WINDOWS)
+    } else {
+        Default::default()
+    };
+    words
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !patterns.contains(index))
+        .flat_map(|(_, whole)| {
             // `--file=.env`, `<.env`, `.env;`: the path part of the word.
             let word = whole.trim_matches(|c: char| matches!(c, ';' | '|' | '&' | '(' | ')'));
             let word = word.trim_start_matches(['<', '>']);
@@ -1301,7 +1411,11 @@ pub(super) fn denied_word(
                     .iter()
                     .flatten()
                     .filter_map(|name| name.to_str())
-                    .any(|name| lines.iter().any(|line| line.contains(name)))
+                    .any(|name| {
+                        lines
+                            .iter()
+                            .any(|line| line.contains(name) || names_no_path(line, WINDOWS))
+                    })
             }) && denied(path.as_path())
         })
 }
@@ -1374,8 +1488,34 @@ fn embedded_paths(word: &str) -> Vec<String> {
 }
 
 fn resolve(word: &str, cwd: &Path, user_home: Option<&Path>, codex_home: &Path) -> Option<PathBuf> {
+    expand(word, cwd, user_home, codex_home, WINDOWS).map(|expanded| cwd.join(expanded))
+}
+
+/// `word` with the home variables and `~` expanded; `None` when another
+/// variable is left. #1296: `windows` adds PowerShell's and cmd's spellings
+/// (`$env:USERPROFILE`, `${env:CODEX_HOME}`, `%USERPROFILE%`, in any letter
+/// case) and `~\`.
+fn expand(
+    word: &str,
+    cwd: &Path,
+    user_home: Option<&Path>,
+    codex_home: &Path,
+    windows: bool,
+) -> Option<String> {
     let codex_home = codex_home.to_string_lossy();
     let mut expanded = word.to_string();
+    if windows {
+        let user_home = user_home.map(Path::to_string_lossy);
+        expanded = super::tainted_action::windows_paths::expand(
+            &expanded,
+            &super::tainted_action::windows_paths::Values {
+                codex_home: &codex_home,
+                user_home: user_home.as_deref(),
+                cwd: &cwd.to_string_lossy(),
+                places: false,
+            },
+        );
+    }
     for name in ["CODEX_HOME", "CORBANU_HOME", "PFTERMINAL_HOME"] {
         for spelling in [format!("${{{name}}}"), format!("${name}")] {
             expanded = expanded.replace(&spelling, &codex_home);
@@ -1389,15 +1529,19 @@ fn resolve(word: &str, cwd: &Path, user_home: Option<&Path>, codex_home: &Path) 
             expanded = home.into_owned();
         } else if let Some(rest) = expanded.strip_prefix("~/") {
             expanded = format!("{home}/{rest}");
+        } else if let Some(rest) = expanded.strip_prefix("~\\").filter(|_| windows) {
+            expanded = format!("{home}\\{rest}");
         }
     }
     if expanded.contains('$') || expanded.starts_with('~') {
         return None;
     }
-    Some(cwd.join(expanded))
+    Some(expanded)
 }
 
 mod moderate;
+
+mod search_patterns;
 
 #[cfg(test)]
 #[path = "protected_reads_tests.rs"]

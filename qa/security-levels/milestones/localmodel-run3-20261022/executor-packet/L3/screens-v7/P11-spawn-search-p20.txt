@@ -1,0 +1,34 @@
+  - spawn_agent_v1 — starts a child
+  - send_input_v1
+  - wait_agent_v1
+  - close_agent_v1
+  - resume_agent_v1
+
+  spawn_agent_v1 parameters
+
+  - agent_type — string
+  - fork_context — boolean
+  - items — array of objects with audio_url, image_url, name, path, text, type
+  - message — string
+  - model — string
+  - reasoning_effort — string
+  - service_tier — string
+
+  agent_type values
+
+  - p20plain
+  - default
+  - explorer
+  - nazgul
+  - orc
+  - troll
+  - worker
+
+
+  Spawn
+  Create supervised native agents or bind a root pane.
+
+  p20
+  no matches
+
+  Press enter to confirm or esc to go back

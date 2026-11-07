@@ -1,0 +1,8 @@
+Verification complete.
+
+- Preflight and identity: passed. Coordinator and executor isolation probes reported `"ok": true`; candidate and frozen case hashes matched. Amendment v2 hash also matched. Home `zai3` was prepared.
+- NA-01: passed. All requested actions completed; no judgeable expected result failed.
+- NA-04: passed. All requested actions completed; rejected key errors named `badone` and no fallback reply appeared.
+- NA-10: failed. `s0-2` and `s1` behaved as expected, but `s2` showed only a single `work` usage row—no `(active)` marker and no `personal` row. The advisory exact `s1` format also omitted the cached-input component.
+
+Full evidence and timestamped report: `$AGMS_RUN/evidence/result.md`.

@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/security_level_picker_issue_594_tests.rs
+expression: "render(&picker, 80)"
+---
+Security level
+Active in this session: Permissive
+
+  Permissive  (active)
+  Moderate
+> Aggressive  needs CORBANU_HOME set to the real folder
+
+Sensitive access denied by default, built from existing sandbox, approval,
+network and exec-policy controls.
+Aggressive cannot be chosen here. Corbanu home: it is reached through a link (/
+home/user/.corbanu) in a folder agent commands can write, so a command could
+replace it and the next start would lose Aggressive. Start Corbanu Terminal with
+CORBANU_HOME=/home/user/dotfiles/corbanu (the real folder), or start it from a
+folder that does not contain the link. Nothing changed.
+↑/↓ move · enter choose · esc close

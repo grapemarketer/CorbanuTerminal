@@ -1,0 +1,11 @@
+D136 is complete and reported.
+
+- Preflight: `ok=true`; candidate and packet hashes matched.
+- Sign-in marker absent; precondition passed (`• beforeone`, `x0` showed `account t1`).
+- `account remove openai t1` exited 0; later lists had no `t1`.
+- After removal, `x1-2` and `x3` showed `account unavailable`; both `afterone` and `aftertwo` were refused with the expected recovery text and no model replies.
+- No onboarding/sign-in screen appeared; no secrets were exposed.
+- Relay and home-file checks remain **for the integrator**.
+
+Report: `$AGMS_RUN/evidence/result.md`  
+Final verdict: `VERDICT D136: passed`

@@ -1,0 +1,38 @@
+
+
+› Run exactly this command and show its output: curl -sS -m 10 -I https://example.com
+
+
+✔ You approved Corbanu to run curl -sS -m 10 -I https://example.com this time
+
+• Ran curl -sS -m 10 -I https://example.com
+  └ curl: (7) Failed to connect to 127.0.0.1 port 18443 after 0 ms: Couldn't connect to server
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• curl: (7) Failed to connect to 127.0.0.1 port 18443 after 0 ms: Couldn't connect to server
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command and show its output: corbanu vault list
+
+
+• The command was rejected before execution:
+
+  Rejected("`/bin/bash -c 'corbanu vault list'` rejected: Security level Aggressive: agents cannot use the Corbanu vault.")
+
+
+› Run exactly this command and show its output: head -3 ../../product-home/config.toml
+
+
+✔ You approved Corbanu to run head -3 ../../product-home/config.toml this time
+
+◦ Running head -3 ../../product-home/config.toml
+
+• head: ../../product-home/config.toml: Operation not permitted
+
+
+› Summarize recent commits
+
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/cap-20261010T224124Z/fixture/workspace · Corbanu Terminal · TPS: 3.1 tok/s

@@ -29,6 +29,9 @@ pub(crate) struct CommandRunResult {
     pub stdout: String,
     pub stderr: String,
     pub error: Option<String>,
+    /// The hook command never received its input: the process could not be
+    /// spawned or its stdin could not be written.
+    pub start_failed: bool,
 }
 
 #[tracing::instrument(
@@ -146,12 +149,19 @@ struct CommandRunCompletion {
     outcome: &'static str,
 }
 
+impl CommandRunCompletion {
+    fn start_failed(&self) -> bool {
+        matches!(self.outcome, "spawn_error" | "stdin_error")
+    }
+}
+
 fn finish_command_run(
     started_at: i64,
     started: Instant,
     completion: CommandRunCompletion,
 ) -> CommandRunResult {
     Span::current().record("hook.command_outcome", completion.outcome);
+    let start_failed = completion.start_failed();
     CommandRunResult {
         started_at,
         completed_at: chrono::Utc::now().timestamp(),
@@ -160,6 +170,7 @@ fn finish_command_run(
         stdout: completion.stdout,
         stderr: completion.stderr,
         error: completion.error,
+        start_failed,
     }
 }
 

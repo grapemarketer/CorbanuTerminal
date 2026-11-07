@@ -1,0 +1,40 @@
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #2.
+
+╭──────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                        │
+│                                                      │
+│ model:     mock-ws-1   /model to change              │
+│ directory: /Volumes/CorbanuDrive/…/i2-after-skipb/ws │
+╰──────────────────────────────────────────────────────╯
+
+• You’re continuing from this point in a new conversation
+
+
+› first message alpha edited
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #3.
+
+
+  Cost — this conversation
+  Requested UTC day: 2026-10-22
+
+› Today (UTC) in this conversation:
+  • mockws · mock-ws-1 — Billing basis not declared. 1 request, 1,208 tokens. Counted neither as money spent nor as
+  subscription work.
+  Other conversations on this day, not included above: 2 requests in 1 conversation.
+  • mockws · mock-ws-1 — Billing basis not declared. 2 requests, 2,408 tokens. Counted neither as money spent nor as
+  subscription work.
+  Other conversations' counted neither as money spent nor as subscription work.
+  To see those requests, open that conversation with /resume and run /cost there.
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

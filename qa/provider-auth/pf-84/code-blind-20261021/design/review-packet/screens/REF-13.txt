@@ -1,0 +1,3 @@
+account `ghost` of provider `zai` is not configured; add it with `corbanu account add zai ghost` or pick another with `--account` (see `corbanu account list`)
+EXITED 1
+

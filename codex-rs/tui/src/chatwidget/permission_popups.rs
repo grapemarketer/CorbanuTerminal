@@ -142,7 +142,7 @@ impl ChatWidget {
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
             vec![
-                "The non-admin sandbox protects your files and prevents network access under most circumstances, but sandboxed commands can delete or move files you own outside your workspace, and it carries greater risk if prompt injected. To upgrade to the default sandbox, run ".dim(),
+                "The non-admin sandbox blocks writes and deletes outside your workspace except in low-integrity folders. It can't stop commands from reading your files, its network block can be bypassed, and it carries greater risk if prompt injected. To upgrade to the default sandbox, run ".dim(),
                 "/setup-default-sandbox".cyan(),
                 ".".dim(),
             ]

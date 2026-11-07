@@ -1,0 +1,9 @@
+=== home zai3 2026-10-21T22:49:16Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+$ corbanu account add zai personal   (key agms-fake-zpersonal-NNNN on stdin)
+Saved zai account `personal` (api_key).
+--- account list (zai3)
+zai	personal	api_key
+zai	work	api_key
+prep done 2026-10-21T22:49:17Z

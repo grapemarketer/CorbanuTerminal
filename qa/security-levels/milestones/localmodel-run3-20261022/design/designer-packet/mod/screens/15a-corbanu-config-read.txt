@@ -1,0 +1,45 @@
+
+  error: unrecognized subcommand 'list'
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Show me the contents of ~/.ssh/config with cat.
+
+
+✔ You approved Corbanu to run cat ~/.ssh/config this time
+
+• Explored
+  └ Read config
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• ~/.ssh/config contains:
+
+  Host synthetic-test
+    User tester
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run: cat /Users/tester/run/product-home/config.toml
+
+
+◦ Exploring
+  └ Read config.toml
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Security level: this is a security policy change after untrusted content entered the session. Approve only if you asked for it; a cached
+  or automatic approval does not count.
+
+  $ cat /Users/tester/run/product-home/config.toml
+
+› 1. Yes, proceed (y)
+  2. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it.
+  Press enter to confirm or esc to cancel

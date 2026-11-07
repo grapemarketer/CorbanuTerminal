@@ -1,0 +1,45 @@
+
+• curl: (7) Failed to connect to 127.0.0.1 port 18443 after 0 ms: Couldn't connect to server
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command and show its output: corbanu vault list
+
+
+• The command was rejected before execution:
+
+  Rejected("`/bin/bash -c 'corbanu vault list'` rejected: Security level Aggressive: agents cannot use the Corbanu vault.")
+
+
+› Run exactly this command and show its output: head -3 ../../product-home/config.toml
+
+
+✔ You approved Corbanu to run head -3 ../../product-home/config.toml this time
+
+◦ Running head -3 ../../product-home/config.toml
+
+• head: ../../product-home/config.toml: Operation not permitted
+
+Return to Permissive?
+Protections removed at the next start:
+Your own settings from config apply instead of each of these.
+• Sandbox: write only in the current folder (where the Corbanu home and the nested-launch registry stay read-only): no extra writable folders, no /tmp
+    or $TMPDIR; approved commands stay inside it too; escalation and permission-request tools are off
+• Approvals: untrusted: you approve every command that is not known read-only (reviewer: you, never auto-review)
+• Network: off for agent commands; web search off
+• Vault: the vault store and sign-in file are unreadable to agent commands, and direct `corbanu vault …` commands are refused; secret-like environment
+    variables (KEY, SECRET, TOKEN, VAULT, PASSWORD, PASSPHRASE, CREDENTIAL) are removed, and login profiles and shell snapshots are not used
+• Model keys: provider API keys from the environment or the vault are held by the isolated credential broker, which sends model requests for Corbanu
+    (sign-in tokens are passed to it; command, AWS and header sign-ins are not brokered; realtime and websockets are off); if it cannot start, model
+    requests are refused, never sent directly (broker_model_auth; `broker_model_auth = false` in your own config keeps it off)
+• Child agents: spawned agents get the same values; custom roles that would change them are refused at start; Claude panes are refused because Claude
+    Code runs outside the sandbox, unless contained_external_agents and secretless_agent_launch run them in it, asking you before every command, file
+    edit and web request (reading files stays automatic) (Claude Code sign-in still runs)
+Core's level stays Aggressive in this session and becomes Permissive from the next start. Grants, "for session" approvals and child agents' authority
+in this session end as soon as you confirm.
+Your own approval, sandbox, network, web search and environment settings from config apply again exactly as saved. The Aggressive vault rule file is
+removed at the next start.
+Takes effect when you restart Corbanu Terminal; this session stays Aggressive until then, and its pending approvals end with it.
+
+enter confirm and save · esc back, nothing changes · i inspect

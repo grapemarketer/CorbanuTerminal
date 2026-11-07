@@ -280,6 +280,9 @@ mod tests {
     use std::io;
     use std::path::PathBuf;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose;
+
     use super::image_protocol::ImageProtocol;
     use super::*;
 
@@ -349,6 +352,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let frame = dir.path().join("frame.png");
         std::fs::write(&frame, b"png").unwrap();
+        let expected_path = frame.canonicalize().unwrap();
         let request = AmbientPetDraw {
             frame,
             protocol: ImageProtocol::KittyLocalFile,
@@ -368,8 +372,22 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("a=d,d=I,i=49374,q=2;"));
         assert!(output.contains("\x1b[4;3H"));
-        assert!(output.contains("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;"));
-        assert!(!output.contains("cG5n"));
+        let (_, transmission) = output
+            .split_once("a=T,t=f,f=100,c=4,r=2,q=2,i=49374;")
+            .expect("writes local-file transmission");
+        // Base64 never contains ESC, so the payload ends at the first one (the
+        // string terminator, or its doubled form when wrapped for tmux).
+        let (payload, _) = transmission
+            .split_once('\x1b')
+            .expect("terminates local-file transmission");
+        let decoded = general_purpose::STANDARD
+            .decode(payload)
+            .expect("payload is base64");
+        // The payload must be the file path, not the PNG bytes themselves.
+        assert_eq!(decoded, expected_path.to_string_lossy().as_bytes());
+        // No direct (inline) transmission anywhere in the output either. Base64
+        // only uses `=` as trailing padding, so the path payload cannot match.
+        assert!(!output.contains("t=d"));
         assert!(output.contains("\x1b8"));
     }
 

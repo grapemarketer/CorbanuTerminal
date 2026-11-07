@@ -1,0 +1,3 @@
+UUID                                 Status   Name
+7EB8B75C-21B4-4DB3-9B9F-497C621BEA47 stopped  macOS 2
+4B1BAF7F-F655-4BF9-81DC-7DEFABA23BA6 started  macOS 3

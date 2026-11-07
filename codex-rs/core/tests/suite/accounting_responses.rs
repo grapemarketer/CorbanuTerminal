@@ -941,6 +941,70 @@ async fn accounting_store_failure_never_fails_compaction() -> anyhow::Result<()>
     Ok(())
 }
 
+/// #314 (D228, Travis 2026-10-28): a turn whose request the ledger refuses
+/// still runs and warns, and leaves a durable marker for its conversation's
+/// UTC day, so `/cost` says that day's totals may be incomplete rather than
+/// showing the turns it did record as the whole day.
+#[tokio::test]
+async fn accounting_unrecorded_turn_marks_its_day_incomplete() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let endpoint = format!("{}/v1", server.uri());
+    let mock = responses::mount_sse_repeating(&server, success(usage(Some(0)))).await;
+    let test = builder(endpoint.clone(), enabled(&endpoint))
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("recorded").await?;
+    let db = test.codex.state_db().unwrap();
+    wait_attempts(&db, /*count*/ 1).await?;
+    let owner = test.session_configured.thread_id;
+    let day = |db: std::sync::Arc<codex_state::StateRuntime>| async move {
+        let now = chrono::Utc::now().timestamp_millis();
+        match AccountingStore::inspect_day(&db, owner, now / 86_400_000, now).await? {
+            InspectionDay::Ready(view) => anyhow::Ok(view),
+            other => anyhow::bail!("{other:?}"),
+        }
+    };
+    let view = day(db.clone()).await?;
+    assert!(!view.recording_gap, "every request so far was recorded");
+
+    let mut conn = connection(&db).await?;
+    sqlx::raw_sql(
+        "CREATE TRIGGER refuse_attempts BEFORE INSERT ON draft_accounting_attempts
+            BEGIN SELECT RAISE(ABORT, 'fixture-store-refusal'); END",
+    )
+    .execute(&mut conn)
+    .await?;
+    submit(&test).await?;
+    let events = terminal(&test).await?;
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, EventMsg::Warning(warning)
+            if warning.message.starts_with("Developer accounting could not record"))),
+        "{events:?}"
+    );
+    assert_eq!(mock.requests().len(), 2, "the unrecorded turn still ran");
+    let marked: Vec<(String, i64)> =
+        sqlx::query_as("SELECT thread_id, utc_day FROM draft_accounting_gap_days")
+            .fetch_all(&mut conn)
+            .await?;
+    // The days the turn ran on (one, unless it crossed midnight UTC).
+    let today = chrono::Utc::now().timestamp_millis() / 86_400_000;
+    assert!(
+        marked
+            .iter()
+            .all(|(thread, _)| *thread == owner.to_string())
+            && marked.iter().any(|(_, day)| *day == today),
+        "{marked:?}"
+    );
+    sqlx::Connection::close(conn).await?;
+    let view = day(db.clone()).await?;
+    assert_eq!(view.totals.attempts, 1);
+    assert!(view.recording_gap, "the day's totals may be incomplete");
+    stop(&test).await;
+    Ok(())
+}
+
 /// PF-60-S05 AC6: a ledger in a newer format turns collection off for the
 /// session with one warning, and every turn still runs.
 #[tokio::test]

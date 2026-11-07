@@ -16,13 +16,18 @@ use super::CREDENTIAL_COMMANDS;
 use super::Classifier;
 use super::FOLDER_FLAGS;
 use super::GitConfigWrites;
+use super::LaterWords;
 use super::MAX_FOLDER_BYTES;
 use super::ProtectedActionKind;
 use super::RECURSIVE_READERS;
 use super::WRITERS;
 use super::code_variables;
+use super::git_helpers;
 use super::has_flag;
+use super::indirect;
+use super::paths::glob_any;
 use super::persistence_command;
+use super::rerun;
 use super::windows_paths;
 use super::work;
 use base64::Engine;
@@ -100,6 +105,72 @@ const WRITING_PARAMETERS: &[&str] = &[
 ];
 /// Commands that copy or archive a whole folder tree.
 const WINDOWS_TREE_COPIERS: &[&str] = &["xcopy", "robocopy", "compress-archive"];
+/// #1261 (D168): the names after `CurrentVersion` of the registry keys whose
+/// values Windows runs at sign-in (the policy key is `Policies\Explorer\Run`).
+const RUN_KEYS: &[&str] = &[
+    "run",
+    "runonce",
+    "runonceex",
+    "runservices",
+    "runservicesonce",
+];
+/// Commands that only read a Run key they name.
+const RUN_KEY_READERS: &[&str] = &[
+    "get-itemproperty",
+    "gp",
+    "get-itempropertyvalue",
+    "gpv",
+    "get-item",
+    "gi",
+    "get-childitem",
+    "gci",
+    "dir",
+    "ls",
+    "test-path",
+    "echo",
+    "write-output",
+    "write-host",
+    "findstr",
+    "select-string",
+    "rg",
+    "grep",
+    "git",
+];
+/// Words that run the command after them, skipped (with their options) to
+/// find the command itself (`cmd /c reg add ...`).
+const LAUNCHERS: &[&str] = &["cmd", "powershell", "pwsh", "start", "call", "&"];
+/// .NET registry methods that write (`[Microsoft.Win32.Registry]::SetValue`,
+/// `.CreateSubKey(...)`).
+const REGISTRY_METHODS: &[&str] = &["setvalue", "createsubkey", "deletevalue", "deletesubkey"];
+/// `reg` operations that only read.
+const REG_READS: &[&str] = &["query", "export", "compare", "/?", "-?"];
+/// PowerShell commands (and aliases) that write registry values or keys,
+/// besides [`WINDOWS_WRITERS`] and the POSIX [`WRITERS`].
+const REGISTRY_WRITERS: &[&str] = &[
+    "new-itemproperty",
+    "set-itemproperty",
+    "sp",
+    "remove-itemproperty",
+    "rp",
+    "rename-itemproperty",
+    "rnp",
+    "copy-itemproperty",
+    "cpp",
+    "move-itemproperty",
+    "mp",
+    "clear-itemproperty",
+    "clp",
+    "clear-item",
+    "cli",
+];
+/// PowerShell commands that register or change a scheduled task or job.
+const TASK_SCHEDULERS: &[&str] = &[
+    "register-scheduledtask",
+    "set-scheduledtask",
+    "enable-scheduledtask",
+    "register-scheduledjob",
+    "set-scheduledjob",
+];
 /// Commands that do so with a recursive flag.
 const WINDOWS_RECURSIVE: &[&str] = &[
     "copy-item",
@@ -241,6 +312,139 @@ pub(super) fn commands(text: &str, quotes: Quotes) -> Vec<Command> {
         /*separated*/ true,
     );
     done
+}
+
+/// #1261 (D168): whether a cmd or PowerShell command installs something
+/// Windows runs later: a scheduled task (`schtasks /create`,
+/// `Register-ScheduledTask`, the task scheduler's COM object), a value of a
+/// registry Run key (any command naming one, unless it is a reader with no
+/// writer among its words), or a registry import the classifier cannot read
+/// (`reg import`, `regedit`, `regini`), anywhere in the command. Words are
+/// read by their blank-separated parts too (`cmd /c "reg add ..."`).
+/// `lower` is the command's words, lowercase; `piped`: the text holds a
+/// `|`, so a reader of a key may feed a writer.
+fn windows_persistence(lower: &[String], piped: bool) -> bool {
+    let tokens: Vec<&str> = lower
+        .iter()
+        .flat_map(|word| {
+            work::step();
+            word.split_whitespace()
+        })
+        .collect();
+    // The command run: the first part past launchers, their options (and
+    // option values) and a variable assignment (`$r = ...`).
+    let mut command: Option<usize> = None;
+    let mut skip_value = false;
+    for (index, token) in tokens.iter().enumerate() {
+        work::step();
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if token.starts_with(['/', '-']) {
+            skip_value = takes_a_value(token);
+            continue;
+        }
+        if LAUNCHERS.contains(&command_name(token)) || token.starts_with('$') || *token == "=" {
+            continue;
+        }
+        command = Some(index);
+        break;
+    }
+    let name_at = |index: usize| {
+        tokens.get(index).map_or("", |token| {
+            command_name(token.trim_start_matches(['(', '$', '@', '{']))
+        })
+    };
+    let command_name_run = command.map_or("", name_at);
+    let mut schtasks = false;
+    let mut changes_a_task = false;
+    let mut writes = false;
+    let mut names_a_run_key = false;
+    for (index, token) in tokens.iter().enumerate() {
+        work::step();
+        let name = name_at(index);
+        let previous = index.checked_sub(1).map_or("", name_at);
+        let following = tokens.get(index + 1).copied().unwrap_or_default();
+        changes_a_task |=
+            schtasks && matches!(*token, "/create" | "-create" | "/change" | "-change");
+        schtasks |= name == "schtasks";
+        let scheduler = TASK_SCHEDULERS.contains(&name);
+        // `Schedule.Service` or `Schedule.Service.1`, also attached
+        // (`-ComObject:Schedule.Service`); not a file of that name.
+        let progid = token
+            .trim_matches(['\'', '"'])
+            .rsplit(':')
+            .next()
+            .unwrap_or_default();
+        let com_scheduler = matches!(progid, "schedule.service" | "schedule.service.1");
+        let import = previous == "reg" && matches!(*token, "import" | "restore" | "load");
+        let editor = matches!(name, "regedit" | "regini")
+            && !following.is_empty()
+            && !matches!(
+                tokens.get(index.wrapping_sub(1)).copied(),
+                Some("/im" | "-im" | "-name" | "-processname")
+            );
+        if scheduler || com_scheduler || import || editor {
+            return true;
+        }
+        writes |= REGISTRY_WRITERS.contains(&name)
+            || WINDOWS_WRITERS.contains(&name)
+            || WRITERS.contains(&name)
+            || (previous == "reg" && !REG_READS.contains(token))
+            || REGISTRY_METHODS.iter().any(|method| token.contains(method))
+            || token.split("::").skip(1).any(|method| {
+                WRITING_METHODS
+                    .iter()
+                    .any(|prefix| method.starts_with(prefix))
+            });
+        names_a_run_key = names_a_run_key || run_key(token);
+    }
+    let reads = (RUN_KEY_READERS.contains(&command_name_run) || command_name_run == "reg")
+        && !writes
+        && !piped;
+    changes_a_task || (names_a_run_key && !reads)
+}
+
+/// Whether `word` (lowercase) names a registry Run key: `...\CurrentVersion\`
+/// and one of [`RUN_KEYS`], or `...\Policies\Explorer\Run`, with `\` or
+/// `/`, `.` and `..` resolved. Once a segment names a hive (`HKCU`,
+/// `HKEY_...`, `Registry::`) a wildcard name counts as any name it matches
+/// (`CurrentVer*\R*`).
+fn run_key(word: &str) -> bool {
+    let mut hive = false;
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in word.split(['/', '\\']) {
+        work::step();
+        let segment = segment.trim_matches(['\'', '"']);
+        match segment {
+            "" | "." => continue,
+            ".." => {
+                segments.pop();
+                continue;
+            }
+            _ => {}
+        }
+        hive |= ["hkcu", "hklm", "hku", "hkey_", "registry::"]
+            .iter()
+            .any(|name| segment.starts_with(name));
+        let same = |segment: &str, name: &str| segment == name || (hive && glob_any(segment, name));
+        let one = segments.last().copied().unwrap_or_default();
+        let two = segments
+            .len()
+            .checked_sub(2)
+            .and_then(|at| segments.get(at))
+            .copied()
+            .unwrap_or_default();
+        let after_current_version =
+            same(one, "currentversion") && RUN_KEYS.iter().any(|key| same(segment, key));
+        let policy = same(two, "policies") && same(one, "explorer") && same(segment, "run");
+        if after_current_version || policy {
+            return true;
+        }
+        segments.push(segment);
+    }
+    false
 }
 
 /// A command word's name: lowercase, without its folder or a Windows
@@ -687,9 +891,12 @@ impl Classifier {
                     possible: vec![cwd_path.clone()],
                     history: vec![cwd_path.clone()],
                 };
+                // #1261 (D168): a reader of a Run key may pipe it into a
+                // writer (`Get-Item ...\Run | New-ItemProperty ...`).
+                let piped = text.contains('|');
                 for found in commands(&text, quotes) {
                     work::step();
-                    self.windows_command(&found, &mut folders, depth);
+                    self.windows_command(&found, &mut folders, depth, piped);
                 }
             }
         }
@@ -698,7 +905,14 @@ impl Classifier {
     /// One cmd or PowerShell command. Its words resolve against every
     /// folder the line has been in (a `cd` may not have run, `popd` may
     /// return) and its folder flags' values.
-    fn windows_command(&mut self, command: &Command, folders: &mut Folders, depth: usize) {
+    /// `piped`: the text holds a `|`.
+    fn windows_command(
+        &mut self,
+        command: &Command,
+        folders: &mut Folders,
+        depth: usize,
+        piped: bool,
+    ) {
         if self.windows_budget == 0 {
             self.note(ProtectedActionKind::UnseenCode);
             return;
@@ -740,13 +954,25 @@ impl Classifier {
                 if !self.spend(cost) {
                     return;
                 }
+                // #1261 (D168): a start-up place's variable is also read as
+                // its usual value (see `windows_path`).
+                let places = windows_paths::names_a_place(target);
+                if places && !self.spend(cost) {
+                    return;
+                }
                 for folder in &folders.possible {
                     work::step();
-                    let resolved = self.homes.resolve(target, folder);
-                    if resolved.len() <= MAX_FOLDER_BYTES {
-                        reached.push(resolved);
-                    } else if !spelling_only {
-                        self.note(ProtectedActionKind::UnseenCode);
+                    let mut resolved = vec![self.homes.resolve(target, folder)];
+                    if places {
+                        resolved.push(self.homes.resolve_places(target, folder));
+                    }
+                    for resolved in resolved {
+                        work::step();
+                        if resolved.len() <= MAX_FOLDER_BYTES {
+                            reached.push(resolved);
+                        } else if !spelling_only {
+                            self.note(ProtectedActionKind::UnseenCode);
+                        }
                     }
                 }
             }
@@ -819,16 +1045,28 @@ impl Classifier {
                 || writer.is_some_and(|at| index > at)
                 || (index > 0 && writing_parameter(&lower[index - 1]))
         };
-        let mut git_config = GitConfigWrites::new(&lower);
+        // #1261 (D168): scheduled tasks, Run keys and registry imports.
+        if windows_persistence(&lower, piped) {
+            self.note(ProtectedActionKind::Persistence);
+        }
+        let mut git_config = GitConfigWrites::new(&lower, &[], &[]);
+        let mut later = LaterWords::new(&lower);
         let mut named_programs = 0;
+        let mut git_programs_read = false;
         for (index, word) in words.iter().enumerate() {
             work::step();
             let name = names[index];
-            let args = &lower[index + 1..];
             // The checks the POSIX pass makes by command name, for names
             // only this reading sees (`C:\Tools\corbanu.exe vault list`).
+            // #1515: `=git` too, where the git option scans stop.
+            let equals_git = indirect::equals_git(&lower[index]);
+            // #1528: a dashed helper by its Windows path (`git-grep.exe`)
+            // names its subcommand.
+            let helper = git_helpers::git_name(&lower[index]).flatten();
             let named = CLI_NAMES.contains(&name)
                 || name == "git"
+                || equals_git
+                || helper.is_some()
                 || matches!(name, "crontab" | "launchctl" | "systemctl")
                 || CREDENTIAL_COMMANDS
                     .iter()
@@ -841,26 +1079,31 @@ impl Classifier {
             } else if named {
                 let imported = index > 0 && matches!(lower[index - 1].as_str(), "from" | "import");
                 if CLI_NAMES.contains(&name) && !imported {
-                    self.cli(args);
+                    self.cli(&mut later, index + 1);
                 }
-                if persistence_command(name, args)
+                if persistence_command(name, &mut later, index + 1)
                     || (name == "git" && git_config.persists(index + 1, /*subcommand*/ None))
                 {
                     self.note(ProtectedActionKind::Persistence);
                 }
-                if name == "git"
+                // #1516: and programs git runs (`grep -O`, `--upload-pack`),
+                // read once per command, as the POSIX pass reads them. A
+                // dashed helper takes no git options (#1528).
+                let git = name == "git" || equals_git;
+                if (git
                     && code_variables::git_runs_code_after_git(
                         &words[index + 1..],
                         &words[index + 1..],
-                    )
+                    ))
+                    || ((git || helper.is_some())
+                        && !std::mem::replace(&mut git_programs_read, true)
+                        && rerun::git_runs_program(&words[index + 1..], helper.as_deref()))
                 {
                     self.note(ProtectedActionKind::UnseenCode);
                 }
                 for (credential_command, verbs) in CREDENTIAL_COMMANDS {
                     work::step();
-                    if name == *credential_command
-                        && args.iter().any(|arg| verbs.contains(&arg.as_str()))
-                    {
+                    if name == *credential_command && later.holds(index + 1, verbs) {
                         self.note(ProtectedActionKind::Credentials);
                     }
                 }
@@ -964,6 +1207,7 @@ impl Classifier {
                 codex_home: self.homes.codex_home(),
                 user_home: self.homes.user_home(),
                 cwd,
+                places: false,
             },
         );
         if climbs_out_of_a_variable(&expanded) {
@@ -977,23 +1221,44 @@ impl Classifier {
         if spelled_as_path && on_another_drive(&expanded, bases) {
             self.note(ProtectedActionKind::UnseenCode);
         }
+        // #1261 (D168): a start-up place's variable is also read as its
+        // usual value, besides as unknown.
+        let places = windows_paths::names_a_place(candidate);
         for base in bases {
             work::step();
             if !self.spend(candidate.len() + base.len()) {
                 return;
             }
             let resolved = self.homes.resolve(candidate, base);
-            if path_like {
-                self.path(&resolved);
-            } else if let Some(kind) = self.homes.classify_path(&resolved) {
-                self.note(kind);
+            self.judge_windows_path(&resolved, path_like, written, recursive);
+            if places {
+                if !self.spend(candidate.len() + base.len()) {
+                    return;
+                }
+                let resolved = self.homes.resolve_places(candidate, base);
+                self.judge_windows_path(&resolved, path_like, written, recursive);
             }
-            if written && self.homes.is_persistence(&resolved) {
-                self.note(ProtectedActionKind::Persistence);
-            }
-            if recursive && self.homes.holds_a_home(&resolved) {
-                self.note(ProtectedActionKind::Credentials);
-            }
+        }
+    }
+
+    /// The findings for a path a word resolved to.
+    fn judge_windows_path(
+        &mut self,
+        resolved: &str,
+        path_like: bool,
+        written: bool,
+        recursive: bool,
+    ) {
+        if path_like {
+            self.path(resolved);
+        } else if let Some(kind) = self.homes.classify_path(resolved) {
+            self.note(kind);
+        }
+        if written && self.homes.is_persistence(resolved) {
+            self.note(ProtectedActionKind::Persistence);
+        }
+        if recursive && self.homes.holds_a_home(resolved) {
+            self.note(ProtectedActionKind::Credentials);
         }
     }
 }

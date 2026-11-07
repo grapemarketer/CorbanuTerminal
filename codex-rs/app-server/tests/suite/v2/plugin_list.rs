@@ -2491,6 +2491,92 @@ async fn app_server_startup_refreshes_cached_remote_catalog_without_blocking_plu
 }
 
 #[tokio::test]
+async fn app_server_startup_and_concurrent_plugin_lists_download_remote_catalog_once() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    // The TUI sends several plugin/list requests while the startup refresh runs; a slow
+    // catalog keeps them all overlapping, as with the real multi-megabyte download.
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/list"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(remote_plugin_list_body(
+                    "plugins~Plugin_00000000000000000000000000000000",
+                    "linear",
+                    "Linear",
+                    "Plan work",
+                ))
+                .set_delay(Duration::from_secs(/*secs*/ 1)),
+        )
+        .mount(&server)
+        .await;
+    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
+    mount_empty_user_installed_plugins(&server).await;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_plugin_startup_tasks()
+        .build()
+        .await?;
+    timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
+    let mut request_ids = Vec::new();
+    for _ in 0..3 {
+        request_ids.push(
+            app_server
+                .send_plugin_list_request(PluginListParams {
+                    cwds: None,
+                    marketplace_kinds: None,
+                    force_refetch: false,
+                })
+                .await?,
+        );
+    }
+    for request_id in request_ids {
+        let response: PluginListResponse = to_response(
+            timeout(
+                DEFAULT_TIMEOUT,
+                app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+            )
+            .await??,
+        )?;
+        assert!(
+            response
+                .marketplaces
+                .iter()
+                .any(|marketplace| marketplace.name == "openai-curated-remote"),
+            "expected the remote marketplace in every plugin/list response"
+        );
+    }
+    wait_for_cached_remote_catalog_plugin_ids(
+        codex_home.path(),
+        &["plugins~Plugin_00000000000000000000000000000000"],
+    )
+    .await?;
+    // Let a late startup refresh, if any, reach the server before counting.
+    sleep(Duration::from_millis(500)).await;
+    wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 1).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn app_server_startup_skips_disabled_remote_plugin_catalog_scopes() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;

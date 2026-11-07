@@ -1,0 +1,9 @@
+transport key file: synthetic placeholder
+{"allowed_prefixes": {"qwen": ["/v1/chat/completions", "/v1/models"], "zai": ["/api/paas/v4/", "/api/coding/paas/v4/", "/api/anthropic/"]}, "allowed_targets": ["api.z.ai:443", "qwen.agms.test:443"], "event": "started", "port": 18443, "time_ns": 1792646297704969000, "ts": "2026-10-22T05:18:17+0000", "upstreams": {"qwen": "127.0.0.1:18602", "zai": "127.0.0.1:18601"}}
+2026-10-22T05:18:18Z clear (baseline login-window SecurityAgent only)
+/Users/agent 700 agent
+/Users/agent/agms 700 agent
+/Users/agent/agms-canary 700 agent
+/private/tmp/agms-canary-ipc 700 agent
+/Users/Shared/agms-canary-ipc.pid 644 agent
+setup-agent done

@@ -73,9 +73,9 @@ pub struct Patch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused_status: Option<u16>,
     /// When the realtime session this attempt opened ended, in Unix ms
-    /// (#824). The attempt's admission time is when the session started; its
-    /// tokens are never reported to this client and stay unknown. Such a patch
-    /// states nothing else. Omitted when absent, so every other patch keeps
+    /// (#824). The attempt's admission time is when the session started; the
+    /// tokens its responses reported (#889 D223) are in earlier patches. Such
+    /// a patch states nothing else. Omitted when absent, so every other patch keeps
     /// its exact bytes; one that has it needs ledger format 6.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_ended_at_ms: Option<Count>,

@@ -1,0 +1,45 @@
+╭────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     glm-5.3-flash   /model to change            │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i3-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Aggressive
+Core's level: Aggressive
+
+  Permissive
+  Moderate
+> Aggressive  (active)
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

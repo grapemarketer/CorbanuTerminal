@@ -760,3 +760,44 @@ async fn attributed_blocked_request_targets_one_of_multiple_active_calls() {
         ))
     );
 }
+
+/// #722 (D246): a PermissionRequest hook may not allow a remote network
+/// request without a prompt; this decides which requests are remote.
+#[tokio::test]
+async fn remote_environment_detection_for_network_hook_decisions() {
+    use crate::environment_selection::TurnEnvironmentSnapshot;
+    use crate::environment_selection::TurnEnvironmentState;
+    use crate::session::turn_context::TurnEnvironment;
+    use codex_exec_server::Environment;
+    use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
+
+    let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd"));
+    let environment = |id: &str, environment: Environment| {
+        TurnEnvironmentState::Ready(TurnEnvironment::new(
+            id.to_string(),
+            Arc::new(environment),
+            cwd.clone(),
+            Vec::new(),
+            /*shell*/ None,
+        ))
+    };
+    let snapshot = TurnEnvironmentSnapshot {
+        environments: vec![
+            environment(LOCAL_ENVIRONMENT_ID, Environment::default_for_tests()),
+            environment(
+                REMOTE_ENVIRONMENT_ID,
+                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                    .expect("remote environment"),
+            ),
+        ],
+    };
+
+    assert!(!is_remote_environment(&snapshot, LOCAL_ENVIRONMENT_ID));
+    assert!(is_remote_environment(&snapshot, REMOTE_ENVIRONMENT_ID));
+    // Not in the turn: only the local id counts as local.
+    let empty = TurnEnvironmentSnapshot::default();
+    assert!(!is_remote_environment(&empty, LOCAL_ENVIRONMENT_ID));
+    assert!(is_remote_environment(&empty, "other"));
+}

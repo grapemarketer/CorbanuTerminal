@@ -19,6 +19,10 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 
+mod glob_scan;
+pub use glob_scan::FileSystemDenyGlob;
+pub use glob_scan::FileSystemGlobScan;
+
 mod effective_reads;
 pub use effective_reads::EffectiveReads;
 mod effective_writes;
@@ -458,7 +462,7 @@ struct FileSystemSemanticSignature {
     readable_roots: Vec<AbsolutePathBuf>,
     writable_roots: Vec<WritableRoot>,
     unreadable_roots: Vec<AbsolutePathBuf>,
-    unreadable_globs: Vec<String>,
+    unreadable_globs: Vec<FileSystemDenyGlob>,
     unlistable_directories: Vec<AbsolutePathBuf>,
     unmovable_paths: Vec<AbsolutePathBuf>,
     keychain_services_denied: bool,
@@ -682,6 +686,11 @@ pub enum FileSystemPath {
     /// FileSystemAccessMode::Deny only.
     GlobPattern {
         pattern: String,
+        /// Linux expansion provenance for generated database-entry denials.
+        /// Omitted for ordinary user and credential globs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        scan: Option<FileSystemGlobScan>,
     },
     Special {
         value: FileSystemSpecialPath,
@@ -1391,11 +1400,12 @@ impl FileSystemSandboxPolicy {
                         entry.path = FileSystemPath::Path { path };
                     }
                 }
-                FileSystemPath::GlobPattern { pattern } => {
+                FileSystemPath::GlobPattern { pattern, scan } => {
                     if let (Some(cwd), Some(subpath)) =
                         (cwd.as_ref(), parse_project_roots_glob_pattern(pattern))
                     {
                         entry.path = FileSystemPath::GlobPattern {
+                            scan: scan.clone(),
                             pattern: resolve_project_roots_glob_pattern(subpath, cwd),
                         };
                     }
@@ -1433,10 +1443,11 @@ impl FileSystemSandboxPolicy {
                         missing_path_behavior: entry.missing_path_behavior,
                     }));
                 }
-                FileSystemPath::GlobPattern { pattern } => {
+                FileSystemPath::GlobPattern { pattern, scan } => {
                     if let Some(subpath) = parse_project_roots_glob_pattern(&pattern) {
                         entries.extend(workspace_roots.iter().map(|root| FileSystemSandboxEntry {
                             path: FileSystemPath::GlobPattern {
+                                scan: scan.clone(),
                                 pattern: resolve_project_roots_glob_pattern(subpath, root),
                             },
                             access: entry.access,
@@ -1444,7 +1455,7 @@ impl FileSystemSandboxPolicy {
                         }));
                     } else {
                         entries.push(FileSystemSandboxEntry {
-                            path: FileSystemPath::GlobPattern { pattern },
+                            path: FileSystemPath::GlobPattern { pattern, scan },
                             access: entry.access,
                             missing_path_behavior: entry.missing_path_behavior,
                         });
@@ -1821,21 +1832,35 @@ impl FileSystemSandboxPolicy {
 
     /// Returns unreadable glob patterns resolved against the provided cwd.
     pub fn get_unreadable_globs_with_cwd(&self, cwd: &Path) -> Vec<String> {
+        let mut patterns: Vec<String> = self
+            .get_unreadable_glob_scans_with_cwd(cwd)
+            .into_iter()
+            .map(|glob| glob.pattern)
+            .collect();
+        patterns.sort();
+        patterns.dedup();
+        patterns
+    }
+
+    /// Keeps each scan's provenance: an identical generic and generated
+    /// database pattern must remain distinct when Linux expands them.
+    pub fn get_unreadable_glob_scans_with_cwd(&self, cwd: &Path) -> Vec<FileSystemDenyGlob> {
         if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
             return Vec::new();
         }
-
         let mut patterns = self
             .entries
             .iter()
             .filter(|entry| entry.access == FileSystemAccessMode::Deny)
             .filter_map(|entry| match &entry.path {
-                FileSystemPath::GlobPattern { pattern } => {
-                    Some(AbsolutePathBuf::resolve_path_against_base(pattern, cwd))
-                }
+                FileSystemPath::GlobPattern { pattern, scan } => Some(FileSystemDenyGlob {
+                    pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                        .to_string_lossy()
+                        .into_owned(),
+                    scan: scan.clone(),
+                }),
                 FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => None,
             })
-            .map(|pattern| pattern.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         patterns.sort();
         patterns.dedup();
@@ -2059,7 +2084,7 @@ impl FileSystemSandboxPolicy {
             readable_roots: sorted_absolute_paths(self.get_readable_roots_with_cwd(cwd)),
             writable_roots: sorted_writable_roots(self.get_writable_roots_with_cwd(cwd)),
             unreadable_roots: sorted_absolute_paths(self.get_unreadable_roots_with_cwd(cwd)),
-            unreadable_globs: self.get_unreadable_globs_with_cwd(cwd),
+            unreadable_globs: self.get_unreadable_glob_scans_with_cwd(cwd),
             unlistable_directories: sorted_absolute_paths(self.get_unlistable_directories()),
             unmovable_paths: sorted_absolute_paths(self.get_unmovable_paths()),
             keychain_services_denied: self.denies_keychain_services(),
@@ -2167,9 +2192,15 @@ fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath)
             special_path_matches_absolute_path(value, path)
         }
         (
-            FileSystemPath::GlobPattern { pattern: left },
-            FileSystemPath::GlobPattern { pattern: right },
-        ) => left == right,
+            FileSystemPath::GlobPattern {
+                pattern: left,
+                scan: left_scan,
+            },
+            FileSystemPath::GlobPattern {
+                pattern: right,
+                scan: right_scan,
+            },
+        ) => left == right && left_scan == right_scan,
         (FileSystemPath::GlobPattern { .. }, _) | (_, FileSystemPath::GlobPattern { .. }) => false,
     }
 }
@@ -4264,6 +4295,7 @@ mod tests {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: project_roots_glob_pattern(Path::new("**/*.env")),
                 },
                 access: FileSystemAccessMode::Deny,
@@ -4307,6 +4339,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: AbsolutePathBuf::resolve_path_against_base(
                             "**/*.env",
                             first.as_path(),
@@ -4319,6 +4352,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: AbsolutePathBuf::resolve_path_against_base(
                             "**/*.env",
                             second.as_path(),
@@ -4338,6 +4372,7 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: project_roots_glob_pattern(Path::new("**/*.env")),
             },
             access: FileSystemAccessMode::Deny,
@@ -4350,6 +4385,7 @@ mod tests {
             actual,
             FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: AbsolutePathBuf::resolve_path_against_base("**/*.env", cwd.path())
                         .to_string_lossy()
                         .into_owned(),
@@ -4474,7 +4510,10 @@ mod tests {
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::GlobPattern { pattern },
+            path: FileSystemPath::GlobPattern {
+                pattern,
+                scan: None,
+            },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         }
@@ -4678,7 +4717,10 @@ mod tests {
                 .into_iter()
                 .map(|pattern| {
                     FileSystemSandboxEntry::new(
-                        FileSystemPath::GlobPattern { pattern },
+                        FileSystemPath::GlobPattern {
+                            pattern,
+                            scan: None,
+                        },
                         FileSystemAccessMode::Deny,
                     )
                 })
@@ -4741,7 +4783,10 @@ mod tests {
                 .into_iter()
                 .map(|pattern| {
                     FileSystemSandboxEntry::new(
-                        FileSystemPath::GlobPattern { pattern },
+                        FileSystemPath::GlobPattern {
+                            pattern,
+                            scan: None,
+                        },
                         FileSystemAccessMode::Deny,
                     )
                 })
@@ -4763,6 +4808,7 @@ mod tests {
         // covers the templates, at any level.
         let own_env_star = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{root}/**/.env.*"),
             },
             FileSystemAccessMode::Deny,
@@ -4795,6 +4841,7 @@ mod tests {
         let mut entries = policy.entries;
         entries.push(FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{root}/**/*.example"),
             },
             FileSystemAccessMode::Deny,
@@ -4821,6 +4868,7 @@ mod tests {
                 .map(|name| {
                     FileSystemSandboxEntry::new(
                         FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: format!("**/{name}"),
                         },
                         FileSystemAccessMode::Deny,

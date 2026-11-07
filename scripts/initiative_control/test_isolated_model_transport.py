@@ -95,6 +95,7 @@ if mode == 'duplicate_thread': events.insert(1, events[0])
 if mode == 'duplicate_turn': events.append(events[-1])
 if mode == 'duplicate_item': events.insert(-1, events[-2])
 if mode == 'malformed_usage': events[-1]['usage']['output_tokens'] = True
+if mode == 'null_usage': events[-1]['usage'] = None
 if mode == 'unknown_field': events[-2]['item']['error'] = 'PRIVATE_RUNTIME_ERROR'
 if mode == 'bad_session': events[0]['thread_id'] = '../../PRIVATE_PATH'
 if mode == 'late_error': events.append(dict(type='error', message='PRIVATE_RUNTIME_ERROR'))
@@ -349,6 +350,10 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(len(self.calls), len(list(self.root.glob('attempt-*'))))
                 self.assertNotIn('PRIVATE_RUNTIME_ERROR', json.dumps(dict(result)))
                 self.assertTrue((run / 'stdout.raw').stat().st_size)
+
+    def test_null_usage_is_accepted(self):
+        result, _ = self.attempt('null_usage')
+        self.assertEqual(result['text'], 'SAFE_TEXT')
 
     def test_only_exact_known_warnings(self):
         result, _ = self.attempt('warning')

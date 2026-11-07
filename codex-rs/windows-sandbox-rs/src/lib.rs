@@ -4,6 +4,7 @@
 
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
+mod unlabelled_roots;
 
 use std::fmt;
 use std::sync::Arc;
@@ -102,6 +103,7 @@ mod workspace_acl;
 pub mod credential_watch;
 mod deny_read_resolver;
 mod deny_read_targets;
+pub mod local_drive;
 
 #[cfg(target_os = "windows")]
 mod conpty;
@@ -240,6 +242,10 @@ pub use hide_users::hide_newly_created_users;
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
 pub use identity::sandbox_setup_is_complete;
+#[cfg(target_os = "windows")]
+pub use integrity_leases::confirm_planted_project_metadata;
+#[cfg(target_os = "windows")]
+pub use integrity_leases::planted_project_metadata;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::repair_stale_integrity_labels;
 #[cfg(target_os = "windows")]
@@ -381,6 +387,10 @@ pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_prof
 pub use unified_exec::spawn_windows_sandbox_session_for_level;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
+pub use unlabelled_roots::legacy_writable_roots;
+pub use unlabelled_roots::unlabelled_roots_mark;
+pub use unlabelled_roots::unlabelled_roots_since;
+pub use unlabelled_roots::unlabelled_writable_root_warning;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]

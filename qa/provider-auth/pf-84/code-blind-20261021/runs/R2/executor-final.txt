@@ -1,0 +1,8 @@
+Executed all assigned cases in order using `zai3`, windows w1–w12, and literal `agms-tui` actions. Isolation preflight, candidate SHA-256, and packet hashes matched.
+
+Results:
+- **PR-01: passed** — precedence sequence and `/status` checkpoints matched; config removal succeeded.
+- **GH-02: passed** — setup, resume on `work`, removal, and refusal behavior matched; missing `ghost` mention was advisory only.
+- **NA-05: failed** — selecting `gzero` in `/resume` silently switched from SID1 into `<gid>` instead of showing the missing-account message and staying on SID1.
+
+Relay mappings and session-file account records are marked **for the integrator**. No model declines or emergency stop conditions occurred. Full timestamps, labels, requested-versus-actual actions, and verdicts are in `$AGMS_RUN/evidence/result.md`.

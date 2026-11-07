@@ -5098,3 +5098,79 @@ async fn chatwidget_tall() {
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
+
+/// The `/status` Account line, as rendered after a `/status` command.
+fn status_account_line(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> String {
+    chat.add_status_output(
+        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+    );
+    drain_insert_history(rx)
+        .last()
+        .expect("status output inserted")
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .find(|line| line.contains("Account"))
+        .expect("account line")
+        .trim()
+        .to_string()
+}
+
+/// #1563: a brokered session reports a key for every provider that takes
+/// one, so with no Corbanu Plan key `/status` said "Corbanu Plan API key
+/// configured" while `/providers` said not configured. `/status` now agrees.
+#[tokio::test]
+async fn status_does_not_claim_a_plan_key_that_providers_reports_missing() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let plan_id = codex_model_provider_info::PFTERMINAL_PLAN_PROVIDER_ID;
+    chat.config.model_providers =
+        codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None);
+    chat.config.model_provider_id = plan_id.to_string();
+    chat.config.model_provider = chat.config.model_providers[plan_id].clone();
+    chat.status_account_display = Some(StatusAccountDisplay::ApiKey { env_var: None });
+    let set_policy = |chat: &ChatWidget, corbanu| {
+        let host = crate::provider_status_host::ProviderStatusHost::from_config(
+            &chat.config,
+            crate::provider_status_host::ProviderAccountMetadata {
+                corbanu,
+                ..Default::default()
+            },
+        )
+        .with_environment(|_| codex_provider_auth::EnvironmentCredentialMetadata::Missing);
+        chat.model_catalog.set_provider_policy(
+            crate::chatwidget::provider_model_policy::ProviderModelPolicy::new(
+                host,
+                codex_provider_auth::ProviderRuntimeAuthorizations::default(),
+            ),
+        );
+    };
+
+    set_policy(
+        &chat,
+        codex_provider_auth::CorbanuPlanMetadata::NotConfigured,
+    );
+    let missing = status_account_line(&mut chat, &mut rx);
+    assert!(!missing.contains("API key configured"), "{missing}");
+    insta::assert_snapshot!("status_plan_key_not_configured", missing);
+
+    // A Plan credential `/providers` counts keeps the existing key line.
+    set_policy(
+        &chat,
+        codex_provider_auth::CorbanuPlanMetadata::Configured {
+            source: codex_provider_auth::CorbanuCredentialSource::Managed,
+            availability: codex_provider_auth::ConfiguredAvailability::Ready,
+        },
+    );
+    let configured = status_account_line(&mut chat, &mut rx);
+    assert!(
+        configured.contains("Corbanu Plan API key configured"),
+        "{configured}"
+    );
+}

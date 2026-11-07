@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,6 +42,22 @@ pub(crate) async fn connect(
     tcp_nodelay: TcpNodelay,
 ) -> Result<(ConnectionInner, Response), WebSocketError> {
     let disable_nagle = tcp_nodelay == TcpNodelay::Enabled;
+    // Tungstenite matches NO_PROXY by host name or suffix only. Apply its IP
+    // range (CIDR) entries here, as the HTTP client does, so an IP-literal host
+    // in a listed range connects directly (#722, D247).
+    let proxy_route = match proxy_route {
+        OutboundProxyRoute::TransportDefault
+            if environment_no_proxy()
+                .is_some_and(|no_proxy| no_proxy_range_matches(&no_proxy, &request)) =>
+        {
+            OutboundProxyRoute::Direct
+        }
+        OutboundProxyRoute::Proxy {
+            no_proxy: Some(no_proxy),
+            ..
+        } if no_proxy_range_matches(&no_proxy, &request) => OutboundProxyRoute::Direct,
+        route => route,
+    };
     let proxy_url = match proxy_route {
         OutboundProxyRoute::TransportDefault => {
             // The workspace enables tokio-tungstenite's `proxy` feature, so its default dialer
@@ -163,6 +180,58 @@ impl ProxyEndpoint {
 
 fn invalid_proxy_config() -> WebSocketError {
     WebSocketError::Url(UrlError::InvalidProxyConfig("<redacted>".to_string()))
+}
+
+/// `NO_PROXY` as Tungstenite reads it: the first non-empty of `NO_PROXY` and
+/// `no_proxy`.
+fn environment_no_proxy() -> Option<String> {
+    ["NO_PROXY", "no_proxy"]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok())
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether the request's host is an IP address inside an IP range (CIDR) entry
+/// of `no_proxy`. Host names are never resolved for this, as in the HTTP client.
+fn no_proxy_range_matches(no_proxy: &str, request: &Request) -> bool {
+    let Some(host) = request.uri().host() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    no_proxy
+        .split(',')
+        .filter_map(|entry| parse_ip_range(entry.trim()))
+        .any(|(network, prefix)| ip_in_range(ip, network, prefix))
+}
+
+/// Parses an `address/prefix` entry, for example `172.16.0.0/12` or `fd00::/8`,
+/// accepting the same forms as the HTTP client's matcher (no brackets or signs).
+fn parse_ip_range(entry: &str) -> Option<(IpAddr, u32)> {
+    let (address, prefix) = entry.split_once('/')?;
+    let address = address.parse::<IpAddr>().ok()?;
+    if prefix.is_empty() || !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let prefix = prefix.parse::<u32>().ok()?;
+    let max_prefix = if address.is_ipv4() { 32 } else { 128 };
+    (prefix <= max_prefix).then_some((address, prefix))
+}
+
+fn ip_in_range(ip: IpAddr, network: IpAddr, prefix: u32) -> bool {
+    match (ip, network) {
+        (IpAddr::V4(ip), IpAddr::V4(network)) => {
+            let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+            u32::from(ip) & mask == u32::from(network) & mask
+        }
+        (IpAddr::V6(ip), IpAddr::V6(network)) => {
+            let mask = u128::MAX.checked_shl(128 - prefix).unwrap_or(0);
+            u128::from(ip) & mask == u128::from(network) & mask
+        }
+        _ => false,
+    }
 }
 
 fn websocket_host(request: &Request) -> Result<&str, WebSocketError> {

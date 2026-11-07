@@ -1,0 +1,52 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: Vercel
+Model: Vercel GLM 5.3 Flash
+Billing: Pay per use
+Cost: $0.001397 (rounded), charged by Vercel
+Price basis: the charge Vercel reported with the response (gatewayCost)
+Tokens: 8,584 tokens
+—— Details ——
+Billed cost: $0.001397 (rounded) — as stated by the provider with each response
+Request: c065b131-ee6e-4e25-b7f7-c589d135db6b
+Attempt: 9d675c27-19ea-4537-805c-6573596a8342
+Thread: 01a13ceb-147b-7e30-894c-d33f00171bf6
+Turn: 01a13ceb-3bbc-78c2-b690-cf36dbcd7421
+Provider: vercel
+Account: default
+Model: zai/glm-5.3-flash
+Opaque scope: 1b80f16c-63f9-49aa-9e9d-4b94de7c1595
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T00:16:52.484Z
+Retry predecessor: db2aac2d-76e7-48df-9c8d-c5ab606d3856
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Token cost for recorded attempts: $0.001397 (rounded), charged by Vercel
+Billing basis: pay per use
+Input: 8558
+Noncached input (derived for inclusive input): unknown — no retained numeric evidence
+Cache read: 0 (reported)
+Cache write: unknown — no retained numeric evidence
+Output: 26
+Reasoning (subset, not separately billed): 23
+Total (not separately billed): 8584
+Noncached input cost: unknown — no retained numeric evidence
+Cache read cost: $0.000000; exact USD 0
+Cache write cost: unknown — no retained numeric evidence
+Output cost: $0.000013; exact USD 0.000013
+Published-price estimate (not used — Vercel reported its charge): not available — the response did not report every token count its published price needs
+Known subtotal exact USD: 0.0013967
+Price ID: 0862277e-e4c4-40a1-aec6-a94ab4902dea
+Price source: NativeCatalog; reference 3a1f913f-8a9b-50af-9730-ebbe49f4c4bd
+Price currency/unit: Usd / PerMillionTokens
+Price observed/approved: 2026-10-15T00:16:52.484Z / 2026-10-15T00:16:52.484Z
+Price effective interval: [2026-10-15T00:16:52.484Z, unbounded)
+Noncached input rate: 0.15 USD per million tokens
+Cache read rate: 0.03 USD per million tokens
+Rate unavailable for Cache write
+Output rate: 0.5 USD per million tokens
+Evidence revision 23; source 7bb30c0e-8e7f-4d60-af1c-f3168783c329; sequence 23; presence patch
+{"input":8558,"read":0,"output":26,"reasoning":23,"total":8584,"billed_usd":"0.0013967"}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

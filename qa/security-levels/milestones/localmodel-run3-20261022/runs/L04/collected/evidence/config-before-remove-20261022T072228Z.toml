@@ -1,0 +1,23 @@
+# AGMS milestone profile: the "Aggressive ships" feature flags. The security level is chosen by the person in /security.
+suppress_unstable_features_warning = true
+
+[features]
+security_levels = true
+protected_mode_preflight = true
+secretless_agent_launch = true
+isolated_credential_broker = true
+secret_output_gate = true
+source_envelopes = true
+url_destination_policy = true
+contained_external_agents = true
+
+[agents.p20plain]
+description = "Test role p20plain for case AGG-20P."
+config_file = "./agms-roles/p20plain.toml"
+
+[projects."/Users/agmx1/runs/agms-L04-agmx1-20261022T071159Z/fixture/workspace"]
+trust_level = "trusted"
+
+[agents.p20wide]
+description = "Test role p20wide for case AGG-20P."
+config_file = "./agms-roles/p20wide.toml"

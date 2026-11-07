@@ -52,7 +52,7 @@ fn sync_provider_manager_model_policy(
 /// PF-84-S06 (#572): Bedrock's models are listed for a session on Bedrock
 /// only, because its default account has no setup in the TUI. A named
 /// Bedrock account (an AWS profile) can be chosen from a session on another
-/// provider (`/providers` → *Use for this session*, `--account
+/// provider (`/providers` → *Start a new session on this account*, `--account
 /// amazon-bedrock:<name>` or `[provider_accounts]`), so while the vault holds
 /// one, `/model` offers Bedrock's models too; they go again once none is
 /// left. The vault read blocks, so it runs off the runtime and reports back
@@ -151,10 +151,7 @@ impl App {
     pub(super) fn open_provider_manager(&mut self, _app_server: &AppServerSession) {
         sync_provider_manager_model_policy(&self.model_catalog, &self.config);
         check_named_bedrock_account(&self.model_catalog, &self.config, &self.app_event_tx);
-        crate::provider_named_accounts::check_named_account_providers(
-            &self.model_catalog,
-            &self.config,
-        );
+        self.check_named_accounts();
         let generation = self.next_provider_management_generation();
         self.provider_management_host = None;
         let config = self.config.clone();

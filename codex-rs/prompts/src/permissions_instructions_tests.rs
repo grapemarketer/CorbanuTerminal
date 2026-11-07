@@ -242,6 +242,7 @@ fn builds_permissions_from_profile_with_denied_reads() {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: denied_glob.to_string_lossy().into_owned(),
                 },
                 access: FileSystemAccessMode::Deny,

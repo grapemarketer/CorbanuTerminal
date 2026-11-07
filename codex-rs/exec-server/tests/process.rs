@@ -11,12 +11,23 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::TerminateResponse;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
+use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
 use codex_exec_server_protocol::ProcessSandboxType;
 use codex_utils_path_uri::PathUri;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+use tokio::time::Instant;
+
+/// `SESSION_ALREADY_ATTACHED_ERROR_CODE` in `src/rpc.rs` (crate-private).
+const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
+/// How long a resume may keep hitting "already attached" while the server
+/// finishes detaching the closed connection. The resumed process must outlive
+/// it (see the `sleep 30` below).
+const RESUME_ATTACHED_RETRY_BUDGET: Duration = Duration::from_secs(20);
+const RESUME_ATTACHED_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
@@ -346,7 +357,7 @@ async fn exec_server_resumes_detached_session_without_killing_processes() -> any
             "process/start",
             serde_json::json!({
                 "processId": "proc-resume",
-                "argv": ["/bin/sh", "-c", "sleep 5"],
+                "argv": ["/bin/sh", "-c", "sleep 30"],
                 "cwd": PathUri::from_host_native_path(std::env::current_dir()?)?,
                 "env": {},
                 "tty": false,
@@ -368,26 +379,38 @@ async fn exec_server_resumes_detached_session_without_killing_processes() -> any
     server.disconnect_websocket().await?;
     server.reconnect_websocket().await?;
 
-    let resume_initialize_id = server
-        .send_request(
-            "initialize",
-            serde_json::to_value(InitializeParams {
-                client_name: "exec-server-test".to_string(),
-                resume_session_id: Some(initialize_response.session_id.clone()),
-            })?,
-        )
-        .await?;
-    let response = server
-        .wait_for_event(|event| {
-            matches!(
-                event,
-                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &resume_initialize_id
+    // The server detaches the old connection only after it has processed the
+    // close, so a fast resume can see "already attached" (#796). The real
+    // client retries that error (`client_recovery.rs`); so does the test.
+    let resume_deadline = Instant::now() + RESUME_ATTACHED_RETRY_BUDGET;
+    let result = loop {
+        let resume_initialize_id = server
+            .send_request(
+                "initialize",
+                serde_json::to_value(InitializeParams {
+                    client_name: "exec-server-test".to_string(),
+                    resume_session_id: Some(initialize_response.session_id.clone()),
+                })?,
             )
-        })
-        .await
-        .context("waiting for the resume initialize response")?;
-    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = response else {
-        panic!("expected resume initialize response");
+            .await?;
+        let response = server
+            .wait_for_event(|event| match event {
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. })
+                | JSONRPCMessage::Error(JSONRPCError { id, .. }) => id == &resume_initialize_id,
+                _ => false,
+            })
+            .await
+            .context("waiting for the resume initialize response")?;
+        match response {
+            JSONRPCMessage::Response(JSONRPCResponse { result, .. }) => break result,
+            JSONRPCMessage::Error(JSONRPCError { error, .. })
+                if error.code == SESSION_ALREADY_ATTACHED_ERROR_CODE
+                    && Instant::now() < resume_deadline =>
+            {
+                tokio::time::sleep(RESUME_ATTACHED_RETRY_INTERVAL).await;
+            }
+            other => anyhow::bail!("resume initialize failed: {other:?}"),
+        }
     };
     let resumed_response: InitializeResponse = serde_json::from_value(result)?;
     assert_eq!(resumed_response, initialize_response);

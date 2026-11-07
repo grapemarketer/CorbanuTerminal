@@ -113,8 +113,8 @@ first, with or without command output on the line:
 
 - zsh glob qualifiers that run code: `e` and `oe` with code
   (`ls *(e:'rm x':)`) and `+name` (`ls *(+f)`) (#1028). Quoted text that zsh
-  would read that way asks too, such as `git commit -m "fix(tests): x"`, but
-  only where zsh may run the line (#1172, D85). A line that runs as
+  would read that way asks too, such as `git commit -m "fix(tests): x"`,
+  except on the plain lines described next (#1172, D85). A line that runs as
   `-c` or `-lc` under a system `bash` or `dash` (`/bin/bash`,
   `/usr/bin/bash`, `/bin/dash`, `/usr/bin/dash`, or a `/bin/sh` or
   `/usr/bin/sh` that is one of them, as on macOS) doesn't ask for this when
@@ -126,13 +126,17 @@ first, with or without command output on the line:
   or `[`). Plain means literal words joined by `;`, `&&`, `||`, `|` or a
   newline: no `$(...)`, variables, redirections, groups, assignments, `if`
   or loops, comments, backslashes or control characters (and no non-ASCII
-  character right before `|`, a brace, a bracket or `~`). So
-  `git commit -m "fix(tests): x"` under `/bin/bash` doesn't ask for this.
-  The same line still asks under zsh (for example when your shell is zsh),
-  under a shell named without one of those system paths (such as `bash` or
+  character right before `|`, a brace, a bracket or `~`). A system `zsh`
+  (`/bin/zsh`, `/usr/bin/zsh`, the macOS default) doesn't ask for this
+  either when such a line also has no `cd`, no `''` and no unquoted
+  parenthesis, glob character, brace, `~` or expansion in any word (#932,
+  #1197). So `git commit -m "fix(tests): x"` runs without this question
+  under `/bin/bash` and under `/bin/zsh`. It still asks unquoted
+  (`git commit -m fix(tests)`), beside a variable or other expansion, under
+  a shell named without one of those system paths (such as `zsh`, `bash` or
   Homebrew's `/opt/homebrew/bin/bash`), with any other program on it, when
   typed into a running shell, and for every command when the zsh-fork shell
-  is on. zsh lines still ask (#932 tracks this).
+  is on.
 - bash's prompt expansion `${v@P}`, which runs any `$(...)` in the value, as
   `eval` would (#1012). Other ways a shell runs a variable's value
   (`PS4` with `set -x`, zsh's `${(e)v}` and `print -P`, `trap "$v"`) aren't
@@ -194,15 +198,28 @@ The kill switch (`/security` → `g`) works under every level.
   all of `.git` (a folder it can't read, or too many entries), approving a
   command in that project doesn't lift the protected-file rules (nor run it
   outside the sandbox, nor let it create user namespaces), in any session of
-  this Corbanu Terminal. Some setups of your own hold them too until you
-  remove them: a layout made of links (`git new-workdir`, Android's `repo`), a
-  `config.worktree` that `git sparse-checkout` adds, or a hooks folder a hook
-  installer creates where there was none. On Linux the sandbox leaves empty
+  this Corbanu Terminal, and a note names what it found. (A known tool's
+  command approved after untrusted content lifts no rule anyway: its note
+  mentions only user namespaces. An additional permission you approve to
+  write to a protected file is refused, and its note says so.) If the
+  repository's own git folder was unreadable at its first look, config files
+  or hooks added before the first complete look may not be reported as new.
+  Check that config and those hooks yourself before you run git there. Some
+  setups of your own hold them too until you remove them: a layout made of
+  links (`git new-workdir`, Android's `repo`), a `config.worktree` that
+  `git sparse-checkout` adds, or a hooks folder a hook installer creates
+  where there was none. On Linux the sandbox leaves empty
   files and folders in place while a command runs: a new config file or hooks
   folder that is empty is reported (in any session) once something is put in
-  it, and an empty `.git` folder replaced by another empty one isn't reported.
+  it (once this Corbanu Terminal remembers 1024 of them, a new one is
+  reported at once instead, one time per session while it stays held, and
+  again once filled), and an empty `.git` folder replaced by another empty one isn't reported
+  (unless the first empty one was reported as a replacement, or, once more
+  than 1024 different `.git` folders have been reported as replacements in
+  this Corbanu Terminal, any).
   It doesn't watch in between: a process a command left running can change
-  `.git` after the last look, even while an approved command runs, and what it
+  `.git` after the last look, even while an approved command runs (such a
+  process doesn't stop an approval from lifting the rules), and what it
   changes after a turn ends is found at the next command, not before you run
   git yourself. It watches the repositories of the folders agent commands run
   in (a command's own working folder, `workdir`, too): not a repository a
@@ -225,7 +242,16 @@ The kill switch (`/security` → `g`) works under every level.
   run git there. New config and hooks are checked only in a repository's own
   git folder, not in its worktrees' or submodules'. A session that works in
   more than 16 repositories forgets the oldest; its next look there reports
-  only links, steps and hard links.
+  only links, steps and hard links. This Corbanu Terminal also keeps that
+  history for at most 64 sessions. When another session needs a look, it
+  forgets the least recently used session's repository history; the next
+  look in that session has the same first-look limit.
+- Corbanu Terminal finds the `.git` files of a repository's linked worktrees
+  through the folders under `.git/worktrees`, and keeps protecting those it
+  found until it quits. A command that makes one of those folders unreadable
+  hides that worktree's `.git` file from the next start, which then doesn't
+  protect it. If a command changed permissions under `.git/worktrees`, check
+  them before you restart.
 - MCP servers, apps, hooks and `!` shell commands run outside the sandbox, as
   under every level.
 - On Linux, where a command you approve can write a Corbanu home's folder
@@ -337,3 +363,6 @@ The kill switch (`/security` → `g`) works under every level.
 
 See [Aggressive security level: protected files](security-aggressive.md) for
 the protected-file rules both levels share.
+
+Product requirement: [Product surface](corbanu-product-spec.md#product-surface) —
+"Add strong protection without making normal agent work painful."

@@ -1,0 +1,254 @@
+#!/usr/bin/python3
+"""Isolation probes for one code-blind run. Synthetic canaries only.
+
+Never reads or prints a real credential: protected real files are opened
+without reading and closed immediately; only the errno is recorded.
+Prints one JSON document. Exit 0 iff every negative probe shows its expected
+denial identity and every positive control succeeds.
+"""
+import errno
+import hashlib
+import json
+import os
+import socket
+import ssl
+import subprocess
+import sys
+import time
+
+RUN = os.environ.get("AGMS_RUN", "")
+PROXY = ("127.0.0.1", int(os.environ.get("AGMS_PROXY", "http://127.0.0.1:18443").rsplit(":", 1)[1]))
+CANARY = "/Users/agent/agms-canary"
+try:
+    _EXPECTED = json.load(open("/opt/agms/etc/expected.json"))
+except (OSError, ValueError):
+    _EXPECTED = {}
+PACKET_SHA = _EXPECTED.get("packet_sha256", "missing")
+BINARY_SHA = _EXPECTED.get("binary_sha256", "missing")
+LANES = ["agmx0", "agmx1", "agmx2", "agmx3"]
+rows = []
+
+
+def record(group, name, expect, observed, ok):
+    rows.append(dict(group=group, probe=name, expect=expect, observed=observed, ok=bool(ok)))
+
+
+def err_name(exc):
+    return errno.errorcode.get(getattr(exc, "errno", None) or 0, type(exc).__name__)
+
+
+def open_denied(group, name, path, write=False):
+    try:
+        fd = os.open(path, (os.O_WRONLY | os.O_APPEND) if write else os.O_RDONLY)
+        os.close(fd)
+        record(group, name, "EACCES/EPERM", "OPENED", False)
+    except OSError as exc:
+        record(group, name, "EACCES/EPERM", err_name(exc), exc.errno in (errno.EACCES, errno.EPERM))
+
+
+def list_denied(group, name, path):
+    try:
+        entries = os.listdir(path)
+        record(group, name, "EACCES", "LISTED %d entries" % len(entries), False)
+    except OSError as exc:
+        record(group, name, "EACCES", err_name(exc), exc.errno == errno.EACCES)
+
+
+def tcp_denied(group, name, addr, timeout=4):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    start = time.time()
+    try:
+        sock.connect(addr)
+        record(group, name, "pf drop (timeout)", "CONNECTED", False)
+    except socket.timeout:
+        record(group, name, "pf drop (timeout)", "timeout after %.1fs" % (time.time() - start), True)
+    except OSError as exc:
+        record(group, name, "pf drop (timeout)", err_name(exc), False)
+    finally:
+        sock.close()
+
+
+def proxy_connect(target):
+    sock = socket.create_connection(PROXY, timeout=10)
+    sock.sendall(("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" % (target, target)).encode())
+    reply = sock.recv(200).decode("latin-1").split("\r\n", 1)[0]
+    return sock, reply
+
+
+def sha(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def negatives():
+    me = os.getuid()
+    # repository read/list (synthetic canary checkout plus every other home)
+    list_denied("repo", "list canary checkout", CANARY + "/repo")
+    open_denied("repo", "read canary source file", CANARY + "/repo/src/lib.rs")
+    list_denied("repo", "list canary .git", CANARY + "/repo/.git")
+    for home in ("/Users/agent", "/Users/neo", "/Users/neo_1"):
+        list_denied("repo", "list home " + home, home)
+    # history / prior findings
+    open_denied("history", "read canary prior findings", CANARY + "/prior-findings.md")
+    open_denied("history", "read coordinator product history db", "/Users/agent/.corbanu/pfterminal_state_5.sqlite")
+    list_denied("history", "list prior case runs", "/Users/agent/pf83-cases-29.Y0k1xE")
+    # symlink escape
+    link = os.path.join(RUN, "tmp", "agms-escape-link-%d" % os.getpid())
+    try:
+        os.symlink(CANARY + "/credential-canary.txt", link)
+        open_denied("symlink", "read canary credential via symlink", link)
+        os.unlink(link)
+        os.symlink("/Users/agent/.pf83-auth/zai_api_key", link)
+        open_denied("symlink", "open real transport key via symlink (no read)", link)
+        os.unlink(link)
+    except OSError as exc:
+        record("symlink", "create symlink", "created", err_name(exc), False)
+    # credentials
+    open_denied("credentials", "read canary credential", CANARY + "/credential-canary.txt")
+    open_denied("credentials", "open real transport key (no read)", "/Users/agent/.pf83-auth/zai_api_key")
+    open_denied("credentials", "open real auth.json (no read)", "/Users/agent/.pf83-auth/auth.json")
+    open_denied("credentials", "open mediator leaf key (no read)", "/Users/agent/agms/mediator/leaf.key")
+    open_denied("credentials", "open campaign restore state (no read)", "/Users/agent/agms/restore-state/recorded")
+    list_denied("credentials", "list Homebrew tools (PATH removal)", "/opt/homebrew/bin")
+    secretish = sorted(k for k in os.environ if any(t in k.upper() for t in ("KEY", "TOKEN", "SECRET", "PASS", "AUTH")))
+    placeholder_only = all(os.environ[k].startswith("agms-synthetic") for k in secretish)
+    record("credentials", "environment credential names", "only synthetic placeholders",
+           {"names": secretish, "all_placeholder": placeholder_only}, placeholder_only)
+    # cross-run IPC
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect("/private/tmp/agms-canary-ipc/tmux.sock")
+        record("ipc", "connect coordinator canary tmux socket", "EACCES", "CONNECTED", False)
+        sock.close()
+    except OSError as exc:
+        record("ipc", "connect coordinator canary tmux socket", "EACCES", err_name(exc), exc.errno == errno.EACCES)
+    try:
+        with open("/Users/Shared/agms-canary-ipc.pid") as stream:
+            pid = int(stream.read().strip())
+        os.kill(pid, 0)
+        record("ipc", "signal coordinator canary process", "EPERM", "SIGNALLED", False)
+    except OSError as exc:
+        record("ipc", "signal coordinator canary process", "EPERM", err_name(exc), exc.errno == errno.EPERM)
+    for lane in LANES:
+        if os.path.expanduser("~" + lane) != os.path.expanduser("~") and os.path.isdir("/Users/" + lane):
+            list_denied("ipc", "list other lane home " + lane, "/Users/" + lane)
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect("/private/tmp/.s.PGSQL.5432")
+        record("ipc", "connect unrelated local database socket", "EACCES", "CONNECTED", False)
+        sock.close()
+    except OSError as exc:
+        record("ipc", "connect unrelated local database socket", "EACCES or absent", err_name(exc),
+               exc.errno in (errno.EACCES, errno.ENOENT))
+    # unapproved network
+    tcp_denied("network", "direct TCP to inference IP bypassing mediator", ("47.251.69.60", 443))
+    tcp_denied("network", "direct TCP to OpenAI IP", ("172.66.0.243", 443))
+    tcp_denied("network", "TCP to host SSH", ("192.168.64.1", 22))
+    tcp_denied("network", "loopback unrelated database", ("127.0.0.1", 5432))
+    tcp_denied("network", "loopback resolver", ("127.0.0.1", 53))
+    # qwen-1052: the reverse-tunnel ports (host Z.AI relay, host local-model gate) are the coordinator's only.
+    tcp_denied("network", "loopback tunnel to host Z.AI relay", ("127.0.0.1", 18601))
+    tcp_denied("network", "loopback tunnel to host local-model gate", ("127.0.0.1", 18602))
+    try:
+        socket.getaddrinfo("github.com", 443)
+        record("network", "resolve github.com", "resolution failure", "RESOLVED", False)
+    except socket.gaierror as exc:
+        record("network", "resolve github.com", "resolution failure", "gaierror %s" % exc.errno, True)
+    for target in ("github.com:443", "raw.githubusercontent.com:443", "codeload.github.com:443"):
+        try:
+            sock, reply = proxy_connect(target)
+            sock.close()
+            record("network", "mediator CONNECT " + target, "403", reply, " 403 " in reply + " ")
+        except OSError as exc:
+            record("network", "mediator CONNECT " + target, "403", err_name(exc), False)
+    try:
+        sock, reply = proxy_connect("api.z.ai:443")
+        ctx = ssl.create_default_context(cafile="/opt/agms/etc/mediation-ca.pem")
+        tls = ctx.wrap_socket(sock, server_hostname="api.z.ai")
+        tls.sendall(b"GET / HTTP/1.1\r\nHost: api.z.ai\r\n\r\n")
+        line = tls.recv(200).decode("latin-1").split("\r\n", 1)[0]
+        tls.close()
+        record("network", "mediator non-inference path GET /", "403", line, " 403 " in line + " ")
+    except OSError as exc:
+        record("network", "mediator non-inference path GET /", "403", err_name(exc), False)
+    # qwen-1052: the local-model target forwards only its two inference paths.
+    for request in ("GET / ", "POST /v1/completions ", "GET /v1/models/x "):
+        name = "mediator non-inference path %sqwen.agms.test" % request
+        try:
+            sock, reply = proxy_connect("qwen.agms.test:443")
+            ctx = ssl.create_default_context(cafile="/opt/agms/etc/mediation-ca.pem")
+            tls = ctx.wrap_socket(sock, server_hostname="qwen.agms.test")
+            tls.sendall(("%sHTTP/1.1\r\nHost: qwen.agms.test\r\nContent-Length: 0\r\n\r\n" % request).encode())
+            line = tls.recv(200).decode("latin-1").split("\r\n", 1)[0]
+            tls.close()
+            record("network", name, "403", line, " 403 " in line + " ")
+        except OSError as exc:
+            record("network", name, "403", err_name(exc), False)
+    for target in ("qwen.agms.test:80", "127.0.0.1:18602"):
+        try:
+            sock, reply = proxy_connect(target)
+            sock.close()
+            record("network", "mediator CONNECT " + target, "403", reply, " 403 " in reply + " ")
+        except OSError as exc:
+            record("network", "mediator CONNECT " + target, "403", err_name(exc), False)
+    # package modification
+    open_denied("package", "open package binary for write", "/opt/agms/pkg/bin/corbanu", write=True)
+    try:
+        os.chmod("/opt/agms/pkg/bin/corbanu", 0o777)
+        record("package", "chmod package binary", "EPERM", "CHANGED", False)
+    except OSError as exc:
+        record("package", "chmod package binary", "EPERM", err_name(exc), exc.errno == errno.EPERM)
+    try:
+        fd = os.open("/opt/agms/pkg/agms-injected", os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        record("package", "create file in package dir", "EACCES", "CREATED", False)
+    except OSError as exc:
+        record("package", "create file in package dir", "EACCES", err_name(exc), exc.errno == errno.EACCES)
+    open_denied("package", "open frozen packet for write", "/opt/agms/packet/design-cases.md", write=True)
+    # privilege
+    result = subprocess.run(["/usr/bin/sudo", "-n", "true"], capture_output=True, text=True)
+    record("child", "sudo -n", "refused", {"rc": result.returncode, "stderr": result.stderr.strip()[:120]},
+           result.returncode != 0)
+    record("child", "uid", "unprivileged run uid", {"uid": me, "euid": os.geteuid()}, me != 0 and me == os.geteuid())
+
+
+def positives():
+    record("positive", "packet readable and frozen", PACKET_SHA, sha("/opt/agms/packet/design-cases.md"),
+           sha("/opt/agms/packet/design-cases.md") == PACKET_SHA)
+    record("positive", "package binary digest", BINARY_SHA, sha("/opt/agms/pkg/bin/corbanu"),
+           sha("/opt/agms/pkg/bin/corbanu") == BINARY_SHA)
+    result = subprocess.run(["/opt/agms/pkg/bin/corbanu", "--version"], capture_output=True, text=True, timeout=60)
+    record("positive", "package launch --version", "rc 0", {"rc": result.returncode, "out": result.stdout.strip()},
+           result.returncode == 0)
+    writable = os.access(os.path.join(RUN, "evidence"), os.W_OK)
+    record("positive", "private evidence dir writable", "writable", writable, writable)
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "all"
+    context = dict(mode=mode, uid=os.getuid(), pid=os.getpid(), ppid=os.getppid(), run=RUN,
+                   utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    negatives()
+    if mode != "negatives":
+        positives()
+    if mode == "all":
+        child = subprocess.run(["/bin/sh", "-c", "exec /usr/bin/python3 /opt/agms/bin/agms-probe negatives"],
+                               capture_output=True, text=True, timeout=300)
+        try:
+            child_doc = json.loads(child.stdout)
+        except ValueError:
+            child_doc = {"ok": False, "raw": child.stdout[-2000:], "stderr": child.stderr[-2000:]}
+        record("child", "grandchild via /bin/sh repeats all negatives", "all denied",
+               {"ok": child_doc.get("ok"), "pid": child_doc.get("context", {}).get("pid"),
+                "failed": [r for r in child_doc.get("probes", []) if not r["ok"]]}, child_doc.get("ok"))
+    ok = all(r["ok"] for r in rows)
+    print(json.dumps(dict(context=context, ok=ok, probes=rows), indent=1))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

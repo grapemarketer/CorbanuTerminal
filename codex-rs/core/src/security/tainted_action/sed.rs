@@ -47,7 +47,7 @@ pub(super) fn command_starts(words: &[String]) -> (Vec<usize>, bool) {
 }
 
 /// What one sed invocation is given.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Call {
     /// Program text: each `-e`/`--expression`, or else the first operand.
     pub(super) programs: Vec<Word>,

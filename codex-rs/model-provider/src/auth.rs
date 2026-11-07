@@ -236,6 +236,27 @@ pub(crate) fn auth_manager_for_provider(
     }
 }
 
+/// D171 (#1286): why a request on `provider`'s named OpenAI sign-in account
+/// that found no sign-in is refused, with the account's recovery; `None` when
+/// `provider` selects no such account. Reads the vault through
+/// `auth_manager`.
+pub fn named_sign_in_refusal(
+    provider: &ModelProviderInfo,
+    auth_manager: Option<&AuthManager>,
+) -> Option<CodexErr> {
+    let account = named_sign_in_account(provider)?;
+    let reason = auth_manager
+        .and_then(AuthManager::named_sign_in_unavailable)
+        .unwrap_or_else(|| {
+            format!(
+                "account `{name}` has no usable sign-in; sign in again with \
+                 `corbanu login --account {name}`",
+                name = account.name
+            )
+        });
+    Some(CodexErr::Fatal(format!("{}: {reason}", provider.name)))
+}
+
 /// PF-84-S06: the named ChatGPT/OpenAI sign-in account `provider` selects.
 pub fn named_sign_in_account(
     provider: &ModelProviderInfo,

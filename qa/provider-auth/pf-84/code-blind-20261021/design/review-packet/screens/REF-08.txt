@@ -1,0 +1,32 @@
+
+╭───────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)         │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: /tmp/f555proj              │
+╰───────────────────────────────────────╯
+
+› Find and fix a bug in @filename
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: -- tok/s
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+ Resume a previous session
+
+ Type to search                                                                                         Filter: [Cwd] All    Sort: [Updated] Created
+
+  ❯ 13s ago     reply with the single word ping
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 1 · 100% ─
+ enter resume   esc exit   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
+
+› Find and fix a bug in @filename
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: -- tok/s
+

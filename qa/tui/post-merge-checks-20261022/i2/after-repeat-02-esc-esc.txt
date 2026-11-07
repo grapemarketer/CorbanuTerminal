@@ -1,0 +1,40 @@
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     mock-ws-1   /model to change                  │
+│ directory: /Volumes/CorbanuDrive/…/runs/i2-after-skip/ws │
+╰──────────────────────────────────────────────────────────╯
+
+
+› first message alpha
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #6.
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────── 100% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc/← to edit prev   → to edit next   enter to edit message
+

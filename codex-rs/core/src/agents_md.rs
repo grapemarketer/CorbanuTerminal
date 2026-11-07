@@ -118,7 +118,18 @@ async fn read_agents_md(
         };
         let size = data.len() as u64;
         if size > remaining {
-            data.truncate(remaining as usize);
+            // Cut on a character boundary: a multi-byte UTF-8 character split
+            // by the budget would decode to U+FFFD and overshoot the budget.
+            let mut end = remaining as usize;
+            while end > 0
+                && remaining as usize - end < 3
+                && data
+                    .get(end)
+                    .is_some_and(|byte| byte & 0b1100_0000 == 0b1000_0000)
+            {
+                end -= 1;
+            }
+            data.truncate(end);
         }
 
         if size > remaining {

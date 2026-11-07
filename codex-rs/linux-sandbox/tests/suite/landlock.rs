@@ -2253,7 +2253,10 @@ fn credential_name_profile(work: &std::path::Path) -> PermissionProfile {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             }),

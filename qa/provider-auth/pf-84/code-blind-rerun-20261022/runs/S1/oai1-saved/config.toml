@@ -1,0 +1,10 @@
+model = "gpt-5.6-luna"
+model_provider = "openai"
+cli_auth_credentials_store = "file"
+suppress_unstable_features_warning = true
+
+[features]
+named_accounts = true
+
+[projects."<RUN>/fixture/workspace"]
+trust_level = "trusted"

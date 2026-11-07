@@ -1,0 +1,7 @@
+{"launcher_ok": true, "tmux_child_ok": true, "pty_input_echoed": true, "failed": [], "probe_count": 99, "ok": true}
+AGMS-SMOKE-OK
+https://api.z.ai/api/paas/v4/models 200
+https://qwen.agms.test/v1/models 200
+{"conn": "1792650620621611000-49203", "event": "forwarded", "method": "POST", "model": "glm-5.3-flash", "n_messages": 4, "path": "/api/paas/v4/chat/completions", "request_bytes": 26874, "response_bytes": 4086, "role": "product", "seconds": 5.302, "status": "200", "stream": true, "target": "zai", "ti
+{"conn": "1792650626069709000-49207", "event": "forwarded", "method": "GET", "path": "/api/paas/v4/models", "request_bytes": 0, "response_bytes": 1503, "role": "product", "seconds": 0.348, "status": "200", "target": "zai", "time_ns": 1792650626421653000, "ts": "2026-10-22T06:30:26+0000"}
+{"conn": "1792650626432395000-49209", "event": "forwarded", "method": "GET", "path": "/v1/models", "request_bytes": 0, "response_bytes": 1047, "role": "product", "seconds": 0.007, "status": "200", "target": "qwen", "time_ns": 1792650626443084000, "ts": "2026-10-22T06:30:26+0000"}

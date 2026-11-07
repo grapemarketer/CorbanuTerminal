@@ -1126,3 +1126,40 @@ async fn issue_442_credential_templates_are_exempt() {
         }
     }
 }
+
+/// #594 (D225): on Linux, Aggressive refuses a Corbanu home reached through a
+/// link in the folder it lets commands write (at launch and for every later
+/// folder, `launch::verify_reloaded`), and accepts the real folder given
+/// directly or a folder that does not contain the link.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn issue_594_home_reached_through_a_writable_link_fails_verification() {
+    use crate::security::home_link;
+    let base = tempfile::tempdir().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let user = base.join("user");
+    let real = base.join("dotfiles/corbanu");
+    let project = base.join("project");
+    for dir in [&user, &real, &project] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let link = user.join(".corbanu");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let refusal = home_link::aggressive_refusal(
+        &real,
+        &[home_link::ExposedLink {
+            link: link.clone(),
+            folder: user.clone(),
+        }],
+    );
+    let failures = |config: &Config| verify(config, /*rules_present*/ true, &real);
+
+    home_link::GIVEN_FOR_TEST.with(|given| *given.borrow_mut() = Some(link.clone()));
+    let in_user = load(&real, &user, "").await;
+    assert_eq!(failures(&in_user), vec![refusal]);
+    let in_project = load(&real, &project, "").await;
+    assert_eq!(failures(&in_project), Vec::<String>::new());
+
+    home_link::GIVEN_FOR_TEST.with(|given| *given.borrow_mut() = Some(real.clone()));
+    assert_eq!(failures(&in_user), Vec::<String>::new());
+}

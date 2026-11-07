@@ -309,6 +309,7 @@ fn packet() -> InspectionDay {
         requests: std::collections::BTreeMap::from([(q.attempt.request_id, vec![q])]),
         other_conversations: Some(Default::default()),
         empty_day: None,
+        recording_gap: false,
     })
 }
 
@@ -365,6 +366,93 @@ fn accounting_inspect_range_partial_no_amount_and_explicit_coverage() {
     Range total unavailable — partial or unavailable buckets excluded; no partial total.
     Effective coverage (requested ∩ aggregate retention ∩ snapshot) for [1970-01-01T00:00:00.000Z, 1970-01-01T01:00:00.000Z): [1970-01-01T00:00:00.001Z, 1970-01-01T01:00:00.000Z)
     ");
+}
+
+/// #314 (D228, Travis 2026-10-28): a day on which accounting failed to record
+/// a request of this conversation says its totals may be incomplete, right
+/// under the heading, so the requests it did record never read as the whole
+/// day. Missing data never looks like free work.
+#[test]
+fn accounting_recording_gap_says_the_day_may_be_incomplete() {
+    let InspectionDay::Ready(mut view) = packet() else {
+        unreachable!()
+    };
+    let complete = inspection_pages(Ok(packet()));
+    assert!(
+        !complete[0]
+            .text
+            .iter()
+            .any(|line| line.contains("may be incomplete")),
+        "{:#?}",
+        complete[0].text
+    );
+    view.recording_gap = true;
+    let pages = inspection_pages(Ok(InspectionDay::Ready(view)));
+    let screen: Vec<&str> = pages[0]
+        .text
+        .iter()
+        .map(String::as_str)
+        .take_while(|line| *line != "—— Details ——")
+        .collect();
+    insta::assert_snapshot!(screen.join("\n"), @"
+    This conversation on 1970-01-01 (UTC):
+    Totals for this day may be incomplete: Corbanu failed to record at least one request of this conversation or its subagents, which may still have been billed. The cause is in Corbanu's accounting log; check your provider's bill.
+    • synthetic · synthetic-model — Pay per use. 1 request, 140 tokens. Estimated cost: at least $0.000180 (1 attempt had no price).
+    No other conversation recorded requests on this day.
+    Next step for requests priced only in part: check the bill from synthetic. Some of their tokens have no published price, so the estimate is only a lower bound.
+    Costs are estimates from published prices; synthetic doesn't report its charges — check synthetic's bill.
+    Select a provider below to see its requests.
+    ");
+}
+
+/// #314 (D228): an empty day with a gap says both that nothing was recorded
+/// and that this is not a complete account.
+#[test]
+fn accounting_recording_gap_on_an_empty_day() {
+    let InspectionDay::Ready(mut view) = packet() else {
+        unreachable!()
+    };
+    view.requests.clear();
+    view.totals = DayTotals::default();
+    view.own_totals = DayTotals::default();
+    view.empty_day = Some(codex_state::accounting::EmptyDay::NotRecorded);
+    view.recording_gap = true;
+    let pages = inspection_pages(Ok(InspectionDay::Ready(view)));
+    assert!(
+        pages[0].text[1].starts_with("Totals for this day may be incomplete:"),
+        "{:#?}",
+        pages[0].text
+    );
+}
+
+/// #314 (D228): a range with a gap day says so on its overview, and the
+/// bucket's own page says it for its period.
+#[test]
+fn accounting_recording_gap_in_a_range() {
+    let InspectionDay::Ready(mut view) = packet() else {
+        unreachable!()
+    };
+    view.recording_gap = true;
+    view.read_at_ms = view.coverage.completed_as_of_ms;
+    let pages = inspection_pages(Ok(range_packet(
+        /*partial*/ false,
+        InspectionDay::Ready(view),
+    )));
+    assert!(
+        pages[0]
+            .text
+            .iter()
+            .any(|line| line.starts_with("Totals for this range may be incomplete:")),
+        "{:#?}",
+        pages[0].text
+    );
+    let texts: Vec<&Vec<String>> = pages.iter().map(|page| &page.text).collect();
+    assert!(
+        texts[1..].iter().any(|text| text
+            .iter()
+            .any(|line| line.starts_with("Totals for this period may be incomplete:"))),
+        "{texts:#?}"
+    );
 }
 
 /// A week read on its third day: day 0 recorded up to the checkpoint, the
@@ -3627,7 +3715,7 @@ fn accounting_realtime_session_reads_unknown_not_zero() {
         .collect();
     assert!(
         screen.iter().any(|line| line.as_str()
-            == "Realtime: 1 session; token counts and cost unknown, not zero — a realtime session's usage is not reported to this client."),
+            == "Realtime: 1 session; token counts and cost unknown, not zero — no token usage was recorded for it."),
         "{screen:#?}"
     );
     let (label, index) = pages[0]
@@ -3642,7 +3730,7 @@ fn accounting_realtime_session_reads_unknown_not_zero() {
     let request = &pages[*index].text;
     assert!(
         request.iter().any(|line| line
-            == "Kind: Realtime session — started 1970-01-01T00:00:01.000Z, ended 1970-01-01T00:01:01.000Z; its token counts and cost are unknown, not zero: a realtime session's usage is not reported to this client."),
+            == "Kind: Realtime session — started 1970-01-01T00:00:01.000Z, ended 1970-01-01T00:01:01.000Z; its token counts and cost are unknown, not zero: no token usage was recorded for it."),
         "{request:#?}"
     );
     let attempt = attempt_text(&session);
@@ -3672,6 +3760,110 @@ fn accounting_realtime_session_reads_unknown_not_zero() {
     }
 }
 
+/// #889 D223: a recorded realtime session with the tokens its responses
+/// reported (332 input, 214 of them cached, 151 output) and no rate, as the
+/// ledger quotes it: the reported parts priced by nothing.
+fn realtime_reported_quote(started: i64, ended: Option<i64>) -> ObservationQuote {
+    let mut q = realtime_quote(started, ended);
+    q.usage = Usage {
+        input: Some(332),
+        read: Some(214),
+        output: Some(151),
+        total: Some(483),
+        session_ended_at_ms: ended,
+        ..Usage::default()
+    };
+    // Noncached input needs the unreported cache-write count.
+    q.buckets = [
+        BucketQuote::MissingUsage,
+        BucketQuote::MissingRate,
+        BucketQuote::MissingUsage,
+        BucketQuote::MissingRate,
+    ];
+    q
+}
+
+/// #889 D223 (Travis, 2026-10-28): `/cost` shows a realtime session's
+/// reported tokens and says its cost is unknown, not zero - never a dollar
+/// figure, on any page.
+#[test]
+fn accounting_realtime_session_shows_reported_tokens_and_no_cost() {
+    let InspectionDay::Ready(mut view) = packet() else {
+        unreachable!()
+    };
+    let session = realtime_reported_quote(/*started*/ 1_000, Some(61_000));
+    view.requests =
+        std::collections::BTreeMap::from([(session.attempt.request_id, vec![session.clone()])]);
+    view.totals = DayTotals::from_quotes(view.requests.values().flatten()).unwrap();
+    view.own_totals = view.totals.clone();
+    let pages = inspection_pages(Ok(InspectionDay::Ready(view)));
+    let screen: Vec<&str> = pages[0]
+        .text
+        .iter()
+        .map(String::as_str)
+        .take_while(|line| *line != "—— Details ——")
+        .collect();
+    insta::assert_snapshot!(screen.join("\n"), @"
+    This conversation on 1970-01-01 (UTC):
+    • OpenAI · gpt-realtime-1.5 — Pay per use. 1 request, 483 tokens. Estimated cost: no price available.
+    Realtime: 1 session; tokens as the provider reported them at the end of each response; cost unknown, not zero — Corbanu has no realtime prices.
+    No other conversation recorded requests on this day.
+    Next step for requests with no price: check the bill from OpenAI. No published price covers them, so no cost is shown for them here.
+    Costs are estimates from published prices; OpenAI doesn't report its charges — check OpenAI's bill.
+    Select a provider below to see its requests.
+    ");
+    let (_, index) = pages[0]
+        .links
+        .iter()
+        .find(|(label, _)| label.contains("Realtime session"))
+        .expect("a realtime request link");
+    assert!(
+        pages[*index].text.iter().any(|line| line
+            == "Kind: Realtime session — started 1970-01-01T00:00:01.000Z, ended 1970-01-01T00:01:01.000Z; its tokens are those the provider reported at the end of each response, so they may be low: a response cut short by the session's end reports none, and one whose report could not be read is not counted; its cost is unknown, not zero: Corbanu has no realtime prices."),
+        "{:#?}",
+        pages[*index].text
+    );
+    let attempt = attempt_text(&session);
+    assert!(
+        attempt.iter().any(|line| line
+            == "Token cost: unavailable — no applicable price; recorded usage is not a zero-cost claim."),
+        "{attempt:#?}"
+    );
+    for text in pages
+        .iter()
+        .flat_map(|page| {
+            page.text
+                .iter()
+                .chain(page.links.iter().map(|(label, _)| label))
+        })
+        .chain(attempt.iter())
+    {
+        assert!(!text.contains('$'), "{text}");
+    }
+}
+
+/// #889 D223: with sessions both with and without recorded tokens, the first
+/// screen says how many of each.
+#[test]
+fn accounting_realtime_sessions_with_and_without_tokens_say_which() {
+    let old = realtime_quote(/*started*/ 1_000, Some(2_000));
+    let mut reported = realtime_reported_quote(/*started*/ 3_000, Some(4_000));
+    reported.attempt.attempt_id = Uuid::from_u128(31);
+    reported.attempt.request_id = Uuid::from_u128(32);
+    assert_eq!(
+        realtime_session_line([&old, &reported]).as_deref(),
+        Some(
+            "Realtime: 2 sessions; tokens as the provider reported them at the end of each response for 1, none recorded for 1; cost unknown, not zero — Corbanu has no realtime prices."
+        )
+    );
+    assert_eq!(
+        realtime_session_line([&reported]).as_deref(),
+        Some(
+            "Realtime: 1 session; tokens as the provider reported them at the end of each response; cost unknown, not zero — Corbanu has no realtime prices."
+        )
+    );
+}
+
 /// #824: a session whose end was never recorded (the process stopped
 /// mid-session) says so rather than inventing a time.
 #[test]
@@ -3692,13 +3884,16 @@ fn accounting_realtime_session_without_an_end_says_so() {
         "{kind}"
     );
     // An owner prefix keeps it a realtime session; an ordinary turn and a
-    // WebRTC call (recorded at its creation, with no session end) are not.
+    // WebRTC call are not. A WebRTC call is recorded at its creation; the end
+    // it may carry (#955) is its client control channel's, not the media
+    // call's, so it is not shown as a session end (#1000).
     let mut side = session.clone();
     side.attempt.turn = format!("side:realtime:ws:{}", Uuid::from_u128(24));
     assert!(realtime_session(&[&side]));
     assert!(!realtime_session(&[&quote()]));
     let mut call = session;
     call.attempt.turn = format!("realtime:{}", Uuid::from_u128(25));
+    call.usage.session_ended_at_ms = Some(61_000);
     assert!(!realtime_session(&[&call]));
     assert!(
         !attempt_text(&call)

@@ -1,0 +1,1 @@
+gate gate-agmx0-20261027T190205Z: probes ok=True count=110 smoke=['AGMS-SMOKE-OK'] relay200={'https://api.z.ai/api/paas/v4/models 200': True, 'https://api.openai.com/v1/models 200': True} -> PASS

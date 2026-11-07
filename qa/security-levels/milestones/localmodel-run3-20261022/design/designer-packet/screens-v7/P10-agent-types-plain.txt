@@ -1,0 +1,46 @@
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Without calling any tool, list the names of your child-agent tools and, for the one that starts a child, every parameter it accepts and the allowed
+  values of any role or agent type parameter, word for word from your tool description.
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+• Tools
+
+  - spawn_agent_v1 — starts a child
+  - send_input_v1
+  - wait_agent_v1
+  - close_agent_v1
+  - resume_agent_v1
+
+  spawn_agent_v1 parameters
+
+  - agent_type — string
+  - fork_context — boolean
+  - items — array of objects with audio_url, image_url, name, path, text, type
+  - message — string
+  - model — string
+  - reasoning_effort — string
+  - service_tier — string
+
+  agent_type values
+
+  - p20plain
+  - default
+  - explorer
+  - nazgul
+  - orc
+  - troll
+  - worker
+
+
+› Improve documentation in @filename
+
+  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen default · ~/run/fixture/workspace · Corbanu Terminal · TPS: 2.8 tok/s
+TIMEOUT: pattern not seen within 240.0s

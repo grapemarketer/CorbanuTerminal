@@ -314,6 +314,9 @@ fn skill_roots_from_layer_stack_inner(
     repo_fs: Option<Arc<dyn ExecutorFileSystem>>,
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
+    // #1506 item 2 (D262): no skills from a folder a sandboxed command may
+    // have planted, until the user confirms it.
+    let planted = codex_config::planted_project_metadata();
 
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::HighestPrecedenceFirst,
@@ -325,7 +328,9 @@ fn skill_roots_from_layer_stack_inner(
 
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
-                if let Some(repo_fs) = &repo_fs {
+                if let Some(repo_fs) = &repo_fs
+                    && !planted.contains(config_folder.as_path())
+                {
                     roots.push(SkillRoot {
                         path: config_folder.join(SKILLS_DIR_NAME),
                         scope: SkillScope::Repo,
@@ -409,7 +414,11 @@ async fn repo_agents_skill_roots(
     };
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     let project_root = find_project_root(fs.as_ref(), cwd, &project_root_markers).await;
-    let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
+    let planted = codex_config::planted_project_metadata();
+    let dirs: Vec<_> = dirs_between_project_root_and_cwd(cwd, &project_root)
+        .into_iter()
+        .filter(|dir| !planted.contains(dir.join(AGENTS_DIR_NAME).as_path()))
+        .collect();
     let mut roots = Vec::new();
     let mut results = futures::stream::iter(dirs)
         .map(|dir| {

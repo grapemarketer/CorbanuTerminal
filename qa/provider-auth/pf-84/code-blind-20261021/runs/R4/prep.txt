@@ -1,0 +1,7 @@
+=== home zaione 2026-10-22T02:15:39Z
+--- account list (zaione)
+No named accounts. Every provider uses its default account.
+=== home fresh 2026-10-22T02:15:39Z
+--- account list (fresh)
+No named accounts. Every provider uses its default account.
+prep done 2026-10-22T02:15:39Z

@@ -883,6 +883,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             ephemeral: None,
             history_mode: None,
             session_start_source: None,
+            reopened_by_prompt_edit: false,
             thread_source: None,
             spawn_agent_parent_thread_id: None,
             spawn_agent_role: None,

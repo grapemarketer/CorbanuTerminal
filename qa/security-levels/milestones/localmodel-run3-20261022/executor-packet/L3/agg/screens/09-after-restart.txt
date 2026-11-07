@@ -1,0 +1,12 @@
+Restarting Corbanu Terminal to apply the saved security level…
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Summarize recent commits
+
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/cap-20261010T224124Z/fixture/workspace · Corbanu Terminal · TPS: -- tok/s

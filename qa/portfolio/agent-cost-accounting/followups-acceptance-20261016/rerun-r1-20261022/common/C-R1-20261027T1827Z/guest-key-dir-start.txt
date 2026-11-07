@@ -1,0 +1,4 @@
+pf83-auth: total 8
+pf83-auth: drwx------  3 agent  staff   96 Oct 27 18:27 .
+pf83-auth: drwx------  8 agent  staff  256 Oct 27 18:27 ..
+pf83-auth: -rw-------  1 agent  staff   47 Oct 27 18:27 auth.json

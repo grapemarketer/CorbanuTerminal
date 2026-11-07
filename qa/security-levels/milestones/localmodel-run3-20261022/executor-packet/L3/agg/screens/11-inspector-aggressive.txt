@@ -1,0 +1,32 @@
+Restarting Corbanu Terminal to apply the saved security level…
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+◐ Aggressive set; off or not observed: Credential broker
+Observed 2s ago, policy generation 0.1
+
+Level
+  Saved: Aggressive [configured: /security]
+  Core config: Permissive [configured: config layers]
+  [set] Active this run: Aggressive, every row verified at launch [resolved: launch check]
+  [on] Live policy: Aggressive in force; next start Aggressive; kill switch off; generation 0.1 [observed: Core policy]
+
+This session
+  [set] Sandbox: profile corbanu-aggressive: commands can write to the current folder; permission-request tools are off [resolved: session config,
+      checked at launch]
+  [set] Approvals: untrusted (reviewer: you) [resolved: session config, checked at launch]
+  [set] Network: off for agent commands; web search disabled [resolved: session config, checked at launch]
+  [set] Vault: the vault store and sign-in file are unreadable to agent commands; secret-like environment variables are removed; login profiles and
+      shell snapshots are not used [resolved: session config, checked at launch]
+  [set] Model keys: held by the isolated credential broker (broker_model_auth on) [resolved: session config]
+  [set] Child agents: spawned agents get this session's values [resolved: session config, checked at launch]
+  [set] Sandbox backend: macOS Seatbelt [resolved: platform]
+  [set] Egress destinations: proxy destination policy on (url_destination_policy) [resolved: features]
+
+Runtime controls
+↑/↓ scroll · r refresh · esc back to /security

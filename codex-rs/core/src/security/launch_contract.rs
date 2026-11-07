@@ -700,6 +700,7 @@ impl LaunchContract {
             .map(|folder| {
                 FileSystemSandboxEntry::new(
                     FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: crate::security::preflight::database_glob(folder.as_path())
                             .to_string_lossy()
                             .into_owned(),

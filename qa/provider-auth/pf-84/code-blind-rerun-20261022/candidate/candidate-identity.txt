@@ -1,0 +1,41 @@
+# git (worktree the build ran in)
+f61397ca413baa6963d8178c4206ddf4b7ff15da
+b1e41bd4f7 is an ancestor of f61397ca41
+80d1146019 is an ancestor of f61397ca41
+20f438ec28 is an ancestor of f61397ca41
+
+# build log (first and last lines)
+2026-10-22T08:22:36Z
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 00s
+BUILD-EXIT=0 2026-10-22T08:26:36Z
+
+# postmerge-ci on f61397ca41
+{"conclusion":"success","headSha":"f61397ca413baa6963d8178c4206ddf4b7ff15da","updatedAt":"2026-10-22T08:30:47Z","workflowName":"postmerge-ci"}
+
+# codesign -dvv (case build)
+Identifier=com.corbanu.corbanu
+Authority=Developer ID Application: Travis Good (K5N2T25C23)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=22 Oct 2026 at 1:30:29 am
+TeamIdentifier=K5N2T25C23
+Runtime Version=26.0.0
+codesign --verify --strict: ok
+
+# candidate files
+{"commit": "f61397ca41", "full_commit": "f61397ca413baa6963d8178c4206ddf4b7ff15da", "built_at": "2026-10-22T08:26:36Z", "toolchain": "1.99.1", "features": "codex-core/developer-accounting,codex-tui/developer-accounting", "signing_identity": "Developer ID Application: Travis Good (K5N2T25C23)", "corbanu_sha256": "ba9feaa443ec18f29abc73a27137cc8f4696899ea4a1c3dada84c8d2df280006", "note": "pf84-rerun private build; not installed"}
+commit f61397ca41
+version 0.1.48
+corbanu sha256 ba9feaa443ec18f29abc73a27137cc8f4696899ea4a1c3dada84c8d2df280006
+packet <Q>/packet-run
+staged 2026-10-22T09:25:44Z   (the last staging, for S3R; S1 used the same build staged at 08:35:07Z and re-staged to its clone at 08:37:13Z, S2/S3 the same stage)
+
+# sign-in tool
+commit 0e2c02529d
+version 0.1.48
+corbanu sha256 3833f80474a9382caa05a6bc500ada0957ecfa9367327738fd060c41afc8c32a
+packet <Q>/packet-signin
+staged 2026-10-22T08:18:17Z
+Authority=Developer ID Application: Travis Good (K5N2T25C23)
+Timestamp=21 Oct 2026 at 11:55:35 pm
+TeamIdentifier=K5N2T25C23

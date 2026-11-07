@@ -15,8 +15,37 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> anyhow::Result<()> {
+/// A turn's futures are large in debug builds: with the default 2 MiB stack a
+/// tokio worker overflows while these tests run the turn. Give this test's
+/// runtime threads room instead of raising the stack for the whole binary.
+const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+fn run_with_test_stack<F, Fut>(test_body: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>> + 'static,
+{
+    std::thread::Builder::new()
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_stack_size(TEST_STACK_SIZE_BYTES)
+                .enable_all()
+                .build()?
+                .block_on(test_body())
+        })?
+        .join()
+        .map_err(|_| anyhow::anyhow!("test thread panicked"))?
+}
+
+#[test]
+fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> anyhow::Result<()> {
+    run_with_test_stack(request_body_is_zstd_compressed_for_codex_backend_when_enabled_inner)
+}
+
+async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled_inner() -> anyhow::Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -67,8 +96,13 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> anyhow::Result<()> {
+#[test]
+fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> anyhow::Result<()> {
+    run_with_test_stack(request_body_is_not_compressed_for_api_key_auth_even_when_enabled_inner)
+}
+
+async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled_inner()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

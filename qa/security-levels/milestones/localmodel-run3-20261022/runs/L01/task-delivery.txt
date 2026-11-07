@@ -1,0 +1,6 @@
+MOD-21 task delivery (#1175): guest mediator flags for every product request to the local model that held the task text (flags only, no text)
+2026-10-22T06:21:18+0000 qwen n_messages=7 [{"in_inter_agent": false, "in_untrusted": false, "index": 6, "inter_agent_anywhere": false, "role": "user", "untrusted_anywhere": false}]
+2026-10-22T06:21:34+0000 qwen n_messages=9 [{"in_inter_agent": false, "in_untrusted": false, "index": 6, "inter_agent_anywhere": false, "role": "user", "untrusted_anywhere": false}]
+2026-10-22T06:21:50+0000 qwen n_messages=11 [{"in_inter_agent": false, "in_untrusted": false, "index": 6, "inter_agent_anywhere": false, "role": "user", "untrusted_anywhere": false}]
+2026-10-22T06:22:18+0000 qwen n_messages=13 [{"in_inter_agent": false, "in_untrusted": false, "index": 6, "inter_agent_anywhere": false, "role": "user", "untrusted_anywhere": false}]
+2026-10-22T06:23:11+0000 qwen n_messages=15 [{"in_inter_agent": false, "in_untrusted": false, "index": 6, "inter_agent_anywhere": false, "role": "user", "untrusted_anywhere": false}]

@@ -1,0 +1,7 @@
+2026-10-22T08:35:18Z
+System-wide memory free percentage: 43%
+2026-10-22T08:35:18Z slot ok (guests running: 0; UTM: 0; Tart: 0)
+ssh ready 2026-10-22T08:35:32Z 192.168.64.125
+Source Name            Disk  Size  Accessed       State  
+local  corbanu-qa-base 50 GB 28 GB 17 minutes ago stopped
+local  pf84-rerun-d136 50 GB 29 GB 11 seconds ago running

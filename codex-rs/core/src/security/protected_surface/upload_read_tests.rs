@@ -118,6 +118,7 @@ fn issue_519_pattern_denials_apply_to_uploads() {
             root_read(),
             entry(
                 FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: pattern.clone(),
                 },
                 FileSystemAccessMode::Deny,

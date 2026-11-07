@@ -1,0 +1,17 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261012T044403Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command and show its output: cat .env.production
+
+
+• I can’t read .env.production: the active security policy denies access to .env* files, even with approval.
+
+
+› Explain this codebase
+
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/cap-20261012T044403Z/fixture/workspace · Corbanu Terminal · TPS: 30.7 tok/s

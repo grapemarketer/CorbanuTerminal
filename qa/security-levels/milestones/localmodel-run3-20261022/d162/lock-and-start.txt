@@ -1,0 +1,9 @@
+# D162: the UTM lock and start, as recorded by the integrator (the lock file was removed at the end)
+lock file workers-20261002/vm-macos3.lock, written 2026-10-22T07:45:55Z:
+  holder: qa-local3
+  taken: 2026-10-22T07:45:55Z
+  vm: UTM "macOS 3" (D162: delete /Users/agent/.pf83-auth, then shut down)
+checks before it: no vm-tart.lock and no vm-macos3.lock present; no "tart run" process; utmctl list: "macOS 2" stopped, "macOS 3" stopped; /Volumes/FASTDRIVE2/z23 present
+2026-10-22T07:45:55Z utmctl start "macOS 3" (rc 0); SSH port open 07:46:04Z; utm-list-start.txt was taken just after the start
+power-offs: shutdown.txt and verify-boot.txt ("no shutdown after 2 min ... power off" = utmctl stop "macOS 3", UTM default force stop)
+lock removed after the second power-off (07:51Z)

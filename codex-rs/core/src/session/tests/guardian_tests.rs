@@ -37,7 +37,7 @@ use core_test_support::responses::chat_completions_sse;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_response_once;
+use core_test_support::responses::mount_response_once_chat_completions;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_chat_completions;
 use core_test_support::responses::sse;
@@ -167,17 +167,31 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
 
 #[tokio::test]
 async fn request_permissions_guardian_review_stops_when_cancelled() {
+    // Generous caps so a loaded CI runner is not mistaken for a hang (#1539).
+    // The guardian's model reply is held for 60 s, so a request that ignores
+    // the cancellation runs into STOP_CAP instead of returning.
+    const START_CAP: Duration = Duration::from_secs(30);
+    const STOP_CAP: Duration = Duration::from_secs(30);
+
     let server = start_mock_server().await;
-    let _guardian_request_log = mount_response_once(
+    // The default Ambient provider reviews over Chat Completions (#1544).
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The request grants narrowly scoped network access for this turn.",
+    })
+    .to_string();
+    let guardian_request_log = mount_response_once_chat_completions(
         &server,
-        sse_response(sse(vec![ev_response_created("resp-guardian-delayed")]))
+        sse_response(chat_completions_sse("z-ai/glm-5.2", &guardian_assessment))
             .set_delay(Duration::from_secs(60)),
     )
     .await;
 
-    let (mut session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (mut session, mut turn_context_raw, _codex_home) =
+        make_session_and_context_with_provider_auth().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
-    let turn_context_raw = Arc::get_mut(&mut turn_context).expect("single turn context ref");
     turn_context_raw
         .approval_policy
         .set(AskForApproval::OnRequest)
@@ -195,15 +209,14 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         session.services.auth_manager(),
         config.model_provider.clone(),
     );
-    Arc::get_mut(&mut session)
-        .expect("single session ref")
-        .services
-        .models_manager = models_manager;
+    session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
     );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(NetworkPermissions {
@@ -239,23 +252,23 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         }
     });
 
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let event = rx_event.recv().await.expect("event channel should be open");
-            if matches!(
-                event.msg,
-                codex_protocol::protocol::EventMsg::GuardianAssessment(_)
-            ) {
-                break;
-            }
+    // Cancel only once the guardian's model call is in flight: the mock has
+    // received it and is holding the reply.
+    timeout(START_CAP, async {
+        while guardian_request_log.requests().is_empty() {
+            assert!(
+                !request_handle.is_finished(),
+                "request_permissions finished before the guardian model call"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("guardian review should start before cancellation");
+    .expect("the guardian model call should start before cancellation");
 
     cancellation_token.cancel();
 
-    let response = timeout(Duration::from_secs(5), request_handle)
+    let response = timeout(STOP_CAP, request_handle)
         .await
         .expect("request_permissions should stop when cancelled")
         .expect("request_permissions task should not panic");
@@ -266,6 +279,9 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
             .await,
         None
     );
+    let guardian_request = guardian_request_log.single_request();
+    assert_eq!(guardian_request.path(), "/v1/chat/completions");
+    assert!(guardian_request.body_contains_text("need network"));
 }
 
 #[tokio::test]

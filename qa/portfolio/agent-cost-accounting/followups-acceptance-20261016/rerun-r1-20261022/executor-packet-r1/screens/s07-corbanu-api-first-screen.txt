@@ -1,0 +1,35 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• Corbanu API · DeepSeek V4.1 Flash — Pay per use. 1 request, 9,289 tokens. Cost: $0.002145, charged by Corbanu API.
+No other conversation recorded requests on this day.
+Costs marked "charged by Corbanu API" are the charges Corbanu API reported with those responses.
+Select a provider below to see its requests.
+—— Details ——
+Token cost for recorded attempts: $0.002145, charged by Corbanu API
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Billed cost: $0.002145 — as stated by the provider with each response
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T00:22:12.368Z; ledger current to: 2026-10-15T00:16:54.409Z (317959 ms behind)
+Retention: request detail kept since 2026-07-17T00:22:12.368Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: 0.002145
+Input: 9,286
+Noncached input (derived for inclusive input): not reported (1 attempt)
+Cache read: 0
+Cache write: not reported (1 attempt)
+Output: 3
+Reasoning (subset, not separately billed): 0
+Total (not separately billed): 9,289
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ Corbanu API · DeepSeek V4.1 Flash — $0.002145, charged by Corbanu API (1 request)
+→ Request 1 · Corbanu API · DeepSeek V4.1 Flash · $0.002145, charged by Corbanu API
+→ Root's own attempts (1 attempt)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: printf ok > cap-v.txt
+
+
+✗ You canceled the request to run printf ok > cap-v.txt
+
+✗ Did not run printf ok > cap-v.txt
+  └ Approval declined
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› hello
+
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: on
+
+No grants are held now.
+  Revoke all active authority
+> Turn the kill switch off
+
+↑/↓ choose · enter review · esc back to the levels
+
+
+
+
+
+
+
+
+
+
+
+

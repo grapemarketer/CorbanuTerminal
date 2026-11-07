@@ -2,12 +2,29 @@ use super::*;
 use crate::transport::remote_control::protocol::normalize_remote_control_url;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::cell::Cell;
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-const TEST_REQUEST_TIMEOUT: Duration = Duration::from_millis(100);
+// Advance this deadline only after the intended response phase is observed.
+// Real connection/header progress is bounded by the test runner, not this timer.
+const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+tokio::task_local! {
+    static RESPONSE_HEADERS_RECEIVED: Cell<Option<oneshot::Sender<()>>>;
+}
+
+pub(super) fn notify_response_headers_received() {
+    let _ = RESPONSE_HEADERS_RECEIVED.try_with(|notification| {
+        if let Some(notification) = notification.take() {
+            notification
+                .send(())
+                .expect("test should await parsed response headers");
+        }
+    });
+}
 
 fn auth() -> RemoteControlConnectionAuth {
     RemoteControlConnectionAuth {
@@ -39,9 +56,13 @@ async fn timed_out_request(partial_response: Option<&'static [u8]>) -> io::Error
             .local_addr()
             .expect("listener should have a local address")
     );
+    let (request_connected_tx, request_connected_rx) = oneshot::channel();
     let (request_done_tx, request_done_rx) = oneshot::channel();
     let server_task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("request should connect");
+        request_connected_tx
+            .send(())
+            .expect("test should await the connection");
         if let Some(partial_response) = partial_response {
             stream
                 .write_all(partial_response)
@@ -53,21 +74,41 @@ async fn timed_out_request(partial_response: Option<&'static [u8]>) -> io::Error
             .expect("test should report request completion");
     });
 
-    let err = send_remote_control_server_request::<_, serde_json::Value>(
-        &url,
-        &auth(),
-        "installation-id",
-        &json!({"server_id": "server-id"}),
-        "refresh",
-        "server refresh",
-        TEST_REQUEST_TIMEOUT,
-    )
-    .await
-    .expect_err("incomplete response should time out");
+    let (headers_received_tx, headers_received_rx) = oneshot::channel();
+    let request_task = tokio::spawn(RESPONSE_HEADERS_RECEIVED.scope(
+        Cell::new(Some(headers_received_tx)),
+        async move {
+            send_remote_control_server_request::<_, serde_json::Value>(
+                &url,
+                &auth(),
+                "installation-id",
+                &json!({"server_id": "server-id"}),
+                "refresh",
+                "server refresh",
+                TEST_REQUEST_TIMEOUT,
+            )
+            .await
+        },
+    ));
+    request_connected_rx
+        .await
+        .expect("server should accept the request");
+    if partial_response.is_some() {
+        headers_received_rx
+            .await
+            .expect("client should parse response headers before the timeout");
+    }
+    tokio::time::pause();
+    tokio::time::advance(TEST_REQUEST_TIMEOUT).await;
+    let err = request_task
+        .await
+        .expect("request task should finish")
+        .expect_err("incomplete response should time out");
     request_done_tx
         .send(())
         .expect("server should wait for request completion");
     server_task.await.expect("server task should finish");
+    tokio::time::resume();
     err
 }
 

@@ -1,0 +1,6 @@
+12:21:55Z
+total 8
+drwxr-xr-x@ 4 Neo  staff  128 Oct 22 05:16 .
+drwxr-xr-x@ 6 Neo  staff  192 Oct 22 05:16 ..
+drwxr-xr-x@ 9 Neo  staff  288 Oct 22 05:16 .git
+-rw-r--r--@ 1 Neo  staff   11 Oct 22 05:16 notes.txt

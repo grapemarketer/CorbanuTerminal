@@ -120,6 +120,13 @@ pub struct ThreadStartParams {
     pub history_mode: Option<ThreadHistoryMode>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// The person edited the first message of a saved conversation and this
+    /// thread continues from that point (#1038). It has no history, but its
+    /// startup warm-up is a reopen warm-up: labelled, announced, and skipped
+    /// with `skip_reopen_warmup`, as when a later message is edited.
+    #[experimental("thread/start.reopenedByPromptEdit")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reopened_by_prompt_edit: bool,
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,

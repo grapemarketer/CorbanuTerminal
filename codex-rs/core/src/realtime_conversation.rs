@@ -29,6 +29,7 @@ use codex_api::build_session_headers;
 use codex_api::map_api_error;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
@@ -55,6 +56,7 @@ use codex_protocol::protocol::RealtimeConversationSdpEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeResponseUsage;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -425,6 +427,9 @@ struct RealtimeInputTask {
     flush_transcript_tail_on_session_end: bool,
     transcript_tail_tx: Sender<String>,
     stop_token: CancellationToken,
+    /// Where a recorded session's finished responses report their tokens
+    /// (#889 D223); `None` when nothing records them.
+    usage_tx: Option<tokio::sync::mpsc::UnboundedSender<RealtimeResponseUsage>>,
 }
 
 struct RealtimeInputChannels {
@@ -665,10 +670,10 @@ impl RealtimeConversationManager {
                 )
                 .await
                 .map_err(map_api_error)?;
-            // #824: the session is billed but its usage never reaches this
-            // client, so it is recorded as one request with tokens unknown:
-            // admitted now that it is open, its end recorded however the
-            // session ends. A failed connection opened no session.
+            // #824: the session is recorded as one request, admitted now
+            // that it is open, with the tokens its finished responses report
+            // (#889 D223) and its end recorded however the session ends. A
+            // failed connection opened no session.
             let record = match (&accounting, &websocket_credential) {
                 (Some((client_session, _scopes)), RealtimeRecordKey::AmbientUnderNamedAccount) => {
                     model_client.leave_realtime_session_unrecorded(
@@ -697,6 +702,7 @@ impl RealtimeConversationManager {
             };
             let task = spawn_realtime_input_task(
                 RealtimeInputTask {
+                    usage_tx: None,
                     model_client,
                     writer: connection.writer(),
                     events: connection.events(),
@@ -1269,6 +1275,13 @@ async fn prepare_realtime_start(
     let mut websocket_credential = RealtimeRecordKey::None;
     let mut extra_headers = match transport {
         ConversationStartTransport::Websocket => {
+            // D171 (#1286, #1311 item 5): a named OpenAI sign-in account with
+            // no sign-in (removed or signed out) is refused with its
+            // recovery, as its other requests are, never sent the ambient
+            // OPENAI_API_KEY instead.
+            if auth.is_none() {
+                refuse_named_account_without_sign_in(&provider, &auth_manager).await?;
+            }
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
             websocket_credential = RealtimeRecordKey::for_websocket(&realtime_api_key, &provider);
             realtime_request_headers(
@@ -1690,6 +1703,28 @@ fn wrap_realtime_delegation_input(
     RealtimeDelegation::new(input, transcript_delta, source).render()
 }
 
+/// D171: `Err` with the account's recovery when `provider` selects a named
+/// OpenAI sign-in account; the caller found no sign-in for it. The vault is
+/// read off the async workers.
+async fn refuse_named_account_without_sign_in(
+    provider: &ModelProviderInfo,
+    auth_manager: &Arc<AuthManager>,
+) -> CodexResult<()> {
+    if codex_model_provider::named_sign_in_account(provider).is_none() {
+        return Ok(());
+    }
+    let info = provider.clone();
+    let auth_manager = Arc::clone(auth_manager);
+    let refusal = tokio::task::spawn_blocking(move || {
+        codex_model_provider::named_sign_in_refusal(&info, Some(&auth_manager))
+    })
+    .await
+    .unwrap_or_else(|_| {
+        codex_model_provider::named_sign_in_refusal(provider, /*auth_manager*/ None)
+    });
+    refusal.map_or(Ok(()), Err)
+}
+
 fn realtime_api_key(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
@@ -1820,14 +1855,32 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
 /// shutdown, or the transport closing or failing. Each of those waits for this
 /// task, so the end is written before the stop returns; the write waits only
 /// while another connection holds the state DB lock.
+///
+/// #889 D223: the record also gets the tokens each finished response reports,
+/// in order, written off the session's own loop; the end is written after
+/// all of them.
 fn spawn_realtime_input_task(
-    input: RealtimeInputTask,
+    mut input: RealtimeInputTask,
     record: Option<crate::accounting::realtime::RealtimeSessionRecord>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let Some(mut record) = record else {
+            run_realtime_input_task(input).await;
+            return;
+        };
+        let (usage_tx, mut usage_rx) = tokio::sync::mpsc::unbounded_channel();
+        input.usage_tx = Some(usage_tx);
+        let recorder = tokio::spawn(async move {
+            while let Some(usage) = usage_rx.recv().await {
+                record.observe_response(&usage).await;
+            }
+            record
+        });
+        // The session's sender is dropped when it ends, which ends the recorder.
         let ended_at_ms = run_realtime_input_task(input).await;
-        if let Some(record) = record {
-            record.end(ended_at_ms).await;
+        match recorder.await {
+            Ok(record) => record.end(ended_at_ms).await,
+            Err(error) => crate::accounting::gap("record realtime session end", error),
         }
     })
 }
@@ -1919,6 +1972,7 @@ async fn run_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) 
     }
 
     run_realtime_input_task(RealtimeInputTask {
+        usage_tx: None,
         model_client,
         writer: connection.writer(),
         events: connection.events(),
@@ -1953,6 +2007,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) -> i64 {
         flush_transcript_tail_on_session_end,
         transcript_tail_tx,
         stop_token,
+        usage_tx,
     } = input;
 
     let mut output_audio_state: Option<OutputAudioState> = None;
@@ -1986,6 +2041,14 @@ async fn run_realtime_input_task(input: RealtimeInputTask) -> i64 {
             }.await,
             // Events received from the realtime server.
             realtime_event = events.next_event() => async {
+                // #889 D223: the provider billed a finished response whatever
+                // happens next, so its reported tokens go to the record first.
+                if let (Some(usage_tx), Ok(Some(RealtimeEvent::ResponseDone(done)))) =
+                    (&usage_tx, &realtime_event)
+                    && let Some(usage) = done.usage
+                {
+                    let _ = usage_tx.send(usage);
+                }
                 admit_realtime_operation(&model_client, &events_tx).await?;
                 handle_realtime_server_event(
                     realtime_event,

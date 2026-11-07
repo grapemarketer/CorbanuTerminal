@@ -289,3 +289,178 @@ fn named_chatgpt_sign_in_is_not_refused_for_a_third_party_session_provider() -> 
     assert!(!home.path().join("auth.json").exists());
     Ok(())
 }
+
+/// D171 (#1286), end to end with two processes: a `corbanu exec` session on
+/// the named ChatGPT account `work` keeps running while `corbanu account
+/// remove openai work` runs in another process. The session's next request
+/// is refused with recovery text naming `work`; it is never sent, neither on
+/// the sign-in the session held in memory nor on the default login.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_refuses_its_chatgpt_account_once_another_process_removes_it() -> Result<()> {
+    use app_test_support::ChatGptAuthFixture;
+    use std::process::Stdio;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    const WORK_TOKEN: &str = "d171-work-access-not-a-secret";
+    const DEFAULT_TOKEN: &str = "d171-default-access-not-a-secret";
+
+    let home = TempDir::new()?;
+    let workdir = TempDir::new()?;
+    let release = workdir.path().join("release");
+    // Turn 1 runs a command that waits until the account is removed; the
+    // request that would carry its output must never arrive.
+    let server = app_test_support::create_mock_responses_server_sequence_unchecked(vec![
+        app_test_support::create_shell_command_sse_response(
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("while [ ! -e '{}' ]; do sleep 0.1; done", release.display()),
+            ],
+            /*workdir*/ None,
+            Some(120_000),
+            "call-wait",
+        )?,
+        app_test_support::create_final_assistant_message_sse_response("must not be requested")?,
+    ])
+    .await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/oauth/revoke"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    app_test_support::write_named_chatgpt_auth(
+        home.path(),
+        "openai",
+        "work",
+        ChatGptAuthFixture::new(WORK_TOKEN).account_id("acct-work"),
+    )?;
+    app_test_support::write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new(DEFAULT_TOKEN).account_id("acct-default"),
+        codex_config::types::AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+model_provider = "openai"
+chatgpt_base_url = "{uri}"
+openai_base_url = "{uri}/v1"
+
+[features]
+named_accounts = true
+"#,
+            uri = server.uri()
+        ),
+    )?;
+
+    let corbanu_bin = codex_utils_cargo_bin::cargo_bin("corbanu")?;
+    let command = |args: &[&str]| {
+        let mut command = std::process::Command::new(&corbanu_bin);
+        command
+            .args(args)
+            .env_remove("CORBANU_HOME")
+            .env_remove("PFTERMINAL_HOME")
+            .env_remove("CORBANU_PROVIDER_ACCOUNT")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY")
+            .env_remove("CODEX_ACCESS_TOKEN")
+            .env("CODEX_HOME", home.path())
+            .env("CORBANU_TEST_NO_NATIVE_KEYRING", "1")
+            .env(
+                "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+                format!("{}/oauth/revoke", server.uri()),
+            )
+            .stdin(Stdio::null());
+        command
+    };
+    let workdir_arg = workdir.path().display().to_string();
+    let session = command(&[
+        "exec",
+        "--skip-git-repo-check",
+        // The only command it runs is the test's own wait loop above; the
+        // sandbox is not what this test is about, and is not available on
+        // every CI runner.
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--account",
+        "work",
+        "-C",
+        workdir_arg.as_str(),
+        "Run the command.",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
+
+    let responses_requests = || async {
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|request| request.url.path().ends_with("/responses"))
+            .collect::<Vec<_>>()
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while responses_requests().await.is_empty() {
+        assert!(Instant::now() < deadline, "the session sent no request");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Another process removes the account while the session runs.
+    let removal = command(&["account", "remove", "openai", "work"]).output()?;
+    assert!(
+        removal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removal.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&removal.stdout)
+            .contains("Signed out and removed openai account `work`."),
+        "{}",
+        String::from_utf8_lossy(&removal.stdout)
+    );
+    std::fs::write(&release, "")?;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        tokio::task::spawn_blocking(move || session.wait_with_output()),
+    )
+    .await???;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("account `work` has no sign-in (it may have been removed or signed out)")
+            && stderr.contains("corbanu login --account work"),
+        "{stderr}"
+    );
+    let sent = responses_requests().await;
+    assert_eq!(sent.len(), 1, "{stderr}");
+    assert_eq!(
+        sent[0]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("Bearer {WORK_TOKEN}").as_str())
+    );
+    // Every request the session sent used `work`, none the default login.
+    for request in server.received_requests().await.unwrap_or_default() {
+        let authorization = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        assert!(
+            authorization.is_none()
+                || authorization.as_deref() == Some(format!("Bearer {WORK_TOKEN}").as_str()),
+            "{} {:?}",
+            request.url,
+            authorization
+        );
+    }
+    assert!(!stderr.contains(WORK_TOKEN) && !stderr.contains(DEFAULT_TOKEN));
+    Ok(())
+}

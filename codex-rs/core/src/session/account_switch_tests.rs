@@ -9,13 +9,20 @@ use codex_login::NamedChatgptAccount;
 use codex_login::login_named_account_with_api_key;
 use codex_model_provider_info::NamedProviderAccount;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 
 use super::Session;
 use super::SessionSettingsUpdate;
+use super::TurnInput;
 use super::tests::TestFolders;
 use super::tests::build_test_config;
 use super::tests::make_session_and_context_for_config;
+use super::tests::open_thread_persistence;
+use crate::rollout::recorder::RolloutRecorder;
 
 /// The default login of these sessions (see `make_session_and_context_for_config`).
 const DEFAULT_KEY: &str = "Test API Key";
@@ -38,9 +45,16 @@ async fn session_with_accounts() -> (Arc<Session>, TestFolders) {
 }
 
 async fn unshared_session_with_accounts() -> (Session, TestFolders) {
+    unshared_session_with_accounts_and(|_| {}).await
+}
+
+async fn unshared_session_with_accounts_and(
+    configure: impl FnOnce(&mut crate::config::Config),
+) -> (Session, TestFolders) {
     let home = tempfile::tempdir().expect("home");
     let test_cwd = tempfile::tempdir().expect("create test cwd");
     let mut config = build_test_config(home.path(), test_cwd.path()).await;
+    configure(&mut config);
     for (name, key) in [("work", WORK_KEY), ("play", PLAY_KEY)] {
         login_named_account_with_api_key(home.path(), &account(name), key).expect("sign-in");
         let mut provider = config.model_provider.clone();
@@ -352,4 +366,130 @@ async fn mcp_refresh_updates_plugin_auth_mode_before_checking_pending_state() {
             .mcp_runtime
             .current_auth_matches(session.services.auth_manager().auth_cached().as_ref())
     );
+}
+
+/// #1331 (D171): a prompt refused because the session's named account was
+/// removed meanwhile (here as `corbanu account remove openai work` does it,
+/// from outside the session) is not kept as a turn on that account. Neither
+/// the prompt nor a turn context naming the account is written to the
+/// conversation, so a later resume does not count it as that account's most
+/// recent turn; the turn's completion carries the refusal.
+#[tokio::test]
+async fn a_prompt_refused_for_a_removed_account_is_not_recorded_as_its_turn() {
+    const REFUSED_PROMPT: &str = "refused-1331-prompt";
+    let (mut session, folders) = unshared_session_with_accounts_and(|config| {
+        // Turn contexts record the account only while named accounts are on.
+        config
+            .features
+            .enable(codex_features::Feature::NamedAccounts)
+            .expect("enable named accounts");
+    })
+    .await;
+    let rollout_path = open_thread_persistence(&mut session).await;
+    session.ensure_rollout_materialized().await;
+    let session = Arc::new(session);
+    let turn = session
+        .new_turn_with_sub_id(
+            "turn-refused".to_string(),
+            SessionSettingsUpdate {
+                model_provider: Some("openai-work".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn");
+    assert_eq!(active_key(&session).as_deref(), Some(WORK_KEY));
+
+    // An API-key sign-in has nothing to revoke.
+    let route_config = codex_login::AuthRouteConfig::from_http_client_factory(
+        codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
+    );
+    assert!(
+        codex_login::logout_named_account_with_revoke(
+            folders.home.path(),
+            &account("work"),
+            &route_config
+        )
+        .await
+        .expect("remove")
+    );
+
+    session
+        .spawn_task(
+            Arc::clone(&turn),
+            vec![TurnInput::UserInput {
+                content: vec![UserInput::Text {
+                    text: REFUSED_PROMPT.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                client_id: None,
+            }],
+            crate::tasks::RegularTask::new(),
+        )
+        .await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (completed, history) = loop {
+        session.flush_rollout().await.expect("flush rollout");
+        let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .expect("read rollout history")
+        else {
+            panic!("expected resumed rollout history");
+        };
+        let completed = resumed.history.iter().find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::TurnComplete(event))
+                if event.turn_id == turn.sub_id =>
+            {
+                Some(event.clone())
+            }
+            _ => None,
+        });
+        if let Some(completed) = completed {
+            break (completed, resumed.history);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the refused turn did not complete"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+
+    let refusal = completed
+        .error
+        .map(|error| error.message)
+        .unwrap_or_default();
+    assert!(
+        refusal.contains("account `work` has no sign-in (it may have been removed or signed out)")
+            && refusal.contains("corbanu login --account work"),
+        "{refusal}"
+    );
+    // Resume restores the account of the newest turn context (PF-84).
+    let turn_contexts = history
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::TurnContext(context) => {
+                Some((context.turn_id.clone(), context.provider_account.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(turn_contexts, Vec::new());
+    let kept_prompt = history
+        .iter()
+        .filter_map(|item| serde_json::to_string(item).ok())
+        .filter(|line| line.contains(REFUSED_PROMPT))
+        .collect::<Vec<_>>();
+    assert_eq!(kept_prompt, Vec::<String>::new());
+    let in_memory = session
+        .clone_history()
+        .await
+        .raw_items()
+        .iter()
+        .filter_map(|item| serde_json::to_string(item).ok())
+        .filter(|line| line.contains(REFUSED_PROMPT))
+        .collect::<Vec<_>>();
+    assert_eq!(in_memory, Vec::<String>::new());
 }

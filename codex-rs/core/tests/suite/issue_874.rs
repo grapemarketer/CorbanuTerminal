@@ -50,6 +50,9 @@ struct Run {
     /// How many of `warnings` came before the first approval prompt.
     warned_before_asked: usize,
     asked: usize,
+    /// The approval prompts' reasons (read by the Linux-only D48 test).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    reasons: Vec<String>,
     requests: Vec<ResponsesRequest>,
 }
 
@@ -103,12 +106,14 @@ async fn run_in(
 ) -> anyhow::Result<(Run, TestCodex)> {
     run_with(
         level, setting, home, steps, project_of, /*left_before*/ None,
+        /*permission_approvals*/ false,
     )
     .await
 }
 
 /// [`run_in`], with a link to `left_before` left in the project's `.git`
-/// before the session starts, where given.
+/// before the session starts, where given, and with requests for additional
+/// permissions asked about where `permission_approvals`.
 async fn run_with(
     level: SecurityLevel,
     setting: Setting,
@@ -116,6 +121,7 @@ async fn run_with(
     steps: Vec<Vec<Value>>,
     project_of: Option<&TestCodex>,
     left_before: Option<std::path::PathBuf>,
+    permission_approvals: bool,
 ) -> anyhow::Result<(Run, TestCodex)> {
     let server = start_mock_server().await;
     let mut steps = steps;
@@ -148,6 +154,12 @@ async fn run_with(
                 .features
                 .enable(Feature::SourceEnvelopes)
                 .expect("enable source envelopes");
+            if permission_approvals {
+                config
+                    .features
+                    .enable(Feature::ExecPermissionApprovals)
+                    .expect("enable exec permission approvals");
+            }
         })
         .with_workspace_setup(move |cwd, _| async move {
             init_git(cwd.as_path())?;
@@ -178,6 +190,7 @@ async fn run_with(
     let mut warnings = Vec::new();
     let mut warned_before_asked = 0;
     let mut asked = 0;
+    let mut reasons = Vec::new();
     loop {
         match wait_for_event(&test.codex, |event| {
             matches!(
@@ -192,6 +205,7 @@ async fn run_with(
                     warned_before_asked = warnings.len();
                 }
                 asked += 1;
+                reasons.push(approval.reason.clone().unwrap_or_default());
                 test.codex
                     .submit(Op::ExecApproval {
                         id: approval.effective_approval_id(),
@@ -214,6 +228,7 @@ async fn run_with(
             },
             warnings,
             asked,
+            reasons,
             requests: captured.requests(),
         },
         test,
@@ -413,7 +428,9 @@ async fn issue_874_a_standing_finding_keeps_user_namespaces_denied() -> anyhow::
 /// Merge with D48 (c) (#891): after untrusted content, a person's approval
 /// of a known tool's request to run outside the sandbox allows user
 /// namespaces for that run, but not while a `.git` finding stands in its
-/// project; the person is told why.
+/// project; the person is told why. #943 item 18: in D48's own prompt; the
+/// note names only the namespaces (a D48 approval lifts no file rule), and
+/// without the finding the namespace is made.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue_874_a_standing_finding_keeps_d48_known_tools_denied() -> anyhow::Result<()> {
@@ -422,8 +439,12 @@ async fn issue_874_a_standing_finding_keeps_d48_known_tools_denied() -> anyhow::
     /// A known tool's plain command; prints the marker only inside a
     /// namespace it made.
     const PLAIN: &str = "unshare -Ur printf NAMESPACE-MADE-%s D48";
+    const NAMESPACE_MADE: &str = "NAMESPACE-MADE-D48";
     /// The #826 explanation added where the rule refused it.
     const EXPLAINED: &str = "blocks creating user namespaces";
+    /// D48's prompt warning (D27's).
+    const WARNING: &str =
+        "Warning (Linux): approving also lets this one run create user namespaces";
     let mut wrong = Vec::new();
     for planted in [false, true] {
         let outside = TempDir::new()?;
@@ -463,14 +484,26 @@ async fn issue_874_a_standing_finding_keeps_d48_known_tools_denied() -> anyhow::
         .await?;
         let out = output(&second.requests, "call-d48");
         let explained = out.contains(EXPLAINED);
+        let made = out.contains(NAMESPACE_MADE);
+        let d48_prompt = second.reasons.iter().any(|reason| reason.contains(WARNING));
         let held_note = second
             .warnings
             .iter()
-            .any(|warning| warning.contains("nor let it create user namespaces"));
-        if second.asked == 0 || explained != planted || held_note != planted {
+            .any(|warning| warning.contains("doesn't let this command create user namespaces"));
+        let rules_note = second
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("doesn't lift the protected-file rules"));
+        if second.asked == 0
+            || !d48_prompt
+            || explained != planted
+            || made == planted
+            || held_note != planted
+            || rules_note
+        {
             wrong.push(format!(
-                "planted={planted}: asked={} warnings={:?} output={out}",
-                second.asked, second.warnings
+                "planted={planted}: asked={} reasons={:?} warnings={:?} output={out}",
+                second.asked, second.reasons, second.warnings
             ));
         }
     }
@@ -558,20 +591,60 @@ async fn issue_943_a_command_in_another_repository_is_checked() -> anyhow::Resul
 /// their approval doesn't lift the protected-file rules for that command (it
 /// does where nothing was left). In the project itself and in a command's
 /// `workdir` in another repository. Under the workspace sandbox the
-/// project's `.git` stays read-only: nothing is looked at there.
+/// project's `.git` stays read-only: nothing is looked at there (#943 item
+/// 22: also under Aggressive, where no approval lifts the rules anyway).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue_943_left_before_the_session_holds_its_first_approval() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     let mut wrong = Vec::new();
-    // (setting, planted, in another repository, held)
-    for (setting, planted, elsewhere, held) in [
-        (Setting::FullAccess, false, false, false),
-        (Setting::FullAccess, true, false, true),
-        (Setting::FullAccess, false, true, false),
-        (Setting::FullAccess, true, true, true),
-        (Setting::Workspace, true, false, false),
+    // (level, setting, planted, in another repository, held)
+    for (level, setting, planted, elsewhere, held) in [
+        (
+            SecurityLevel::Moderate,
+            Setting::FullAccess,
+            false,
+            false,
+            false,
+        ),
+        (
+            SecurityLevel::Moderate,
+            Setting::FullAccess,
+            true,
+            false,
+            true,
+        ),
+        (
+            SecurityLevel::Moderate,
+            Setting::FullAccess,
+            false,
+            true,
+            false,
+        ),
+        (
+            SecurityLevel::Moderate,
+            Setting::FullAccess,
+            true,
+            true,
+            true,
+        ),
+        (
+            SecurityLevel::Moderate,
+            Setting::Workspace,
+            true,
+            false,
+            false,
+        ),
+        (
+            SecurityLevel::Aggressive,
+            Setting::Workspace,
+            true,
+            false,
+            false,
+        ),
     ] {
+        // Under Aggressive an approval never lifts the rules.
+        let lifted = level == SecurityLevel::Moderate && !held;
         let outside = TempDir::new()?;
         let outside_path = outside.path().canonicalize()?;
         let target = outside_path.join("zshrc");
@@ -594,12 +667,13 @@ async fn issue_943_left_before_the_session_holds_its_first_approval() -> anyhow:
             read["workdir"] = json!(other_path.display().to_string());
         }
         let (run, test) = Box::pin(run_with(
-            SecurityLevel::Moderate,
+            level,
             setting,
             home,
             vec![step("call-read", read)],
             /*project_of*/ None,
             (planted && !elsewhere).then(|| target.clone()),
+            /*permission_approvals*/ false,
         ))
         .await?;
         let repository = if elsewhere {
@@ -623,12 +697,79 @@ async fn issue_943_left_before_the_session_holds_its_first_approval() -> anyhow:
             || link.symlink_metadata().is_ok() != planted
             || reported_before_asked != held
             || held_note != held
-            || read.contains(CANARY) == held
+            || read.contains(CANARY) != lifted
         {
             wrong.push(format!(
-                "{setting:?} planted={planted} elsewhere={elsewhere}: asked={} \
+                "{level:?} {setting:?} planted={planted} elsewhere={elsewhere}: asked={} \
                  warned_before_asked={} warnings={:?} read={read}",
                 run.asked, run.warned_before_asked, run.warnings
+            ));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+    Ok(())
+}
+
+/// #943 (#513): while a finding stands in the project (found by any session
+/// of this process), a person's approval of a command's additional write
+/// permission doesn't reopen a persistence file (here the project's
+/// `.agents`): the run is refused, and a note names the finding (#1503
+/// review). Without the finding it is written.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_943_a_standing_finding_refuses_additional_writes() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    let mut wrong = Vec::new();
+    for planted in [false, true] {
+        let outside = TempDir::new()?;
+        let outside_path = outside.path().canonicalize()?;
+        std::fs::write(outside_path.join("zshrc"), "# start-up\n")?;
+        let first = if planted {
+            plant(&outside_path)
+        } else {
+            "printf 'tidied'".to_string()
+        };
+        let (_, worked) = Box::pin(run(
+            SecurityLevel::Moderate,
+            Setting::FullAccess,
+            Arc::new(TempDir::new()?),
+            vec![step("call-first", json!({ "command": first }))],
+        ))
+        .await?;
+        let (second, _) = Box::pin(run_with(
+            SecurityLevel::Moderate,
+            Setting::Workspace,
+            Arc::new(TempDir::new()?),
+            vec![step(
+                "call-write",
+                json!({
+                    "command": "mkdir -p .agents && printf x >> .agents/issue943.md && echo wrote-943",
+                    "sandbox_permissions": "with_additional_permissions",
+                    "additional_permissions": { "file_system": { "write": [".agents"] } },
+                    "justification": "update the agent notes",
+                }),
+            )],
+            Some(&worked),
+            /*left_before*/ None,
+            /*permission_approvals*/ true,
+        ))
+        .await?;
+        let out = output(&second.requests, "call-write");
+        let written = std::fs::read_to_string(worked.cwd_path().join(".agents/issue943.md"))
+            .unwrap_or_default();
+        let held_note = second.warnings.iter().any(|warning| {
+            warning.contains("doesn't let this command's additional permissions write")
+                && warning.contains(".git")
+        });
+        if second.asked == 0
+            || (written == "x") == planted
+            || out.contains("wrote-943") == planted
+            || held_note != planted
+        {
+            wrong.push(format!(
+                "planted={planted}: asked={} written={written:?} warnings={:?} output={out}",
+                second.asked, second.warnings
             ));
         }
     }

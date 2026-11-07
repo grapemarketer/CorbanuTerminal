@@ -1,0 +1,6 @@
+# Accounts recorded per turn in each conversation file of home zai3 (integrator extract: session id, source, provider_account of each turn_context, the reply word of each user prompt)
+01a16140-fe46-7201-81c5-6defd783fe84 source=cli accounts=['work', 'personal', 'work', 'work'] words=['pzero', 'pone', 'pback', 'ptwo']
+01a16144-6cc7-7d12-a938-f04d14cd068a source=cli accounts=['personal'] words=['pthree']
+01a16145-351e-71c3-b493-f580e49aac74 source=cli accounts=['default'] words=['pfour']
+01a16146-19a1-7310-876a-e932924807a6 source=cli accounts=['work', 'work', 'personal'] words=['gzero', 'gaone', 'rtwo']
+01a16147-b0b7-7542-9f10-d9e4f90c42b9 source=cli accounts=['personal'] words=['rone']

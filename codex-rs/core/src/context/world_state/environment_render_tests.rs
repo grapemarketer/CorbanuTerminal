@@ -172,6 +172,7 @@ fn workspace_write_permission_profile_with_private_denials() -> PermissionProfil
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: project_roots_glob_pattern(Path::new("private/**")),
                 },
                 access: FileSystemAccessMode::Deny,

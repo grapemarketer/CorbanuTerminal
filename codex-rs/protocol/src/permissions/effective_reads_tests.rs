@@ -218,6 +218,7 @@ impl Fixture {
                     ),
                     FileSystemSandboxEntry::new(
                         FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: self.real.join("**/*.key").to_string_lossy().into_owned(),
                         },
                         Deny,

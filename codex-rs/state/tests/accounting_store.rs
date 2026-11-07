@@ -2039,6 +2039,178 @@ async fn a_realtime_session_end_keeps_usage_unknown_through_format_6() -> anyhow
     Ok(())
 }
 
+/// #314 (D228, Travis 2026-10-28): a request accounting failed to record
+/// leaves a durable marker for its conversation and UTC day, so `/cost` can
+/// say that day's totals may be incomplete. The first marker upgrades the
+/// ledger to format 7 and leaves every record as it was; a marker of a
+/// subagent counts for its parent, another conversation's does not, and
+/// deleting the conversation removes its markers.
+#[tokio::test]
+async fn a_recording_gap_marks_its_day_through_format_7() -> anyhow::Result<()> {
+    const DAY: i64 = 86_400_000;
+    let path = home();
+    let runtime = open(&path).await?;
+    let ok = attempt(/*id*/ 1, /*time*/ 0)?;
+    native(&runtime, ok.thread_id).await?;
+    let store = AccountingStore::open(&runtime, /*as_of*/ 0).await?;
+    store
+        .admit(ok.thread_id, &ok, &[snapshot()?], /*as_of*/ 0)
+        .await?;
+    store
+        .observe(
+            ok.thread_id,
+            &ok,
+            &[observation(&ok, /*revision*/ 1, /*input*/ 10)?],
+            /*as_of*/ 0,
+        )
+        .await?;
+    // Current through the days read below.
+    store.maintain(2 * DAY).await?;
+    let state = |runtime: Arc<StateRuntime>| async move {
+        let mut conn = connection(&runtime).await?;
+        let format: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _accounting_migrations ORDER BY version")
+                .fetch_all(&mut conn)
+                .await?;
+        let records: Vec<String> = sqlx::query_scalar(
+            "SELECT payload FROM draft_accounting_attempts
+             UNION ALL SELECT payload FROM draft_accounting_observations",
+        )
+        .fetch_all(&mut conn)
+        .await?;
+        conn.close().await?;
+        anyhow::Ok((format, records))
+    };
+    let (before, records) = state(runtime.clone()).await?;
+    assert_eq!(before, vec![1]);
+    let gap = |owner: ThreadId, day: i64| {
+        let runtime = runtime.clone();
+        async move {
+            anyhow::Ok(
+                ready(
+                    AccountingStore::inspect_day(&runtime, owner, day, /*read_at_ms*/ 2 * DAY)
+                        .await?,
+                )
+                .recording_gap,
+            )
+        }
+    };
+    // A ledger before format 7 holds no marker, and reads as before.
+    assert!(!gap(ok.thread_id, 0).await?);
+
+    AccountingStore::record_gap(
+        &runtime,
+        ok.thread_id,
+        /*from_ms*/ DAY + 5,
+        /*to_ms*/ DAY + 5,
+    )
+    .await?;
+    let (after, unchanged) = state(runtime.clone()).await?;
+    assert_eq!(after, vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(unchanged, records);
+    assert!(gap(ok.thread_id, 1).await?, "the marked day");
+    assert!(!gap(ok.thread_id, 0).await?, "another day");
+    // The clock read behind the ledger's checkpoint (day 2): the true time is
+    // at least the checkpoint, so its day is marked too.
+    assert!(gap(ok.thread_id, 2).await?, "the checkpoint's day");
+    // Twice is one marker per day.
+    AccountingStore::record_gap(&runtime, ok.thread_id, DAY + 9, DAY + 9).await?;
+    let mut conn = connection(&runtime).await?;
+    let markers: i64 = sqlx::query_scalar("SELECT count(*) FROM draft_accounting_gap_days")
+        .fetch_one(&mut conn)
+        .await?;
+    assert_eq!(markers, 2);
+    conn.close().await?;
+
+    // A subagent's gap is its parent's; an unrelated conversation's is not.
+    let child = ThreadId::from_string(&Uuid::from_u128(8).to_string())?;
+    let other = ThreadId::from_string(&Uuid::from_u128(9).to_string())?;
+    for thread in [child, other] {
+        native(&runtime, thread).await?;
+    }
+    runtime
+        .upsert_thread_spawn_edge(
+            ok.thread_id,
+            child,
+            codex_state::DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await?;
+    AccountingStore::record_gap(&runtime, child, /*from_ms*/ 0, /*to_ms*/ 0).await?;
+    AccountingStore::record_gap(&runtime, other, /*from_ms*/ 0, /*to_ms*/ 0).await?;
+    assert!(gap(ok.thread_id, 0).await?, "the subagent's day");
+    assert!(!gap(other, 1).await?, "not another conversation's day");
+
+    // Deleting a conversation removes its markers with its records; the
+    // deletion's maintenance, at today's time, expires the 1970 markers with
+    // their days' totals.
+    let today = chrono::Utc::now().timestamp_millis();
+    AccountingStore::record_gap(&runtime, ok.thread_id, today, today).await?;
+    AccountingStore::record_gap(&runtime, other, today, today).await?;
+    assert_eq!(runtime.delete_thread(other).await?, 1);
+    let mut conn = connection(&runtime).await?;
+    let left: Vec<(String, i64)> =
+        sqlx::query_as("SELECT thread_id, utc_day FROM draft_accounting_gap_days")
+            .fetch_all(&mut conn)
+            .await?;
+    assert_eq!(left, vec![(ok.thread_id.to_string(), today / DAY)]);
+    conn.close().await?;
+    assert!(
+        AccountingStore::record_gap(
+            &runtime,
+            ok.thread_id,
+            /*from_ms*/ -1,
+            /*to_ms*/ -1
+        )
+        .await
+        .is_err()
+    );
+    runtime.close().await;
+    Ok(())
+}
+
+/// #314 (D228): a gap in a home with no ledger installs none (the day reads
+/// unavailable, never complete, as before); once a request is recorded, the
+/// next gap marks its day.
+#[tokio::test]
+async fn a_recording_gap_never_installs_a_ledger() -> anyhow::Result<()> {
+    let path = home();
+    let runtime = open(&path).await?;
+    let a = attempt(/*id*/ 1, /*time*/ 0)?;
+    let owner = a.thread_id;
+    native(&runtime, owner).await?;
+    let read = |runtime: Arc<StateRuntime>| async move {
+        AccountingStore::inspect_day(&runtime, owner, /*utc_day*/ 0, /*read_at_ms*/ 1).await
+    };
+    assert!(matches!(
+        read(runtime.clone()).await?,
+        InspectionDay::Absent
+    ));
+    AccountingStore::record_gap(&runtime, owner, /*from_ms*/ 0, /*to_ms*/ 0).await?;
+    assert!(matches!(
+        read(runtime.clone()).await?,
+        InspectionDay::Absent
+    ));
+    let mut conn = connection(&runtime).await?;
+    let objects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'draft_accounting_*' OR name = '_accounting_migrations'",
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    assert_eq!(objects, 0, "no ledger was installed");
+    conn.close().await?;
+    AccountingStore::open(&runtime, /*as_of*/ 1)
+        .await?
+        .admit(owner, &a, &[snapshot()?], /*as_of*/ 1)
+        .await?;
+    assert!(!ready(read(runtime.clone()).await?).recording_gap);
+    AccountingStore::record_gap(&runtime, owner, /*from_ms*/ 0, /*to_ms*/ 0).await?;
+    let view = ready(read(runtime.clone()).await?);
+    assert!(view.recording_gap);
+    assert_eq!(view.totals.attempts, 1);
+    runtime.close().await;
+    Ok(())
+}
+
 /// A ledger in a format newer than this build's is refused by name, for reads
 /// and writes alike, and left untouched.
 #[tokio::test]

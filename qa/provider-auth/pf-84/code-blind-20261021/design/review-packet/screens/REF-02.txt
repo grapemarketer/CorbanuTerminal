@@ -1,0 +1,32 @@
+
+› reply with the single word side
+
+• side
+
+■ Editing previous prompts is unavailable in side conversations.
+
+/status
+
+╭────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Corbanu Terminal (v0.1.48)                                                             │
+│                                                                                            │
+│  Model:                Z.AI GLM 5.3 Flash                                                  │
+│  Model provider:       Z.AI - https://api.z.ai/api/paas/v4 · account work                  │
+│  Directory:            /tmp/f555proj                                                       │
+│  Permissions:          Next turn: Workspace (Ask for approval)                             │
+│  Security:             Requested Permissive; effective protection unverified (/security)   │
+│  Agents.md:            <none>                                                              │
+│  Account:              Z.AI API key configured                                             │
+│  Collaboration mode:   Default                                                             │
+│  Session:              01a12e41-d7c4-7923-a0e5-b066914388c9                                │
+│                                                                                            │
+│  Token usage:          40.1K total  (40K input + 52 output)                                │
+│  Context window:       100% left (14K used / 950K)                                         │
+│  Account usage:        work · 25,727 input · 2,560 cached input · 34 output (26 reasoning) │
+│  Limits:               data not available yet                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+› Will this algorithm scale well?
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: 16.9 … Side from main thread · ctrl + / to switch · ctrl + c to close
+

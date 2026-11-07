@@ -120,6 +120,59 @@ async fn issue_912_other_warmup_cost_qualifies_resume_advice() {
             .any(|line| line.contains("Other conversations' estimated cost: at least $0.000180"))
     );
     assert_explained(&pages[0].text);
+    // #1000: the note points at warm-ups the section itself counts.
+    assert!(
+        pages[0]
+            .text
+            .iter()
+            .any(|line| line == "Of these, 1 request is a reopen warm-up."),
+        "{:#?}",
+        pages[0].text
+    );
+}
+
+/// #1000: the warm-up count names requests, not attempts, and leaves other
+/// requests of those conversations out.
+#[tokio::test]
+async fn issue_912_other_warmups_are_counted_by_request() {
+    let InspectionDay::Ready(mut view) = packet() else {
+        unreachable!()
+    };
+    let other = ThreadId::from_string(&Uuid::from_u128(912).to_string()).unwrap();
+    let mut first = warmup();
+    first.attempt.thread_id = other;
+    first.attempt.request_id = Uuid::from_u128(9122);
+    first.attempt.attempt_id = Uuid::from_u128(9121);
+    let mut retry = first.clone();
+    retry.attempt.attempt_id = Uuid::from_u128(9123);
+    let mut second = first.clone();
+    second.attempt.request_id = Uuid::from_u128(9124);
+    second.attempt.attempt_id = Uuid::from_u128(9125);
+    let mut normal = quote();
+    normal.attempt.thread_id = other;
+    normal.attempt.request_id = Uuid::from_u128(9126);
+    normal.attempt.attempt_id = Uuid::from_u128(9127);
+    view.other_conversations = Some(OtherConversations {
+        conversations: 1,
+        requests: std::collections::BTreeMap::from([
+            (first.attempt.request_id, vec![first, retry]),
+            (second.attempt.request_id, vec![second]),
+            (normal.attempt.request_id, vec![normal]),
+        ]),
+        unavailable: 1,
+        ..OtherConversations::default()
+    });
+    let pages = inspection_pages(Ok(InspectionDay::Ready(view)));
+    let text = &pages[0].text;
+    let position = |wanted: &str| text.iter().position(|line| line.starts_with(wanted));
+    let count = position("Of these, 2 requests are reopen warm-ups.");
+    // The count sits with the requests it counts, not after the line about
+    // conversations that could not be read.
+    assert!(
+        count.is_some() && count < position("1 conversation could not be read in full"),
+        "{text:#?}"
+    );
+    assert_explained(text);
 }
 
 #[tokio::test]
@@ -165,89 +218,81 @@ async fn issue_912_mixed_saved_turn_and_warmup_does_not_assert_unresumable() {
             .iter()
             .any(|(label, _)| label.starts_with("Request ") && !label.contains("Reopen warm-up"))
     );
-    assert!(
-        !pages[0]
-            .text
-            .join("\n")
-            .contains("This conversation cannot be resumed")
-    );
+    // The resume note is only for other conversations: this one is open.
+    let text = pages[0].text.join("\n");
+    assert!(!text.contains("no saved turns"), "{text}");
+    assert!(!text.contains("Of these,"), "{text}");
 }
 
 #[cfg(feature = "developer-accounting")]
 #[tokio::test]
 async fn issue_912_warmup_resume_explanation_snapshots() {
     use crate::app_event::AppEvent;
-    let label = "other";
-    {
-        for width in [100, 40] {
-            let mut view = {
-                let InspectionDay::Ready(mut view) = packet() else {
-                    unreachable!()
-                };
-                let mut q = warmup();
-                q.attempt.thread_id =
-                    ThreadId::from_string(&Uuid::from_u128(912).to_string()).unwrap();
-                q.attempt.request_id = Uuid::from_u128(9122);
-                q.attempt.attempt_id = Uuid::from_u128(9121);
-                view.other_conversations = Some(OtherConversations {
-                    conversations: 1,
-                    requests: std::collections::BTreeMap::from([(q.attempt.request_id, vec![q])]),
-                    ..OtherConversations::default()
-                });
-                view
+    for width in [100, 40] {
+        let mut view = {
+            let InspectionDay::Ready(mut view) = packet() else {
+                unreachable!()
             };
-            let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-            chat.on_terminal_resize(width);
-            chat.open_accounting_command(
-                "requests 1970-01-01",
-                NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-            );
-            let AppEvent::LoadAccountingInspector {
-                generation,
-                thread,
-                day: requested,
-                ..
-            } = rx.try_recv().unwrap()
-            else {
-                panic!("expected inspector load");
-            };
-            if let Some(owner) = thread {
-                view.owner = owner;
-                for quote in view.requests.values_mut().flatten() {
-                    quote.attempt.thread_id = owner;
-                }
+            let mut q = warmup();
+            q.attempt.thread_id = ThreadId::from_string(&Uuid::from_u128(912).to_string()).unwrap();
+            q.attempt.request_id = Uuid::from_u128(9122);
+            q.attempt.attempt_id = Uuid::from_u128(9121);
+            view.other_conversations = Some(OtherConversations {
+                conversations: 1,
+                requests: std::collections::BTreeMap::from([(q.attempt.request_id, vec![q])]),
+                ..OtherConversations::default()
+            });
+            view
+        };
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.on_terminal_resize(width);
+        chat.open_accounting_command(
+            "requests 1970-01-01",
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+        );
+        let AppEvent::LoadAccountingInspector {
+            generation,
+            thread,
+            day: requested,
+            ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected inspector load");
+        };
+        if let Some(owner) = thread {
+            view.owner = owner;
+            for quote in view.requests.values_mut().flatten() {
+                quote.attempt.thread_id = owner;
             }
-            chat.finish_accounting_inspector(
-                generation,
-                thread,
-                requested,
-                Ok(InspectionDay::Ready(view)),
-            );
-            insta::assert_snapshot!(
-                format!("issue912_{label}_{width}"),
-                render_bottom_popup_with_height(&chat, width, /*height*/ 60)
-            );
-            let mut explanation = String::new();
-            let mut visible = false;
-            for _ in 0..40 {
-                explanation = render_bottom_popup_with_height(&chat, width, /*height*/ 60);
-                let words = explanation.split_whitespace().collect::<Vec<_>>().join(" ");
-                if words.contains("no saved turns")
-                    && words.contains("included in the recorded cost")
-                {
-                    visible = true;
-                    break;
-                }
-                chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-            }
-            assert!(
-                visible,
-                "explanation unreachable at {label}/{width}:\n{explanation}"
-            );
-            insta::assert_snapshot!(
-                format!("issue912_{label}_{width}_explanation_visible"),
-                explanation
-            );
         }
+        chat.finish_accounting_inspector(
+            generation,
+            thread,
+            requested,
+            Ok(InspectionDay::Ready(view)),
+        );
+        insta::assert_snapshot!(
+            format!("issue912_other_{width}"),
+            render_bottom_popup_with_height(&chat, width, /*height*/ 60)
+        );
+        let mut explanation = String::new();
+        let mut visible = false;
+        for _ in 0..40 {
+            explanation = render_bottom_popup_with_height(&chat, width, /*height*/ 60);
+            let words = explanation.split_whitespace().collect::<Vec<_>>().join(" ");
+            if words.contains("no saved turns") && words.contains("included in the recorded cost") {
+                visible = true;
+                break;
+            }
+            chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert!(
+            visible,
+            "explanation unreachable at {width}:\n{explanation}"
+        );
+        insta::assert_snapshot!(
+            format!("issue912_other_{width}_explanation_visible"),
+            explanation
+        );
     }
 }

@@ -1,0 +1,6 @@
+2026-10-21T22:02:44Z attempt 1: code posted to the handoff file
+   https://auth.openai.com/codex/device
+   <CODE>
+Signed in OpenAI account `t1` (ChatGPT sign-in · <email-hint> · Free).
+SIGNIN-EXIT=0
+2026-10-21T22:14:54Z signed in

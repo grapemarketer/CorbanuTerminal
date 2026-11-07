@@ -1151,6 +1151,111 @@ fn legacy_workspace_write_cannot_delete_or_replace_protected_git_dir() {
     });
 }
 
+/// #1506 item 3 (D263): moving a folder between a writable root and an
+/// explicit nested read-only carve-out carried the carve-out away and let the
+/// command recreate it with its own contents. Those folders can't be moved or
+/// renamed now; writing inside them still works.
+#[test]
+fn legacy_workspace_write_cannot_move_ancestor_of_nested_carve_out() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let test_root = user_owned_test_root();
+        let codex_home = sandbox_home("legacy-nested-carve-out");
+        let workspace = test_root.path().join("workspace");
+        let outer = workspace.join("a");
+        let inner = outer.join("b");
+        let carve_out = inner.join("c");
+        fs::create_dir_all(&carve_out).expect("create nested carve-out");
+        let kept = carve_out.join("keep.txt");
+        fs::write(&kept, "original").expect("seed carve-out file");
+        let outer_file = outer.join("other.txt");
+        fs::write(&outer_file, "before").expect("seed outer file");
+
+        let script = codex_home.path().join("move-ancestor.cmd");
+        fs::write(
+            &script,
+            concat!(
+                "@echo off\r\n",
+                "echo after> \"%OUTER%\\other.txt\"\r\n",
+                "move \"%OUTER%\\b\" \"%WORKSPACE%\\b-moved\"\r\n",
+                "ren \"%OUTER%\\b\" b-renamed\r\n",
+                "move \"%OUTER%\" \"%WORKSPACE%\\a-moved\"\r\n",
+                "ren \"%OUTER%\" a-renamed\r\n",
+                "mkdir \"%OUTER%\\b\\c\"\r\n",
+                "echo planted> \"%OUTER%\\b\\c\\keep.txt\"\r\n",
+                "exit /b 0\r\n",
+            ),
+        )
+        .expect("write move-ancestor script");
+        let env_map = HashMap::from([
+            (
+                "WORKSPACE".to_string(),
+                workspace.to_string_lossy().into_owned(),
+            ),
+            ("OUTER".to_string(), outer.to_string_lossy().into_owned()),
+        ]);
+        let carve_outs =
+            [AbsolutePathBuf::from_absolute_path(&carve_out).expect("absolute carve-out")];
+
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(workspace.as_path()).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script.display().to_string(),
+            ],
+            workspace.as_path(),
+            env_map,
+            /*timeout_ms*/ Some(5_000),
+            &[],
+            &carve_outs,
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy move-ancestor session");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 10))
+                .await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        let sandbox_outcome = (
+            exit_code,
+            fs::read_to_string(&kept).ok(),
+            fs::read_to_string(&outer_file).ok(),
+            ["b-moved", "a-moved", "a-renamed"]
+                .iter()
+                .filter(|name| workspace.join(name).exists())
+                .copied()
+                .collect::<Vec<_>>(),
+            outer.join("b-renamed").exists(),
+        );
+        // The unsandboxed user can still rename their own folders.
+        let host_rename =
+            fs::rename(&outer, workspace.join("a-host")).map_err(|err| err.to_string());
+
+        assert_eq!(
+            (sandbox_outcome, host_rename),
+            (
+                (
+                    0,
+                    Some("original".to_string()),
+                    Some("after\r\n".to_string()),
+                    Vec::<&str>::new(),
+                    false,
+                ),
+                Ok(()),
+            ),
+            "stdout={stdout:?}\n{}",
+            sandbox_log(codex_home.path())
+        );
+    });
+}
+
 /// #158: WRITE_RESTRICTED tokens do not restrict FILE_DELETE_CHILD, so the
 /// parent's ACL let the sandbox delete or move anything the user could; the
 /// Low-integrity token keeps deletes and moves inside the writable roots.
@@ -1451,9 +1556,210 @@ fn legacy_integrity_label_cost() {
     eprintln!("integrity label cost: {count} files, label {labelled:?}, put back {restored:?}");
 }
 
+/// #734: a root a lease can't label is reported for core's warning, and not
+/// once a later lease labels it. (A missing folder can't be labelled; the
+/// lease still starts, as #705 requires.)
+#[test]
+fn legacy_unlabelled_root_is_reported_until_labelled() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = dunce::canonicalize(test_root.path())
+        .expect("canonical test root")
+        .join("not-yet");
+    let mark = crate::unlabelled_roots_mark();
+    drop(
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease"),
+    );
+    assert!(
+        crate::unlabelled_roots_since(mark).contains(&root),
+        "{} is not reported",
+        root.display()
+    );
+    fs::create_dir_all(&root).expect("create root");
+    drop(
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease"),
+    );
+    assert!(
+        !crate::unlabelled_roots_since(mark).contains(&root),
+        "{} is still reported",
+        root.display()
+    );
+}
+
+/// #734: core matches failures against the roots the sandbox itself labels:
+/// canonical, every workspace root (not only the working directory), and
+/// `%TEMP%` for a writable temp entry.
+#[test]
+fn legacy_writable_roots_are_the_labelled_roots() {
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    let test_root = user_owned_test_root();
+    let base = dunce::canonicalize(test_root.path()).expect("canonical test root");
+    let (cwd, other) = (base.join("cwd"), base.join("other"));
+    fs::create_dir_all(&cwd).expect("cwd");
+    fs::create_dir_all(&other).expect("other");
+    let special = |value| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special { value },
+            FileSystemAccessMode::Write,
+        )
+    };
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        special(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        special(FileSystemSpecialPath::Tmpdir),
+    ]);
+    let workspace_roots = [
+        AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute"),
+        AbsolutePathBuf::from_absolute_path(&other).expect("absolute"),
+    ];
+    let roots = crate::legacy_writable_roots(&policy, &workspace_roots, &cwd);
+    let temp = dunce::canonicalize(std::env::var_os("TEMP").expect("TEMP")).expect("TEMP");
+    for want in [&cwd, &other, &temp] {
+        assert!(
+            roots.contains(want),
+            "{} missing from {roots:?}",
+            want.display()
+        );
+    }
+}
+
+const BREAKAWAY_PROBE_ENV: &str = "CODEX_733_BREAKAWAY_PROBE";
+const BREAKAWAY_PROBE_TEST: &str = "unified_exec::tests::legacy_breakaway_probe_entry";
+const BREAKAWAY_PROBE_RESULT: &str = "breakaway-probe: ";
+
+/// The command of [`legacy_command_cannot_break_away_from_its_job`]: starts
+/// a short `cmd.exe` normally, then with `CREATE_BREAKAWAY_FROM_JOB`, and
+/// reports whether Windows allowed each. Does nothing otherwise.
+#[test]
+fn legacy_breakaway_probe_entry() {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    use windows_sys::Win32::System::Threading::CreateProcessW;
+    use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+    use windows_sys::Win32::System::Threading::STARTUPINFOW;
+
+    if std::env::var_os(BREAKAWAY_PROBE_ENV).is_none() {
+        return;
+    }
+    let start = |flags: u32| -> (bool, u32) {
+        let mut command_line = crate::winutil::to_wide(format!(
+            "\"{}\" /d /c exit 0",
+            system32_exe("cmd.exe").display()
+        ));
+        // SAFETY: zeroed plain-data structs; the call fills in `info`.
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: every pointer refers to a live buffer above; nothing is inherited.
+        let started = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                command_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                /*binherithandles*/ 0,
+                CREATE_NO_WINDOW | flags,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            )
+        } != 0;
+        if !started {
+            // SAFETY: read right after the call.
+            return (false, unsafe { GetLastError() });
+        }
+        // SAFETY: returned by the call above and not used again.
+        unsafe {
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+        }
+        (true, 0)
+    };
+    // The control shows a refusal below comes from the job, not from the
+    // token or the desktop.
+    let (control, control_error) = start(/*flags*/ 0);
+    let (started, error) = start(CREATE_BREAKAWAY_FROM_JOB);
+    // Own line: libtest prints the test name without a newline first.
+    println!(
+        "\n{BREAKAWAY_PROBE_RESULT}control={control}/{control_error} breakaway={started}/{error}"
+    );
+}
+
+/// #733: a legacy command can't start a child outside its job. With
+/// breakaway allowed, such a child outlived the job, so neither cancellation
+/// nor the integrity lease's release (which waits for the job to empty)
+/// reached it, and it kept running at Low integrity in roots whose label
+/// was being put back.
+#[test]
+fn legacy_command_cannot_break_away_from_its_job() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let (stdout, exit_code, log) = runtime.block_on(async {
+        let codex_home = sandbox_home("legacy-breakaway");
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let env_map = HashMap::from([
+            (BREAKAWAY_PROBE_ENV.to_string(), "1".to_string()),
+            ("SystemRoot".to_string(), system_root),
+        ]);
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(test_root.path()).as_slice(),
+            codex_home.path(),
+            vec![
+                std::env::current_exe()
+                    .expect("test exe")
+                    .display()
+                    .to_string(),
+                "--exact".to_string(),
+                BREAKAWAY_PROBE_TEST.to_string(),
+                "--nocapture".to_string(),
+                "--test-threads=1".to_string(),
+            ],
+            test_root.path(),
+            env_map,
+            /*timeout_ms*/ Some(60_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy breakaway probe");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 90))
+                .await;
+        (
+            String::from_utf8_lossy(&stdout).into_owned(),
+            exit_code,
+            sandbox_log(codex_home.path()),
+        )
+    });
+    let result = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(BREAKAWAY_PROBE_RESULT));
+    // 5 is ERROR_ACCESS_DENIED: the job refuses the breakaway.
+    assert_eq!(
+        (exit_code, result),
+        (0, Some("control=true/0 breakaway=false/5")),
+        "stdout={stdout:?}\n{log}"
+    );
+}
+
 const CRASH_ROOTS_ENV: &str = "CODEX_158_CRASH_ROOTS";
 const CRASH_CHILD_TEST: &str = "unified_exec::tests::legacy_integrity_crash_child_entry";
 const CRASH_CHILD_READY: &str = "integrity-crash-child: leased";
+/// Protected paths whose delete-child denies the crash child adds (#1506 item 1).
+const CRASH_DENY_PATHS_ENV: &str = "CODEX_1506_CRASH_DENY_PATHS";
 
 /// The child of [`legacy_crashed_session_labels_are_repaired`]: takes a lease
 /// on the roots it is given and waits to be killed. Does nothing otherwise.
@@ -1466,6 +1772,15 @@ fn legacy_integrity_crash_child_entry() {
         .map(|root| dunce::canonicalize(root).expect("canonical root"))
         .collect();
     let lease = crate::integrity_leases::acquire(&roots, /*log_dir*/ None).expect("lease");
+    if let Some(paths) = std::env::var_os(CRASH_DENY_PATHS_ENV) {
+        let denies: Vec<_> = std::env::split_paths(&paths)
+            .flat_map(|path| crate::workspace_acl::delete_child_route_denies(&path))
+            .collect();
+        crate::integrity_leases::add_tracked_delete_child_denies(
+            &denies, /*required*/ false, /*log_dir*/ None,
+        )
+        .expect("add denies");
+    }
     // Own line: libtest prints the test name without a newline first.
     println!("\n{CRASH_CHILD_READY}");
     use std::io::Write as _;
@@ -1578,6 +1893,337 @@ fn legacy_crashed_session_labels_are_repaired() {
             recorded.contains(&canonical(&live)),
         ),
         (false, false)
+    );
+}
+
+fn everyone_sid() -> Vec<u8> {
+    // SAFETY: builds the well-known Everyone SID.
+    unsafe { crate::token::world_sid() }.expect("Everyone SID")
+}
+
+/// Whether `path` has the Everyone delete-child deny a legacy session adds.
+fn has_everyone_delete_child_deny(path: &Path, inherit_to_subdirs: bool) -> bool {
+    let mut everyone = everyone_sid();
+    // SAFETY: a valid SID and an existing path.
+    unsafe {
+        crate::acl::has_deny_delete_child_ace(
+            path,
+            everyone.as_mut_ptr() as *mut std::ffi::c_void,
+            inherit_to_subdirs,
+        )
+    }
+    .expect("read DACL")
+}
+
+/// #1506 item 1 (D261): the Everyone `FILE_DELETE_CHILD` denies a legacy
+/// session adds on `.git`, the paths above an explicit nested read-only path
+/// and their parents protect them while it runs, and are gone once it ends.
+#[test]
+fn legacy_delete_child_denies_are_removed_after_the_session() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let test_root = user_owned_test_root();
+        let codex_home = sandbox_home("legacy-delete-child-cleanup");
+        let workspace = test_root.path().join("workspace");
+        let git_dir = workspace.join(".git");
+        fs::create_dir_all(git_dir.join("hooks")).expect("create .git/hooks");
+        let outer = workspace.join("a");
+        let inner = outer.join("b");
+        let carve_out = inner.join("c");
+        fs::create_dir_all(&carve_out).expect("create nested carve-out");
+        let carve_outs =
+            [AbsolutePathBuf::from_absolute_path(&carve_out).expect("absolute carve-out")];
+        let script = codex_home.path().join("delete-protected.cmd");
+        fs::write(
+            &script,
+            concat!(
+                "@echo off\r\n",
+                "rd /s /q \"%WORKSPACE%\\.git\"\r\n",
+                "ren \"%WORKSPACE%\\a\" a-renamed\r\n",
+                "exit /b 0\r\n",
+            ),
+        )
+        .expect("write script");
+        let env_map = HashMap::from([(
+            "WORKSPACE".to_string(),
+            workspace.to_string_lossy().into_owned(),
+        )]);
+
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(workspace.as_path()).as_slice(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                script.display().to_string(),
+            ],
+            workspace.as_path(),
+            env_map,
+            /*timeout_ms*/ Some(5_000),
+            &[],
+            &carve_outs,
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy session");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 10))
+                .await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        let denies_left: Vec<(PathBuf, bool)> = [
+            (workspace.clone(), false),
+            (git_dir.clone(), true),
+            (outer.clone(), false),
+            (inner.clone(), false),
+            (carve_out.clone(), true),
+        ]
+        .into_iter()
+        .filter(|(path, inherit)| has_everyone_delete_child_deny(path, *inherit))
+        .collect();
+
+        assert_eq!(
+            (exit_code, git_dir.exists(), outer.exists(), denies_left,),
+            (0, true, true, Vec::new()),
+            "stdout={stdout:?}\n{}",
+            sandbox_log(codex_home.path())
+        );
+    });
+}
+
+/// #1506 item 1 (D261): a recorded deny stays while any live session's root
+/// holds it, a crashed session's denies go at the next sweep, and a deny that
+/// was there before is never removed.
+#[test]
+fn legacy_delete_child_denies_follow_live_sessions() {
+    use crate::integrity_leases::DeleteChildDeny;
+    use std::io::BufRead as _;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let canonical = |path: &Path| dunce::canonicalize(path).expect("canonical");
+    let root = test_root.path().join("root");
+    let protected = root.join("protected");
+    let crash_root = test_root.path().join("crash-root");
+    let crash_protected = crash_root.join("protected");
+    let preexisting = test_root.path().join("preexisting");
+    for dir in [&protected, &crash_protected, &preexisting] {
+        fs::create_dir_all(dir).expect("create test directory");
+    }
+    let mut everyone = everyone_sid();
+    let everyone = everyone.as_mut_ptr() as *mut std::ffi::c_void;
+    // SAFETY: a valid SID and an existing folder.
+    assert!(
+        unsafe {
+            crate::acl::add_deny_delete_child_ace(
+                &preexisting,
+                everyone,
+                /*inherit_to_subdirs*/ false,
+            )
+        }
+        .expect("add preexisting deny")
+    );
+    let mut route = crate::workspace_acl::delete_child_route_denies(&protected);
+    route.push(DeleteChildDeny {
+        path: preexisting.clone(),
+        inherit_to_subdirs: false,
+    });
+    let state = || {
+        (
+            has_everyone_delete_child_deny(&root, /*inherit_to_subdirs*/ false),
+            has_everyone_delete_child_deny(&protected, /*inherit_to_subdirs*/ true),
+            has_everyone_delete_child_deny(&preexisting, /*inherit_to_subdirs*/ false),
+        )
+    };
+    let recorded_here = || {
+        crate::integrity_leases::recorded_delete_child_denies()
+            .expect("records")
+            .into_iter()
+            .filter(|deny| deny.path.starts_with(canonical(test_root.path())))
+            .map(|deny| deny.path)
+            .collect::<Vec<_>>()
+    };
+
+    let first = crate::integrity_leases::acquire(&[canonical(&root)], /*log_dir*/ None)
+        .expect("first lease");
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &route, /*required*/ false, /*log_dir*/ None,
+    )
+    .expect("add denies");
+    let second = crate::integrity_leases::acquire(&[canonical(&root)], /*log_dir*/ None)
+        .expect("second lease");
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &route, /*required*/ false, /*log_dir*/ None,
+    )
+    .expect("add denies");
+    let both_live = (state(), recorded_here());
+    drop(first);
+    let one_live = state();
+    drop(second);
+    let none_live = (state(), recorded_here());
+
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
+        .args([
+            "--exact",
+            CRASH_CHILD_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CRASH_ROOTS_ENV, &crash_root)
+        .env(CRASH_DENY_PATHS_ENV, &crash_protected)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the crash child");
+    let stdout = child.stdout.take().expect("child stdout");
+    let ready = std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.trim() == CRASH_CHILD_READY);
+    crate::repair_stale_integrity_labels().expect("repair while live");
+    let crash_live = (
+        ready,
+        has_everyone_delete_child_deny(&crash_root, /*inherit_to_subdirs*/ false),
+        has_everyone_delete_child_deny(&crash_protected, /*inherit_to_subdirs*/ true),
+    );
+    child.kill().expect("kill the crash child");
+    child.wait().expect("wait for the crash child");
+    crate::repair_stale_integrity_labels().expect("repair");
+    let crash_repaired = (
+        has_everyone_delete_child_deny(&crash_root, /*inherit_to_subdirs*/ false),
+        has_everyone_delete_child_deny(&crash_protected, /*inherit_to_subdirs*/ true),
+        recorded_here(),
+    );
+    // SAFETY: as above.
+    let _ = unsafe {
+        crate::acl::remove_deny_delete_child_ace(
+            &preexisting,
+            everyone,
+            /*inherit_to_subdirs*/ false,
+        )
+    };
+
+    let mut recorded_live = vec![canonical(&root), canonical(&protected)];
+    recorded_live.sort();
+    let mut both_live = both_live;
+    both_live.1.sort();
+    assert_eq!(
+        (both_live, one_live, none_live, crash_live, crash_repaired),
+        (
+            ((true, true, true), recorded_live),
+            (true, true, true),
+            ((false, false, true), Vec::new()),
+            (true, true, true),
+            (false, false, Vec::new()),
+        )
+    );
+}
+
+/// #1506 item 2 (D262): a `.codex` folder that appears while a session runs
+/// counts as planted at once (the session may still be running), stays
+/// recorded after that session crashes, and stops counting once confirmed.
+#[test]
+fn legacy_planted_project_metadata_survives_a_crash() {
+    use std::io::BufRead as _;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = test_root.path().join("root");
+    fs::create_dir_all(&root).expect("create root");
+    let canonical_root = dunce::canonicalize(&root).expect("canonical");
+    let dot_codex = canonical_root.join(".codex");
+    let dot_agents = canonical_root.join(".agents");
+    let planted = || {
+        let all = crate::planted_project_metadata().expect("planted records");
+        (all.contains(&dot_codex), all.contains(&dot_agents))
+    };
+
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test exe"))
+        .args([
+            "--exact",
+            CRASH_CHILD_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CRASH_ROOTS_ENV, &root)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the crash child");
+    let stdout = child.stdout.take().expect("child stdout");
+    let ready = std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.trim() == CRASH_CHILD_READY);
+    let before = planted();
+    fs::create_dir(&dot_codex).expect("plant .codex");
+    let live = planted();
+    child.kill().expect("kill the crash child");
+    child.wait().expect("wait for the crash child");
+    crate::repair_stale_integrity_labels().expect("repair");
+    let crashed = planted();
+    let confirmed = crate::confirm_planted_project_metadata(&dot_codex).expect("confirm");
+    let after_confirming = planted();
+
+    assert_eq!(
+        (ready, before, live, crashed, confirmed, after_confirming),
+        (
+            true,
+            (false, false),
+            (true, false),
+            (true, false),
+            true,
+            (false, false),
+        )
+    );
+}
+
+/// #1506 item 1 (D261): a root nested inside another session's protected
+/// folder gets its own deny even though it inherits a copy, so it keeps one
+/// when the outer session ends and its entry goes.
+#[test]
+fn legacy_delete_child_denies_nested_root_keeps_its_own() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let canonical = |path: &Path| dunce::canonicalize(path).expect("canonical");
+    let outer = test_root.path().join("outer");
+    let protected = outer.join("protected");
+    let nested = protected.join("nested");
+    let inner = nested.join("inner");
+    fs::create_dir_all(&inner).expect("create test directories");
+
+    let outer_lease = crate::integrity_leases::acquire(&[canonical(&outer)], /*log_dir*/ None)
+        .expect("outer lease");
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &crate::workspace_acl::delete_child_route_denies(&protected),
+        /*required*/ false,
+        /*log_dir*/ None,
+    )
+    .expect("outer denies");
+    let nested_lease =
+        crate::integrity_leases::acquire(&[canonical(&nested)], /*log_dir*/ None)
+            .expect("nested lease");
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &crate::workspace_acl::delete_child_route_denies(&inner),
+        /*required*/ true,
+        /*log_dir*/ None,
+    )
+    .expect("nested denies");
+    drop(outer_lease);
+    let outer_ended = (
+        has_everyone_delete_child_deny(&protected, /*inherit_to_subdirs*/ true),
+        has_everyone_delete_child_deny(&nested, /*inherit_to_subdirs*/ false),
+        has_everyone_delete_child_deny(&inner, /*inherit_to_subdirs*/ true),
+    );
+    drop(nested_lease);
+    let both_ended = (
+        has_everyone_delete_child_deny(&nested, /*inherit_to_subdirs*/ false),
+        has_everyone_delete_child_deny(&inner, /*inherit_to_subdirs*/ true),
+    );
+
+    assert_eq!(
+        (outer_ended, both_ended),
+        ((false, true, true), (false, false))
     );
 }
 
@@ -2093,3 +2739,15 @@ fn legacy_capture_command_log_redacts_credentials() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// #1507: other process-creation routes out of a legacy session.
+#[path = "launch_path_tests.rs"]
+mod launch_paths;
+
+/// D259 (#1507): each legacy command's own identity in its default DACL.
+#[path = "command_identity_tests.rs"]
+mod command_identity;
+
+/// D285: what the per-command ACL work costs on a large workspace.
+#[path = "acl_cost_tests.rs"]
+mod acl_cost;

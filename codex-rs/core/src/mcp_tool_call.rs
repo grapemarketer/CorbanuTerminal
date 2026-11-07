@@ -88,8 +88,10 @@ use tracing::error;
 use tracing::field::Empty;
 use url::Url;
 
+mod post_taint;
 mod telemetry;
 
+use post_taint::McpCallContext;
 use telemetry::McpCallMetricOutcome;
 use telemetry::emit_mcp_call_metrics;
 use telemetry::mcp_call_metric_outcome;
@@ -559,32 +561,18 @@ async fn post_taint_mcp_check(
     use crate::security::protected_surface;
     let turn_context = step_context.turn.as_ref();
     let codex_home = turn_context.config.codex_home.to_path_buf();
-    #[allow(deprecated)]
-    let cwd = step_context.environments.primary().map_or_else(
-        || codex_utils_path_uri::PathUri::from_abs_path(&turn_context.cwd),
-        |environment| environment.cwd().clone(),
-    );
-    let acts_outside = requires_mcp_tool_approval(metadata.annotations.as_ref());
-    let (server, tool, title, arguments) = (
-        invocation.server.clone(),
-        invocation.tool.clone(),
-        metadata.tool_title.clone(),
-        invocation.arguments.clone(),
-    );
+    let context = McpCallContext::new(step_context, metadata);
+    let classification_invocation = invocation.clone();
     let admission = protected_surface::admit(
         sess,
         turn_context.approval_policy.value(),
         protected_surface::Route::McpTool,
         call_id,
         move || {
-            let call = protected_surface::McpCall {
-                server: &server,
-                tool: &tool,
-                title: title.as_deref(),
-                acts_outside,
-                arguments: arguments.as_ref(),
-                cwd: &cwd,
-            };
+            let call = context.call(
+                &classification_invocation,
+                classification_invocation.arguments.as_ref(),
+            );
             protected_surface::classify_mcp(&call, &codex_home)
         },
     )
@@ -1606,23 +1594,14 @@ fn mcp_tool_needs_fresh_approval_after_taint(
     let Some(state) = sess.services.model_client().post_taint_state() else {
         return false;
     };
+    // This level/taint predicate also determines whether lasting MCP approvals
+    // can apply; it does not inspect any path in this tool-only check.
     if !state.protected_paths_apply() {
         return false;
     }
     let turn_context = step_context.turn.as_ref();
-    #[allow(deprecated)]
-    let cwd = step_context.environments.primary().map_or_else(
-        || PathUri::from_abs_path(&turn_context.cwd),
-        |environment| environment.cwd().clone(),
-    );
-    let call = protected_surface::McpCall {
-        server: &invocation.server,
-        tool: &invocation.tool,
-        title: metadata.tool_title.as_deref(),
-        acts_outside: requires_mcp_tool_approval(metadata.annotations.as_ref()),
-        arguments: None,
-        cwd: &cwd,
-    };
+    let context = McpCallContext::new(step_context, metadata);
+    let call = context.call(invocation, /*arguments*/ None);
     protected_surface::classify_mcp(&call, turn_context.config.codex_home.as_path()).is_some()
 }
 

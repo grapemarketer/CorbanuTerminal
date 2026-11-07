@@ -12,6 +12,7 @@
 use super::indirect;
 use super::shell;
 use super::work;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Range;
@@ -453,22 +454,24 @@ impl Arithmetic {
         let mut eval_scanned = false;
         // `eval let v`, zsh `noglob let v`: the rest is a command too. Each
         // level notes only what precedes its command, so this is linear.
+        // #988: so is a `trap` action, which the shell reads again later.
         while start < raw.len().min(words.len()) {
             work::step();
             let raw = &raw[start..];
             let command = indirect::command_word(&words[start..]);
             match command {
                 Some((index, name))
-                    if matches!(name.as_str(), "eval" | "noglob" | "nocorrect")
+                    if matches!(name.as_str(), "eval" | "trap" | "noglob" | "nocorrect")
                         && !self.functions.contains(&name)
                         && !self.aliases.contains_key(&name) =>
                 {
                     // Escapes (`eval \(\(v\)\)`) or `$'...'` decoding hide
                     // the evaluated text from the lexer.
-                    if name == "eval" && (simple.escaped || self.ansi_c) {
+                    let evaluates = matches!(name.as_str(), "eval" | "trap");
+                    if evaluates && (simple.escaped || self.ansi_c) {
                         self.opaque = true;
                     }
-                    if name == "eval" {
+                    if evaluates {
                         self.evaluates_text = true;
                         // `eval 'print ${'$t'x}'`: an expansion in the text
                         // may spell `${~x}` (#1084). Scanned at the first
@@ -483,6 +486,18 @@ impl Arithmetic {
                     }
                     self.note_one(&raw[..index], &redirect[start..], /*command*/ None);
                     start += index + 1;
+                    // `trap -- 'let v' EXIT`: the action follows its options.
+                    while name == "trap"
+                        && let Some(option) = words.get(start)
+                        && option.len() > 1
+                        && option.starts_with('-')
+                    {
+                        work::step();
+                        start += 1;
+                        if option == "--" {
+                            break;
+                        }
+                    }
                 }
                 command => {
                     self.note_one(raw, &redirect[start..], command.as_ref());
@@ -1345,6 +1360,170 @@ impl Arithmetic {
         }
         (tainted, any)
     }
+
+    /// #932 measuring: which reading of `runs_unseen` holds, with the region.
+    #[cfg(test)]
+    pub(super) fn runs_unseen_why(&self, text: &[String]) -> String {
+        if self.unfollowed {
+            return "unfollowed".into();
+        }
+        let (tainted, any) = self.tainted();
+        if (self.opaque || self.sources || self.evaluates_text) && any {
+            return format!(
+                "opaque_sources_evaltext:o{}s{}e{}",
+                u8::from(self.opaque),
+                u8::from(self.sources),
+                u8::from(self.evaluates_text)
+            );
+        }
+        let builds = |value: &str| any && self.builds(value);
+        let tainted_value = |value: &str| {
+            command_output(value)
+                || builds(value)
+                || names(&visible(value)).any(|name| tainted.contains(name))
+        };
+        if self.integers.iter().any(|name| tainted.contains(name)) {
+            return "integers".into();
+        }
+        if let Some(w) = self.evaluated.iter().find(|word| tainted_value(word)) {
+            return format!("evaluated {w:?}");
+        }
+        if self.named.iter().any(|word| {
+            command_output(word)
+                || builds(word)
+                || references(word).any(|name| tainted.contains(name))
+                || word.find('[').is_some_and(|at| tainted_value(&word[at..]))
+        }) {
+            return "named".into();
+        }
+        for arg in text {
+            work::step();
+            let arg = joined(arg);
+            for range in regions(&arg) {
+                work::step();
+                let region = &arg[range];
+                let bare = unquoted(region);
+                if names(&bare).any(|name| tainted.contains(name)) {
+                    return format!("region_tainted_name {region:?}");
+                }
+                if unseen_substitution(region) {
+                    return format!("region_substitution {region:?}");
+                }
+                if any {
+                    let (builders, unknown) = building(region);
+                    if unknown || !builders.is_empty() {
+                        return format!("region_building {region:?}");
+                    }
+                }
+            }
+        }
+        if any && self.strict_unseen(text, &tainted) {
+            return "strict_unseen".into();
+        }
+        "namerefs_or_other".into()
+    }
+
+    /// #932 measuring: the argument text (or lexed word) that reads as a
+    /// qualifier that runs code.
+    #[cfg(test)]
+    pub(super) fn qualifier_trigger(&self, text: &[String]) -> Option<String> {
+        let one = |t: &[String]| self.runs_qualifier_code_in(t);
+        for arg in text {
+            work::step();
+            if one(std::slice::from_ref(arg)) {
+                let j = joined(arg);
+                for t in [j.clone(), j.replace('\\', "")] {
+                    work::step();
+                    for range in all_qualifier_lists(&t) {
+                        work::step();
+                        let hit = (range.is_empty() && range.start == t.len()) || {
+                            let list = &t[range.clone()];
+                            qualifier_runs_code(list)
+                                || (list.contains(['\'', '"', '\\'])
+                                    && quoted_group_end(&t, range.start).is_none_or(|end| {
+                                        qualifier_runs_code(&t[range.start..end])
+                                    }))
+                        };
+                        if hit {
+                            let from = t[..range.start]
+                                .char_indices()
+                                .rev()
+                                .nth(24)
+                                .map_or(0, |(i, _)| i);
+                            let to = t[range.end..]
+                                .char_indices()
+                                .nth(4)
+                                .map_or(t.len(), |(i, _)| range.end + i);
+                            return Some(format!(
+                                "argv:{}|{}|{}",
+                                &t[from..range.start],
+                                &t[range.clone()],
+                                &t[range.end..to]
+                            ));
+                        }
+                    }
+                }
+                return Some("argv:?".to_string());
+            }
+        }
+        for word in &self.qualifier_words {
+            work::step();
+            if one(std::slice::from_ref(word)) {
+                return Some(format!("lexed:{word}"));
+            }
+        }
+        None
+    }
+
+    /// #932 measuring: `runs_qualifier_code` over `text` alone.
+    #[cfg(test)]
+    fn runs_qualifier_code_in(&self, text: &[String]) -> bool {
+        let runs = |text: &str| {
+            all_qualifier_lists(text).into_iter().any(|range| {
+                if range.is_empty() && range.start == text.len() {
+                    return true;
+                }
+                let list = &text[range.clone()];
+                qualifier_runs_code(list)
+                    || (list.contains(['\'', '"', '\\'])
+                        && quoted_group_end(text, range.start)
+                            .is_none_or(|end| qualifier_runs_code(&text[range.start..end])))
+            })
+        };
+        text.iter()
+            .map(|arg| joined(arg))
+            .any(|text| runs(&text) || (text.contains('\\') && runs(&text.replace('\\', ""))))
+    }
+
+    /// #932 measuring: why `uses_glob_substitution` holds.
+    #[cfg(test)]
+    pub(super) fn glob_subst_why(&self, text: &[String]) -> String {
+        let options = |name: &str| name == "options";
+        if self.glob_subst {
+            return "lexed_glob_subst".into();
+        }
+        if let Some(arg) = text
+            .iter()
+            .find(|arg| shell::glob_substitution(&joined(arg)))
+        {
+            return format!("argv:{arg}");
+        }
+        if self.assigned.iter().any(|(name, _)| options(name))
+            || self
+                .filled
+                .iter()
+                .chain(&self.appended)
+                .chain(&self.namerefs)
+                .any(|name| options(name))
+            || self
+                .named
+                .iter()
+                .any(|word| options(word.split(['[', '=']).next().unwrap_or(word)))
+        {
+            return "options_array".into();
+        }
+        "-".into()
+    }
 }
 
 impl Arithmetic {
@@ -1472,7 +1651,10 @@ fn pure_arithmetic(region: &str) -> bool {
 
 /// Text with its command substitutions (`$(...)`, `` `...` ``) blanked.
 /// Arithmetic (`$((`) is kept. Linear: each byte is visited once.
-fn without_substitutions(text: &str) -> String {
+fn without_substitutions(text: &str) -> Cow<'_, str> {
+    if !text.contains('`') && !text.contains("$(") {
+        return Cow::Borrowed(text);
+    }
     let bytes = text.as_bytes();
     let mut kept = String::with_capacity(text.len());
     let mut at = 0;
@@ -1515,7 +1697,7 @@ fn without_substitutions(text: &str) -> String {
         from = at;
     }
     kept.push_str(&text[from.min(text.len())..]);
-    kept
+    Cow::Owned(kept)
 }
 
 /// Whether every command substitution in text prints a neutral fact
@@ -1578,7 +1760,7 @@ const MAX_FLAGS: usize = 64;
 /// (`${(P)n:-x=y}`). Linear: each expansion looks at most `MAX_FLAGS`
 /// bytes ahead for its flags, and its `=` is any later one.
 fn assigns_named_variable(text: &str) -> bool {
-    let Some(last_equals) = text.rfind('=') else {
+    let Some(last_equals) = work::rfind(text, "=") else {
         return false;
     };
     text.match_indices("${").any(|(at, _)| {
@@ -1924,6 +2106,16 @@ fn flags_unsafe(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bool {
     if references(flags).any(unsafe_in) {
         return true;
     }
+    // Keep checking flags inside malformed arguments: a safe outer suffix
+    // can contain an unsafe inner argument. Remove quotes once, then map each
+    // original argument's boundaries into that shared text instead of copying
+    // every overlapping suffix. Delimiter searches and callbacks are unchanged.
+    let unquoted_flags = unquoted(flags);
+    let quotes: Vec<usize> = flags
+        .match_indices(['"', '\'', '\\'])
+        .map(|(at, _)| at)
+        .collect();
+    let unquoted_at = |at| at - quotes.partition_point(|&quote| quote < at);
     flags.char_indices().any(|(at, flag)| {
         work::step();
         if !matches!(flag, 'l' | 'r' | 'I') {
@@ -1933,11 +2125,11 @@ fn flags_unsafe(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bool {
         let Some(delimiter) = rest.chars().next().filter(|ch| !ch.is_ascii_alphanumeric()) else {
             return false;
         };
-        let argument = &rest[delimiter.len_utf8()..];
-        let argument = argument
+        let start = at + flag.len_utf8() + delimiter.len_utf8();
+        let end = flags[start..]
             .find(delimiter)
-            .map_or(argument, |end| &argument[..end]);
-        unsafe_in(&unquoted(argument))
+            .map_or(flags.len(), |end| start + end);
+        unsafe_in(&unquoted_flags[unquoted_at(start)..unquoted_at(end)])
     })
 }
 
@@ -2557,7 +2749,7 @@ fn unseen_substitution(region: &str) -> bool {
 }
 
 /// `NAME=value`, `NAME+=value` or `NAME[sub]=value`: the name and value.
-fn assignment(word: &str) -> Option<(&str, &str)> {
+pub(super) fn assignment(word: &str) -> Option<(&str, &str)> {
     let (left, value) = word.split_once('=')?;
     let left = left.strip_suffix('+').unwrap_or(left);
     let name = left.split_once('[').map_or(left, |(name, _)| name);
@@ -3294,9 +3486,10 @@ fn qualifier_runs_code(list: &str) -> bool {
 /// assignments or the options of a declaring builtin.
 fn assignment_position(text: &str, at: usize) -> bool {
     let before = &text[..at];
-    let start = before
-        .rfind(|ch: char| ch.is_ascii_whitespace() || ";&|(".contains(ch))
-        .map_or(0, |space| space + 1);
+    let start = work::rfind_by(before, |ch: char| {
+        ch.is_ascii_whitespace() || ";&|(".contains(ch)
+    })
+    .map_or(0, |space| space + 1);
     let left = before[start..]
         .strip_suffix('+')
         .unwrap_or(&before[start..]);
@@ -3311,9 +3504,10 @@ fn assignment_position(text: &str, at: usize) -> bool {
         if rest.is_empty() || rest.ends_with([';', '&', '|', '(', '{', '!']) {
             return true;
         }
-        let word_start = rest
-            .rfind(|ch: char| ch.is_ascii_whitespace() || ";&|({".contains(ch))
-            .map_or(0, |space| space + 1);
+        let word_start = work::rfind_by(rest, |ch: char| {
+            ch.is_ascii_whitespace() || ";&|({".contains(ch)
+        })
+        .map_or(0, |space| space + 1);
         let word = &rest[word_start..];
         // An earlier array assignment (`a=(1 2) b=(3)`): read on from its
         // `a=`.

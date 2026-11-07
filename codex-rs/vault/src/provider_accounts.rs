@@ -447,6 +447,47 @@ impl Vault {
         )
     }
 
+    /// #1311 (D171): rewrites a named account's `chatgpt_auth` sign-in only
+    /// while the account still holds one, reading and writing it under one
+    /// storage lock, so a removal by another process is never undone by a
+    /// save that read the sign-in before it. `change` gets the stored value
+    /// and returns the new one with what it holds (#609). `Ok(false)`,
+    /// writing nothing, when the account holds no sign-in; `change`'s error
+    /// is returned inside, also writing nothing.
+    pub fn update_provider_account_sign_in<E>(
+        &self,
+        provider_id: &str,
+        name: &ProviderAccountName,
+        change: impl FnOnce(&str) -> Result<(Zeroizing<String>, Option<ProviderAccountSignIn>), E>,
+    ) -> Result<Result<bool, E>, VaultError> {
+        let kind = ProviderAccountKind::ChatgptAuth;
+        let label = account_label(provider_id, name, kind)?;
+        self.with_storage_lock(|| {
+            let mut index = self.load_index()?;
+            if !index
+                .credentials
+                .get(&label)
+                .is_some_and(|meta| meta.credential_type == kind.credential_type())
+            {
+                return Ok(Ok(false));
+            }
+            let Some(stored) = self
+                .read_secret(&label)?
+                .filter(|value| !value.trim().is_empty())
+                .map(Zeroizing::new)
+            else {
+                return Ok(Ok(false));
+            };
+            let (value, sign_in) = match change(&stored) {
+                Ok(changed) => changed,
+                Err(error) => return Ok(Err(error)),
+            };
+            Self::check_account_value(&label, kind, &value)?;
+            self.store_locked(&mut index, &label, provider_id, name, kind, &value, sign_in)?;
+            Ok(Ok(true))
+        })
+    }
+
     /// PF-84 (#609): what a named account's `chatgpt_auth` sign-in holds, as
     /// recorded in its metadata; `None` when it holds none or it was not
     /// recorded. Reads the vault index only, never the sign-in.
@@ -511,13 +552,7 @@ impl Vault {
         refuse_if_any: Option<&[String]>,
     ) -> Result<(), VaultError> {
         let label = account_label(provider_id, name, kind)?;
-        if value.trim().is_empty() {
-            return Err(VaultError::EmptySecret);
-        }
-        if kind.is_secret() {
-            crate::ensure_not_error_text(value)?;
-        }
-        crate::protect_stored(&label, kind.credential_type(), value)?;
+        Self::check_account_value(&label, kind, value)?;
         self.with_storage_lock(|| {
             let mut index = self.load_index()?;
             if refuse_if_any.is_some_and(|labels| {
@@ -529,38 +564,68 @@ impl Vault {
                     "{provider_id} already has an account `{name}`"
                 )));
             }
-            let now = Utc::now().timestamp();
-            let created_at = index
-                .credentials
-                .get(&label)
-                .map_or(now, |meta| meta.created_at);
-            index.credentials.insert(
-                label.clone(),
-                VaultCredentialMeta {
-                    label: label.clone(),
-                    credential_type: kind.credential_type(),
-                    provider: Some(provider_id.to_string()),
-                    notes: Some(format!("{provider_id} account {name}")),
-                    revocation_notes: None,
-                    created_at,
-                    updated_at: now,
-                    storage_backend: StorageBackend::EncryptedSecrets,
-                    // Only a sign-in has one.
-                    sign_in: sign_in.filter(|_| kind == ProviderAccountKind::ChatgptAuth),
-                },
-            );
-            let mut updates = vec![
-                (
-                    VAULT_SCOPE.clone(),
-                    secret_name_for(&label)?,
-                    value.to_string(),
-                ),
-                index_secret_entry(&index)?,
-            ];
-            updates.extend(self.missing_fingerprint_salt()?);
-            self.secrets.apply_batch(&updates, &[])?;
-            Ok(())
+            self.store_locked(&mut index, &label, provider_id, name, kind, value, sign_in)
         })
+    }
+
+    /// The checks every stored account value passes.
+    fn check_account_value(
+        label: &str,
+        kind: ProviderAccountKind,
+        value: &str,
+    ) -> Result<(), VaultError> {
+        if value.trim().is_empty() {
+            return Err(VaultError::EmptySecret);
+        }
+        if kind.is_secret() {
+            crate::ensure_not_error_text(value)?;
+        }
+        crate::protect_stored(label, kind.credential_type(), value)
+    }
+
+    /// Writes one kind and the index; the caller holds the storage lock.
+    #[allow(clippy::too_many_arguments)]
+    fn store_locked(
+        &self,
+        index: &mut crate::VaultIndex,
+        label: &str,
+        provider_id: &str,
+        name: &ProviderAccountName,
+        kind: ProviderAccountKind,
+        value: &str,
+        sign_in: Option<ProviderAccountSignIn>,
+    ) -> Result<(), VaultError> {
+        let now = Utc::now().timestamp();
+        let created_at = index
+            .credentials
+            .get(label)
+            .map_or(now, |meta| meta.created_at);
+        index.credentials.insert(
+            label.to_string(),
+            VaultCredentialMeta {
+                label: label.to_string(),
+                credential_type: kind.credential_type(),
+                provider: Some(provider_id.to_string()),
+                notes: Some(format!("{provider_id} account {name}")),
+                revocation_notes: None,
+                created_at,
+                updated_at: now,
+                storage_backend: StorageBackend::EncryptedSecrets,
+                // Only a sign-in has one.
+                sign_in: sign_in.filter(|_| kind == ProviderAccountKind::ChatgptAuth),
+            },
+        );
+        let mut updates = vec![
+            (
+                VAULT_SCOPE.clone(),
+                secret_name_for(label)?,
+                value.to_string(),
+            ),
+            index_secret_entry(index)?,
+        ];
+        updates.extend(self.missing_fingerprint_salt()?);
+        self.secrets.apply_batch(&updates, &[])?;
+        Ok(())
     }
 
     /// Removes every kind of a named account in one transaction. Returns

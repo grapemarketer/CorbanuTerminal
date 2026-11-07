@@ -102,6 +102,9 @@ pub(super) async fn expire_batch_on_connection(
         }
         applied += 1;
     }
+    // #314: a gap marker expires with its day's totals. At most one per
+    // conversation per day, a small table, so one statement does for all.
+    crate::runtime::accounting::gap_days::expire(conn, as_of_ms, REPLAY_MS).await?;
     // Only snapshots this batch unbound can have become unreferenced by it. A
     // whole-table collection scans every binding per snapshot - about 1 s on a
     // real ledger - and would only differ for a snapshot already unreferenced,

@@ -35,6 +35,18 @@ async fn build(home: &Path, cwd: &Path, user_config: &str, aggressive_level: boo
         .unwrap()
 }
 
+/// #691: on Windows workspace-write needs the Windows sandbox; without it the
+/// session falls back to read-only (Core's `config/permissions.rs`). These
+/// configs then select the default (elevated) Windows sandbox, as on a machine
+/// where it is set up. Unchanged elsewhere.
+fn with_windows_sandbox(user_config: &str) -> String {
+    if cfg!(windows) {
+        format!("{user_config}\n[windows]\nsandbox = \"elevated\"\n")
+    } else {
+        user_config.to_string()
+    }
+}
+
 /// A legacy workspace-write sandbox without temp folders, with an extra
 /// writable root and the given network setting.
 fn workspace_write(extra: &Path, network: bool) -> String {
@@ -57,10 +69,6 @@ exclude_slash_tmp = true
 /// legacy sandbox has no denied reads, so approved commands can leave it,
 /// and its "off" network and vault rows say so.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "workspace-write falls back to read-only on Windows without the Windows sandbox (#691)"
-)]
 async fn workspace_write_rows_name_the_escape_route() {
     let home = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
@@ -75,7 +83,7 @@ async fn workspace_write_rows_name_the_escape_route() {
     let open = build(
         home.path(),
         cwd.path(),
-        &workspace_write(extra.path(), /*network*/ true),
+        &with_windows_sandbox(&workspace_write(extra.path(), /*network*/ true)),
         /*aggressive_level*/ false,
     )
     .await;
@@ -96,7 +104,7 @@ async fn workspace_write_rows_name_the_escape_route() {
     let closed = build(
         home.path(),
         cwd.path(),
-        &workspace_write(extra.path(), /*network*/ false),
+        &with_windows_sandbox(&workspace_write(extra.path(), /*network*/ false)),
         /*aggressive_level*/ false,
     )
     .await;
@@ -210,10 +218,6 @@ async fn issue_440_vault_row_says_the_environment_is_allowlisted_under_secretles
 /// claim that approved or allow-listed commands can run outside it, nor what
 /// would follow from that.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "workspace-write falls back to read-only on Windows without the Windows sandbox (#691)"
-)]
 async fn issue_739_rows_under_protected_launch_claim_no_run_outside_the_sandbox() {
     let home = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
@@ -221,7 +225,7 @@ async fn issue_739_rows_under_protected_launch_claim_no_run_outside_the_sandbox(
     let mut config = build(
         home.path(),
         cwd.path(),
-        &workspace_write(extra.path(), /*network*/ false),
+        &with_windows_sandbox(&workspace_write(extra.path(), /*network*/ false)),
         /*aggressive_level*/ false,
     )
     .await;
@@ -493,10 +497,6 @@ async fn sec_437_thread_settings_keep_the_aggressive_rows() {
 /// never say approved commands can run outside it, and with the
 /// untrusted-content labels the vault store and sign-in file are unreadable.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "workspace-write falls back to read-only on Windows without the Windows sandbox (#691)"
-)]
 async fn issue_749_moderate_rows_keep_commands_in_the_sandbox() {
     let home = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
@@ -504,10 +504,10 @@ async fn issue_749_moderate_rows_keep_commands_in_the_sandbox() {
     let config = build(
         home.path(),
         cwd.path(),
-        &format!(
+        &with_windows_sandbox(&format!(
             "{}\n[features]\nsource_envelopes = true\n",
             workspace_write(extra.path(), /*network*/ false)
-        ),
+        )),
         /*aggressive_level*/ false,
     )
     .await;
@@ -558,10 +558,6 @@ async fn issue_749_moderate_rows_keep_commands_in_the_sandbox() {
 /// the rows no longer say the store is readable or that approved commands
 /// leave the sandbox; `corbanu vault …` commands are refused (#443).
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "workspace-write falls back to read-only on Windows without the Windows sandbox (#691)"
-)]
 async fn issue_792_aggressive_before_restart_rows_say_what_core_enforces() {
     let home = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
@@ -589,7 +585,7 @@ source_envelopes = {labels}
     let config = build(
         home.path(),
         cwd.path(),
-        &permissive(true),
+        &with_windows_sandbox(&permissive(true)),
         /*aggressive_level*/ false,
     )
     .await;
@@ -617,7 +613,7 @@ source_envelopes = {labels}
     let unlabelled = build(
         home.path(),
         cwd.path(),
-        &permissive(false),
+        &with_windows_sandbox(&permissive(false)),
         /*aggressive_level*/ false,
     )
     .await;
@@ -639,10 +635,10 @@ source_envelopes = {labels}
     let restarted = build(
         home.path(),
         cwd.path(),
-        &format!(
+        &with_windows_sandbox(&format!(
             "{}\n[features]\nsource_envelopes = true\n",
             workspace_write(extra.path(), /*network*/ false)
-        ),
+        )),
         /*aggressive_level*/ true,
     )
     .await;
@@ -676,10 +672,6 @@ source_envelopes = {labels}
 /// Aggressive and confirmation has set approval for every command (#505),
 /// for each kind of session.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "workspace-write falls back to read-only on Windows without the Windows sandbox (#691)"
-)]
 async fn issue_816_before_restart_facts_match_the_inspector_rows() {
     let home = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
@@ -774,7 +766,13 @@ exclude_slash_tmp = true
             let mut config = build(
                 home.path(),
                 cwd.path(),
-                &session("on-request", "workspace-write", false, "cached", labels),
+                &with_windows_sandbox(&session(
+                    "on-request",
+                    "workspace-write",
+                    false,
+                    "cached",
+                    labels,
+                )),
                 /*aggressive_level*/ false,
             )
             .await;
@@ -789,7 +787,7 @@ exclude_slash_tmp = true
             build(
                 home.path(),
                 cwd.path(),
-                &user_config,
+                &with_windows_sandbox(&user_config),
                 /*aggressive_level*/ false,
             )
             .await
@@ -844,4 +842,61 @@ exclude_slash_tmp = true
         seen.push(format!("{name}: {facts:?}"));
     }
     insta::assert_snapshot!("issue_816_before_restart_facts", seen.join("\n"));
+}
+
+/// #1468 (from #807's review): core keeps every run inside a policy that
+/// keeps the macOS keychain services away (`unsandboxed_execution_allowed`),
+/// so on macOS the rows must not say approved commands leave the sandbox.
+/// Other platforms ignore the rule, and the escape route stays.
+#[tokio::test]
+async fn issue_1468_keychain_rule_keeps_commands_in_the_sandbox_on_macos() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let user_config = r#"approval_policy = "on-request"
+default_permissions = "locked"
+
+[permissions.locked]
+extends = ":workspace"
+
+[permissions.locked.filesystem]
+":tmpdir" = "read"
+":slash_tmp" = "read"
+":keychain_services" = "deny"
+
+[permissions.locked.network]
+enabled = false
+"#;
+    let config = build(
+        home.path(),
+        cwd.path(),
+        &with_windows_sandbox(user_config),
+        /*aggressive_level*/ false,
+    )
+    .await;
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .denies_keychain_services()
+    );
+    let [sandbox, _, network, vault, _, _] = current_values(&config, SecurityLevel::Permissive);
+    let vault = vault.split("; ").next().unwrap().to_string();
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            [sandbox, network, vault],
+            [
+                "profile locked: commands can write to the current folder; approved and allow-listed commands stay inside the sandbox, which keeps the macOS keychain away; permission-request tools are off".to_string(),
+                "off for agent commands; web search cached".to_string(),
+                "the vault store and sign-in file are readable to agent commands".to_string(),
+            ]
+        );
+    } else {
+        assert_eq!(
+            [sandbox, network],
+            [
+                "profile locked: commands can write to the current folder; approved or allow-listed commands can run outside the sandbox; permission-request tools are off".to_string(),
+                "off inside the sandbox, on for commands that run outside it; web search cached".to_string(),
+            ]
+        );
+    }
 }

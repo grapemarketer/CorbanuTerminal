@@ -242,6 +242,8 @@ where
                 timed_out,
             )
         })?;
+    #[cfg(test)]
+    tests::notify_response_headers_received();
     let headers = response.headers().clone();
     let status = response.status();
     let retry_at = parse_retry_after(&headers, OffsetDateTime::now_utc());

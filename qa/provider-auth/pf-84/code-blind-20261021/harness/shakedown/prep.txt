@@ -1,0 +1,45 @@
+=== home zai3 2026-10-21T21:57:08Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+$ corbanu account add zai personal   (key agms-fake-zpersonal-NNNN on stdin)
+Saved zai account `personal` (api_key).
+--- account list (zai3)
+zai	personal	api_key
+zai	work	api_key
+=== home zai3off 2026-10-21T21:57:08Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+$ corbanu account add zai personal   (key agms-fake-zpersonal-NNNN on stdin)
+Saved zai account `personal` (api_key).
+--- account list (zai3off)
+Error: named accounts are off; enable them with `[features] named_accounts = true` or `--enable named_accounts`
+account list rc=1
+=== home zaione 2026-10-21T21:57:09Z
+--- account list (zaione)
+No named accounts. Every provider uses its default account.
+=== home zainokey 2026-10-21T21:57:09Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+--- account list (zainokey)
+zai	work	api_key
+=== home zainokeyoff 2026-10-21T21:57:09Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+--- account list (zainokeyoff)
+Error: named accounts are off; enable them with `[features] named_accounts = true` or `--enable named_accounts`
+account list rc=1
+=== home fresh 2026-10-21T21:57:09Z
+--- account list (fresh)
+No named accounts. Every provider uses its default account.
+=== home custom 2026-10-21T21:57:10Z
+$ corbanu account add zpx work   (key agms-fake-zpxwork-NNNN on stdin)
+Saved zpx account `work` (api_key).
+--- account list (custom)
+zpx	work	api_key
+=== home oai1 2026-10-21T21:57:10Z
+$ corbanu login --with-api-key   (key agms-fake-odefault-NNNN on stdin)
+Reading API key from stdin...
+Successfully logged in
+--- account list (oai1)
+No named accounts. Every provider uses its default account.
+prep done 2026-10-21T21:57:10Z

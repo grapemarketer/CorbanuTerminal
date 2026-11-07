@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::Span;
+use tracing::debug;
 use tracing::field;
 use tracing::info_span;
 use tracing::trace;
@@ -56,6 +57,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
@@ -578,7 +580,35 @@ impl Session {
             return;
         }
 
+        // A busy session cannot start another turn. Avoid preparing a turn and reading its
+        // named account here; the locked reservation below still checks for a concurrent start.
+        if self.active_turn.lock().await.is_some() {
+            return;
+        }
+
         let turn_context = self.new_default_turn_with_sub_id(sub_id.clone()).await;
+        // #1331 (D171): nor while its named account is removed or signed out.
+        if let Some(err) = crate::session::turn::turn_refusal(self, &turn_context).await {
+            let message = format!(
+                "Agent messages remain queued: {err}. After recovery, send another message or start a turn to retry."
+            );
+            self.send_event(
+                &turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: message.clone(),
+                }),
+            )
+            .await;
+            if let Err(err) = self
+                .services
+                .agent_control
+                .warn_parent_of_held_mailbox(self.thread_id, &turn_context.session_source, message)
+                .await
+            {
+                debug!("failed to notify parent of held mailbox: {err}");
+            }
+            return;
+        }
         let agent_execution_guard = match self.services.agent_control.try_execution_guard(
             turn_context.multi_agent_version,
             &turn_context.session_source,
@@ -1134,28 +1164,75 @@ impl Session {
         }
     }
 
-    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
+    async fn handle_task_abort(self: &Arc<Self>, mut task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
+        let cancelled_at = Instant::now();
         task.cancellation_token.cancel();
         task.turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
-        select! {
-            _ = task.done.notified() => {
-            },
+        let hard_aborted = select! {
+            _ = task.done.notified() => false,
             _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
                 warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+                true
             }
-        }
+        };
 
         task.handle.abort();
+        if hard_aborted {
+            // The turn did not record its tool outputs in time. Once it has stopped,
+            // record each pending call's output, as the turn would have: the tool's
+            // own output if it finished (D244), else its abort output (#1467).
+            // Joining waits only for the turn's current poll to return, so the turn
+            // cannot record an output after the check below. The join is skipped only
+            // when the turn task aborts itself; aborts from tasks the turn spawned must
+            // run in a detached task (as guardian's does), or the join cancels them.
+            if tokio::task::try_id() != Some(task.handle.abort_handle().id()) {
+                let _ = (&mut task.handle).await;
+            }
+            let mut outputs: Vec<ResponseItem> = task
+                .turn_context
+                .pending_tool_calls
+                .take_unrecorded_outputs(cancelled_at)
+                .into_iter()
+                .map(ResponseItem::from)
+                .collect();
+            self.retain_unrecorded_tool_outputs(&mut outputs).await;
+            if !outputs.is_empty() {
+                self.record_conversation_items(task.turn_context.as_ref(), &outputs)
+                    .await;
+                // A finished call's real output is recorded here instead of by the
+                // turn (D244), so apply the turn's external-context check too.
+                for output in &outputs {
+                    crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context(
+                        self,
+                        task.turn_context.as_ref(),
+                        output,
+                    )
+                    .await;
+                }
+            }
+            // D282: the turn did not reach its end, which sends the turn's
+            // file-change summary; send it here.
+            if let Some(tracker) = task.turn_context.pending_tool_calls.turn_diff_tracker() {
+                let unified_diff = tracker.lock().await.get_unified_diff();
+                if let Some(unified_diff) = unified_diff {
+                    self.send_event(
+                        task.turn_context.as_ref(),
+                        EventMsg::TurnDiff(TurnDiffEvent { unified_diff }),
+                    )
+                    .await;
+                }
+            }
+        }
 
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),

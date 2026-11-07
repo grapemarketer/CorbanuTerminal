@@ -1378,6 +1378,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             history_mode,
             session_start_source,
+            reopened_by_prompt_edit,
             thread_source,
             spawn_agent_parent_thread_id,
             spawn_agent_role,
@@ -1415,6 +1416,7 @@ impl ThreadRequestProcessor {
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
+        typesafe_overrides.reopened_by_prompt_edit = reopened_by_prompt_edit;
         typesafe_overrides.allow_provider_model_fallback = allow_provider_model_fallback;
         typesafe_overrides.provider_account = provider_account;
         typesafe_overrides.inherited_provider_account = inherited_provider_account;

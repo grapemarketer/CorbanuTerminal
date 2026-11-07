@@ -1,0 +1,14 @@
+
+Saved: Aggressive (nested agents: refuse)
+Active now in this session: agent commands cannot run `corbanu vault …` and cannot open protected paths (the vault store, sign-in and credential
+files, and Corbanu's config, history and state), sensitive surfaces need a grant, external content reaches the model labelled untrusted, and memory
+summaries stop.
+Starts when you restart: the Aggressive sandbox (writes only in the current folder, approved commands stay inside it), approval for every command that
+is not known read-only, network and web search off, secret-like environment variables removed and login profiles and shell snapshots unused, model
+keys held by the credential broker, and the child-agent rules. Until then this session keeps your own settings for these, and commands already running
+keep the permissions they started with until they end.
+Core's level is Aggressive now in this session, and from every start.
+Press r to restart now: Corbanu Terminal closes this session and starts again in this folder with the same options. Conversations from before cannot
+be resumed under Aggressive.
+
+r restart now · enter or esc close · i inspect

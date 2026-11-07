@@ -367,6 +367,10 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         let Some(disabled_reason) = &layer.disabled_reason else {
             continue;
         };
+        // #1506 item 2: a possibly planted folder has its own startup warning.
+        if disabled_reason.starts_with(codex_config::PLANTED_PROJECT_METADATA_WARNING_PREFIX) {
+            continue;
+        }
         disabled_folders.push((
             dot_codex_folder.as_path().display().to_string(),
             disabled_reason.clone(),

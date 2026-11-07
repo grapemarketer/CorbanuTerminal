@@ -480,6 +480,17 @@ pub(crate) fn label_desktop_low(name: &str) -> Result<()> {
 
 /// Whether `h_token` runs at Low integrity or below.
 pub(crate) fn token_is_low_integrity(h_token: HANDLE) -> bool {
+    token_integrity_rid(h_token).is_some_and(|rid| rid <= LOW_INTEGRITY_RID)
+}
+
+/// Whether `h_token` is known to run above Low integrity; false when its
+/// level can't be read.
+pub(crate) fn token_is_above_low_integrity(h_token: HANDLE) -> bool {
+    token_integrity_rid(h_token).is_some_and(|rid| rid > LOW_INTEGRITY_RID)
+}
+
+/// The RID of `h_token`'s integrity level, or `None` if it can't be read.
+fn token_integrity_rid(h_token: HANDLE) -> Option<u32> {
     let mut buffer = [0u64; 16];
     let mut needed = 0u32;
     // SAFETY: the buffer outlives the call and its size is passed.
@@ -493,7 +504,7 @@ pub(crate) fn token_is_low_integrity(h_token: HANDLE) -> bool {
         )
     };
     if ok == 0 {
-        return false;
+        return None;
     }
     // SAFETY: GetTokenInformation filled a TOKEN_MANDATORY_LABEL whose SID
     // points into `buffer`.
@@ -501,8 +512,8 @@ pub(crate) fn token_is_low_integrity(h_token: HANDLE) -> bool {
         let label = &*(buffer.as_ptr() as *const TOKEN_MANDATORY_LABEL);
         let count = *GetSidSubAuthorityCount(label.Label.Sid);
         if count == 0 {
-            return false;
+            return None;
         }
-        *GetSidSubAuthority(label.Label.Sid, u32::from(count) - 1) <= LOW_INTEGRITY_RID
+        Some(*GetSidSubAuthority(label.Label.Sid, u32::from(count) - 1))
     }
 }

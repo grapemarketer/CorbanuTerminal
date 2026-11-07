@@ -343,8 +343,8 @@ def _validate(raw):
             usage = event['usage']
             allowed = {'input_tokens', 'cached_input_tokens', 'output_tokens',
                        'cache_write_input_tokens', 'reasoning_output_tokens'}
-            if (not isinstance(usage, dict) or not {'input_tokens', 'cached_input_tokens', 'output_tokens'} <= usage.keys()
-                    or not usage.keys() <= allowed or any(type(n) is not int or n < 0 for n in usage.values())):
+            if (usage is not None and (not isinstance(usage, dict) or not {'input_tokens', 'cached_input_tokens', 'output_tokens'} <= usage.keys()
+                    or not usage.keys() <= allowed or any(type(n) is not int or n < 0 for n in usage.values()))):
                 raise ValueError('invalid usage')
             phase = 3
         elif kind == 'item.completed' and phase < 3 and set(event) == {'type', 'item'}:

@@ -77,6 +77,19 @@ impl ResolvedWindowsSandboxPermissions {
         })
     }
 
+    /// #734: the file-system half of a run's permissions, `:workspace_roots`
+    /// bound as in [`Self::try_from_permission_profile_for_workspace_roots`].
+    pub(crate) fn from_file_system_policy(
+        file_system: FileSystemSandboxPolicy,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        Self {
+            file_system: file_system
+                .materialize_project_roots_with_workspace_roots(workspace_roots),
+            network: NetworkSandboxPolicy::default(),
+        }
+    }
+
     /// Resolves a managed permission profile and binds symbolic `:workspace_roots`
     /// entries to the workspace roots supplied by the caller.
     pub fn try_from_permission_profile_for_workspace_roots(
@@ -100,6 +113,14 @@ impl ResolvedWindowsSandboxPermissions {
 
     pub(crate) fn is_enforceable_by_windows_sandbox(&self) -> bool {
         matches!(self.file_system.kind, FileSystemSandboxKind::Restricted)
+    }
+
+    /// Whether the profile names `path` itself as not writable (an explicit
+    /// read-only carve-out, as opposed to the default `.git`/`.codex`/`.agents`
+    /// protections).
+    pub(crate) fn is_explicit_read_only_path(&self, path: &Path, cwd: &Path) -> bool {
+        self.file_system
+            .has_explicit_non_write_entry_for_path_with_cwd(path, cwd)
     }
 
     pub(crate) fn has_full_disk_read_access(&self) -> bool {
@@ -310,6 +331,7 @@ mod tests {
                     },
                     FileSystemSandboxEntry {
                         path: FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: project_roots_glob_pattern(Path::new("**/*.env")),
                         },
                         access: FileSystemAccessMode::Deny,
@@ -361,6 +383,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: AbsolutePathBuf::resolve_path_against_base(
                             "**/*.env",
                             first.as_path(),
@@ -373,6 +396,7 @@ mod tests {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: AbsolutePathBuf::resolve_path_against_base(
                             "**/*.env",
                             second.as_path(),

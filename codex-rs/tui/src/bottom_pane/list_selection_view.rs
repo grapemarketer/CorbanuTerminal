@@ -22,6 +22,7 @@ use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListKeymap;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::selection_list::list_position_label;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -1426,6 +1427,27 @@ impl Renderable for ListSelectionView {
             );
             Self::clear_to_terminal_bg(buf, clear_area);
             self.stacked_side_content().render(stacked_side_area, buf);
+        }
+
+        // -- Position (#1288): rows exist beyond the visible window --
+        // Drawn right-aligned under the list, in the menu surface's bottom
+        // padding row, so the popup's height does not change.
+        let len = self.visible_len();
+        if len > Self::max_visible_rows(len) && content_area.bottom() < outer_content_area.bottom()
+        {
+            let label = list_position_label(self.state.selected_idx, len);
+            let label_width = UnicodeWidthStr::width(label.as_str()) as u16;
+            let right = list_area
+                .x
+                .saturating_sub(2)
+                .saturating_add(effective_rows_width)
+                .min(content_area.right());
+            if label_width < right.saturating_sub(content_area.x) {
+                Line::from(label.dim()).render(
+                    Rect::new(right - label_width, content_area.bottom(), label_width, 1),
+                    buf,
+                );
+            }
         }
 
         if footer_area.height > 0 {

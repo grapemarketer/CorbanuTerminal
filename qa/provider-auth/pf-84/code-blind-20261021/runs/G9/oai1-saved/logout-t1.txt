@@ -1,0 +1,2 @@
+OpenAI account `t1` is not signed in
+rc=0

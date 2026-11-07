@@ -1,0 +1,282 @@
+#!/usr/bin/python3
+"""Neutral terminal driver for the code-blind executor.
+
+Every invocation is appended to $AGMS_RUN/evidence/actions.jsonl with a
+timestamp; every screen read is appended to screens.jsonl. The product runs in
+a private tmux server on $AGMS_RUN/tmux.sock; raw terminal output is piped to
+evidence/pty.raw.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+RUN = os.environ["AGMS_RUN"]
+EVIDENCE = os.path.join(RUN, "evidence")
+SOCK = os.path.join(RUN, "tmux.sock")
+ROOT = os.environ.get("AGMS_ROOT", "/opt/agms")
+TMUX = [ROOT + "/bin/tmux", "-f", ROOT + "/etc/tmux.conf", "-S", SOCK]
+TARGET = "product"
+TERM_NO = 1  # --term 2 selects a second Corbanu Terminal on the same run profile (same CORBANU_HOME)
+FIXTURE = os.path.join(RUN, "fixture")
+USAGE = """usage:
+  agms-tui start [--route ROUTE] [--model MODEL] [--provider-name NAME] [--env NAME=synthetic...]
+                 [PRODUCT ARGS...]   launch the product (defaults: route zai, model glm-5.3-flash).
+                                    Routes and models:
+                                      zai         glm-5.3-flash                       (real)
+                                      openai      gpt-6-luna gpt-5.6-luna gpt-5.6-sol gpt-6.1-sol gpt-5.4 (real)
+                                      moonshot    kimi-k3 kimi-k2.7-code              (real; provider name
+                                                  `kimi` unless --provider-name NAME)
+                                      chatgpt     gpt-5.4 gpt-mock-unlisted           (sign-in stand-in)
+                                      openrouter  z-ai/glm-5.3-flash deepseek/deepseek-v4.1-flash
+                                                  xiaomi/mimo-v2.6-pro standin/uncatalogued (stand-in)
+                                      vercel      zai/glm-5.3-flash                   (stand-in)
+                                      corbanu     corbanu/deepseek-v4.1-flash         (stand-in)
+                                      custom      lab-model-1 (provider `mylab`, stand-in)
+                                    PRODUCT ARGS go to the product, e.g. `resume --last`, `resume ID`
+                                    or `-c key=value`.
+  agms-tui exec [--route ROUTE] [--model MODEL] [--provider-name NAME] [EXEC ARGS...] 'prompt'
+                                    run `corbanu exec` once on the same profile and project (EXEC ARGS
+                                    e.g. --ephemeral); prints its output
+  agms-tui realtime 'text'          run ONE realtime session on the openai route's API key through the
+                                    product's app server: start (text output), send the text as speech
+                                    input, wait for the reply, stop; prints the reply and the
+                                    conversation (thread) ID (the harness refuses sessions over the
+                                    owner's limit); output saved as evidence/realtime-N.txt
+  agms-tui config 'key = value'     add one top-level setting to the product profile's config.toml
+  agms-tui standin chatgpt-image    make the ChatGPT stand-in's next answer use the image tool
+  agms-tui standin no-charge on|off the charging stand-ins (OpenRouter, Vercel, Corbanu API) leave out
+                                    their reported charge (on) or report it again (off; the default)
+  agms-tui text 'literal text'      type text (does not press Enter)
+  agms-tui key KEY [KEY...]         press keys: Enter Escape Up Down Left Right Tab
+                                    BSpace Space C-c C-d y n 1 2 3 ... (tmux key names)
+  agms-tui screen [LABEL]           print the current screen
+  agms-tui wait REGEX [SECONDS]     wait until the screen matches REGEX (default 60s)
+  agms-tui fixture [LABEL]          list fixture files with their contents
+  agms-tui stop                     end the product terminal session
+"""
+
+
+def log(kind, row):
+    row = dict(time_ns=time.time_ns(), utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **row)
+    if TERM_NO != 1:
+        row["term"] = TERM_NO
+    with open(os.path.join(EVIDENCE, kind), "a") as out:
+        out.write(json.dumps(row) + "\n")
+
+
+def tmux(*args, check=True):
+    result = subprocess.run(TMUX + list(args), capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise SystemExit("tmux error: " + result.stderr.strip())
+    return result
+
+
+def pty_name():
+    return "pty.raw" if TERM_NO == 1 else "pty-%d.raw" % TERM_NO
+
+
+def pty_offset():
+    path = os.path.join(EVIDENCE, pty_name())
+    return os.path.getsize(path) if os.path.exists(path) else 0
+
+
+def capture():
+    return tmux("capture-pane", "-p", "-t", TARGET).stdout
+
+
+def show(label, screen):
+    log("screens.jsonl", dict(label=label, pty_offset=pty_offset(), screen=screen))
+    print(screen.rstrip("\n"))
+
+
+def fixture_state():
+    state = {}
+    for base, dirs, files in os.walk(FIXTURE):
+        dirs.sort()
+        if os.path.basename(base) == ".git":
+            # git internals: list hooks/config, skip object storage
+            dirs[:] = [d for d in dirs if d in ("hooks", "info")]
+        for name in sorted(files):
+            path = os.path.join(base, name)
+            rel = os.path.relpath(path, FIXTURE)
+            try:
+                with open(path, "rb") as stream:
+                    data = stream.read(4096)
+                state[rel] = data.decode("utf-8", "replace")
+            except OSError as exc:
+                state[rel] = "<unreadable: %s>" % exc.strerror
+    return state
+
+
+def main(argv):
+    global TERM_NO, TARGET
+    if argv[:1] == ["--term"]:
+        if len(argv) < 2 or argv[1] not in ("1", "2"):
+            print("--term takes 1 or 2")
+            return 64
+        TERM_NO = int(argv[1])
+        TARGET = "product" if TERM_NO == 1 else "term%d" % TERM_NO  # not a prefix of "product": tmux prefix-matches -t
+        argv = argv[2:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    cmd, args = argv[0], argv[1:]
+    log("actions.jsonl", dict(requested=cmd, args=args))
+    if cmd == "start":
+        route, model, extra = "zai", "glm-5.3-flash", []
+        name = ""
+        while args[:1] and args[0] in ("--route", "--model", "--env", "--provider-name"):
+            if args[0] == "--route":
+                route = args[1]
+            elif args[0] == "--model":
+                model = args[1]
+            elif args[0] == "--provider-name":
+                name = args[1]
+            else:
+                extra.append(args[1])
+            args = args[2:]
+        if tmux("has-session", "-t", TARGET, check=False).returncode == 0:
+            print("a product session is already running; use 'agms-tui stop' first")
+            return 1
+        product = [ROOT + "/bin/agms-product", route, model] + args
+        tmux("new-session", "-d", "-s", TARGET, "-x", "150", "-y", "45",
+             "-e", "AGMS_EXTRA_ENV=" + "\n".join(extra), "-e", "AGMS_PROVIDER_NAME=" + name,
+             " ".join("'" + a.replace("'", "'\\''") + "'" for a in product))
+        tmux("pipe-pane", "-o", "-t", TARGET, "cat >> '%s'" % os.path.join(EVIDENCE, pty_name()))
+        time.sleep(2)
+        log("actions.jsonl", dict(executed="start", argv=product))
+        show("after-start", capture())
+    elif cmd == "exec":
+        route, model, name = "zai", "glm-5.3-flash", ""
+        while args[:1] and args[0] in ("--route", "--model", "--provider-name"):
+            if args[0] == "--route":
+                route = args[1]
+            elif args[0] == "--model":
+                model = args[1]
+            else:
+                name = args[1]
+            args = args[2:]
+        env = dict(os.environ, AGMS_PROVIDER_NAME=name)
+        argv = [ROOT + "/bin/agms-product", "--exec", route, model] + args
+        result = subprocess.run(argv, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+        n = len([1 for _ in open(os.path.join(EVIDENCE, "actions.jsonl"))])
+        with open(os.path.join(EVIDENCE, "exec-%d.txt" % n), "w") as out:
+            out.write("argv: %s\nexit: %d\n--- stdout\n%s\n--- stderr\n%s\n" % (argv, result.returncode, result.stdout, result.stderr))
+        log("actions.jsonl", dict(executed="exec", argv=argv, exit=result.returncode, output="exec-%d.txt" % n))
+        print(result.stdout + result.stderr)
+        print("exit=%d (saved as evidence/exec-%d.txt)" % (result.returncode, n))
+        return result.returncode
+    elif cmd == "realtime":
+        text = " ".join(args)
+        if not text or "\n" in text:
+            print("give one line of text, e.g. agms-tui realtime 'Reply with the single word OK.'")
+            return 64
+        argv = [ROOT + "/bin/agms-product", "--realtime", "openai", "gpt-6-luna", text]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+            code, out, err = result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired as exc:
+            code, out, err = 124, exc.stdout or "", (exc.stderr or "") + "\nTIMEOUT after 300 s"
+            out = out.decode() if isinstance(out, bytes) else out
+            err = err.decode() if isinstance(err, bytes) else err
+        n = len([1 for _ in open(os.path.join(EVIDENCE, "actions.jsonl"))])
+        with open(os.path.join(EVIDENCE, "realtime-%d.txt" % n), "w") as stream:
+            stream.write("argv: %s\nexit: %d\n--- stdout\n%s\n--- stderr\n%s\n" % (argv, code, out, err))
+        log("actions.jsonl", dict(executed="realtime", argv=argv, exit=code, output="realtime-%d.txt" % n))
+        print(out + err)
+        print("exit=%d (saved as evidence/realtime-%d.txt)" % (code, n))
+        return code
+    elif cmd == "config":
+        line = " ".join(args)
+        if "\n" in line or not re.match(r"^[A-Za-z0-9_.\[\]\"-]+ = .+$", line):
+            print("refused: give one TOML line, e.g. skip_reopen_warmup = true")
+            return 64
+        path = os.path.join(RUN, "product-home", "config.toml")
+        lines = open(path).read().splitlines() if os.path.exists(path) else []
+        # A top-level setting: insert it before the first [table] so it stays top-level.
+        at = next((i for i, l in enumerate(lines) if l.lstrip().startswith("[")), len(lines))
+        lines.insert(at, line)
+        with open(path, "w") as out:
+            out.write("\n".join(lines) + "\n")
+        log("actions.jsonl", dict(executed="config", line=line))
+        print("added to the profile's config.toml (top level): " + line)
+    elif cmd == "standin":
+        if args not in (["chatgpt-image"], ["no-charge", "on"], ["no-charge", "off"]):
+            print(USAGE)
+            return 64
+        import socket, ssl
+        port = int(os.environ.get("AGMS_PROXY", "http://127.0.0.1:18443").rsplit(":", 1)[1])
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        host = b"chatgpt.com" if args == ["chatgpt-image"] else b"openrouter.ai"
+        sock.sendall(b"CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n" % (host, host))
+        sock.recv(200)
+        tls = ssl.create_default_context(cafile=ROOT + "/etc/mediation-ca.pem").wrap_socket(sock, server_hostname=host.decode())
+        if args == ["chatgpt-image"]:
+            path, body = b"/_script", b'{"replies":["imagegen","text"]}'
+        else:
+            path, body = b"/_standin", b'{"omit_charge": %s}' % (b"true" if args[1] == "on" else b"false")
+        tls.sendall(b"POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (path, host, len(body), body))
+        reply = tls.recv(200).decode("latin-1").split("\r\n", 1)[0]
+        tls.close()
+        log("actions.jsonl", dict(executed="standin", what=" ".join(args), reply=reply))
+        if args == ["chatgpt-image"]:
+            print("ChatGPT stand-in: next answer uses the image tool, then text (%s)" % reply)
+        else:
+            print("Charging stand-ins (OpenRouter, Vercel, Corbanu API) now %s their charge (%s)"
+                  % ("leave out" if args[1] == "on" else "report", reply))
+    elif cmd == "text":
+        text = " ".join(args)
+        tmux("send-keys", "-t", TARGET, "-l", text)
+        log("actions.jsonl", dict(executed="text", text=text, pty_offset=pty_offset()))
+        print("typed %d characters" % len(text))
+    elif cmd == "key":
+        for key in args:
+            tmux("send-keys", "-t", TARGET, key)
+            log("actions.jsonl", dict(executed="key", key=key, pty_offset=pty_offset()))
+            time.sleep(0.15)
+        print("pressed " + " ".join(args))
+    elif cmd == "ansi":
+        # Coloured capture (coordinator screenshots).
+        screen = tmux("capture-pane", "-e", "-p", "-t", TARGET).stdout
+        log("screens.jsonl", dict(label=(args[0] if args else "ansi"), pty_offset=pty_offset(), ansi=True, screen=screen))
+        print(screen.rstrip("\n"))
+    elif cmd == "screen":
+        show(args[0] if args else "screen", capture())
+    elif cmd == "wait":
+        pattern = re.compile(args[0])
+        limit = float(args[1]) if len(args) > 1 else 60.0
+        deadline = time.time() + limit
+        while True:
+            screen = capture()
+            if pattern.search(screen):
+                log("actions.jsonl", dict(executed="wait", pattern=args[0], matched=True))
+                show("wait-matched:" + args[0], screen)
+                return 0
+            if time.time() > deadline:
+                log("actions.jsonl", dict(executed="wait", pattern=args[0], matched=False))
+                show("wait-timeout:" + args[0], screen)
+                print("TIMEOUT: pattern not seen within %ss" % limit)
+                return 2
+            time.sleep(0.5)
+    elif cmd == "fixture":
+        state = fixture_state()
+        log("fixture.jsonl", dict(label=args[0] if args else "fixture", files=state))
+        print(json.dumps(state, indent=1, sort_keys=True))
+    elif cmd == "stop":
+        if TERM_NO == 1:
+            tmux("kill-server", check=False)
+        else:
+            tmux("kill-session", "-t", TARGET, check=False)
+        log("actions.jsonl", dict(executed="stop"))
+        print("stopped")
+    else:
+        print(USAGE)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

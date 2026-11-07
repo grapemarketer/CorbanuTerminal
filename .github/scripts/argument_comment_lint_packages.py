@@ -9,6 +9,7 @@ Prints one package name per line.
 """
 
 import argparse
+import os
 import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
@@ -65,19 +66,18 @@ def changed_files(base: str, head: str) -> list[str]:
         # Three dots: only what the PR changed since it left `base`.
         [
             "git",
-            "-c",
-            "core.quotePath=off",
             "diff",
             "--name-only",
             "--no-renames",
+            "-z",
             f"{base}...{head}",
         ],
         capture_output=True,
         check=True,
         cwd=ROOT,
-        text=True,
     ).stdout
-    return [line for line in output.splitlines() if line]
+    # NUL records avoid Git's path quoting and preserve embedded newlines.
+    return [os.fsdecode(path) for path in output.split(b"\0") if path]
 
 
 def main() -> None:

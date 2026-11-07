@@ -332,6 +332,147 @@ fn a_sweep_limits_successful_removals_across_records_and_resumes() {
     assert_eq!(setup.report(), "");
 }
 
+/// Makes `count` placeholders in `home`, named `<prefix>-<index>`, and
+/// returns their paths and entries.
+fn placeholders(setup: &Setup, prefix: &str, count: usize) -> (Vec<PathBuf>, Vec<Entry>) {
+    let paths = (0..count)
+        .map(|index| setup.base.join(format!("home/{prefix}-{index}")))
+        .collect::<Vec<_>>();
+    let entries = paths
+        .iter()
+        .map(|path| Entry::Made {
+            kind: Kind::File,
+            path: path.clone(),
+            real: path.clone(),
+            identity: make_placeholder(path, Kind::File).expect("placeholder"),
+        })
+        .collect();
+    (paths, entries)
+}
+
+/// Writes the record of an ended run that made `count` placeholders.
+fn ended_with_placeholders(setup: &Setup, prefix: &str, count: usize) -> Vec<PathBuf> {
+    let (paths, entries) = placeholders(setup, prefix, count);
+    setup.write(ended(), entries);
+    paths
+}
+
+/// Makes the sweep read `points` as the mount points, and returns how many
+/// times it has read them.
+fn read_mounts_as(
+    setup: &mut Setup,
+    points: Option<HashSet<Vec<u8>>>,
+) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = reads.clone();
+    setup.journal.mount_points = Box::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        points.clone()
+    });
+    reads
+}
+
+fn recorded_entries(setup: &Setup) -> usize {
+    setup
+        .records()
+        .iter()
+        .map(|name| setup.journal.read(name).expect("record").entries.len())
+        .sum()
+}
+
+#[test]
+fn placeholders_mounted_over_do_not_hold_up_the_ones_after_them() {
+    let mut setup = Setup::new();
+    // One record, in this order (same depth; the sort is stable).
+    let (mounted, mut entries) = placeholders(&setup, "mounted", /*count*/ 70);
+    let (removable, more) = placeholders(&setup, "removable", /*count*/ 3);
+    entries.extend(more);
+    setup.write(ended(), entries);
+    let points = mounted
+        .iter()
+        .map(|path| path.as_os_str().as_bytes().to_vec())
+        .collect();
+    let reads = read_mounts_as(&mut setup, Some(points));
+
+    setup.sweep();
+
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 73);
+    assert!(mounted.iter().all(|path| path.is_file()));
+    assert!(removable.iter().all(|path| !path.exists()));
+    assert_eq!(recorded_entries(&setup), 70);
+    assert_eq!(setup.report(), "");
+
+    read_mounts_as(&mut setup, Some(HashSet::new()));
+    setup.sweep();
+    setup.sweep();
+
+    assert!(mounted.iter().all(|path| !path.exists()));
+    assert_eq!(setup.records(), Vec::<String>::new());
+    assert_eq!(setup.report(), "");
+}
+
+#[test]
+fn a_parent_that_fails_after_its_children_keeps_the_identity_they_left() {
+    let mut setup = Setup::new();
+    let folder = setup.left_folder_with_children(/*children*/ 3);
+    // The children's reads succeed; the parent's cannot be made.
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = reads.clone();
+    setup.journal.mount_points = Box::new(move || {
+        (counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3).then(HashSet::new)
+    });
+
+    setup.sweep();
+
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 4);
+    assert!(folder.is_dir());
+    assert_eq!(std::fs::read_dir(&folder).expect("folder").count(), 0);
+    assert_eq!(recorded_entries(&setup), 1);
+
+    read_mounts_as(&mut setup, Some(HashSet::new()));
+    setup.sweep();
+
+    assert!(!folder.exists(), "{}", setup.report());
+    assert_eq!(setup.records(), Vec::<String>::new());
+    assert_eq!(setup.report(), "");
+}
+
+#[test]
+fn a_sweep_stops_once_the_mount_points_cannot_be_read() {
+    let mut setup = Setup::new();
+    let first = ended_with_placeholders(&setup, "first", /*count*/ 3);
+    let second = ended_with_placeholders(&setup, "second", /*count*/ 3);
+    let reads = read_mounts_as(&mut setup, /*points*/ None);
+
+    setup.sweep();
+
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(first.iter().chain(&second).all(|path| path.is_file()));
+    assert_eq!(recorded_entries(&setup), 6);
+    assert_eq!(setup.report(), "");
+}
+
+#[test]
+fn placeholders_settled_before_the_mount_read_do_not_use_up_the_sweep() {
+    let mut setup = Setup::new();
+    // One record, in this order (same depth; the sort is stable).
+    let (gone, mut entries) = placeholders(&setup, "gone", /*count*/ 10);
+    for path in &gone {
+        std::fs::remove_file(path).expect("removed by the person");
+    }
+    let (removable, more) = placeholders(&setup, "removable", /*count*/ 64);
+    entries.extend(more);
+    setup.write(ended(), entries);
+    let reads = read_mounts_as(&mut setup, Some(HashSet::new()));
+
+    setup.sweep();
+
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 64);
+    assert!(removable.iter().all(|path| !path.exists()));
+    assert_eq!(setup.records(), Vec::<String>::new());
+    assert_eq!(setup.report(), "");
+}
+
 #[test]
 fn a_deferred_parent_keeps_the_identity_its_removed_children_left() {
     let mut setup = Setup::new();
@@ -809,9 +950,10 @@ fn a_mount_point_in_any_of_this_users_namespaces_is_found() {
     assert_eq!(unescape_mount_point(br"/a\040b\134c"), b"/a b\\c".to_vec());
     assert_eq!(unescape_mount_point(br"/plain\x"), br"/plain\x".to_vec());
     // This process's own `/proc` is a mount point; a fresh folder is not.
-    assert!(mounted_anywhere(&[Path::new("/proc")]));
+    assert!(mounted_anywhere(&[Path::new("/proc")], mount_points()));
     let dir = tempfile::TempDir::new().expect("tempdir");
-    assert!(!mounted_anywhere(&[dir.path()]));
+    assert!(!mounted_anywhere(&[dir.path()], mount_points()));
+    assert!(mounted_anywhere(&[dir.path()], /*points*/ None));
 }
 
 // A fake `/proc/<pid>` in mount namespace `namespace`, with a `mountinfo`

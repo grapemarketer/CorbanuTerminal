@@ -5,6 +5,7 @@ use crate::acl::ensure_allow_write_aces;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::cap::load_or_create_cap_sids;
+use crate::cap::new_command_identity_sid_string;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
@@ -27,11 +28,11 @@ use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
-use crate::token::create_readonly_token_with_cap;
-use crate::token::create_workspace_write_token_with_caps_from;
+use crate::token::create_legacy_token_with_caps_from;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
-use crate::workspace_acl::deny_delete_child_route;
+use crate::workspace_acl::delete_child_route_denies;
+use crate::workspace_acl::deny_moving_ancestors;
 use crate::workspace_acl::is_command_cwd_root;
 use crate::workspace_acl::protect_workspace_agents_dir;
 use crate::workspace_acl::protect_workspace_codex_dir;
@@ -40,6 +41,7 @@ use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::Path;
 use std::path::PathBuf;
@@ -156,26 +158,34 @@ pub(crate) fn prepare_legacy_session_security(
     capability_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, readonly_sid, readonly_sid_str, write_root_sids) = unsafe {
-        if uses_write_capabilities {
-            let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
-            if write_root_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-            }
-            let base = get_current_token_for_restriction()?;
-            let cap_ptrs: Vec<*mut c_void> = write_root_sids
-                .iter()
-                .map(|root| root.sid.as_ptr())
-                .collect();
-            let h_token = create_workspace_write_token_with_caps_from(base, cap_ptrs.as_slice());
-            CloseHandle(base);
-            let h_token = h_token?;
-            (h_token, None, None, write_root_sids)
-        } else {
-            let psid = LocalSid::from_string(&caps.readonly)?;
-            let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-            (h_token, Some(psid), Some(caps.readonly), Vec::new())
+    // D259 (#1507): the token copies the SID, so it can go once the token exists.
+    let command_identity = LocalSid::from_string(&new_command_identity_sid_string())?;
+    let (readonly_sid, readonly_sid_str, write_root_sids) = if uses_write_capabilities {
+        let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
+        if write_root_sids.is_empty() {
+            anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
         }
+        (None, None, write_root_sids)
+    } else {
+        let psid = LocalSid::from_string(&caps.readonly)?;
+        (Some(psid), Some(caps.readonly), Vec::new())
+    };
+    let cap_ptrs: Vec<*mut c_void> = match readonly_sid.as_ref() {
+        Some(psid) => vec![psid.as_ptr()],
+        None => write_root_sids
+            .iter()
+            .map(|root| root.sid.as_ptr())
+            .collect(),
+    };
+    let h_token = unsafe {
+        let base = get_current_token_for_restriction()?;
+        let h_token = create_legacy_token_with_caps_from(
+            base,
+            cap_ptrs.as_slice(),
+            command_identity.as_ptr(),
+        );
+        CloseHandle(base);
+        h_token?
     };
     // #158: Low integrity closes the parent FILE_DELETE_CHILD route that the
     // write-restricted token leaves open outside the writable roots.
@@ -260,6 +270,38 @@ fn deny_root_capabilities_for_path<'a>(
     }
 }
 
+/// #1506 item 3 (D263): denies every write root containing `path` the moving
+/// of folders between the outermost such root and `path`.
+///
+/// # Safety
+/// The root SIDs must be valid.
+unsafe fn deny_moving_ancestors_below_roots(
+    path: &Path,
+    root_sids: &[RootCapabilitySid],
+    denies: &mut Vec<crate::integrity_leases::DeleteChildDeny>,
+) -> Result<()> {
+    let containing: Vec<&RootCapabilitySid> = root_sids
+        .iter()
+        .filter(|root_sid| workspace_write_root_contains_path(&root_sid.root, path))
+        .collect();
+    let Some(outermost) = containing
+        .iter()
+        .min_by_key(|root_sid| workspace_write_root_specificity(&root_sid.root))
+    else {
+        return Ok(());
+    };
+    let sids: Vec<*mut c_void> = containing
+        .iter()
+        .map(|root_sid| root_sid.sid.as_ptr())
+        .collect();
+    deny_moving_ancestors(path, &outermost.root, &sids, denies).with_context(|| {
+        format!(
+            "the Windows sandbox could not protect the folders above read-only path {}",
+            path.display()
+        )
+    })
+}
+
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
 /// `gitdir: .` must not relabel the workspace itself). All paths canonical.
 fn strictly_inside_a_root(path: &Path, roots: &[PathBuf]) -> bool {
@@ -331,6 +373,18 @@ pub(crate) fn apply_legacy_session_acl_rules(
     {
         deny.insert(registry);
     }
+    // #1506 item 3 (D263): explicit read-only carve-outs, as opposed to the
+    // default `.git`/`.codex`/`.agents` protections and the label records.
+    let mut explicit_carve_outs: HashSet<PathBuf> = deny
+        .iter()
+        .filter(|path| permissions.is_explicit_read_only_path(path, current_dir))
+        .cloned()
+        .collect();
+    // #1506 item 1 (D261): the Everyone delete-child denies, added together
+    // (tracked) before the command starts.
+    let mut delete_child_denies = Vec::new();
+    // D263's, which the command must not start without.
+    let mut required_delete_child_denies = Vec::new();
     unsafe {
         for path in additional_deny_write_paths {
             // Explicit carveouts must exist before the command starts so the
@@ -340,6 +394,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
                     .with_context(|| format!("create deny-write path {}", path.display()))?;
             }
             deny.insert(path.clone());
+            explicit_carve_outs.insert(path.clone());
         }
         if let Some(readonly_sid) = acl_sids.readonly_sid {
             for p in &allow {
@@ -387,7 +442,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
                     matching_root_capability(parent, acl_sids.write_root_sids).is_some()
                 })
             {
-                let _ = deny_delete_child_route(p);
+                delete_child_denies.extend(delete_child_route_denies(p));
+            }
+            // Nor does it stop the command moving a folder between the root
+            // and an explicit nested carve-out, then recreating the carve-out.
+            if p.exists() && explicit_carve_outs.contains(p) {
+                deny_moving_ancestors_below_roots(
+                    p,
+                    acl_sids.write_root_sids,
+                    &mut required_delete_child_denies,
+                )?;
             }
         }
         if !additional_deny_read_paths.is_empty() {
@@ -436,11 +500,29 @@ pub(crate) fn apply_legacy_session_acl_rules(
         {
             let canonical_cwd = canonicalize_path(current_dir);
             if is_command_cwd_root(&workspace_sid.root, &canonical_cwd) {
-                let _ = protect_workspace_codex_dir(current_dir, workspace_sid.sid.as_ptr());
-                let _ = protect_workspace_agents_dir(current_dir, workspace_sid.sid.as_ptr());
+                let _ = protect_workspace_codex_dir(
+                    current_dir,
+                    workspace_sid.sid.as_ptr(),
+                    &mut delete_child_denies,
+                );
+                let _ = protect_workspace_agents_dir(
+                    current_dir,
+                    workspace_sid.sid.as_ptr(),
+                    &mut delete_child_denies,
+                );
             }
         }
     }
+    let _ = crate::integrity_leases::add_tracked_delete_child_denies(
+        &delete_child_denies,
+        /*required*/ false,
+        Some(log_dir.as_path()),
+    );
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &required_delete_child_denies,
+        /*required*/ true,
+        Some(log_dir.as_path()),
+    )?;
     Ok(lease)
 }
 

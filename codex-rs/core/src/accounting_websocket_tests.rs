@@ -87,6 +87,56 @@ async fn accounting_responses_ws_subscription_uses_resolved_endpoint_without_api
     Ok(())
 }
 
+/// #889 D223: a request admitted without rates (a realtime session) keeps
+/// its basis and binds no rate. Subscription work stays a plan record with no
+/// plan rate or catalogue figure, though this row states both; pay per use is
+/// covered by core's realtime session test.
+#[tokio::test]
+async fn accounting_admission_without_rates_keeps_the_basis() -> anyhow::Result<()> {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let auth = CodexAuth::from_external_chatgpt_tokens(
+        "header.e30.synthetic",
+        "fixture",
+        /*chatgpt_plan_type*/ None,
+    )?;
+    let api = provider.to_api_provider(Some(auth.auth_mode()))?;
+    let fixture = Fixture::new(AccountingMode::Provider {
+        scope: Uuid::new_v4(),
+        provider_id: "openai".into(),
+        wire_api: codex_model_provider_info::WireApi::Responses,
+        approved_endpoint: api.base_url.clone(),
+        approved_query: None,
+        pricing: PriceAuthority::Unavailable,
+        basis_source: Default::default(),
+        account: None,
+    })
+    .await?;
+    let sampling = fixture
+        .deferred
+        .resolve(&provider, Some(&auth), &api.url_for_path("responses"))
+        .await?
+        .unwrap();
+    assert!(matches!(sampling.pricing, super::super::Pricing::Plan));
+    sampling
+        .admit_without_rates("gpt-5.6-terra", &api.url_for_path("responses"))
+        .await?;
+    let prices: Vec<Snapshot> = fixture.rows("draft_accounting_price_snapshots").await?;
+    assert_eq!(prices.len(), 1);
+    assert_eq!(
+        (
+            prices[0].basis,
+            &prices[0].rates,
+            prices[0].plan_burn_millis
+        ),
+        (
+            codex_state::accounting::Basis::PlanEquivalent,
+            &codex_state::accounting::Rates::default(),
+            None
+        )
+    );
+    Ok(())
+}
+
 /// Subscription work keeps its basis when the catalogue gives it no figure
 /// (review Major 2): a ChatGPT turn on a model with no catalogue price, and a
 /// priority-tier turn, are each bound to a plan record with no rates, never to

@@ -3677,6 +3677,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .entries
         .push(FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,

@@ -1,0 +1,28 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: echo '# grant-once-1' >> .husky/pre-commit
+
+
+✔ You granted echo '# grant-once-1' >> .husky/pre-commit permission to write hooks and start-up files (expires 07:51)
+
+✔ You approved Corbanu to run echo '# grant-once-1' >> .husky/pre-commit this time
+
+• Ran echo '# grant-once-1' >> .husky/pre-commit
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ran successfully.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Implement {feature}
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Termina…

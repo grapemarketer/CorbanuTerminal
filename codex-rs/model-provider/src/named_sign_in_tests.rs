@@ -81,6 +81,72 @@ async fn named_openai_account_without_a_sign_in_is_refused_not_sent_unauthentica
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// D171 (#1286): a provider on a named sign-in account whose account another
+/// process removed while the session ran refuses the next request with the
+/// recovery, instead of running on the sign-in it held in memory or on the
+/// default login.
+#[tokio::test]
+async fn named_openai_account_removed_mid_session_is_refused() {
+    let home = std::env::temp_dir().join(format!("pf84-d171-removed-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("home");
+    let work = NamedChatgptAccount {
+        provider_id: "openai".to_string(),
+        name: "work".to_string(),
+    };
+    codex_login::login_named_account_with_api_key(&home, &work, "sk-work-canary")
+        .expect("named sign-in");
+    let base = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("sk-default-canary"),
+        home.clone(),
+    );
+    let provider = create_model_provider(openai(Some("work")), Some(base));
+    assert!(provider.api_auth().await.is_ok());
+
+    // What `corbanu account remove openai work` runs, from outside this
+    // provider's manager (an API-key sign-in has nothing to revoke).
+    let route_config = codex_login::AuthRouteConfig::from_http_client_factory(
+        codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
+    );
+    assert!(
+        codex_login::logout_named_account_with_revoke(&home, &work, &route_config)
+            .await
+            .expect("remove")
+    );
+    let Err(error) = provider.api_auth().await else {
+        panic!("a removed account must not authorize a request");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("account `work` has no sign-in (it may have been removed or signed out)")
+            && message.contains("corbanu login --account work"),
+        "{message}"
+    );
+    assert!(provider.auth().await.is_none());
+    assert!(
+        !message.contains("sk-default-canary") && !message.contains("sk-work-canary"),
+        "{message}"
+    );
+    // The first-party path model requests take refuses it too, instead of
+    // sending the request without credentials.
+    let scope = crate::auth::ProviderAuthScope {
+        agent_identity_policy: codex_login::AgentIdentityAuthPolicy::ChatGptAuth,
+        session_source: codex_protocol::protocol::SessionSource::Cli,
+        agent_identity_session_fallback: Default::default(),
+    };
+    let Err(error) = provider.api_auth_for_scope(scope).await else {
+        panic!("a removed account must not authorize a model request");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("account `work` has no sign-in (it may have been removed or signed out)"),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 struct NamedSessionConfig {
     home: std::path::PathBuf,
 }

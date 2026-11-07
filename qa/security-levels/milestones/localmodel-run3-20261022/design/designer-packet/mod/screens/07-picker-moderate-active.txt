@@ -1,0 +1,22 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Moderate
+Core's level: Moderate
+
+  Permissive
+> Moderate  (active)
+  Aggressive
+
+Protection around untrusted content and secrets while normal work continues: agent commands stay in your sandbox, credential and Corbanu files are
+protected, and protected actions after untrusted content need your fresh approval. Your own approval, sandbox and network settings stay.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect

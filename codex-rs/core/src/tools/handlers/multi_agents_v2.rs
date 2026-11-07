@@ -406,9 +406,19 @@ mod tests {
     async fn issue820_custom_reserved_messages_preserve_codec_and_fail_closed_targets() {
         let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
         let mut config = (*turn.config).clone();
+        // The exact #820 provider entry, with a synthetic unset key.
+        let provider_info: codex_model_provider_info::ModelProviderInfo = toml::from_str(
+            r#"
+name = "Custom official endpoint"
+base_url = "https://api.openai.com/v1"
+env_key = "ISSUE820_SYNTHETIC_UNSET_KEY"
+wire_api = "responses"
+billing = "pay_per_use"
+"#,
+        )
+        .expect("synthetic #820 provider config");
         config.model_provider_id = "myopenai".to_string();
-        config.model_provider.name = "Custom official endpoint".to_string();
-        config.model_provider.base_url = Some("https://api.openai.com/v1".to_string());
+        config.model_provider = provider_info;
         turn.provider = codex_model_provider::create_model_provider(
             config.model_provider.clone(),
             turn.auth_manager.clone(),

@@ -306,6 +306,8 @@ async fn run_provider_auth_command(
 
     // Test-only timing diagnostics for #1201. Never log the helper's configuration,
     // account, stdout or stderr: even a failing auth command can contain a token.
+    // Remove these diagnostics or migrate them to tracing once the native Windows lane
+    // has stayed clean under the longer test-helper timeout (#1201).
     #[cfg(test)]
     let (attempt_id, attempt_started) = {
         use std::sync::atomic::AtomicU64;

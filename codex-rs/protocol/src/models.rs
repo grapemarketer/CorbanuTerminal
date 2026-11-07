@@ -2578,6 +2578,7 @@ mod tests {
         let mut file_system_sandbox_policy =
             FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: "**/*.env".to_string(),
                 },
                 access: FileSystemAccessMode::Deny,

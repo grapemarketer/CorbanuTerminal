@@ -1,4 +1,6 @@
 use crate::config::OtelTlsConfig;
+use crate::otlp_http_client::AsyncOtlpHttpClient;
+use crate::otlp_http_client::BlockingOtlpHttpClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
@@ -71,24 +73,28 @@ pub(crate) fn build_grpc_tls_config(
 ///
 /// We use `reqwest::blocking::Client` because OTEL exporters run on dedicated
 /// OS threads that are not necessarily backed by tokio.
+///
+/// Without `tls` this matches the client the exporter used to build for itself:
+/// default roots and the resolved OTLP timeout.
 pub(crate) fn build_http_client(
-    tls: &OtelTlsConfig,
+    tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    if current_tokio_runtime_is_multi_thread() {
-        tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
+) -> Result<BlockingOtlpHttpClient, Box<dyn Error>> {
+    let client = if current_tokio_runtime_is_multi_thread() {
+        tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))?
     } else if tokio::runtime::Handle::try_current().is_ok() {
-        let tls = tls.clone();
+        let tls = tls.cloned();
         let timeout_var = timeout_var.to_string();
         std::thread::spawn(move || {
-            build_http_client_inner(&tls, &timeout_var).map_err(|err| err.to_string())
+            build_http_client_inner(tls.as_ref(), &timeout_var).map_err(|err| err.to_string())
         })
         .join()
         .map_err(|_| config_error("failed to join OTLP blocking HTTP client builder thread"))?
-        .map_err(config_error)
+        .map_err(config_error)?
     } else {
-        build_http_client_inner(tls, timeout_var)
-    }
+        build_http_client_inner(tls, timeout_var)?
+    };
+    Ok(BlockingOtlpHttpClient::new(client))
 }
 
 pub(crate) fn current_tokio_runtime_is_multi_thread() -> bool {
@@ -99,11 +105,16 @@ pub(crate) fn current_tokio_runtime_is_multi_thread() -> bool {
 }
 
 fn build_http_client_inner(
-    tls: &OtelTlsConfig,
+    tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
 ) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
+    let Some(tls) = tls else {
+        return builder
+            .build()
+            .map_err(|error| Box::new(error) as Box<dyn Error>);
+    };
 
     if let Some(path) = tls.ca_certificate.as_ref() {
         let (pem, location) = read_bytes(path)?;
@@ -146,6 +157,13 @@ fn build_http_client_inner(
 }
 
 pub(crate) fn build_async_http_client(
+    tls: Option<&OtelTlsConfig>,
+    timeout_var: &str,
+) -> Result<AsyncOtlpHttpClient, Box<dyn Error>> {
+    build_async_http_client_inner(tls, timeout_var).map(AsyncOtlpHttpClient::new)
+}
+
+fn build_async_http_client_inner(
     tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
 ) -> Result<reqwest::Client, Box<dyn Error>> {
@@ -264,7 +282,7 @@ mod tests {
             .expect("current-thread runtime");
 
         let client = runtime.block_on(async {
-            build_http_client(&OtelTlsConfig::default(), OTEL_EXPORTER_OTLP_TIMEOUT)
+            build_http_client(Some(&OtelTlsConfig::default()), OTEL_EXPORTER_OTLP_TIMEOUT)
         });
 
         assert!(client.is_ok());

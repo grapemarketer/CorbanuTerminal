@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: printf ok > cap-v.txt
+
+
+✗ You canceled the request to run printf ok > cap-v.txt
+
+✗ Did not run printf ok > cap-v.txt
+  └ Approval declined
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+Security level
+Active in this session: Aggressive
+Core's level: Aggressive
+
+  Permissive
+  Moderate
+> Aggressive  (active)
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

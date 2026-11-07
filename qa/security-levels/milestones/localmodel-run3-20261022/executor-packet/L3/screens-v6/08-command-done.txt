@@ -1,0 +1,32 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace              │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command and show its output: printf shakedown-ok > shakedown.txt
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+✔ You approved Corbanu to run printf shakedown-ok > shakedown.txt this time
+
+• Ran printf shakedown-ok > shakedown.txt
+  └ (no output)
+
+• Explored
+  └ Read shakedown.txt
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Done — printf shakedown-ok > shakedown.txt ran cleanly (exit code 0, no output), and the resulting shakedown.txt contains exactly shakedown-ok.
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run /review on my current changes
+
+  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen default · ~/run/fixture/workspace · Corbanu Terminal · TPS: 1.4 tok/s

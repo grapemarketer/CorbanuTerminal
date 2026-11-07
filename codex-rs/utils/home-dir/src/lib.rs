@@ -106,6 +106,27 @@ fn find_codex_home_from_env(
     }
 }
 
+/// #594: the Corbanu home as named, before any link in it is resolved: the
+/// first set home variable (made absolute against the current folder) or the
+/// default folder in the user's home, with the variable's name. `None` when
+/// neither is known.
+pub fn given_codex_home() -> Option<(Option<&'static str>, PathBuf)> {
+    let var = |name: &'static str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(|value| (Some(name), PathBuf::from(value)))
+    };
+    let (variable, path) = var("CORBANU_HOME")
+        .or_else(|| var("PFTERMINAL_HOME"))
+        .or_else(|| var("CODEX_HOME"))
+        .or_else(|| {
+            resolve_default_home(home_dir())
+                .ok()
+                .map(|home| (None, home.into_path_buf()))
+        })?;
+    Some((variable, std::path::absolute(&path).unwrap_or(path)))
+}
+
 fn resolve_home_override((variable, value): (&str, &str)) -> std::io::Result<AbsolutePathBuf> {
     let path = PathBuf::from(value);
     let metadata = std::fs::metadata(&path).map_err(|err| match err.kind() {

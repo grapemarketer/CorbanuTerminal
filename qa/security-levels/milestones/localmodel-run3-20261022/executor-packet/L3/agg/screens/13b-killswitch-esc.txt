@@ -1,0 +1,18 @@
+Restarting Corbanu Terminal to apply the saved security level…
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: off
+
+No grants are held now.
+  Revoke all active authority
+> Turn the kill switch on
+
+Cancelled. Nothing changed.
+
+↑/↓ choose · enter review · esc back to the levels

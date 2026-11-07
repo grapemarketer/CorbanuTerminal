@@ -1,0 +1,25 @@
+PASS: empty named-account list
+PASS: add API-key account through stdin
+PASS: debug fixture uses profile-local keyring fallback
+PASS: list shows account metadata without its credential
+PASS: repeated account list does not rewrite vault files
+PASS: rename existing account
+PASS: renamed account listed under its new name
+PASS: reject invalid/reserved account name default
+PASS: reject invalid/reserved account name BadName
+PASS: reject invalid/reserved account name ../escape
+PASS: named OpenAI API-key login through stdin
+PASS: add a second account for the same provider
+PASS: rename refuses to overwrite an existing account
+PASS: both named accounts survive a rejected rename
+PASS: named login leaves disposable default auth unchanged
+PASS: remove renamed account
+PASS: remove named login account
+PASS: removed explicit OpenAI account refuses at startup despite a default credential
+PASS: add named account for the loopback session provider
+PASS: remove the loopback session provider account
+PASS: removed session-provider account refuses rather than using its default credential
+PASS: remove second account after collision check
+PASS: list is empty after all removals
+PASS: default auth remains unchanged after all checks
+CLEANUP: disposable fixture removed

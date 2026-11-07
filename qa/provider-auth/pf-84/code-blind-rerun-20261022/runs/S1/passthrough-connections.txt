@@ -1,0 +1,234 @@
+# Every ChatGPT pass-through connection of the D136 clone, from the guest mediator's log and the host pass-through's log.
+# One row per connection, written when it closed: open time = close time - duration. Bytes are totals for the whole
+# connection (TLS not opened, so content and timing inside a connection are not visible).
+# source  open..close (UTC)  seconds  target  bytes_up  bytes_down
+guest-mediator   08:20:38.515..08:20:39    0.485 auth.openai.com:443       1947       6769
+guest-mediator   08:24:09.339..08:24:10    0.661 auth.openai.com:443       2192      10441
+guest-mediator   08:20:38.803..08:24:11  212.197 auth.openai.com:443       9534      56128
+guest-mediator   08:40:40.770..08:40:41    0.230 chatgpt.com:443           1933       5638
+guest-mediator   08:40:41.805..08:40:42    0.195 chatgpt.com:443           2167       5330
+guest-mediator   08:42:57.917..08:42:58    0.083 chatgpt.com:443           1566       3918
+guest-mediator   08:42:57.916..08:42:58    0.084 chatgpt.com:443           1708       3917
+guest-mediator   08:42:57.927..08:42:58    0.073 chatgpt.com:443           1708       3918
+guest-mediator   08:42:57.927..08:42:58    0.073 chatgpt.com:443           1743       4479
+guest-mediator   08:42:57.919..08:42:58    0.081 chatgpt.com:443           1708       4477
+guest-mediator   08:42:58.924..08:42:59    0.076 chatgpt.com:443           1708       3919
+guest-mediator   08:42:58.364..08:42:59    0.636 chatgpt.com:443           3340       6739
+guest-mediator   08:42:58.426..08:42:59    0.574 chatgpt.com:443           6261      17646
+guest-mediator   08:42:58.530..08:42:59    0.470 chatgpt.com:443           3338     121096
+guest-mediator   08:42:58.312..08:42:59    0.688 chatgpt.com:443           6228      16836
+guest-mediator   08:42:58.772..08:42:59    0.228 chatgpt.com:443           2167       5329
+guest-mediator   08:42:58.517..08:42:59    0.483 chatgpt.com:443           4718       9172
+guest-mediator   08:42:58.305..08:42:59    0.695 chatgpt.com:443           3356     275034
+guest-mediator   08:42:58.527..08:42:59    0.473 chatgpt.com:443           3663     274718
+guest-mediator   08:42:59.907..08:43:00    0.093 chatgpt.com:443           1743       3917
+guest-mediator   08:42:59.920..08:43:00    0.080 chatgpt.com:443           1708       3919
+guest-mediator   08:42:59.676..08:43:00    0.324 chatgpt.com:443           4340       5570
+guest-mediator   08:43:09.911..08:43:10    0.089 chatgpt.com:443           1708       4479
+guest-mediator   08:43:09.765..08:43:10    0.235 chatgpt.com:443           3635       6080
+guest-mediator   08:43:11.796..08:43:12    0.204 chatgpt.com:443           5477       5547
+guest-mediator   08:43:18.924..08:43:19    0.076 chatgpt.com:443           1708       4478
+guest-mediator   08:43:18.481..08:43:19    0.519 chatgpt.com:443           5314       8601
+guest-mediator   08:42:58.030..08:43:24   25.970 chatgpt.com:443         108030   38633293
+guest-mediator   08:43:23.907..08:43:24    0.093 chatgpt.com:443           1743       4477
+guest-mediator   08:43:23.906..08:43:24    0.094 chatgpt.com:443           1708       3919
+guest-mediator   08:43:24.922..08:43:25    0.078 chatgpt.com:443           1566       3919
+guest-mediator   08:43:24.920..08:43:25    0.080 chatgpt.com:443           1743       3919
+guest-mediator   08:43:24.754..08:43:25    0.246 chatgpt.com:443           7122      15568
+guest-mediator   08:42:58.757..08:43:25   26.243 chatgpt.com:443         109517   38644019
+guest-mediator   08:43:24.678..08:43:25    0.322 chatgpt.com:443           3647       6230
+guest-mediator   08:42:59.842..08:43:25   25.158 chatgpt.com:443         110128   38641961
+guest-mediator   08:43:24.540..08:43:25    0.460 chatgpt.com:443           7177      16368
+guest-mediator   08:42:59.521..08:43:25   25.479 chatgpt.com:443           4069    6658355
+guest-mediator   08:43:24.900..08:43:25    0.100 chatgpt.com:443           1708       3918
+guest-mediator   08:43:24.900..08:43:25    0.100 chatgpt.com:443           1743       3917
+guest-mediator   08:43:24.706..08:43:25    0.294 chatgpt.com:443           7135      15560
+guest-mediator   08:42:59.501..08:43:26   26.499 chatgpt.com:443         110116   38642329
+guest-mediator   08:43:25.914..08:43:26    0.086 chatgpt.com:443           1566       3917
+guest-mediator   08:43:25.914..08:43:26    0.086 chatgpt.com:443           1708       4478
+guest-mediator   08:43:25.909..08:43:26    0.091 chatgpt.com:443           1708       3917
+guest-mediator   08:43:25.905..08:43:26    0.095 chatgpt.com:443           1743       3919
+guest-mediator   08:43:26.317..08:43:27    0.683 chatgpt.com:443           7113      15578
+guest-mediator   08:43:26.243..08:43:27    0.757 chatgpt.com:443           7168      16369
+guest-mediator   08:43:31.272..08:43:32    0.728 auth.openai.com:443       2240       6850
+guest-mediator   08:43:10.250..08:43:33   22.750 chatgpt.com:443          71091   23874349
+guest-mediator   08:43:32.916..08:43:33    0.084 chatgpt.com:443           1708       3917
+guest-mediator   08:43:32.915..08:43:33    0.085 chatgpt.com:443           1708       4477
+guest-mediator   08:43:32.867..08:43:33    0.133 chatgpt.com:443           7183       6545
+guest-mediator   08:43:32.905..08:43:33    0.095 chatgpt.com:443           1708       3918
+guest-mediator   08:43:32.902..08:43:33    0.098 chatgpt.com:443           1708       3918
+guest-mediator   08:43:32.860..08:43:33    0.140 chatgpt.com:443           7216       6099
+guest-mediator   08:42:58.930..08:45:59  180.070 chatgpt.com:443          15180     142658
+guest-mediator   08:43:00.594..08:48:31  330.406 chatgpt.com:443          44883      59784
+guest-mediator   08:19:26 denied_proxy_request 
+guest-mediator   08:19:26 denied_proxy_request 
+guest-mediator   08:19:26 denied_proxy_request 
+guest-mediator   08:19:26 denied_proxy_request 
+guest-mediator   08:19:26 denied_proxy_request 
+guest-mediator   08:19:27 denied_proxy_request 
+guest-mediator   08:19:27 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:05 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:20:34 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:36:24 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:03 denied_proxy_request 
+guest-mediator   08:37:31 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:32 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:37:55 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:38:34 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:02 denied_proxy_request 
+guest-mediator   08:39:05 denied_proxy_request 
+guest-mediator   08:39:05 passthrough_error chatgpt.com:443
+guest-mediator   08:39:05 denied_proxy_request 
+guest-mediator   08:39:05 passthrough_error chatgpt.com:443
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:39:41 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:09 denied_proxy_request 
+guest-mediator   08:40:37 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:38 denied_proxy_request 
+guest-mediator   08:40:41 denied_proxy_request 
+guest-mediator   08:40:41 denied_proxy_request 
+guest-mediator   08:40:42 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:18 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:41:48 denied_proxy_request 
+guest-mediator   08:42:58 denied_proxy_request 
+guest-mediator   08:42:58 denied_proxy_request 
+guest-mediator   08:42:59 denied_proxy_request 
+guest-mediator   08:42:59 denied_proxy_request 
+guest-mediator   08:42:59 denied_proxy_request 
+guest-mediator   08:43:25 denied_proxy_request 
+guest-mediator   08:43:25 denied_proxy_request 
+guest-mediator   08:43:27 denied_proxy_request 
+guest-mediator   08:43:27 denied_proxy_request 
+host-passthrough 08:20:38.523..08:20:39    0.477 auth.openai.com:443       1947       6769
+host-passthrough 08:24:09.341..08:24:10    0.659 auth.openai.com:443       2192      10441
+host-passthrough 08:20:38.805..08:24:11  212.195 auth.openai.com:443       9534      56128
+host-passthrough 08:40:40.771..08:40:41    0.229 chatgpt.com:443           1933       5638
+host-passthrough 08:40:41.806..08:40:42    0.194 chatgpt.com:443           2167       5330
+host-passthrough 08:42:57.919..08:42:58    0.081 chatgpt.com:443           1566       3918
+host-passthrough 08:42:57.918..08:42:58    0.082 chatgpt.com:443           1708       3917
+host-passthrough 08:42:57.928..08:42:58    0.072 chatgpt.com:443           1708       3918
+host-passthrough 08:42:57.928..08:42:58    0.072 chatgpt.com:443           1743       4479
+host-passthrough 08:42:57.921..08:42:58    0.079 chatgpt.com:443           1708       4477
+host-passthrough 08:42:58.926..08:42:59    0.074 chatgpt.com:443           1708       3919
+host-passthrough 08:42:58.366..08:42:59    0.634 chatgpt.com:443           3340       6739
+host-passthrough 08:42:58.428..08:42:59    0.572 chatgpt.com:443           6261      17646
+host-passthrough 08:42:58.531..08:42:59    0.469 chatgpt.com:443           3338     121096
+host-passthrough 08:42:58.313..08:42:59    0.687 chatgpt.com:443           6228      16836
+host-passthrough 08:42:58.773..08:42:59    0.227 chatgpt.com:443           2167       5329
+host-passthrough 08:42:58.518..08:42:59    0.482 chatgpt.com:443           4718       9172
+host-passthrough 08:42:58.306..08:42:59    0.694 chatgpt.com:443           3356     275034
+host-passthrough 08:42:58.528..08:42:59    0.472 chatgpt.com:443           3663     274718
+host-passthrough 08:42:59.908..08:43:00    0.092 chatgpt.com:443           1743       3917
+host-passthrough 08:42:59.678..08:43:00    0.322 chatgpt.com:443           4340       5570
+host-passthrough 08:42:59.921..08:43:00    0.079 chatgpt.com:443           1708       3919
+host-passthrough 08:43:09.912..08:43:10    0.088 chatgpt.com:443           1708       4479
+host-passthrough 08:43:09.766..08:43:10    0.234 chatgpt.com:443           3635       6080
+host-passthrough 08:43:11.797..08:43:12    0.203 chatgpt.com:443           5477       5547
+host-passthrough 08:43:18.925..08:43:19    0.075 chatgpt.com:443           1708       4478
+host-passthrough 08:43:18.482..08:43:19    0.518 chatgpt.com:443           5314       8601
+host-passthrough 08:42:58.032..08:43:24   25.968 chatgpt.com:443         108030   38633293
+host-passthrough 08:43:23.912..08:43:24    0.088 chatgpt.com:443           1743       4477
+host-passthrough 08:43:23.912..08:43:24    0.088 chatgpt.com:443           1708       3919
+host-passthrough 08:43:24.926..08:43:25    0.074 chatgpt.com:443           1566       3919
+host-passthrough 08:43:24.924..08:43:25    0.076 chatgpt.com:443           1743       3919
+host-passthrough 08:43:24.759..08:43:25    0.241 chatgpt.com:443           7122      15568
+host-passthrough 08:42:58.762..08:43:25   26.238 chatgpt.com:443         109517   38644019
+host-passthrough 08:43:24.679..08:43:25    0.321 chatgpt.com:443           3647       6230
+host-passthrough 08:42:59.847..08:43:25   25.153 chatgpt.com:443         110128   38641961
+host-passthrough 08:43:24.542..08:43:25    0.458 chatgpt.com:443           7177      16368
+host-passthrough 08:42:59.522..08:43:25   25.478 chatgpt.com:443           4069    6658355
+host-passthrough 08:43:24.902..08:43:25    0.098 chatgpt.com:443           1708       3918
+host-passthrough 08:43:24.902..08:43:25    0.098 chatgpt.com:443           1743       3917
+host-passthrough 08:43:24.708..08:43:25    0.292 chatgpt.com:443           7135      15560
+host-passthrough 08:42:59.502..08:43:26   26.498 chatgpt.com:443         110116   38642329
+host-passthrough 08:43:25.916..08:43:26    0.084 chatgpt.com:443           1566       3917
+host-passthrough 08:43:25.915..08:43:26    0.085 chatgpt.com:443           1708       4478
+host-passthrough 08:43:25.912..08:43:26    0.088 chatgpt.com:443           1708       3917
+host-passthrough 08:43:25.908..08:43:26    0.092 chatgpt.com:443           1743       3919
+host-passthrough 08:43:25.659..08:43:26    0.341 chatgpt.com:443           7113      15578
+host-passthrough 08:43:26.253..08:43:27    0.747 chatgpt.com:443           7168      16369
+host-passthrough 08:43:31.274..08:43:32    0.726 auth.openai.com:443       2240       6850
+host-passthrough 08:43:10.252..08:43:33   22.748 chatgpt.com:443          71091   23874349
+host-passthrough 08:43:32.918..08:43:33    0.082 chatgpt.com:443           1708       3917
+host-passthrough 08:43:32.918..08:43:33    0.082 chatgpt.com:443           1708       4477
+host-passthrough 08:43:32.851..08:43:33    0.149 chatgpt.com:443           7183       6576
+host-passthrough 08:43:32.909..08:43:33    0.091 chatgpt.com:443           1708       3918
+host-passthrough 08:43:32.905..08:43:33    0.095 chatgpt.com:443           1708       3918
+host-passthrough 08:43:32.844..08:43:33    0.156 chatgpt.com:443           7216       6099
+host-passthrough 08:42:58.932..08:45:59  180.068 chatgpt.com:443          15180     142658
+host-passthrough 08:43:00.596..08:48:31  330.404 chatgpt.com:443          44883      59784

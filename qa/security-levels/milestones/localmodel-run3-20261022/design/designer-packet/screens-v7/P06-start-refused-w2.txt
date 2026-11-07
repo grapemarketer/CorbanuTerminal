@@ -1,0 +1,45 @@
+  Child agents: role `p20wide` sets approval_policy
+Fix the setting, or choose Permissive by editing /Users/tester/run/product-home/security_level.toml.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Pane is dead (status 1, Thu Oct 22 05:23:32 2026)

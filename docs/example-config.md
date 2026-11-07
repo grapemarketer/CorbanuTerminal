@@ -49,7 +49,6 @@ Other visible OpenRouter models:
 
 ```toml
 model = "minimax/minimax-m3"
-model = "openrouter/owl-alpha"
 model = "google/gemini-3.5-flash"
 ```
 

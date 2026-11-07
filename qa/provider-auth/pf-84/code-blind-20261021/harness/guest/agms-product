@@ -1,0 +1,37 @@
+#!/bin/bash
+# pf84-cb1: launch the exact pinned package on one of the run's prepared homes. Usage:
+#   agms-product HOME [ARGS...]     ARGS may start with a subcommand (resume, fork, account, login, logout, exec).
+# The home's config.toml decides provider and model; nothing here overrides them.
+set -u
+home="$1"; shift
+RUN="${AGMS_RUN:?}"
+[[ "$home" =~ ^[a-z0-9]+$ ]] && [ -d "$RUN/homes/$home" ] || { echo "unknown home: $home (see agms-tui homes)" >&2; exit 64; }
+H="$RUN/homes/$home"
+M="$RUN/homes-meta/$home"
+# Synthetic extra environment requested by the tester (AGMS_EXTRA_ENV: NAME=value lines; letters, digits, . _ -).
+extra_env=()
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  [[ "$line" =~ ^[A-Z][A-Z0-9_]*=[A-Za-z0-9._-]+$ ]] || { echo "refused extra env: $line" >&2; exit 64; }
+  extra_env+=("$line")
+done <<< "${AGMS_EXTRA_ENV:-}"
+zai_env=()
+[ -s "$M/zai-env" ] && zai_env=("ZAI_API_KEY=$(cat "$M/zai-env")")
+cd "$RUN/fixture/workspace" || exit 66
+env_args=(-i PATH=/opt/agms/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" USER="$USER"
+  LOGNAME="$USER" SHELL=/bin/bash TERM="${TERM:-screen-256color}" LANG=en_US.UTF-8
+  TMPDIR="$RUN/tmp/" CORBANU_HOME="$H" CODEX_HOME="$H" PFTERMINAL_HOME="$H"
+  CORBANU_TEST_NO_NATIVE_KEYRING=1
+  HTTPS_PROXY="$AGMS_PROXY" CODEX_CA_CERTIFICATE=/opt/agms/etc/mediation-ca.pem
+  AGMS_RUN="$RUN" ${zai_env[@]+"${zai_env[@]}"} ${extra_env[@]+"${extra_env[@]}"})
+tui=(--no-alt-screen -c "log_dir=\"$RUN/product-logs/$home\"" -C "$RUN/fixture/workspace")
+mkdir -p "$RUN/product-logs/$home"
+case "${1:-}" in
+  resume|fork)
+    sub="$1"; shift
+    exec env "${env_args[@]}" /opt/agms/pkg/bin/corbanu "$sub" "$@" "${tui[@]}" ;;
+  account|login|logout|exec|help|--help|--version)
+    exec env "${env_args[@]}" /opt/agms/pkg/bin/corbanu "$@" ;;
+  *)
+    exec env "${env_args[@]}" /opt/agms/pkg/bin/corbanu "${tui[@]}" "$@" ;;
+esac

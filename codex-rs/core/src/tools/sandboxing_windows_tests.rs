@@ -66,6 +66,16 @@ fn unelevated_tool_launch(
     permissions: &PermissionProfile,
     cwd: &AbsolutePathBuf,
 ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
+    unelevated_tool_launch_script(permissions, cwd, "type secret.env & type public.txt")
+}
+
+/// Prepares `cmd /C <script>` through the tool path, under the unelevated
+/// sandbox.
+fn unelevated_tool_launch_script(
+    permissions: &PermissionProfile,
+    cwd: &AbsolutePathBuf,
+    script: &str,
+) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
     let cwd_uri = PathUri::from_abs_path(cwd);
     let manager = SandboxManager::new();
     SandboxAttempt {
@@ -88,11 +98,7 @@ fn unelevated_tool_launch(
         /*contract*/ None,
         SandboxCommand {
             program: "cmd.exe".into(),
-            args: vec![
-                "/D".to_string(),
-                "/C".to_string(),
-                "type secret.env & type public.txt".to_string(),
-            ],
+            args: vec!["/D".to_string(), "/C".to_string(), script.to_string()],
             cwd: cwd_uri.clone(),
             env: HashMap::new(),
             managed_network: None,
@@ -147,6 +153,7 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
         (
             "glob",
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.env".to_string(),
             },
         ),
@@ -154,6 +161,7 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
         (
             "glob matching nothing",
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.key".to_string(),
             },
         ),
@@ -190,4 +198,129 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
         assert!(!outcome.contains(SECRET), "{label}: read a denied file");
         assert_eq!(outcome, refusal, "{label}");
     }
+}
+
+/// #1506 item 2 (D262): `.codex` and `.agents` folders an unelevated sandbox
+/// command creates in a trusted project (absent when its session started)
+/// aren't loaded, config or skills, until the user confirms them.
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_1506_planted_project_config_is_not_loaded() {
+    use codex_config::ConfigLayerSource;
+    use codex_config::ConfigLoadOptions;
+    use codex_config::LoaderOverrides;
+    use codex_config::NoopThreadConfigLoader;
+    use codex_config::loader::load_config_layers_state;
+
+    let temp = tempfile::tempdir().expect("fixture directory");
+    let root = dunce::canonicalize(temp.path()).expect("canonical fixture root");
+    let home = root.join("home");
+    let project = root.join("project");
+    for dir in [
+        &home,
+        &project,
+        &root.join("account"),
+        &root.join("managed"),
+    ] {
+        std::fs::create_dir_all(dir).expect("fixture directory");
+    }
+    std::fs::write(project.join(".fixture-root"), "").expect("project root marker");
+    let project_key = toml::Value::String(project.display().to_string());
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "model = \"fixture-user\"\nproject_root_markers = [\".fixture-root\"]\n\
+             [projects.{project_key}]\ntrust_level = \"trusted\"\n"
+        ),
+    )
+    .expect("user config");
+    let _codex_home = EnvGuard::set("CODEX_HOME", &home);
+    let cwd = AbsolutePathBuf::from_absolute_path(&project).expect("absolute project");
+    let base = PermissionProfile::workspace_write()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+
+    let planted = crate::sandboxing::execute_env(
+        unelevated_tool_launch_script(
+            &base,
+            &cwd,
+            // A TOML literal string: cmd doesn't understand the `\"` the
+            // argument quoting would give a double quote.
+            "mkdir .codex && (echo model = 'planted')> .codex\\config.toml && mkdir .agents\\skills",
+        )
+        .expect("planting launch"),
+        /*stdout_stream*/ None,
+    )
+    .await
+    .expect("unelevated sandbox run");
+    eprintln!(
+        "sec-win-1506 planting command: exit {} {}{}",
+        planted.exit_code, planted.stdout.text, planted.stderr.text
+    );
+
+    let load = || async {
+        let stack = load_config_layers_state(
+            codex_exec_server::LOCAL_FS.as_ref(),
+            &home,
+            Some(cwd.clone()),
+            &[],
+            ConfigLoadOptions {
+                loader_overrides: LoaderOverrides {
+                    managed_config_path: Some(root.join("managed/legacy.toml")),
+                    system_config_path: Some(root.join("managed/config.toml")),
+                    system_requirements_path: Some(root.join("managed/requirements.toml")),
+                    user_home_dir: Some(root.join("account")),
+                    macos_managed_config_requirements_base64: Some(String::new()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &NoopThreadConfigLoader,
+        )
+        .await
+        .expect("load config");
+        let model = stack
+            .effective_config()
+            .get("model")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string);
+        let project_layer_disabled = stack
+            .get_layers(
+                codex_config::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .find(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .map(|layer| layer.disabled_reason.is_some());
+        (model, project_layer_disabled)
+    };
+    let before_confirming = (
+        planted.exit_code,
+        project.join(".codex").join("config.toml").is_file(),
+        load().await,
+    );
+
+    let agents_planted =
+        || codex_config::planted_project_metadata().contains(&project.join(".agents"));
+    let agents_before = agents_planted();
+    codex_windows_sandbox::confirm_planted_project_metadata(&project.join(".codex"))
+        .expect("confirm .codex");
+    let after_confirming = load().await;
+    // Confirming one folder leaves the other planted.
+    let agents_after_codex = agents_planted();
+    codex_windows_sandbox::confirm_planted_project_metadata(&project.join(".agents"))
+        .expect("confirm .agents");
+    let agents_after = agents_planted();
+
+    assert_eq!(
+        (
+            before_confirming,
+            after_confirming,
+            (agents_before, agents_after_codex, agents_after),
+        ),
+        (
+            (0, true, (Some("fixture-user".to_string()), Some(true))),
+            (Some("planted".to_string()), Some(false)),
+            (true, true, false),
+        )
+    );
 }

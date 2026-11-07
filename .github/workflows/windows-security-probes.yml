@@ -13,6 +13,7 @@ on:
       - "codex-rs/Cargo.lock"
       - "codex-rs/Cargo.toml"
       - "codex-rs/process-hardening/**"
+      - "codex-rs/utils/pty/src/win/**"
       - "codex-rs/windows-sandbox-rs/**"
       - "codex-rs/network-proxy/src/credential_broker/**"
       - "codex-rs/network-proxy/src/credential_broker.rs"
@@ -37,6 +38,8 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/config/src/loader/mod.rs"
+      - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
       - ".github/scripts/run-at-medium-integrity.ps1"
   push:
@@ -47,6 +50,7 @@ on:
       - "codex-rs/Cargo.lock"
       - "codex-rs/Cargo.toml"
       - "codex-rs/process-hardening/**"
+      - "codex-rs/utils/pty/src/win/**"
       - "codex-rs/windows-sandbox-rs/**"
       - "codex-rs/network-proxy/src/credential_broker/**"
       - "codex-rs/network-proxy/src/credential_broker.rs"
@@ -71,6 +75,8 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/config/src/loader/mod.rs"
+      - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
       - ".github/scripts/run-at-medium-integrity.ps1"
 
@@ -84,15 +90,33 @@ concurrency:
 
 env:
   # #158: the legacy (unelevated) sandbox keeps deletes inside writable roots,
-  # and labels them Low only while a session uses them (option (b)).
+  # and labels them Low only while a session uses them (option (b)); #733:
+  # its commands can't start children outside their job; #1507: nor, on the
+  # hosted runner, through WMI, the Task Scheduler or ShellWindows.
   LEGACY_158_TESTS: >-
     legacy_workspace_write_delete_is_limited_to_writable_roots
     legacy_read_only_cannot_delete_anything
     legacy_workspace_write_can_delete_inside_writable_roots
     legacy_workspace_write_cannot_delete_or_replace_protected_git_dir
+    legacy_workspace_write_cannot_move_ancestor_of_nested_carve_out
+    legacy_delete_child_denies_are_removed_after_the_session
+    legacy_delete_child_denies_follow_live_sessions
+    legacy_planted_project_metadata_survives_a_crash
+    legacy_delete_child_denies_nested_root_keeps_its_own
     legacy_read_only_after_workspace_write_cannot_delete
     legacy_crashed_session_labels_are_repaired
     legacy_label_registry_is_closed_to_low_integrity
+    legacy_unlabelled_root_is_reported_until_labelled
+    legacy_writable_roots_are_the_labelled_roots
+    legacy_command_cannot_break_away_from_its_job
+    launch_paths::legacy_launch_plain_child_stays_in_session
+    launch_paths::legacy_launch_through_wmi_stays_in_session
+    launch_paths::legacy_launch_through_task_scheduler_stays_in_session
+    launch_paths::legacy_launch_through_com_shell_windows_stays_in_session
+    launch_paths::legacy_launch_under_another_session_process_stays_in_session
+    command_identity::legacy_command_cannot_write_to_another_commands_process
+    command_identity::legacy_command_keeps_write_access_to_its_own_processes
+    command_identity::legacy_command_tools_work_with_command_identity
 
 jobs:
   probes:
@@ -116,6 +140,22 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib pf_27_s07 -- --nocapture --test-threads=1
+      - name: D263 deny that can't be written (#1542 item 3)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact acl::tests::d263_delete_deny_that_cannot_be_written_is_an_error --nocapture --test-threads=1 2>&1 | tee d263-1542.log
+          grep -q "test result: ok. 1 passed" d263-1542.log
+          rm d263-1542.log
+      - name: D261 denies without the tree walk match it (D285, #1542 item 6)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- acl::delete_child::tests::d285_ --nocapture --test-threads=1 2>&1 | tee d285.log
+          grep -q "test result: ok. 8 passed" d285.log
+          rm d285.log
       - name: Credential file watch (#442)
         if: ${{ !cancelled() }}
         shell: bash
@@ -149,6 +189,14 @@ jobs:
             grep -q "test result: ok. 1 passed" legacy-158.log
           done
           rm legacy-158.log
+      - name: Job breakaway limits (#733)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-utils-pty --lib win::job::tests -- --nocapture --test-threads=1 2>&1 | tee job-733.log
+          grep -q "test result: ok. 2 passed" job-733.log
+          rm job-733.log
       - name: Broker token probes after legacy sessions (#158, PF-27-S08)
         if: ${{ !cancelled() }}
         shell: bash
@@ -183,7 +231,7 @@ jobs:
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 --nocapture --test-threads=1
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_1506 --nocapture --test-threads=1
       # The runners are elevated, which hid #294/#295. This reruns those probes
       # with the token of an administrator's normal session (medium integrity).
       # Not covered here: a separate non-administrator account, and the
@@ -245,6 +293,15 @@ jobs:
               # An ignored test passes with nothing run.
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#158 $t did not run in a normal session" }
             }
+            Assert-Tests $sandbox 'acl::tests::d263_delete_deny_that_cannot_be_written_is_an_error' 1
+            $out = & $medium -Program $sandbox -Arguments @('--exact', 'acl::tests::d263_delete_deny_that_cannot_be_written_is_an_error', '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            $out
+            if ($code -ne 0) { throw "#1542 item 3 failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1542 item 3 did not run in a normal session" }
+            Assert-Tests $sandbox 'acl::delete_child::tests::d285_' 8
+            & $medium -Program $sandbox -Arguments @('acl::delete_child::tests::d285_', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D285 ACL comparison failed in a normal session" }
             Assert-Tests $sandbox 'credential_watch' 18
             & $medium -Program $sandbox -Arguments @('credential_watch', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#442 credential watch failed in a normal session" }
@@ -270,6 +327,10 @@ jobs:
             Assert-Tests $core 'sec_win_300' 2
             & $medium -Program $core -Arguments @('sec_win_300', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#300 regressions failed in a normal session" }
+            # #1506 item 2: planted .codex/.agents aren't loaded until confirmed.
+            Assert-Tests $core 'sec_win_1506' 1
+            & $medium -Program $core -Arguments @('sec_win_1506', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "#1506 planted-metadata regression failed in a normal session" }
             # Each elevated setup resets the sandbox passwords, so record the
             # setup the normal-session run reuses right before it.
             New-Item -ItemType Directory -Force $env:CODEX_PF27S06_SETUP_SEED | Out-Null

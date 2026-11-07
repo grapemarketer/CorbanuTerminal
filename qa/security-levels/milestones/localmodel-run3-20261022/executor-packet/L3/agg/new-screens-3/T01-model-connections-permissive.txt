@@ -1,0 +1,23 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+  Select Model and Effort
+  Access hidden models by running corbanu -m <model_name> or in your config.toml
+
+› 1. GLM 5.3 Flash · Z.AI (OpenAI-style) (current)  Model: glm-5.3-flash. Native multimodal GLM 5.3 Flash through the Z.AI API, billed per token;
+                                                    mandatory thinking, with low/high/max effort.
+  2. GLM 5.3 Flash · Z.AI (Claude-style)            Model: glm-5.3-flash. The same model over Z.AI's Anthropic-compatible connection, the GLM Coding
+                                                    Plan route.
+  3. GLM 5.3 · Z.AI (OpenAI-style)                  Model: glm-5.3. GLM 5.3 through the Z.AI API, billed per token.
+  4. GLM 5.3 · Z.AI (Claude-style)                  Model: glm-5.3. The same model over Z.AI's Anthropic-compatible connection, the GLM Coding Plan
+                                                    route.
+  5. GLM 5.2 · Z.AI (OpenAI-style)                  Model: glm-5.2. GLM 5.2 through the Z.AI API, billed per token.
+  6. GLM 5.2 · Z.AI (Claude-style)                  Model: glm-5.2. The same model over Z.AI's Anthropic-compatible connection, the GLM Coding Plan
+                                                    route.
+
+  Press enter to confirm or esc to go back

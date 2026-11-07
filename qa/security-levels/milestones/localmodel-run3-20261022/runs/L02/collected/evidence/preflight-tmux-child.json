@@ -1,0 +1,353 @@
+{
+ "context": {
+  "mode": "negatives",
+  "uid": 612,
+  "pid": 2673,
+  "ppid": 2672,
+  "run": "/Users/agmx2/runs/agms-L02-agmx2-20261022T063026Z",
+  "utc": "2026-10-22T06:31:24Z"
+ },
+ "ok": true,
+ "probes": [
+  {
+   "group": "repo",
+   "probe": "list canary checkout",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "repo",
+   "probe": "read canary source file",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "repo",
+   "probe": "list canary .git",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "repo",
+   "probe": "list home /Users/agent",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "repo",
+   "probe": "list home /Users/neo",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "repo",
+   "probe": "list home /Users/neo_1",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "history",
+   "probe": "read canary prior findings",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "history",
+   "probe": "read coordinator product history db",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "history",
+   "probe": "list prior case runs",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "symlink",
+   "probe": "read canary credential via symlink",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "symlink",
+   "probe": "open real transport key via symlink (no read)",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "read canary credential",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "open real transport key (no read)",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "open real auth.json (no read)",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "open mediator leaf key (no read)",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "open campaign restore state (no read)",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "list Homebrew tools (PATH removal)",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "credentials",
+   "probe": "environment credential names",
+   "expect": "only synthetic placeholders",
+   "observed": {
+    "names": [
+     "ZAI_API_KEY"
+    ],
+    "all_placeholder": true
+   },
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "connect coordinator canary tmux socket",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "signal coordinator canary process",
+   "expect": "EPERM",
+   "observed": "EPERM",
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "list other lane home agmx0",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "list other lane home agmx1",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "list other lane home agmx3",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "ipc",
+   "probe": "connect unrelated local database socket",
+   "expect": "EACCES or absent",
+   "observed": "ENOENT",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "direct TCP to inference IP bypassing mediator",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "direct TCP to OpenAI IP",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "TCP to host SSH",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "loopback unrelated database",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "loopback resolver",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "loopback tunnel to host Z.AI relay",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "loopback tunnel to host local-model gate",
+   "expect": "pf drop (timeout)",
+   "observed": "timeout after 4.0s",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "resolve github.com",
+   "expect": "resolution failure",
+   "observed": "gaierror 8",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator CONNECT github.com:443",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator CONNECT raw.githubusercontent.com:443",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator CONNECT codeload.github.com:443",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator non-inference path GET /",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator non-inference path GET / qwen.agms.test",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator non-inference path POST /v1/completions qwen.agms.test",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator non-inference path GET /v1/models/x qwen.agms.test",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator CONNECT qwen.agms.test:80",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "network",
+   "probe": "mediator CONNECT 127.0.0.1:18602",
+   "expect": "403",
+   "observed": "HTTP/1.1 403 Forbidden",
+   "ok": true
+  },
+  {
+   "group": "package",
+   "probe": "open package binary for write",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "package",
+   "probe": "chmod package binary",
+   "expect": "EPERM",
+   "observed": "EPERM",
+   "ok": true
+  },
+  {
+   "group": "package",
+   "probe": "create file in package dir",
+   "expect": "EACCES",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "package",
+   "probe": "open frozen packet for write",
+   "expect": "EACCES/EPERM",
+   "observed": "EACCES",
+   "ok": true
+  },
+  {
+   "group": "child",
+   "probe": "sudo -n",
+   "expect": "refused",
+   "observed": {
+    "rc": 1,
+    "stderr": "sudo: a password is required"
+   },
+   "ok": true
+  },
+  {
+   "group": "child",
+   "probe": "uid",
+   "expect": "unprivileged run uid",
+   "observed": {
+    "uid": 612,
+    "euid": 612
+   },
+   "ok": true
+  }
+ ]
+}

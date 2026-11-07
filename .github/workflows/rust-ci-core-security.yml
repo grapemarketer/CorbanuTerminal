@@ -167,6 +167,36 @@ jobs:
           cargo test --locked --target ${{ inputs.target }} -p codex-core --test all -- \
             suite::issue_506:: suite::issue_584:: suite::issue_620_622:: suite::issue_736_740:: suite::issue_747:: suite::issue_748::
 
+      # #1367: a test binary once died with a bare SIGSEGV and no output, and
+      # the log could not say which thread faulted. When this job fails on
+      # macOS, keep the crash reports (`*.ips`) so the next occurrence can.
+      # The runner image ships old reports from its own build, so only take
+      # files changed within this job's 60-minute timeout (+10). ReportCrash
+      # writes a report a few seconds after the crash, so wait briefly when
+      # none is there yet.
+      - name: Collect macOS crash reports (#1367)
+        if: ${{ failure() && runner.os == 'macOS' }}
+        working-directory: .
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/crash-reports"
+          mkdir -p "$out"
+          for _ in 1 2 3 4 5 6; do
+            find "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports \
+              -maxdepth 1 -name '*.ips' -mmin -70 -exec cp -p {} "$out/" \; 2>/dev/null || true
+            [ -n "$(ls -A "$out")" ] && break
+            sleep 5
+          done
+          ls -l "$out"
+      - name: Upload macOS crash reports (#1367)
+        if: ${{ failure() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: macos-crash-reports-${{ inputs.target }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
       # Only main saves caches; PRs and branch runs restore main's (#636).
       - name: Save sccache cache
         if: always() && !cancelled() && inputs.save_cache && github.ref == 'refs/heads/main'

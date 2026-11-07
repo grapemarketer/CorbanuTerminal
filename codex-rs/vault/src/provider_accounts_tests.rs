@@ -714,3 +714,79 @@ fn an_unknown_sign_in_reads_as_not_recorded() {
     .expect("readable");
     assert_eq!(meta.sign_in, Some(ProviderAccountSignIn::ApiKey));
 }
+
+/// #1311 (D171): an update of an account that holds no sign-in writes
+/// nothing (the account is not created), and `change` is not called.
+#[test]
+fn updating_an_absent_sign_in_writes_nothing() {
+    let (_dir, vault) = test_vault();
+    let work = name("work");
+    let updated = vault
+        .update_provider_account_sign_in("openai", &work, |_| -> Result<_, VaultError> {
+            panic!("no sign-in to change")
+        })
+        .expect("update");
+    assert_eq!(updated.expect("change"), false);
+    assert!(
+        vault
+            .provider_account_kinds("openai", &work)
+            .expect("kinds")
+            .is_empty()
+    );
+}
+
+/// #1311 (D171): a removal through another vault handle that starts after an
+/// update read the sign-in waits for the update's write, so the account ends
+/// removed; an update after the removal finds nothing to change.
+#[test]
+fn a_removal_racing_an_update_is_never_undone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let keyring = Arc::new(MockKeyringStore::default());
+    let open = || Vault::new_with_keyring_store(dir.path().to_path_buf(), keyring.clone());
+    let work = name("work");
+    open()
+        .write_provider_account_with_sign_in(
+            "openai",
+            &work,
+            ProviderAccountKind::ChatgptAuth,
+            "{\"before\":true}",
+            Some(ProviderAccountSignIn::Chatgpt),
+        )
+        .expect("sign-in");
+
+    let updater = open();
+    let remover = open();
+    let removal = std::thread::scope(|scope| {
+        let mut removal = None;
+        let updated = updater
+            .update_provider_account_sign_in("openai", &work, |stored| -> Result<_, VaultError> {
+                assert_eq!(stored, "{\"before\":true}");
+                removal = Some(scope.spawn(|| {
+                    remover
+                        .remove_provider_account("openai", &work)
+                        .expect("remove")
+                }));
+                Ok((
+                    Zeroizing::new("{\"after\":true}".to_string()),
+                    Some(ProviderAccountSignIn::Chatgpt),
+                ))
+            })
+            .expect("update");
+        assert_eq!(updated.expect("change"), true);
+        removal.expect("started").join().expect("remover")
+    });
+
+    assert!(removal);
+    assert_eq!(
+        open()
+            .read_provider_account_sign_in("openai", &work)
+            .expect("read"),
+        None
+    );
+    let updated = open()
+        .update_provider_account_sign_in("openai", &work, |_| -> Result<_, VaultError> {
+            panic!("removed")
+        })
+        .expect("update");
+    assert_eq!(updated.expect("change"), false);
+}

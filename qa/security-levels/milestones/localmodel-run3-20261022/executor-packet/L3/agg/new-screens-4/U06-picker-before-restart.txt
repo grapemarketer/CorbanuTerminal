@@ -1,0 +1,14 @@
+
+Security level
+Active in this session: Permissive
+Saved: Aggressive. Core's protections (vault refusal, protected paths) apply in this session now, and approval for every command from its next turn;
+the sandbox, network, environment, model-key and child-agent rows take effect when you restart Corbanu Terminal.
+Core's level: Aggressive
+
+  Permissive  (active)
+  Moderate  not available yet
+> Aggressive
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · r restart now · g grants and kill switch · esc close · i inspect

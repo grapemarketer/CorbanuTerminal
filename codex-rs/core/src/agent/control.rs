@@ -73,6 +73,7 @@ const LAST_TASK_MESSAGE_MAX_CHARS: usize = 240;
 const LAST_RESULT_MESSAGE_MAX_CHARS: usize = 500;
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 mod execution;
+mod held_mailbox_warning;
 mod legacy;
 mod mailbox;
 mod residency;

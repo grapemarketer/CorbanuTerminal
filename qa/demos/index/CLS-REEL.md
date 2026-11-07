@@ -1,0 +1,15 @@
+# CLS-REEL demo videos
+
+Recorded with `scripts/demo_video.py`; see [the demo SOP](../README.md).
+Videos are assets on the [`demos` prerelease](https://github.com/CorbanuCore/CorbanuTerminal/releases/tag/demos).
+These are the source clips of the [classifier demo reel](classifier-reel.md). In `clsreel-git-names`, the #1254 line also
+asked on main between #1158 and #1230; #1254 makes it ask again after #1230 (see the reel index).
+
+| Date | Demo | Feature | Commit | Model | Length | Video |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-21 | `clsreel-1158-git-output` | #1158: git output files and pager settings ask | `333f0b8db70f` | glm-5.3-flash | 46s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1158-git-output-333f0b8db70f-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1158-git-output-333f0b8db70f-2026-10-21.cast) |
+| 2026-10-21 | `clsreel-1220-pane-task-after` | #1220 + #1263: an agent's task to your pane arrives as agent mail | `333f0b8db70f` | glm-5.3-flash | 47s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1220-pane-task-after-333f0b8db70f-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1220-pane-task-after-333f0b8db70f-2026-10-21.cast) |
+| 2026-10-21 | `clsreel-1220-pane-task-before` | Before #1220: an agent's task arrived as your input | `9750861c2ab0` | glm-5.3-flash | 50s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1220-pane-task-before-9750861c2ab0-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-1220-pane-task-before-9750861c2ab0-2026-10-21.cast) |
+| 2026-10-21 | `clsreel-commit-after` | #1172 + #1197: git commit -m "fix(tests)" no longer asks | `333f0b8db70f` | glm-5.3-flash | 46s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-commit-after-333f0b8db70f-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-commit-after-333f0b8db70f-2026-10-21.cast) |
+| 2026-10-21 | `clsreel-commit-before` | Before #1197: the zsh line still asked | `9750861c2ab0` | glm-5.3-flash | 50s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-commit-before-9750861c2ab0-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-commit-before-9750861c2ab0-2026-10-21.cast) |
+| 2026-10-21 | `clsreel-git-names` | #1230, #1254, #1262: more git spellings ask | `333f0b8db70f` | glm-5.3-flash | 62s | [mp4](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-git-names-333f0b8db70f-2026-10-21.mp4) · [cast](https://github.com/CorbanuCore/CorbanuTerminal/releases/download/demos/cls-reel-clsreel-git-names-333f0b8db70f-2026-10-21.cast) |

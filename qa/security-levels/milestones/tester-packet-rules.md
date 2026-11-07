@@ -6,6 +6,10 @@ tester's prompt, and into any amendment that sets waiting rules, before that pac
 exact tester text to use. The generic [executor prompt](../../code-blind-functional/executor-prompt.md) carries the
 D114 rule as well.
 
+## Verify setup before the first request (D185, 2026-10-22)
+
+Include a short checklist derived from every case's starting conditions. Before the first product request, the tester must record completion of each required fixture, file, checksum, security-level setting, and exact request text. If any starting condition is missing, stop and correct the disposable fixture before starting; if the run has already started, record the deviation and follow the packet's restart rule. Do not silently repair setup midway or substitute a different request. Verify that the checklist covers all starting conditions before freezing the packet. Existing frozen packets remain unchanged.
+
 ## Check about every 30 seconds while a long turn runs (D114, 2026-10-21)
 
 - **Decision (owner-approved, 2026-10-21):** D114, tell testers in the tester packet templates to check about every

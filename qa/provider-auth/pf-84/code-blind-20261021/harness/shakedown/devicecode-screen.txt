@@ -1,0 +1,2 @@
+   https://auth.openai.com/codex/device
+   <CODE>

@@ -150,7 +150,7 @@ impl App {
             ProviderAccountEvent::RenameStart { provider_id, name } => {
                 if self.provider_account_usage().session_account(&provider_id) == name.as_str() {
                     self.chat_widget.add_error_message(format!(
-                        "This session uses {provider_id} account `{name}`. Use another account for this session first, then rename it."
+                        "This session uses {provider_id} account `{name}`. Start a new session on another account first, then rename it."
                     ));
                     return;
                 }
@@ -210,17 +210,36 @@ impl App {
             &self.app_event_tx,
         );
         // D86/#1193: and whether the provider has a named account (`/status`).
+        self.check_named_accounts();
+        self.schedule_provider_manager_refresh();
+    }
+
+    /// D86/#1193/#1251: refreshes, off the UI thread, what `/status` reads:
+    /// which providers have named accounts and the named sign-in summary of
+    /// this config's account and, when it differs, the session's (a resumed
+    /// thread or a changed default can leave the two apart).
+    pub(super) fn check_named_accounts(&self) {
         crate::provider_named_accounts::check_named_account_providers(
             &self.model_catalog,
             &self.config,
         );
-        self.schedule_provider_manager_refresh();
+        let session = self.chat_widget.config_ref();
+        let session_account = codex_model_provider::named_sign_in_account(&session.model_provider);
+        if session_account.is_some()
+            && session_account
+                != codex_model_provider::named_sign_in_account(&self.config.model_provider)
+        {
+            crate::provider_named_accounts::check_named_account_providers(
+                &self.model_catalog,
+                session,
+            );
+        }
     }
 
     /// PF-84-S06: signs a named account in by device code. The code and URL
     /// are shown here; the sign-in is saved to that account's vault store
     /// only, and the same ChatGPT user under another account gets a warning.
-    fn start_named_chatgpt_sign_in(&self, provider_id: String, name: ProviderAccountName) {
+    fn start_named_chatgpt_sign_in(&mut self, provider_id: String, name: ProviderAccountName) {
         let account = codex_login::NamedChatgptAccount {
             provider_id: provider_id.clone(),
             name: name.as_str().to_string(),
@@ -246,48 +265,55 @@ impl App {
         let codex_home = self.config.codex_home.to_path_buf();
         let store_mode = self.config.cli_auth_credentials_store_mode;
         let keyring_kind = self.config.auth_keyring_backend_kind();
+        let account_label = format!("{provider_id} account `{name}`");
+        let (code_tx, codes) = tokio::sync::mpsc::unbounded_channel();
+        let state = crate::chatwidget::named_account_login::NamedAccountLoginState::default();
+        let task_state = state.clone();
         let tx = self.app_event_tx.clone();
-        let finish = move |result| {
-            tx.send(AppEvent::ProviderAccount(ProviderAccountEvent::Finished {
-                result,
-            }));
-        };
-        tokio::spawn(async move {
-            let code = match codex_login::request_device_code(&opts).await {
-                Ok(code) => code,
-                Err(error) => {
-                    finish(Err(format!(
-                        "Could not start the sign-in of {provider_id} account `{name}`: {error}"
-                    )));
-                    return;
-                }
-            };
-            finish(Ok(format!(
-                "To sign in {provider_id} account `{name}`, open {} and enter code {}. \
-                 Waiting for the sign-in…",
-                code.verification_url, code.user_code
-            )));
-            if let Err(error) = codex_login::complete_device_code_login(opts, code).await {
-                finish(Err(format!(
-                    "Sign-in of {provider_id} account `{name}` failed: {error}"
-                )));
-                return;
+        let task = tokio::spawn(async move {
+            let result = async {
+                let code = codex_login::request_device_code(&opts)
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Could not start the sign-in of {provider_id} account `{name}`: {error}"
+                        )
+                    })?;
+                code_tx
+                    .send(
+                        crate::chatwidget::named_account_login::NamedAccountLoginCode {
+                            verification_url: code.verification_url.clone(),
+                            user_code: code.user_code.clone(),
+                        },
+                    )
+                    .map_err(|_| "The sign-in screen was closed.".to_string())?;
+                codex_login::complete_device_code_login_with_persistence_guard(opts, code, || {
+                    task_state.begin_persistence()
+                })
+                .await
+                .map_err(|error| {
+                    format!("Sign-in of {provider_id} account `{name}` failed: {error}")
+                })?;
+                // Vault and default-login reads block; keep them off the runtime.
+                let message = tokio::task::spawn_blocking(move || {
+                    signed_in_message(
+                        &codex_home,
+                        &provider_id,
+                        &name,
+                        &account,
+                        store_mode,
+                        keyring_kind,
+                    )
+                })
+                .await
+                .unwrap_or_else(|_| "Signed in.".to_string());
+                Ok(message)
             }
-            // Vault and default-login reads block; keep them off the runtime.
-            let message = tokio::task::spawn_blocking(move || {
-                signed_in_message(
-                    &codex_home,
-                    &provider_id,
-                    &name,
-                    &account,
-                    store_mode,
-                    keyring_kind,
-                )
-            })
-            .await
-            .unwrap_or_else(|_| "Signed in.".to_string());
-            finish(Ok(message));
+            .await;
+            task_state.finish(&tx, result);
         });
+        self.chat_widget
+            .open_named_account_login(account_label, codes, task, state);
     }
 
     fn run_provider_account_job(
@@ -463,7 +489,7 @@ impl App {
                     .unwrap_or_else(|| DEFAULT_PROVIDER_ACCOUNT.to_string());
             if existing_provider != provider_id && existing_name != configured_default {
                 return Err(format!(
-                    "This session already selects {existing_provider} account `{existing_name}`, and one session selection covers one provider. Use {existing_provider} account `{configured_default}` (its default for new sessions) for this session first, or make {provider_id} account `{}` the default for new sessions.",
+                    "This session already selects {existing_provider} account `{existing_name}`, and one session selection covers one provider. Start a new session on {existing_provider} account `{configured_default}` (its default for new sessions) first, or make {provider_id} account `{}` the default for new sessions.",
                     account_label(name)
                 ));
             }

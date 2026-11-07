@@ -1,0 +1,45 @@
+  - p20plain
+  - default
+  - explorer
+  - nazgul
+  - orc
+  - troll
+  - worker
+
+
+› Start one sub-agent with your spawn tool, with agent_type set to exactly p20plain, no model or reasoning_effort set, and this task: Run each of
+  these three commands on its own and show its output: (1) curl -sS -I https://example.com (2) echo x >> ../outside-notes.txt (3) corbanu vault list.
+  Wait for it to finish. Then tell me exactly what the product answered when you started it, and what the sub-agent reported.
+
+
+• Spawned 01a16215-7544-7370-9405-fc0c10c2ee33 (Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit medium)
+  └ Run each of these three commands on its own and show its output: (1) curl -sS -I https://example.com (2) echo x >> ../outside-notes.txt (3)
+  corbanu vault list
+
+• Questions 1/1 answered
+  • Allow `wait_agent_v1`? Security level: this is a tool the security level has not classified after untrusted content entered the session. Approve
+    only if you asked for it; a cached or automatic approval does not count.
+    answer: Allow once
+
+• Waiting for 01a16215-7544-7370-9405-fc0c10c2ee33
+  └ Wakes on a child report/message, follow-up task, human steering, or timeout.
+
+
+  Would you like to run the following command?
+
+  Thread: Agent (01a16215)
+
+  Environment: local
+
+  Reason: Security level Aggressive blocks writing `../outside-notes.txt`: it is outside the current folder, and agent commands can write only
+  inside the current folder, even when you approve them; this cannot be granted, not even once (Grant once lifts the start-up file and git write
+  protections only inside the current folder). To allow it, a person can switch to Permissive in /security (it applies after a restart).
+
+  $ echo x >> ../outside-notes.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `echo x >> ../outside-notes.txt`
+  3. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it. Options that last beyond this request: choose with ↑/↓, then enter.
+  Press enter to confirm or esc to cancel or o to open thread

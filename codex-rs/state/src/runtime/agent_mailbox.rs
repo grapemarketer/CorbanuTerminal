@@ -288,6 +288,17 @@ WHERE message_id = ?
 /// Clients retry with the stable message ID and semantic payload; they are not required to
 /// persist a timestamp that the server generated on their behalf. Every field that can alter
 /// routing, model-visible content, delivery behavior, or attribution remains collision-checked.
+///
+/// A stored row without an `author_label` matches a labelled retry (#1335): a row persisted
+/// before Core labelled cross-tree mail has none, and the same message retried afterwards has
+/// one. The relaxation is one-directional: a labelled stored row still conflicts with an
+/// unlabelled retry, because the label is the only field naming the sending thread and the
+/// incoming copy is the one delivered. Two different known labels still conflict, and `author`
+/// is always compared. A stored row without a label cannot be told apart from same-tree mail,
+/// so a same-tree row and a labelled cross-tree retry with otherwise identical fields are
+/// treated as one message; the risk is low because only app-server clients choose message ids
+/// and the model-facing tool always makes a fresh UUID. This function is not an attribution
+/// guarantee.
 fn same_logical_message(
     stored: &InterAgentCommunication,
     incoming: &InterAgentCommunication,
@@ -296,6 +307,9 @@ fn same_logical_message(
     let mut incoming = incoming.clone();
     stored.created_at_ms = None;
     incoming.created_at_ms = None;
+    if stored.author_label.is_none() {
+        incoming.author_label = None;
+    }
     stored == incoming
 }
 

@@ -1,0 +1,6 @@
+=== zai3
+302 zai3/config.toml
+0 zai3/secrets/.vault.lock
+44 zai3/secrets/keyring-fallback/8550d0445e01adeb5bd9f84dd61e0636fbe94c0aa7a0b49bd7126ab765167cbb.key
+1054 zai3/secrets/local.age
+78a8c4fd130c4b99f82e8f18ee232fdba801ff76d5a1b1de183f24feb89b5a5c  zai3/config.toml

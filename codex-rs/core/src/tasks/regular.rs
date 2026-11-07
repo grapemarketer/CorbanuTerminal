@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::session::TurnInput;
 use crate::session::turn::run_hooks_and_record_inputs;
 use crate::session::turn::run_turn;
+use crate::session::turn::turn_refusal;
 use crate::session::turn_context::TurnContext;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
@@ -85,10 +86,13 @@ impl SessionTask for RegularTask {
             )
             .instrument(run_turn_span.clone())
             .await?;
-            // Issue #445: a refused turn takes no pending input; looping on
-            // it would refuse forever. Pending work waits for the switch.
-            if sess.services.model_client().kill_switch_on()
-                || !sess.input_queue.has_pending_input(&sess.active_turn).await
+            // Issue #445: a refused turn takes no pending input; looping here
+            // would refuse forever. Agent messages stay queued for a later wake
+            // after the kill switch is off or the named account is signed in
+            // (#1331). `on_task_finished` resubmits pending user input as follow-up
+            // turns; while refusal persists, each is refused once and dropped.
+            if !sess.input_queue.has_pending_input(&sess.active_turn).await
+                || turn_refusal(&sess, &ctx).await.is_some()
             {
                 return Ok(last_agent_message);
             }

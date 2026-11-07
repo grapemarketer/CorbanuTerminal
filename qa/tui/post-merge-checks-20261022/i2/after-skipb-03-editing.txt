@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                        │
+│                                                      │
+│ model:     mock-ws-1   /model to change              │
+│ directory: /Volumes/CorbanuDrive/…/i2-after-skipb/ws │
+╰──────────────────────────────────────────────────────╯
+
+
+› first message alpha
+
+
+⚠ Model metadata for `mock-ws-1` not found. Defaulting to fallback metadata; this can degrade performance and cause
+  issues.
+
+• Mock reply #2.
+
+╭──────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                        │
+│                                                      │
+│ model:     mock-ws-1   /model to change              │
+│ directory: /Volumes/CorbanuDrive/…/i2-after-skipb/ws │
+╰──────────────────────────────────────────────────────╯
+
+• You’re continuing from this point in a new conversation
+
+
+› first message alpha
+
+  mock-ws-1 via mockws default · /Volumes/CorbanuDrive/Corbanu/.codex-work/tui-qa2/runs/i2-after-skipb/ws · Corbanu Ter…
+
+
+
+
+
+
+
+
+
+
+

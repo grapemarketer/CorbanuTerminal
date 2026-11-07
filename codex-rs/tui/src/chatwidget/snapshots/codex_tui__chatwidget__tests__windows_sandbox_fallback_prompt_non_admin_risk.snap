@@ -5,12 +5,12 @@ expression: "render_bottom_popup(&chat, 120)"
   Couldn't set up your sandbox with Administrator permissions
 
   You can still use Corbanu Terminal in a non-admin sandbox. It carries greater risk if prompt injected.
-  In the non-admin sandbox, commands can delete or move files outside your workspace in folders you own, such as most
-  of your user profile.
+  The non-admin sandbox blocks writes and deletes outside your workspace except in low-integrity folders, but it can't
+  stop commands from reading your files and its network block can be bypassed.
   Learn more <https://developers.openai.com/codex/windows>
 
 › 1. Try setting up admin sandbox again
-  2. Use Codex with non-admin sandbox    Commands can delete or move files outside your workspace
+  2. Use Codex with non-admin sandbox    Doesn't block reading your files; its network block can be bypassed
   3. Quit
 
   Press enter to confirm or esc to go back

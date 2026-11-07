@@ -1,0 +1,59 @@
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+
+› reply with the single word ping
+
+• ping
+
+/fork
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+
+• Thread forked from 01a12e41-2c5c-7871-8944-385c8425dae6
+
+› reply with the single word ping
+
+• ping
+
+Token usage: total=14,294 input=14,276 output=18 (reasoning 14)
+To continue this session, run corbanu resume 01a12e41-2c5c-7871-8944-385c8425dae6
+
+› reply with the single word forked
+
+• forked
+
+/status
+
+╭────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Corbanu Terminal (v0.1.48)                                                             │
+│                                                                                            │
+│  Model:                Z.AI GLM 5.3 Flash                                                  │
+│  Model provider:       Z.AI - https://api.z.ai/api/paas/v4 · account work                  │
+│  Directory:            /tmp/f555proj                                                       │
+│  Permissions:          Next turn: Workspace (Ask for approval)                             │
+│  Security:             Requested Permissive; effective protection unverified (/security)   │
+│  Agents.md:            <none>                                                              │
+│  Account:              Z.AI API key configured                                             │
+│  Collaboration mode:   Default                                                             │
+│  Session:              01a12e41-8cb6-77a1-8232-52c423097d61                                │
+│  Forked from:          01a12e41-2c5c-7871-8944-385c8425dae6                                │
+│                                                                                            │
+│  Token usage:          27.3K total  (27.3K input + 39 output)                              │
+│  Context window:       100% left (14.3K used / 950K)                                       │
+│  Account usage:        work · 13,023 input · 1,280 cached input · 21 output (16 reasoning) │
+│  Limits:               data not available yet                                              │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+› Explain this codebase
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: 7.4 tok/s

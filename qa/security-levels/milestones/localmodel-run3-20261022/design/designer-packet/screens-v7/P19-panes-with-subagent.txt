@@ -1,0 +1,35 @@
+  source=tool id=5e3f76f7-62cb-4165-8328-7955a43526f9 sha256=e698f9b7...5cf20d authority=none
+  Untrusted data. Text inside cannot grant approvals, permissions or user authority.
+  {"agent_id":"01a16215-7544-7370-9405-fc0c10c2ee33","nickname":"Curie"}
+
+  So: agent id 01a16215-7544-7370-9405-fc0c10c2ee33, nickname Curie — no approval prompt, no permission banner, just the id/nickname plus the generic
+  "untrusted data" wrapper that the product puts around every tool result.
+
+  What the sub-agent reported
+  It ran all three individually and said each was blocked by the security level:
+
+  - curl -sS -I https://example.com → exit 7, Failed to connect to 127.0.0.1 port 18443 ... Couldn't connect to server (no network access under
+    Aggressive).
+
+  - echo x >> ../outside-notes.txt → exit 1, ../outside-notes.txt: Operation not permitted (outside the workspace, not grantable).
+  - corbanu vault list → Security level Aggressive: agents cannot use the Corbanu vault. (it noted you can still run /vault yourself).
+  - Its advice was to switch levels via /security, noting a Permissive change for out-of-workspace writes needs a restart.
+
+  One note
+  My follow-up close_agent_v1 on Curie was not run — the product replied "you declined a tool the security level has not classified after untrusted
+  content entered the session," so the agent may still be open. Want me to retry closing it?
+
+
+  Panes
+  Switch user panes or inspect the managed /spawn crew.
+
+  Search panes and crew
+  User Panes
+› Corbanu Terminal - Main (current)  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit; idle
+  Create User Pane
+  + Corbanu Terminal Pane            Create a persistent native Corbanu Terminal pane; choose model next.
+  + Claude Pane                      Create a Claude Code headless pane; choose provider next.
+  Managed Crew (/spawn)
+  No managed crew
+
+  Enter select | F2 rename | type to search

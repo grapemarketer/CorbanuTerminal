@@ -9,6 +9,157 @@ fn name(raw: &str) -> ProviderAccountName {
     ProviderAccountName::parse(raw).expect("valid name")
 }
 
+#[tokio::test]
+async fn issue1290_dismissal_during_save_or_summary_keeps_the_committed_result() {
+    use crate::chatwidget::named_account_login::NamedAccountLoginState;
+    use base64::Engine;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
+
+    for save_before_wait in [false, true] {
+        for drop_view in [false, true] {
+            let home = tempdir().expect("isolated account home");
+            let account = codex_login::NamedChatgptAccount {
+                provider_id: "openai".to_string(),
+                name: "work".to_string(),
+            };
+            let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                serde_json::json!({"https://api.openai.com/auth": {
+                    "chatgpt_user_id": "issue1290-user"
+                }})
+                .to_string(),
+            );
+            let auth = codex_login::AuthDotJson {
+                auth_mode: Some(codex_protocol::auth::AuthMode::Chatgpt),
+                openai_api_key: None,
+                tokens: Some(codex_login::TokenData {
+                    id_token: codex_login::token_data::parse_chatgpt_jwt_claims(&format!(
+                        "e30.{claims}.c2ln"
+                    ))
+                    .expect("fixture claims"),
+                    access_token: "issue1290-access".to_string(),
+                    refresh_token: "issue1290-refresh".to_string(),
+                    ..Default::default()
+                }),
+                last_refresh: None,
+                agent_identity: None,
+                personal_access_token: None,
+                bedrock_api_key: None,
+            };
+            codex_login::save_named_account_auth(
+                home.path(),
+                &codex_login::NamedChatgptAccount {
+                    name: "other".to_string(),
+                    ..account.clone()
+                },
+                &auth,
+                /*must_be_new*/ true,
+            )
+            .expect("existing account for the duplicate-user warning");
+            let (mut chat, sender, mut events, _ops) =
+                crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+            while events.try_recv().is_ok() {}
+            let state = NamedAccountLoginState::default();
+            let task_state = state.clone();
+            let path = home.path().to_path_buf();
+            let task_account = account.clone();
+            let (reached, waiting) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            let (done, completed) = oneshot::channel();
+            let task = tokio::spawn(async move {
+                task_state
+                    .begin_persistence()
+                    .expect("save won cancellation gate");
+                let result = tokio::task::spawn_blocking(move || {
+                    let save = || {
+                        codex_login::save_named_account_auth(
+                            &path,
+                            &task_account,
+                            &auth,
+                            /*must_be_new*/ true,
+                        )
+                        .expect("named account saved")
+                    };
+                    if save_before_wait {
+                        save();
+                    }
+                    let _ = reached.send(());
+                    released.blocking_recv().expect("release save or summary");
+                    if !save_before_wait {
+                        save();
+                    }
+                    signed_in_message(
+                        &path,
+                        "openai",
+                        &name("work"),
+                        &task_account,
+                        codex_login::AuthCredentialsStoreMode::File,
+                        codex_login::AuthKeyringBackendKind::default(),
+                    )
+                })
+                .await
+                .map_err(|error| error.to_string());
+                task_state.finish(&sender, result);
+                let _ = done.send(());
+            });
+            let (_codes, code_rx) = mpsc::unbounded_channel();
+            chat.open_named_account_login(
+                "openai account `work`".to_string(),
+                code_rx,
+                task,
+                state,
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(30), waiting)
+                .await
+                .expect("blocking save or summary reached")
+                .expect("checkpoint");
+            if drop_view {
+                drop(chat);
+            } else {
+                chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                assert!(chat.no_modal_or_popup_active());
+            }
+            assert!(events.try_recv().is_err(), "no false Cancelled result");
+            release.send(()).expect("save still owned");
+            tokio::time::timeout(std::time::Duration::from_secs(30), completed)
+                .await
+                .expect("finalization continues after dismissal")
+                .expect("finished");
+            let expected = signed_in_message(
+                home.path(),
+                "openai",
+                &name("work"),
+                &account,
+                codex_login::AuthCredentialsStoreMode::File,
+                codex_login::AuthKeyringBackendKind::default(),
+            );
+            assert!(
+                expected.contains("same ChatGPT user as account(s) `other`"),
+                "{expected}"
+            );
+            match events.try_recv().expect("actual committed result") {
+                AppEvent::ProviderAccount(ProviderAccountEvent::Finished { result }) => {
+                    assert_eq!(result, Ok(expected));
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+            assert!(
+                codex_login::named_account_summary(home.path(), &account)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                !home.path().join("auth.json").exists(),
+                "default login unchanged"
+            );
+            assert!(events.try_recv().is_err());
+        }
+    }
+}
+
 async fn app_with_named_accounts(extra_config: &str) -> (App, TempDir) {
     let mut app = make_test_app().await;
     let home = tempdir().expect("home");
@@ -123,8 +274,8 @@ async fn a_default_set_by_a_higher_layer_is_reported() {
 
 /// #572: with a named Bedrock account (an AWS profile) in the vault, a
 /// session on another provider is offered Bedrock's models in `/model` (and
-/// the provider policy lets them be picked), so an account chosen with *Use
-/// for this session* is reachable. Without one, with the feature off, or
+/// the provider policy lets them be picked), so an account chosen with *Start
+/// a new session on this account* is reachable. Without one, with the feature off, or
 /// once the last one is removed, Bedrock stays out of the list as before,
 /// except the model the session is on. Only the newest check is applied.
 #[tokio::test]

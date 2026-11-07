@@ -163,6 +163,25 @@ fn pf_29_s01_isolation_only_after_a_preflight_and_lands_in_the_profile() {
     }
 }
 
+/// #1441: SQLite creates a missing `-wal` through a dangling symlink, so
+/// where it would land is on the launch deny list.
+#[cfg(unix)]
+#[test]
+fn pf_29_s01_dangling_database_side_file_target_is_denied_at_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let corbanu = root.path().join("corbanu");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&corbanu).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(receipt_path(&corbanu), "garbage").unwrap();
+    std::fs::write(corbanu.join("state_5.sqlite"), "db").unwrap();
+    std::os::unix::fs::symlink(outside.join("wal"), corbanu.join("state_5.sqlite-wal")).unwrap();
+
+    let paths = isolation_paths(&corbanu, /*home*/ None, /*cwd*/ None);
+    let target = std::fs::canonicalize(&outside).unwrap().join("wal");
+    assert!(paths.contains(&target), "{paths:?}");
+}
+
 #[test]
 fn pf_29_s01_resume_refused_for_conversations_before_activation() {
     let now = now_ms();

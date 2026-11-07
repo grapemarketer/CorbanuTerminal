@@ -1,0 +1,15 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+
+  Spawn Troll
+  Choose the harness for this Troll pane.
+
+› 1. Harness: Corbanu Terminal  Native Corbanu Terminal agent pane; choose model and reasoning next.
+  2. Harness: Claude Code       Claude Code headless pane; choose provider route next.
+
+  Press enter to confirm or esc to go back

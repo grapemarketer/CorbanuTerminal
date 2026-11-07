@@ -837,3 +837,122 @@ fn qualifier_code_reading_stays_linear() {
         });
     }
 }
+
+/// #1111: distinct unclosed delimiters must not copy every remaining suffix.
+/// This measures allocations and counted loop work, not library search time.
+#[test]
+fn unclosed_flag_argument_copying_stays_linear() {
+    for flag in ['l', 'r', 'I'] {
+        for quote in ["", "'\\\""] {
+            work::assert_linear("unclosed flag argument copies", |scale| {
+                let mut flags = String::from("${(");
+                for at in 0..1_000 * scale {
+                    flags.push(flag);
+                    flags.push(char::from_u32(0x4e00 + at as u32).unwrap());
+                    flags.push_str(quote);
+                }
+                flags.push_str(")x}");
+                assert!(!flags_unsafe(&flags, &|_: &str| false));
+            });
+        }
+    }
+}
+
+/// The real name predicate also borrows substitution-free arguments. Its
+/// repeated scans are deliberately not claimed to have linear step growth.
+#[test]
+fn unclosed_flag_caller_allocation_stays_linear() {
+    for flag in ['l', 'r', 'I'] {
+        let safe = HashSet::from([flag.to_string()]);
+        let run = |scale| {
+            let mut flags = String::from("${(");
+            for at in 0..100 * scale {
+                flags.push(flag);
+                flags.push(char::from_u32(0x4e00 + at as u32).unwrap());
+                flags.push_str("'\\\"");
+            }
+            flags.push_str(")x}");
+            assert!(!flags_unsafe(&flags, &|text: &str| {
+                names(&without_substitutions(text)).any(|name| !safe.contains(name))
+            }));
+        };
+        let small = work::measure(|| run(1));
+        let large = work::measure(|| run(work::SCALE as usize));
+        assert!(small.bytes > 0);
+        assert!(
+            large.bytes <= 6 * small.bytes,
+            "flag {flag}: {} bytes at 1x, {} at 4x",
+            small.bytes,
+            large.bytes
+        );
+    }
+}
+
+#[test]
+fn flag_arguments_keep_original_quote_and_delimiter_boundaries() {
+    for (region, expected) in [
+        ("${(l|l_a_b)x}", vec!["l_a_b", "a"]),
+        ("${(l|'l_a_b')x}", vec!["l_a_b", "a"]),
+        ("${(r界\"m\"界I:2:)x}", vec!["m", "2"]),
+        ("${(l::r:)x}", vec!["", ""]),
+        ("${(l\\v\\)x}", vec!["v"]),
+        ("${(I'v')x}", vec!["v"]),
+        ("${(l|$v)x}", vec!["v", "$v"]),
+    ] {
+        let arguments = std::cell::RefCell::new(Vec::new());
+        assert!(!flags_unsafe(region, &|text: &str| {
+            arguments.borrow_mut().push(text.to_string());
+            false
+        }));
+        assert_eq!(arguments.into_inner(), expected, "{region}");
+    }
+}
+
+#[test]
+fn malformed_flag_arguments_keep_unsafe_inner_names() {
+    let safe = HashSet::from(["l_a_b"]);
+    let unsafe_in =
+        |text: &str| names(&without_substitutions(text)).any(|name| !safe.contains(name));
+    // The first unclosed argument is safe; an overlapping inner one is not.
+    for region in ["${(l|l_a_b)x}", "${(l|'l_a_b')x}"] {
+        assert!(flags_unsafe(region, &unsafe_in), "{region}");
+    }
+    // A substitution can hide a name in the outer argument but not the inner
+    // argument. Stopping after the first safe suffix would miss it.
+    for region in ["${(l|`r_m_n`)x}", "${(l|$(r_m_n)x}"] {
+        assert!(flags_unsafe(region, &unsafe_in), "{region}");
+    }
+    let safe = HashSet::from(["l_a_b", "a"]);
+    assert!(!flags_unsafe("${(l|l_a_b)x}", &|text: &str| {
+        names(&without_substitutions(text)).any(|name| !safe.contains(name))
+    }));
+    for flag in ['l', 'r', 'I'] {
+        for argument in ["m", "'m'", "\"m\"", "\\m"] {
+            let line = format!("out=$(cat notes); echo ${{({flag}|{argument})x}}");
+            assert!(runs_unseen_in("zsh", &line), "{line}");
+        }
+        let region = format!("${{({flag}|1)x}}");
+        assert!(!flags_unsafe(&region, &unsafe_in), "{region}");
+        // The whole-line fallback rejects transformed zsh expansions after
+        // command output, independently of the numeric flag argument.
+        let line = format!("out=$(cat notes); echo ${{({flag}|1)x}}");
+        assert!(runs_unseen_in("zsh", &line), "{line}");
+    }
+}
+
+#[test]
+fn substitution_blanking_keeps_exact_text() {
+    for (text, expected) in [
+        ("", ""),
+        ("名字 + n + $v", "名字 + n + $v"),
+        ("a$(date +%s)b", "a b"),
+        ("a$(nested $(x))b", "a b"),
+        ("a`date`b", "a b"),
+        ("a`unfinished", "a "),
+        ("a$(unfinished", "a "),
+        ("$((n + 1))", "$((n + 1))"),
+        ("a$(x)b`y`c", "a b c"),
+    ] {
+        assert_eq!(&*without_substitutions(text), expected, "{text}");
+    }
+}

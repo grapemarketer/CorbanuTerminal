@@ -466,7 +466,10 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
         .expect("canonical glob should compile");
     let mut policy = FileSystemSandboxPolicy::default();
     policy.entries.push(FileSystemSandboxEntry {
-        path: FileSystemPath::GlobPattern { pattern },
+        path: FileSystemPath::GlobPattern {
+            pattern,
+            scan: None,
+        },
         access: FileSystemAccessMode::Deny,
         missing_path_behavior: None,
     });
@@ -2522,7 +2525,10 @@ fn credential_templates_stay_usable() {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             }),
@@ -2622,6 +2628,7 @@ fn own_env_star_glob_still_covers_templates() {
         ),
         FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}/**/.env.*", work.display()),
             },
             FileSystemAccessMode::Deny,
@@ -2683,7 +2690,10 @@ fn credential_names_cannot_be_read_created_or_planted() {
             .into_iter()
             .map(|pattern| {
                 FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern { pattern },
+                    FileSystemPath::GlobPattern {
+                        pattern,
+                        scan: None,
+                    },
                     FileSystemAccessMode::Deny,
                 )
             }),
@@ -3284,6 +3294,7 @@ fn minimal_reads_in_tmp(denied: bool) -> (TempDir, String) {
         ));
         entries.push(FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}/**/.env", x.display()),
             },
             access: FileSystemAccessMode::Deny,
@@ -3374,6 +3385,7 @@ fn glob_below_a_link_to_a_folder_with_glob_syntax_is_escaped() {
         root_read_entry(),
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}/*.sqlite*", link.display()),
             },
             access: FileSystemAccessMode::Deny,

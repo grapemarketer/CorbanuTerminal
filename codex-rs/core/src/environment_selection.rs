@@ -11,6 +11,7 @@ use codex_exec_server::EnvironmentConnectionState;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -430,6 +431,16 @@ impl TurnEnvironmentSnapshot {
         self.turn_environments().next()
     }
 
+    /// True when this turn may run work on a remote executor: a ready remote
+    /// environment, or a non-local environment that is still starting.
+    pub(crate) fn may_run_remotely(&self) -> bool {
+        self.turn_environments()
+            .any(|environment| environment.environment.is_remote())
+            || self
+                .starting()
+                .any(|environment| environment.selection.environment_id != LOCAL_ENVIRONMENT_ID)
+    }
+
     pub(crate) fn local(&self) -> Option<&TurnEnvironment> {
         self.turn_environments()
             .find(|environment| !environment.environment.is_remote())
@@ -478,7 +489,6 @@ mod tests {
 
     use codex_exec_server::Environment;
     use codex_exec_server::ExecServerRuntimePaths;
-    use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_exec_server_test_support::environment_manager_without_environments;
     use codex_http_client::HttpClientFactory;
@@ -1142,5 +1152,74 @@ url = "ws://127.0.0.1:8765"
         assert_eq!(local.single_local_environment_cwd(), Some(cwd));
         assert_eq!(remote.single_local_environment_cwd(), None);
         assert_eq!(multiple.single_local_environment_cwd(), None);
+    }
+
+    #[tokio::test]
+    async fn may_run_remotely_covers_ready_and_starting_remote_environments() {
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let cwd_uri = PathUri::from_abs_path(&cwd);
+        let local = resolve_turn_environments(
+            Arc::new(EnvironmentManager::default_for_tests()),
+            &[TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: cwd_uri.clone(),
+                workspace_roots: Vec::new(),
+            }],
+        )
+        .await
+        .snapshot()
+        .await;
+        let local_environment = local.primary().expect("local environment").clone();
+        let remote_environment = TurnEnvironment::new(
+            REMOTE_ENVIRONMENT_ID.to_string(),
+            Arc::new(
+                Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
+                    .expect("remote environment"),
+            ),
+            cwd_uri.clone(),
+            Vec::new(),
+            /*shell*/ None,
+        );
+        let starting = |environment_id: &str| {
+            TurnEnvironmentState::Starting(StartingTurnEnvironment {
+                selection: TurnEnvironmentSelection {
+                    environment_id: environment_id.to_string(),
+                    cwd: cwd_uri.clone(),
+                    workspace_roots: Vec::new(),
+                },
+                resolution: futures::future::pending().boxed().shared(),
+            })
+        };
+        let snapshot = |environments| TurnEnvironmentSnapshot { environments };
+
+        assert!(!local.may_run_remotely());
+        assert!(!TurnEnvironmentSnapshot::default().may_run_remotely());
+        assert!(
+            snapshot(vec![TurnEnvironmentState::Ready(
+                remote_environment.clone()
+            )])
+            .may_run_remotely()
+        );
+        assert!(
+            snapshot(vec![
+                TurnEnvironmentState::Ready(local_environment.clone()),
+                TurnEnvironmentState::Ready(remote_environment),
+            ])
+            .may_run_remotely()
+        );
+        assert!(
+            snapshot(vec![
+                TurnEnvironmentState::Ready(local_environment.clone()),
+                starting(REMOTE_ENVIRONMENT_ID),
+            ])
+            .may_run_remotely()
+        );
+        assert!(
+            !snapshot(vec![
+                TurnEnvironmentState::Ready(local_environment),
+                starting(LOCAL_ENVIRONMENT_ID),
+            ])
+            .may_run_remotely()
+        );
     }
 }

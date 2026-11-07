@@ -145,6 +145,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,
@@ -290,6 +291,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.env".to_string(),
             },
             access: FileSystemAccessMode::Deny,

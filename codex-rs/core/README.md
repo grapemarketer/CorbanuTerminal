@@ -149,18 +149,100 @@ sign-off by Travis on 2026-10-13):
   desktop, or Core's own desktop when Core runs off the interactive window
   station with `sandbox_private_desktop = false`.
 
+A legacy command's job doesn't allow breaking away (#733; not covered by that
+sign-off): a child started with `CREATE_BREAKAWAY_FROM_JOB` fails with access
+denied, so its descendants stay in its job, where cancelling ends them and the
+lease waits for them. A program that asks to break away gets that error unless
+it retries without the flag. The elevated backend and unsandboxed commands
+still allow breaking away.
+
+Other ways to start a process (#1507), measured on the hosted Windows runner
+(no Explorer running; not yet measured on a desktop): WMI's
+`Win32_Process.Create` refuses a legacy command (access denied), as do
+activating Explorer's `ShellWindows` (E_ACCESSDENIED) and the Task
+Scheduler (opening its task folder fails with 0x80070003). Naming another
+legacy command's process as the parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`)
+is refused too since D259 (but see #1560 below): each legacy command's token
+carries its own identity SID, and its default DACL (what its processes, threads, token and
+the pipes and other objects it creates without explicit security get)
+grants full access only to the user, SYSTEM and that SID, and read and
+execute to Everyone, the logon SID and the capability SIDs. A legacy command
+writes only through its restricting SIDs, so it keeps full access to its own
+processes but can't open another legacy command's with any write right
+(start a child under it, change its DACL, duplicate its handles, write its
+memory) or adjust its token. Core and other unsandboxed programs keep full
+access through the user SID. Cost: a legacy command can't write to an object
+that another legacy command's process (a concurrent one, or one left running
+by an earlier command) created without explicit security, such as a named
+pipe, event or section a shared daemon serves; nor to a file it created in a
+folder without inheritable entries. Not closed: other legacy commands can
+still end its processes (`PROCESS_TERMINATE` comes with execute access), and
+can still duplicate and impersonate its token (`TOKEN_DUPLICATE` isn't a
+write right). The borrowed token carries the command's identity, so with it
+they can write to its processes again, including starting a child in its job
+through the parent-process route, and write in its writable roots while it
+runs (#1560). The boundary D259 draws between legacy commands holds only once
+#1560 is closed. Two routes still start a child
+outside the command's job: the COM servers `ShellBrowserWindow` (the child
+runs at Low integrity but with an unrestricted token) and
+`MMC20.Application` (Low, restricted). Closing them waits on a measurement
+on a real desktop (D260); their tests are ignored until then.
+
 Protected paths that already exist inside writable roots when a session
 starts, such as `.git`, `.codex`, and `.agents`, also get an Everyone deny of
 `FILE_DELETE_CHILD` on the path, its subdirectories, and its parent directory.
 That keeps the sandbox from deleting, moving, or replacing them through the
 parent, which would otherwise let it plant Git hooks or config that later run
-unsandboxed. Renaming a writable ancestor of a nested protected path is not
-covered. The deny entries are persistent and visible in the folder's security
-settings. Unsandboxed deletes normally keep working because they use each
+unsandboxed. For an explicitly configured read-only path nested deeper in a
+writable root (`w\a\b`, say), each folder between the root and it (`w\a`)
+also denies the sandbox `DELETE`, and that folder's parent denies Everyone
+`FILE_DELETE_CHILD`, so a command can't move or rename the folder away and
+recreate the read-only path (#1506 item 3, D263). Commands can still write
+inside those folders but can't delete or rename the folders themselves; the
+default `.git`, `.codex` and `.agents` protections sit directly in the root
+and don't add these. A `.codex` or `.agents` folder at the top of a writable
+root that doesn't exist when a session starts isn't protected, so a command
+can create it (#1506 item 2). Each session records which of them were absent;
+one that exists when the session ends (or, for a session still running, as
+soon as it appears; for one that crashed, at the next sweep) is recorded as
+possibly planted in `planted-metadata.json` next to the integrity-label
+records (D262). Until the user confirms it, Core loads neither its config
+and hooks (the project layer is disabled) nor its skills, and says so at
+startup; the TUI asks whether to load it, and confirming is refused while a
+session that saw it appear still runs. A planted link counts as the folder
+itself (it isn't followed), and a linked worktree's hooks from a planted root
+checkout `.codex` are ignored too. If the records can't be read, no project
+`.codex`/`.agents` content is loaded at all. Anything that creates such a
+folder while a session runs is reported, including the user. Not covered:
+`.codex`/`.agents` folders below the top of a writable root (between the
+project root and the working directory), which commands can create or change
+whether or not they exist. The
+Everyone deny entries are visible in the folder's security settings while a
+session needs them. Each one a session adds is recorded first, in
+`delete-child-denies.json` next to the integrity-label records (#1506 item 1,
+D261), and removed by the sweep that puts labels back once no live session's
+writable root holds its folder and the folder isn't labelled Low (a Low
+label means a sandbox, perhaps another Windows account's, whose records
+these aren't, may be using it); a session that crashed has its entries
+removed by the next sweep (a later legacy command, or the next TUI or
+app-server start). A deny that D263 needs above an explicit nested read-only
+path must be in place, or the command doesn't start. An entry that was already there and isn't recorded (one
+the user made, or one left by a version before this change) is never
+removed. Without usable records the entries are added untracked and stay, as
+before. Unsandboxed deletes normally keep working because they use each
 object's own `DELETE` right; only a delete that relies on the parent's
-`FILE_DELETE_CHILD` is affected. To remove the entries, run
+`FILE_DELETE_CHILD` is affected. To remove leftover entries, run
 `icacls <dir> /remove:d *S-1-1-0` on the affected directories. That command
-also removes any other Everyone deny entries on them.
+also removes any other Everyone deny entries on them. The sandbox `DELETE`
+denies on folders above nested read-only paths (D263) name the sandbox's own
+capability SIDs, like its other deny entries, and stay; if one can't be added,
+the command doesn't start. To remove them, first drop the nested read-only
+path from your configuration (otherwise the next legacy command adds them
+back), then run `icacls <dir> /remove:d *<sid>` on each folder between the
+writable root and the read-only path, for each SID listed in `cap_sid` under
+`CODEX_HOME` (a JSON file). That also removes the sandbox's other deny
+entries for that SID on the folder, which the next legacy command that needs
+them adds back.
 
 New `[permissions]` / split filesystem policies remain supported on Windows
 only when they can be enforced directly by the selected Windows backend or

@@ -25,6 +25,7 @@ use sha2::Sha256;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
@@ -130,10 +131,9 @@ pub(crate) fn compaction_turn_label(sub_id: &str) -> String {
 
 /// A turn label for one realtime call.
 ///
-/// Creating the call is a model request the operator paid for. The realtime
-/// session's own token usage never reaches this client - the protocol this
-/// client parses carries none - so the call is recorded with its tokens
-/// unknown rather than left invisible.
+/// Creating the call is a model request the operator paid for. Its response
+/// carries no usage and the call's sideband reports are not recorded, so the
+/// call is recorded with its tokens unknown rather than left invisible.
 pub(crate) fn realtime_turn_label(sub_id: &str) -> String {
     scoped_turn_label("realtime:", sub_id)
 }
@@ -146,8 +146,8 @@ pub(crate) fn realtime_turn_label(sub_id: &str) -> String {
 pub(crate) const REALTIME_SESSION_LABEL: &str = "realtime:ws:";
 
 /// A turn label for one realtime WebSocket session (#824). The session is
-/// one request, recorded with its tokens unknown: its usage never reaches
-/// this client.
+/// one request, with the tokens its finished responses reported (#889 D223)
+/// and no price.
 pub(crate) fn realtime_session_turn_label(sub_id: &str) -> String {
     scoped_turn_label(REALTIME_SESSION_LABEL, sub_id)
 }
@@ -235,6 +235,12 @@ pub(crate) struct TurnScopes {
     /// The ledger and conversation this turn records under, to notice records
     /// the ledger writer refused after their request stopped waiting.
     ledger: Option<(Arc<StateRuntime>, ThreadId)>,
+    /// #314 (D228): the last UTC day this unit's gap marker covers, once one
+    /// is written or on its way; `-1` before.
+    gap_marked_through: AtomicI64,
+    /// When this unit attached (Unix ms): its unrecorded requests were sent
+    /// between then and when it is marked.
+    attached_at_ms: i64,
     _anthropic_scope: SamplingScope,
     _responses_scope: responses::Scope,
     _chat_scope: chat::Scope,
@@ -257,6 +263,25 @@ impl TurnScopes {
             || self.chat.as_ref().is_some_and(|value| value.is_closed())
     }
 
+    /// #314 (D228): durably mark the UTC days this unit ran on (attach to
+    /// now) as days on which accounting failed to record one of this
+    /// conversation's requests, again only once the UTC day has moved on, so
+    /// `/cost` says those days' totals may be incomplete. Nothing when the ledger was never reached; a
+    /// failed mark is logged. A record the ledger writer refuses marks its own
+    /// day (`accounting_writer::refuse`).
+    pub(crate) async fn mark_gap(&self) {
+        if let Some((db, owner, attached)) = self.claim_gap_mark() {
+            write_gap_mark(&db, owner, attached).await;
+        }
+    }
+
+    fn claim_gap_mark(&self) -> Option<(Arc<StateRuntime>, ThreadId, i64)> {
+        let (db, owner) = self.ledger.as_ref()?;
+        let today = now().div_euclid(86_400_000);
+        (self.gap_marked_through.fetch_max(today, Ordering::AcqRel) < today)
+            .then(|| (Arc::clone(db), *owner, self.attached_at_ms))
+    }
+
     /// Whether a collector stopped this turn (`Sampling::halt`).
     pub(crate) fn halted(&self) -> bool {
         self.anthropic
@@ -267,6 +292,35 @@ impl TurnScopes {
                 .as_ref()
                 .is_some_and(|value| value.is_halted())
             || self.chat.as_ref().is_some_and(|value| value.is_halted())
+    }
+}
+
+/// #314 (D228): a unit that ends with requests unrecorded and no turn-end
+/// check (a startup warm-up, a completion assessment, a memory extraction, a
+/// realtime session) still marks its days; the write is handed to the runtime
+/// as the unit's scopes are dropped, so one dropped as the process exits can
+/// be lost. A memory-denial stop (`halted`) is not an accounting failure.
+impl Drop for TurnScopes {
+    fn drop(&mut self) {
+        if !self.stopped() || self.halted() {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if let Some((db, owner, attached)) = self.claim_gap_mark() {
+            handle.spawn(async move { write_gap_mark(&db, owner, attached).await });
+        }
+    }
+}
+
+async fn write_gap_mark(db: &StateRuntime, owner: ThreadId, attached_at_ms: i64) {
+    if let Err(error) = AccountingStore::record_gap(db, owner, attached_at_ms, now()).await {
+        tracing::warn!(
+            target: LOG_TARGET,
+            cause = %format_args!("{error:#}"),
+            "accounting: could not mark this day's totals as incomplete"
+        );
     }
 }
 
@@ -283,7 +337,12 @@ pub(crate) async fn warn_if_unrecorded(
     // Always read, so a refusal this turn already reports is not reported
     // again by the next one.
     let refused = session.services.accounting_notices.refused_since(ledger);
-    if (scopes.is_none_or(TurnScopes::stopped) || refused)
+    let unrecorded = scopes.is_none_or(TurnScopes::stopped) || refused;
+    // A refused record marked its own day as the writer refused it.
+    if let Some(scopes) = scopes.filter(|scopes| scopes.stopped()) {
+        scopes.mark_gap().await;
+    }
+    if unrecorded
         && !turn_context
             .accounting_gap_warning_emitted
             .swap(true, Ordering::Relaxed)
@@ -631,6 +690,8 @@ pub(crate) async fn attach_scopes(
             .count_refusals_from(db, *owner);
     }
     Ok(TurnScopes {
+        gap_marked_through: AtomicI64::new(-1),
+        attached_at_ms: now(),
         ledger,
         anthropic,
         responses,
@@ -1360,6 +1421,31 @@ impl Sampling {
         endpoint: &str,
         tier: Option<&str>,
     ) -> anyhow::Result<Attempt> {
+        self.admit_priced(model, endpoint, tier, /*rated*/ true)
+            .await
+    }
+
+    /// Admit a request this sampling's basis covers but no rate prices
+    /// (#889 D223): a realtime session, whose tokens are audio and text at
+    /// realtime rates no catalogue row states. Its record keeps its basis and
+    /// binds no rate, so its reported tokens read "no price", never a figure
+    /// from a text model's rates.
+    pub(crate) async fn admit_without_rates(
+        &self,
+        model: &str,
+        endpoint: &str,
+    ) -> anyhow::Result<Attempt> {
+        self.admit_priced(model, endpoint, /*tier*/ None, /*rated*/ false)
+            .await
+    }
+
+    async fn admit_priced(
+        &self,
+        model: &str,
+        endpoint: &str,
+        tier: Option<&str>,
+        rated: bool,
+    ) -> anyhow::Result<Attempt> {
         self.check()?;
         anyhow::ensure!(
             canonical_route(endpoint) == canonical_route(&self.endpoint),
@@ -1402,6 +1488,16 @@ impl Sampling {
             )
         };
         let mut prices = match self.pricing {
+            // Unrated (`admit_without_rates`): subscription work keeps its
+            // basis with no plan rate; pay per use falls to the basis-only
+            // record below. Local, undeclared and unpriced work bind no rate
+            // either way.
+            Pricing::Plan if !rated => basis_only(Basis::PlanEquivalent)?,
+            Pricing::Anthropic | Pricing::Responses | Pricing::Chat | Pricing::Route(_)
+                if !rated =>
+            {
+                Vec::new()
+            }
             Pricing::Unavailable => Vec::new(),
             // Subscription work stays subscription work with no catalogue
             // figure: a plan record with no rates, never a missing record that

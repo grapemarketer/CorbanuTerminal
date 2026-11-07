@@ -17,6 +17,7 @@ use super::inspection_pages;
 use super::inspection_pages_for;
 use super::interval;
 use super::names_accounts;
+use super::recording_gap_line;
 use super::scope;
 use super::unpriced_rows;
 use super::utc_date;
@@ -223,6 +224,13 @@ pub(super) fn range_pages(
         parent: None,
         selected: Arc::default(),
     }];
+    // #314 (D228): a day in the range on which a request went unrecorded.
+    if states
+        .iter()
+        .any(|state| matches!(state, InspectionDay::Ready(view) if view.recording_gap))
+    {
+        pages[0].text.push(recording_gap_line("this range"));
+    }
     pages[0].text.extend(scope::other_conversations_lines(
         /*others*/ None, /*named*/ false,
     ));
@@ -334,6 +342,8 @@ pub(super) fn range_pages(
                         }
                         target.unknown_parent_unavailable_threads +=
                             view.unknown_parent_unavailable_threads;
+                        // #314 (D228): any day's gap leaves the bucket incomplete.
+                        target.recording_gap |= view.recording_gap;
                         // #1196: days classified differently prove only
                         // that nothing was recorded.
                         target.empty_day = match (target.empty_day, view.empty_day) {

@@ -1310,7 +1310,13 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     let mut startup_warnings = Vec::new();
+    // #1506 item 2 (D262): folders a sandboxed command may have planted.
+    let planted = crate::planted_project_metadata();
     for dir in dirs {
+        let dot_agents = dir.join(".agents");
+        if dot_agents.as_path().is_dir() && planted.contains(dot_agents.as_path()) {
+            startup_warnings.push(planted.reason(dot_agents.as_path()));
+        }
         let dot_codex_abs = dir.join(".codex");
         let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs);
         if !fs
@@ -1323,8 +1329,21 @@ async fn load_project_layers(
         }
 
         let decision = trust_context.decision_for_dir(&dir);
-        let disabled_reason = trust_context.disabled_reason_for_decision(&decision);
+        let mut disabled_reason = trust_context.disabled_reason_for_decision(&decision);
         let hooks_config_folder_override = trust_context.root_checkout_hooks_folder_for_dir(&dir);
+        // The root checkout's `.codex` a linked worktree takes hooks from
+        // counts too.
+        if let Some(planted_folder) = [Some(&dot_codex_abs), hooks_config_folder_override.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|folder| planted.contains(folder.as_path()))
+        {
+            let reason = planted.reason(planted_folder.as_path());
+            startup_warnings.push(reason.clone());
+            disabled_reason = Some(reason);
+        }
+        // Trusted, and not possibly planted.
+        let loads_project_config = disabled_reason.is_none();
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
@@ -1345,7 +1364,7 @@ async fn load_project_layers(
                 let config: TomlValue = match toml::from_str(&contents) {
                     Ok(config) => config,
                     Err(e) => {
-                        if decision.is_trusted() {
+                        if loads_project_config {
                             let config_file_display = config_file.as_path().display();
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -1386,7 +1405,7 @@ async fn load_project_layers(
                     fs,
                     config,
                     hooks_config_folder_override.as_ref(),
-                    decision.is_trusted(),
+                    loads_project_config,
                 )
                 .await?;
                 if disabled_reason.is_none() && !ignored_project_config_keys.is_empty() {
@@ -1412,7 +1431,7 @@ async fn load_project_layers(
                         fs,
                         TomlValue::Table(toml::map::Map::new()),
                         hooks_config_folder_override.as_ref(),
-                        decision.is_trusted(),
+                        loads_project_config,
                     )
                     .await?;
                     layers.push(project_layer_entry(

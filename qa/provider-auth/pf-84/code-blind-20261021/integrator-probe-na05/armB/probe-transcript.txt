@@ -1,0 +1,38 @@
+gate gate-agmx0-20261022T032322Z: probes ok=True count=97 smoke=['AGMS-SMOKE-OK'] relay200=True -> PASS
+### 1. conversation on work in the TUI (--account work), then quit
+03:26:37
+03:26:46
+To continue this session, run corbanu resume 01a161a5-8273-7020-8f9d-0bc4b368c8aa
+[agms] product exited with code 0
+### 2. account remove zai work
+03:26:50
+Removed zai account `work`.
+### 3. TUI WITH --account personal ([provider_accounts] zai = personal); in-app /resume of the qzero conversation
+03:26:51
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: ~/runs/…/fixture/workspace       │
+╰─────────────────────────────────────────────╯
+› reply with the single word qzero
+• qzero
+To continue this session, run corbanu resume 01a161a5-b7eb-7ec0-8403-53e7f62ead1b
+› Explain this codebase
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/probe-na05b-20261022T032245Z/fixture/workspace · Corbanu Terminal · TPS: -- tok/s
+03:27:06
+03:27:47
+╰─────────────────────────────────────────────╯
+› reply with the single word qzero
+• qzero
+To continue this session, run corbanu resume 01a161a5-b7eb-7ec0-8403-53e7f62ead1b
+› reply with the single word qone
+• qone
+› Explain this codebase
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/probe-na05b-20261022T032245Z/fixture/workspace · Corbanu Terminal · TPS: 2.6 tok/s
+│  Model provider:       Z.AI - https://api.z.ai/api/paas/v4 · account personal            │
+│  Session:              01a161a5-8273-7020-8f9d-0bc4b368c8aa                              │
+│  Account usage:        account            input  cached input  output  reasoning         │
+### end
+03:27:55
+probe done

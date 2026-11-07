@@ -1,0 +1,33 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace          │
+╰──────────────────────────────────────────────────────────╯
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+
+› Reply with the single word OK.
+
+
+• OK
+
+  OK
+
+
+  Request
+  Requested UTC day: 2026-10-21
+
+› Provider: qwen
+  Model: Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit
+  Billing: not declared
+  Counted neither as money spent nor as subscription work
+  Billing basis not declared for qwen. Next step: set model_providers.qwen.billing = "subscription", "pay_per_use" or "local" in config.toml.
+  Until then these requests are counted neither as money spent nor as subscription work.
+  Tokens: 12,746 tokens
+  —— Details ——
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

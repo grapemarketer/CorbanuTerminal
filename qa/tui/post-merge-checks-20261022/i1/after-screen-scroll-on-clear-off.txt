@@ -1,0 +1,12 @@
+
+
+› /
+
+  /model          choose what model and reasoning effort to use
+  /gpu            rent, inspect, or terminate GPU capacity
+  /ide            include current selection, open files, and other context from your IDE
+  /permissions    choose what Corbanu Terminal is allowed to do
+  /security       explore security profiles and protection readiness (read only)
+  /keymap         remap TUI shortcuts
+  /vim            toggle Vim mode for the composer
+  /experimental   toggle experimental features

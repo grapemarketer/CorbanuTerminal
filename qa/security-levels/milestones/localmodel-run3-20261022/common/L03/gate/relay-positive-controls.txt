@@ -1,0 +1,5 @@
+https://api.z.ai/api/paas/v4/models 200
+https://qwen.agms.test/v1/models 200
+{"conn": "1792651841908907000-49203", "event": "forwarded", "method": "POST", "model": "glm-5.3-flash", "n_messages": 4, "path": "/api/paas/v4/chat/completions", "request_bytes": 26874, "response_bytes": 3851, "role": "product", "seconds": 7.086, "status": "200", "stream": true, "target": "zai", "ti
+{"conn": "1792651849135319000-49207", "event": "forwarded", "method": "GET", "path": "/api/paas/v4/models", "request_bytes": 0, "response_bytes": 1503, "role": "product", "seconds": 0.357, "status": "200", "target": "zai", "time_ns": 1792651849496739000, "ts": "2026-10-22T06:50:49+0000"}
+{"conn": "1792651849507367000-49209", "event": "forwarded", "method": "GET", "path": "/v1/models", "request_bytes": 0, "response_bytes": 1047, "role": "product", "seconds": 0.01, "status": "200", "target": "qwen", "time_ns": 1792651849521215000, "ts": "2026-10-22T06:50:49+0000"}

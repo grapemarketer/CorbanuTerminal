@@ -1058,8 +1058,8 @@ async fn accounting_clock_behind_the_checkpoint_still_records_and_sends() -> any
     Ok(())
 }
 
-/// A clock more than the 90-day detail window behind the checkpoint (a clock
-/// that once ran far ahead, then was corrected) cannot be recorded at all:
+/// A clock at least 90 days behind the checkpoint (a clock that once ran far
+/// ahead, then was corrected) cannot be recorded at all:
 /// every attempt would already be past detail retention. It is a gap, never a
 /// stopped request.
 #[tokio::test]

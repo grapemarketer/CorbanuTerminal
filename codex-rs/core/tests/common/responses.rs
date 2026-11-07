@@ -1131,6 +1131,20 @@ pub async fn mount_sse_once_chat_completions(server: &MockServer, body: String) 
     response_mock
 }
 
+/// Mounts one Chat Completions response template (for example a delayed one).
+/// The request is captured when it arrives, before any delay elapses.
+pub async fn mount_response_once_chat_completions(
+    server: &MockServer,
+    response: ResponseTemplate,
+) -> ResponseMock {
+    let (mock, response_mock) = chat_completions_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
 /// Mounts one streamed body per Chat Completions request, in order.
 /// Panics if more requests arrive than bodies were provided.
 pub async fn mount_chat_completions_sequence(

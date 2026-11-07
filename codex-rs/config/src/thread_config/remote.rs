@@ -18,15 +18,6 @@ use super::ThreadConfigSource;
 use super::UserThreadConfig;
 use proto::thread_config_loader_client::ThreadConfigLoaderClient;
 
-// tonic's generated server trait uses async-trait 0.1.89, which adds
-// `#[must_use]` to methods whose return type (a boxed future) is must-use
-// anyway; clippy 1.99 reports that as double_must_use. async-trait 0.1.90+
-// drops the attribute but pulls in syn 3 (#1031). `allow`, not `expect`:
-// clippy before 1.99 does not flag this, so an expectation would fail there.
-#[allow(
-    clippy::double_must_use,
-    reason = "tonic-generated #[async_trait] server trait; fixed in async-trait 0.1.90+ (#1031)"
-)]
 #[path = "proto/codex.thread_config.v1.rs"]
 mod proto;
 

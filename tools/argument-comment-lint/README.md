@@ -73,6 +73,13 @@ cd tools/argument-comment-lint
 cargo test
 ```
 
+Building the Dylint 6.1.1 driver clones rust-clippy and checks out `master`,
+which rust-clippy renamed to `main` (#1479). `run.py`, `run-prebuilt-linter.py`
+and this directory's `.cargo/config.toml` add a Git fetch refspec that maps
+`main` to `master`; a bare `cargo dylint` run outside them needs the same
+`GIT_CONFIG_*` variables. Remove the workaround once the pinned dylint
+release no longer checks out `master`.
+
 Prebuilt packages for macOS arm64, Linux arm64, Linux x64, and Windows x64
 are published as GitHub prereleases tagged
 `argument-comment-lint-<nightly>-<short sha>`, together with a generated

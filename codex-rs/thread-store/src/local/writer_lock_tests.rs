@@ -154,9 +154,12 @@ const RELEASE_WAIT_MS: libc::c_int = 60_000;
 /// Runs in the forked child before exec: reports the fork, then waits for the
 /// release byte, without outliving the test process (#1252). The child closes
 /// its copy of the write end, so the read sees EOF once this process dies; on
-/// Linux the death of the forking thread also kills it; and if neither ends
-/// the wait (a child forked by a concurrent test may hold the write end too),
-/// it fails the spawn after `RELEASE_WAIT_MS`, which fails the test.
+/// Linux the death of the forking thread also kills it. Elsewhere nothing
+/// kills it, so once this process is gone (EOF, or `RELEASE_WAIT_MS` passed
+/// and the child was re-parented) it goes on to run its program and exit 0:
+/// failing the hook there would abort the child, since std cannot report the
+/// error to a dead parent. A timeout while this process lives fails the spawn,
+/// which fails the test.
 #[cfg(unix)]
 fn wait_for_release_in_child(
     release_tx_fd: std::os::fd::RawFd,
@@ -185,8 +188,6 @@ fn wait_for_release_in_child(
             return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
         }
     }
-    #[cfg(not(target_os = "linux"))]
-    let _ = parent;
     forked_tx.write_all(b"f")?;
     let mut poll_fd = libc::pollfd {
         fd: release_rx.as_raw_fd(),
@@ -196,8 +197,17 @@ fn wait_for_release_in_child(
     loop {
         // SAFETY: `poll_fd` is one valid, writable `pollfd`.
         match unsafe { libc::poll(&mut poll_fd, 1, RELEASE_WAIT_MS) } {
-            // std reports a hook error to the spawner by its OS error code.
-            0 => return Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT)),
+            0 => {
+                #[cfg(not(target_os = "linux"))]
+                {
+                    // SAFETY: no arguments.
+                    if unsafe { libc::getppid() } as u32 != parent {
+                        return Ok(());
+                    }
+                }
+                // std reports a hook error to the spawner by its OS error code.
+                return Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT));
+            }
             -1 => {
                 let err = std::io::Error::last_os_error();
                 if err.kind() != std::io::ErrorKind::Interrupted {
@@ -205,7 +215,15 @@ fn wait_for_release_in_child(
                 }
             }
             // Readable, or EOF if every write end is closed.
+            #[cfg(target_os = "linux")]
             _ => return release_rx.read_exact(&mut [0; 1]),
+            #[cfg(not(target_os = "linux"))]
+            _ => {
+                return match release_rx.read_exact(&mut [0; 1]) {
+                    Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => Ok(()),
+                    result => result,
+                };
+            }
         }
     }
 }
@@ -282,7 +300,7 @@ fn writer_lock_is_released_when_file_removal_fails() -> std::io::Result<()> {
 fn writer_lock_is_released_when_coordination_fails() -> std::io::Result<()> {
     let home = TempDir::new()?;
     let coordinator = Arc::new(WriterLockCoordinator::new(home.path()));
-    let owner = coordinator
+    let mut owner = coordinator
         .acquire(ThreadId::default())
         .expect("acquire writer lock");
     let path = owner.path.clone();
@@ -299,8 +317,12 @@ fn writer_lock_is_released_when_coordination_fails() -> std::io::Result<()> {
     fs::remove_file(&coordination_path)?;
     fs::create_dir(&coordination_path)?;
 
-    drop(owner);
+    owner.cleanup();
 
+    assert!(
+        owner.file.is_none(),
+        "failed coordination still takes the owned writer file"
+    );
     assert!(
         coordination_path.is_dir(),
         "coordination failure is preserved"

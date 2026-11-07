@@ -19,6 +19,7 @@ pub use auth::ResolvedProviderAuth;
 pub use auth::auth_provider_from_auth;
 pub use auth::auth_provider_from_auth_manager;
 pub use auth::named_sign_in_account;
+pub use auth::named_sign_in_refusal;
 pub use auth::provider_api_key;
 pub use auth::session_sign_in;
 pub use auth::unauthenticated_auth_provider;

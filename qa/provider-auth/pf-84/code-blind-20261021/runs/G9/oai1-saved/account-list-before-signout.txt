@@ -1,0 +1,1 @@
+No named accounts. Every provider uses its default account.

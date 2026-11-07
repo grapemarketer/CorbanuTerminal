@@ -220,10 +220,13 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
     .await
     .expect("cancelled delegate spawn should not hang");
 
-    assert!(matches!(
-        result,
-        Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted)
-    ));
+    match result {
+        Err(err) => assert!(
+            matches!(err.details(), CodexErrorDetails::TurnAborted),
+            "pre-cancelled delegate spawn returned a different error: {err:?}"
+        ),
+        Ok(_) => panic!("pre-cancelled delegate spawn unexpectedly started a session"),
+    }
 }
 
 #[tokio::test]

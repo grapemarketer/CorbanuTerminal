@@ -50,9 +50,36 @@ fn only_the_users_resume_or_fork_is_a_reopen() {
     ];
     for (history, source, expected) in cases {
         assert_eq!(
-            is_reopen(&history, &source),
+            is_reopen(&history, &source, /*reopened_by_prompt_edit*/ false),
             expected,
             "{history:?} from {source:?}"
+        );
+    }
+}
+
+/// #1038: editing the first message continues in a conversation with no
+/// history. The client marks it, and it is a reopen like any other edit; the
+/// mark makes nothing else a reopen.
+#[test]
+fn a_first_message_edit_is_a_reopen() {
+    let spawned = SessionSource::SubAgent(SubAgentSource::Review);
+    let cases = [
+        (InitialHistory::New, SessionSource::Cli, true, true),
+        (InitialHistory::New, SessionSource::Cli, false, false),
+        (InitialHistory::Cleared, SessionSource::Cli, true, false),
+        (InitialHistory::New, spawned, true, false),
+        (
+            InitialHistory::Forked(Vec::new()),
+            SessionSource::Cli,
+            true,
+            true,
+        ),
+    ];
+    for (history, source, edited, expected) in cases {
+        assert_eq!(
+            is_reopen(&history, &source, edited),
+            expected,
+            "{history:?} from {source:?}, edited={edited}"
         );
     }
 }

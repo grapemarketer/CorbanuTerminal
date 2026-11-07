@@ -1,0 +1,9 @@
+---
+source: tui/src/security/home_link_tests.rs
+expression: rendered
+---
+⚠ Security level Moderate: your Corbanu home is reached through a link (/home/
+  user/.corbanu) in a folder agent commands can write, so a command could
+  replace it and the next start would use another folder without your security
+  level. Start Corbanu Terminal with CORBANU_HOME=/home/user/dotfiles/corbanu to
+  close this.

@@ -2,9 +2,13 @@
 source: tui/src/app/tests.rs
 expression: normalized
 ---
-⚠ Corbanu Terminal is using the non-admin Windows sandbox. In this mode,
-  sandboxed commands can delete or move files outside your workspace in folders
-  you own, such as most of your user profile. Switch to the default sandbox
-  (one-time Administrator setup) by running /setup-default-sandbox, or set
-  `sandbox = "elevated"` under `[windows]` in config.toml. Learn more:
+⚠ Corbanu Terminal is using the non-admin Windows sandbox. It blocks sandboxed
+  commands from creating, changing, deleting or moving files outside the folders
+  they may write to, except in places marked low-integrity (such as
+  AppData\LocalLow) and in folders another non-admin sandbox session is using.
+  It does not stop commands from reading your files, its network block is only
+  proxy and tool settings that a program can ignore, and a few ways of starting
+  programs get partly outside it. Switch to the default sandbox (one-time
+  Administrator setup) by running /setup-default-sandbox, or set `sandbox =
+  "elevated"` under `[windows]` in config.toml. Learn more:
   https://github.com/CorbanuCore/CorbanuTerminal/blob/main/docs/sandbox.md#windows-non-admin-sandbox

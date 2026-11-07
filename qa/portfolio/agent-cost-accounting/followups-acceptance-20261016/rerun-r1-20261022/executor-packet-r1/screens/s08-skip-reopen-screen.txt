@@ -1,0 +1,10 @@
+╭───────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                     │
+│                                                   │
+│ model:     gpt-6-luna   /model to change          │
+│ directory: /Users/tester/run/workspace │
+╰───────────────────────────────────────────────────╯
+› Reply with the single word OK.
+• OK
+› Write tests for @filename
+  GPT-6 Luna default · /Users/tester/run/workspace · Corbanu Terminal · TPS: -- tok/s

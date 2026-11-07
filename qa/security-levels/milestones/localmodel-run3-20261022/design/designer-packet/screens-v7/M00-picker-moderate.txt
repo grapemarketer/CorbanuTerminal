@@ -1,0 +1,18 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Permissive
+
+  Permissive  (active)
+> Moderate
+  Aggressive
+
+Protection around untrusted content and secrets while normal work continues: agent commands stay in your sandbox, credential and Corbanu files are
+protected, and protected actions after untrusted content need your fresh approval. Your own approval, sandbox and network settings stay.
+
+↑/↓ move · enter choose · esc close · i inspect

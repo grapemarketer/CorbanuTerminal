@@ -120,6 +120,52 @@ fn server_opts(
 }
 
 #[tokio::test]
+async fn issue1290_cancelled_persistence_guard_leaves_authorized_tokens_unsaved() {
+    let home = tempdir().expect("isolated sign-in home");
+    let server = MockServer::start().await;
+    mock_usercode_success(&server).await;
+    mock_poll_token_single(
+        &server,
+        "/api/accounts/deviceauth/token",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_code": "issue1290-code",
+            "code_challenge": "issue1290-challenge",
+            "code_verifier": "issue1290-verifier"
+        })),
+    )
+    .await;
+    mock_oauth_token_single(
+        &server,
+        make_jwt(json!({
+            "https://api.openai.com/auth": { "chatgpt_account_id": WORKSPACE_ID_ALLOWED }
+        })),
+    )
+    .await;
+    let opts = server_opts(&home, server.uri(), AuthCredentialsStoreMode::File);
+    let code = codex_login::request_device_code(&opts)
+        .await
+        .expect("device code");
+    let guard_reached = std::sync::atomic::AtomicBool::new(false);
+    let error = codex_login::complete_device_code_login_with_persistence_guard(opts, code, || {
+        guard_reached.store(true, Ordering::SeqCst);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "cancelled before save",
+        ))
+    })
+    .await
+    .expect_err("cancellation won before persistence");
+    assert!(guard_reached.load(Ordering::SeqCst));
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        std::fs::read_dir(home.path())
+            .expect("home contents")
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

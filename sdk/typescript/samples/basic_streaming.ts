@@ -55,9 +55,13 @@ const handleEvent = (event: ThreadEvent): void => {
       handleItemUpdated(event.item);
       break;
     case "turn.completed":
-      console.log(
-        `Used ${event.usage.input_tokens} input tokens, ${event.usage.cached_input_tokens} cached input tokens, ${event.usage.cache_write_input_tokens} cache write input tokens, ${event.usage.output_tokens} output tokens, ${event.usage.reasoning_output_tokens} reasoning output tokens.`,
-      );
+      if (event.usage) {
+        console.log(
+          `Used ${event.usage.input_tokens} input tokens, ${event.usage.cached_input_tokens} cached input tokens, ${event.usage.cache_write_input_tokens} cache write input tokens, ${event.usage.output_tokens} output tokens, ${event.usage.reasoning_output_tokens} reasoning output tokens.`,
+        );
+      } else {
+        console.log("Usage was not reported for this turn.");
+      }
       break;
     case "turn.failed":
       console.error(`Turn failed: ${event.error.message}`);

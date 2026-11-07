@@ -53,6 +53,7 @@ pub fn resolve_windows_deny_read_targets(
         let exempts_templates = credential_glob_exempts_templates(&pattern, &rule_roots);
         let glob_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: pattern.clone(),
             },
             access: FileSystemAccessMode::Deny,
@@ -225,7 +226,10 @@ mod tests {
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::GlobPattern { pattern },
+            path: FileSystemPath::GlobPattern {
+                pattern,
+                scan: None,
+            },
             access: FileSystemAccessMode::Deny,
             missing_path_behavior: None,
         }

@@ -1,0 +1,17 @@
+Restarting Corbanu Terminal to apply the saved security level…
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: off
+
+Turn the kill switch on?
+Everything "Revoke all" ends, and until you turn it off here: no grant can be issued, protected actions after untrusted content are refused, the
+browser and memory writes are refused, and the credential broker stays closed.
+Saved in security_state.json: it holds after a restart. The level stays Aggressive.
+
+enter confirm · esc cancel, nothing changes

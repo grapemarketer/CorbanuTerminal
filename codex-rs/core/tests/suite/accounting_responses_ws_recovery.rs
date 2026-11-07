@@ -724,6 +724,54 @@ async fn metadata_terminal_matrix(
     Ok(())
 }
 
+/// #1038: editing the first message continues in a conversation with no
+/// history. Marked by the client, its warm-up is a reopen warm-up all the
+/// same: recorded under the reopen label, announced, and skipped with
+/// `skip_reopen_warmup`, as when a later message is edited.
+#[tokio::test]
+async fn accounting_first_message_edit_warmup_is_a_reopen_warmup() -> anyhow::Result<()> {
+    const NOTICE: &str = "Reopening or forking this conversation sent a warm-up request";
+    for skip in [false, true] {
+        let server = MockServer::start().await;
+        let mut gate = Gate::start().await?;
+        let test = builder(gate.endpoint.clone(), enabled(&gate.endpoint))
+            .with_config(move |config| {
+                config.skip_reopen_warmup = skip;
+                config.reopened_by_prompt_edit = true;
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        // The first turn waits for any warm-up, so by its end a warm-up was
+        // either sent and announced, or never sent.
+        submit(&test).await?;
+        gate.next().await?.complete().await?;
+        let events = terminal(&test).await?;
+        let announced = events.iter().any(
+            |event| matches!(event, EventMsg::Warning(warning) if warning.message.contains(NOTICE)),
+        );
+        let db = test.codex.state_db().unwrap();
+        let prewarms: Vec<String> = attempts(&db)
+            .await?
+            .into_iter()
+            .map(|attempt| attempt.turn)
+            .filter(|turn| turn.starts_with("prewarm:"))
+            .collect();
+        let warmups = gate.counts.lock().unwrap().1;
+        if skip {
+            assert!(!announced, "a skipped warm-up is not announced");
+            assert!(prewarms.is_empty(), "{prewarms:?}");
+            assert_eq!(warmups, 0, "no warm-up sent");
+        } else {
+            assert!(announced, "the warm-up is announced: {events:?}");
+            assert_eq!(prewarms.len(), 1, "{prewarms:?}");
+            assert!(prewarms[0].starts_with("prewarm:reopen:"), "{prewarms:?}");
+            assert_eq!(warmups, 1);
+        }
+        stop(&test).await;
+    }
+    Ok(())
+}
+
 /// #403 (Travis, 2026-10-14, option C): reopening a conversation sends its
 /// warm-up as a reopen warm-up, recorded under its own label and announced
 /// once sent. With `skip_reopen_warmup` set, a reopen sends no warm-up at all,

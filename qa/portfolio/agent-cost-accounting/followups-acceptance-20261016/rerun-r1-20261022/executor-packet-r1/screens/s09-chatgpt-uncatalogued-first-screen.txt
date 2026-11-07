@@ -1,0 +1,42 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• OpenAI · gpt-mock-unlisted — Covered by your subscription (not billed per request). 1 request, 107 tokens. Same work at API prices: not available.
+Other conversations on this day, not included above: 1 request in 1 conversation.
+• OpenAI · gpt-5.4 — Covered by your subscription (not billed per request). 1 request, 107 tokens. Same work at API prices: at least $0.000105.
+Other conversations' same work at API prices: at least $0.000105.
+To see those requests, open that conversation with /resume and run /cost there.
+Paid usage beyond a plan (usage credits, Extra Usage or extra credits you bought) isn't visible here and is never counted as spent; check your provider's
+usage page.
+Subscription work is not billed per request; any figure here is what it would cost at API prices.
+Select a provider below to see its requests.
+—— Details ——
+No recorded attempt here was billed per token.
+Subscription capacity: 1 of 1 attempts, not billed per token
+Plan consumption: unavailable — no plan rate or token total for 1 of 1 plan attempts
+Same tokens at API rates: unavailable — the catalogue states no API price for 1 of 1 plan attempts
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T02:40:28.631Z; ledger current to: 2026-10-15T02:40:13.938Z (14693 ms behind)
+Retention: request detail kept since 2026-07-17T02:40:28.631Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: none — subscription work is not billed per token
+Input: 100
+Noncached input (derived for inclusive input): not reported (1 attempt)
+Cache read: 0
+Cache write: not reported (1 attempt)
+Output: 7
+Reasoning (subset, not separately billed): 0
+Total (not separately billed): 107
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ OpenAI · gpt-mock-unlisted — covered by subscription (1 request)
+→ Request 1 · OpenAI · gpt-mock-unlisted · covered by subscription
+→ Root's own attempts (1 attempt)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+⚠ secret_output_gate: without secretless_agent_launch, agent commands can read the vault themselves (for example `corbanu vault auth-helper`); values
+  revealed outside Core are not gated
+
+
+› Run exactly this command: echo remembered >> ../outside-notes.txt
+
+
+✔ You approved Corbanu to always run commands that start with echo remembered >> ../outside-notes.txt
+
+• Ran echo remembered >> ../outside-notes.txt
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Done.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Summarize recent commits
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Ter…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

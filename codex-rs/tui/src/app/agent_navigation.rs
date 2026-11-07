@@ -49,6 +49,8 @@ pub(crate) struct AgentNavigationState {
     stopped_threads: HashSet<ThreadId>,
     /// Spawned child threads whose instructions are owned by their parent agent.
     parent_owned_threads: HashSet<ThreadId>,
+    /// #867: threads whose turn the security kill switch stopped, until their next turn starts.
+    kill_switch_stopped: HashSet<ThreadId>,
     /// Coalesces root refreshes while rejecting replies from a previous session.
     picker_refresh: Option<(ThreadId, Uuid)>,
 }
@@ -209,7 +211,18 @@ impl AgentNavigationState {
             return;
         }
         self.stopped_threads.remove(&thread_id);
+        self.kill_switch_stopped.remove(&thread_id);
         self.set_running(thread_id, /*is_running*/ true);
+    }
+
+    /// #867: the security kill switch stopped this thread's turn; shown in the picker until the
+    /// thread's next turn starts.
+    pub(crate) fn mark_kill_switch_stopped(&mut self, thread_id: ThreadId) {
+        self.kill_switch_stopped.insert(thread_id);
+    }
+
+    pub(crate) fn is_kill_switch_stopped(&self, thread_id: ThreadId) -> bool {
+        self.kill_switch_stopped.contains(&thread_id)
     }
 
     pub(crate) fn mark_stopped(&mut self, thread_id: ThreadId) {
@@ -298,6 +311,7 @@ impl AgentNavigationState {
         self.order.clear();
         self.stopped_threads.clear();
         self.parent_owned_threads.clear();
+        self.kill_switch_stopped.clear();
         self.picker_refresh = None;
     }
 
@@ -311,6 +325,7 @@ impl AgentNavigationState {
         self.order.retain(|candidate| *candidate != thread_id);
         self.stopped_threads.remove(&thread_id);
         self.parent_owned_threads.remove(&thread_id);
+        self.kill_switch_stopped.remove(&thread_id);
     }
 
     /// Returns whether there is at least one tracked thread other than the primary one.

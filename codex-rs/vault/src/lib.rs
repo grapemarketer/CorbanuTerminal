@@ -336,6 +336,14 @@ pub struct Vault {
     uses_default_keyring: bool,
 }
 
+/// See [`Vault::storage_marker`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultStorageMarker {
+    len: u64,
+    modified: std::time::SystemTime,
+    inode: u64,
+}
+
 /// Non-secret description of where the encrypted vault passphrase is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultKeyStorage {
@@ -379,6 +387,25 @@ impl Vault {
             codex_home,
             uses_default_keyring: false,
         }
+    }
+
+    /// D171 (#1286): a cheap change marker of the encrypted store (size,
+    /// modification time and, on Unix, inode of `secrets/local.age`), read
+    /// without the vault lock or the passphrase. Every write replaces the
+    /// file, so an unchanged marker means no process changed the vault since
+    /// it was taken. `None` when the store is missing or its metadata cannot
+    /// be read.
+    pub fn storage_marker(&self) -> Option<VaultStorageMarker> {
+        let metadata = std::fs::metadata(self.codex_home.join("secrets").join("local.age")).ok()?;
+        #[cfg(unix)]
+        let inode = std::os::unix::fs::MetadataExt::ino(&metadata);
+        #[cfg(not(unix))]
+        let inode = 0;
+        Some(VaultStorageMarker {
+            len: metadata.len(),
+            modified: metadata.modified().ok()?,
+            inode,
+        })
     }
 
     /// Report the active passphrase storage mechanism without opening or

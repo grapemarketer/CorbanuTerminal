@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+Unavailable — your system clock is behind the newest recorded usage (less than a minute). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.
+Unavailable — your system clock is behind the newest recorded usage (about 1 minute). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.
+Unavailable — your system clock is behind the newest recorded usage (about 58 minutes). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.
+Unavailable — your system clock is behind the newest recorded usage (about 3 hours). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.
+Unavailable — your system clock is behind the newest recorded usage (about 47 hours). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.
+Unavailable — your system clock is behind the newest recorded usage (about 6 days). The accounting data is not damaged and nothing was changed. Next step: check your system date and time, then select Refresh; totals show again once the clock passes the newest record.

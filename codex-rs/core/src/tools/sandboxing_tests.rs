@@ -144,10 +144,54 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
     );
 }
 
+/// #807: on macOS the keychain-services rule of Aggressive (#758) keeps an
+/// escalated or allow-listed run in the sandbox by itself, although it
+/// denies no file read; elsewhere no sandbox takes it.
+#[test]
+fn issue_807_keychain_rule_alone_keeps_the_run_sandboxed_on_macos() {
+    let full_write = FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Write,
+    );
+    let without = FileSystemSandboxPolicy::restricted(vec![full_write.clone()]);
+    let with = FileSystemSandboxPolicy::restricted(vec![
+        full_write,
+        FileSystemSandboxEntry::deny_keychain_services(),
+    ]);
+    assert!(!with.has_denied_read_restrictions());
+    assert!(unsandboxed_execution_allowed(&without));
+    let macos = cfg!(target_os = "macos");
+    assert_eq!(unsandboxed_execution_allowed(&with), !macos);
+    let skip = ExecApprovalRequirement::Skip {
+        bypass_sandbox: true,
+        proposed_execpolicy_amendment: None,
+    };
+    assert_eq!(
+        (
+            sandbox_override_for_first_attempt(SandboxPermissions::RequireEscalated, &skip, &with),
+            sandbox_permissions_preserving_denied_reads(
+                SandboxPermissions::RequireEscalated,
+                &with
+            ),
+        ),
+        if macos {
+            (SandboxOverride::NoOverride, SandboxPermissions::UseDefault)
+        } else {
+            (
+                SandboxOverride::BypassSandboxFirstAttempt,
+                SandboxPermissions::RequireEscalated,
+            )
+        }
+    );
+}
+
 #[test]
 fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
+            scan: None,
             pattern: "**/*.env".to_string(),
         },
         access: FileSystemAccessMode::Deny,

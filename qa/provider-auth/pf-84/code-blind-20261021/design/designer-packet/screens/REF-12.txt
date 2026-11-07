@@ -1,0 +1,50 @@
+  Welcome to Corbanu Terminal, your crypto-native AI terminal
+
+  Choose a provider account for Corbanu Terminal
+
+> 1. Provider: OpenAI Codex Account
+     Sign in with device code
+
+  2. Provider: OpenAI API Key
+     Use the OpenAI auth store
+
+  3. Provider: Anthropic Claude Account
+     Use Claude subscription access; long-lived token recommended or Claude Code login
+
+  4. Corbanu API
+     Queue protected wallet and API-key setup; it runs after Done
+
+  5. Provider: Anthropic API Key
+     Use a key stored as ANTHROPIC_API_KEY
+
+  6. Provider: Ambient API Key
+     Use a key stored as AMBIENT_API_KEY
+
+  7. Provider: Kimi Code API Key
+     Use a key stored as KIMI_API_KEY
+
+  8. Provider: Z.AI API Key
+     Use a key stored as ZAI_API_KEY
+
+  9. Provider: DeepSeek API Key
+     Use a key stored as DEEPSEEK_API_KEY
+
+  10. Provider: OpenRouter API Key
+     Use a key stored as OPENROUTER_API_KEY
+
+  11. Provider: Meta API Key
+     Use a key stored as MODEL_API_KEY
+
+  12. Provider: Baseten API Key
+     Use a key stored as BASETEN_API_KEY
+
+  13. Provider: Vercel API Key
+     Use a key stored as AI_GATEWAY_API_KEY
+
+  14. Provider: Amazon Bedrock
+     Use this provider without an enrollment step
+
+  15. Provider: Ollama
+     Configured · unavailable
+
+  Use ↑/↓ to choose · Press enter to continue

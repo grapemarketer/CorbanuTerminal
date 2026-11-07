@@ -1,0 +1,29 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+
+› Reply with exactly: pong
+
+
+• pong
+
+
+  Spawn Status
+  Nazgul -> Troll -> Orc hierarchy.
+
+  Search spawned work
+  Nazgul
+› Nazgul: Corbanu Terminal - Main  Root role binding; idle; 01a1621d-0c16-78b1-92ca-017fd8fe6633; same user pane listed above.
+  Trolls
+  • Burzum [troll] (current)       completed; current task: Reply with exactly: pong; latest result: pong
+    Send task to Burzum [troll]    Start a turn in this pane.
+    No Orcs for this Troll yet
+
+  Press enter to confirm or esc to go back

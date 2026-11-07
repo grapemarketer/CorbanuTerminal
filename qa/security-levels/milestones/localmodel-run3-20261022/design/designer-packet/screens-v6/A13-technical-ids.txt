@@ -1,0 +1,33 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace          │
+╰──────────────────────────────────────────────────────────╯
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+
+› Reply with the single word OK.
+
+
+• OK
+
+  OK
+
+
+  Attempt, components and original price
+  Requested UTC day: 2026-10-21
+
+  —— Details ——
+  Billed cost: qwen doesn't report its charges, so any cost here is an estimate — check qwen's bill.
+  Request: cad6d570-d405-4c53-9a71-2c73e0f29745
+  Attempt: a589859e-3631-470a-97db-0805d484f418
+  Thread: 01a15c17-254f-7332-a167-57d25699c8ca
+  Turn: 01a15c17-6b9b-7c61-84a3-31ce5f4adb06
+  Provider: qwen
+› Account: default
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

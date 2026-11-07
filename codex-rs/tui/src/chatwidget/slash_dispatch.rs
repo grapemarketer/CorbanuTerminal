@@ -414,6 +414,10 @@ impl ChatWidget {
                     ))
                     .with_before_restart(|| crate::security::current::before_restart(&self.config))
                     .with_windows_sandbox_steps(windows_sandbox_steps)
+                    .with_aggressive_home_link(crate::security::home_link::aggressive_blocker(
+                        &self.config.codex_home,
+                        self.config.cwd.as_path(),
+                    ))
                     .with_inspector(|| {
                         crate::security::inspector::InspectorInput::from_config(
                             &self.config,

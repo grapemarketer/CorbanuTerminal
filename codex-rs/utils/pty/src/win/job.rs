@@ -17,6 +17,9 @@ use winapi::um::winnt::JobObjectExtendedLimitInformation;
 #[derive(Debug)]
 pub struct JobObject {
     handle: OwnedHandle,
+    // `JOB_OBJECT_LIMIT_BREAKAWAY_OK` or 0: whether members may start
+    // children outside the job with `CREATE_BREAKAWAY_FROM_JOB`.
+    breakaway_flags: u32,
     // A mutex makes the state check, Job Object API call, and state update
     // atomic with respect to concurrent preserve and terminate requests.
     preserve_descendants: Mutex<bool>,
@@ -24,7 +27,20 @@ pub struct JobObject {
 
 impl JobObject {
     /// Creates a Job Object configured to terminate all members when its last handle closes.
+    /// Members may start children outside the job with `CREATE_BREAKAWAY_FROM_JOB`.
     pub fn create() -> io::Result<Self> {
+        Self::create_with_breakaway_flags(JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+    }
+
+    /// Like [`Self::create`], but members can't break away: a
+    /// `CREATE_BREAKAWAY_FROM_JOB` child fails with `ERROR_ACCESS_DENIED`, so
+    /// every descendant stays in the job, before and after
+    /// [`Self::preserve_descendants`] (#733).
+    pub fn create_without_breakaway() -> io::Result<Self> {
+        Self::create_with_breakaway_flags(/*breakaway_flags*/ 0)
+    }
+
+    fn create_with_breakaway_flags(breakaway_flags: u32) -> io::Result<Self> {
         let handle = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
@@ -33,11 +49,12 @@ impl JobObject {
 
         Self::set_limit_flags(
             &handle,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | breakaway_flags,
         )?;
 
         Ok(Self {
             handle,
+            breakaway_flags,
             preserve_descendants: Mutex::new(false),
         })
     }
@@ -89,7 +106,7 @@ impl JobObject {
             return Ok(());
         }
 
-        Self::set_limit_flags(&self.handle, JOB_OBJECT_LIMIT_BREAKAWAY_OK)?;
+        Self::set_limit_flags(&self.handle, self.breakaway_flags)?;
         *preserve_descendants = true;
         Ok(())
     }
@@ -120,3 +137,7 @@ impl AsRawHandle for JobObject {
         self.handle.as_raw_handle()
     }
 }
+
+#[cfg(test)]
+#[path = "job_tests.rs"]
+mod tests;

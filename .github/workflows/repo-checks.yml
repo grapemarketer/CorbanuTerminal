@@ -6,9 +6,14 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Cold npm staging downloads six native artifacts (~4 GiB); allow transfer
+    # headroom on runs that stage the full package (main pushes and PRs that
+    # touch packaging inputs, see "Detect packaging changes" below).
+    timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      # Version written into the staged npm packages (both staging steps).
+      CODEX_VERSION: 0.149.0-alpha.1
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -41,20 +46,74 @@ jobs:
         run: python3 -m unittest discover -s scripts/install -p 'test_*.py'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Full staging downloads ~4 GiB of native artifacts, so PRs run it only
+      # when they change a packaging input (#1420, idea by @citadelculture in
+      # #1382). Every other event (main pushes, manual runs) always stages.
+      # The job still runs and succeeds when the steps are skipped, so `CI
+      # required` keeps seeing a real result for repo-checks. The diff is
+      # two-dot (base tip vs. PR head), a superset of the PR's own changes.
+      # Any detection failure falls back to full staging.
+      - name: Detect packaging changes
+        id: packaging
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+            echo "$EVENT_NAME run: full npm staging."
+            exit 0
+          fi
+          if ! git fetch --no-tags --depth=1 origin "$BASE_SHA" \
+            || ! changed="$(git -c core.quotePath=false diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")"; then
+            echo "::warning::Could not diff $BASE_SHA..$HEAD_SHA; running full npm staging."
+            echo "full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          full=false
+          while IFS= read -r f; do
+            case "$f" in
+              codex-cli/* | scripts/stage_npm_packages.py \
+                | package.json | pnpm-lock.yaml | pnpm-workspace.yaml | .npmrc \
+                | .github/workflows/repo-checks.yml | .github/workflows/blocking-ci.yml \
+                | .github/actions/*)
+                echo "Packaging input changed: $f"
+                full=true
+                ;;
+            esac
+          done <<< "$changed"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "Full npm staging: $full"
+
+      # Without full staging, still build and pack the root npm package (no
+      # native payload) so changes to its bundled README.md, mkdocs.yml and
+      # docs/ are checked on every PR.
+      - name: Pack root npm package (no native artifacts)
+        if: steps.packaging.outputs.full != 'true'
+        run: |
+          set -euo pipefail
+          python3 ./codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --version "$CODEX_VERSION" \
+            --pack-output "${RUNNER_TEMP}/codex-npm-root.tgz"
+
       - name: Stage npm package
         id: stage_npm_package
+        if: steps.packaging.outputs.full == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -63,7 +122,6 @@ jobs:
           # cross-platform native payload required by the npm package layout.
           # Passing the workflow URL directly avoids relying on old rust-v*
           # branches remaining discoverable via `gh run list --branch ...`.
-          CODEX_VERSION=0.149.0-alpha.1
           WORKFLOW_URL="https://github.com/openai/codex/actions/runs/32199727293"
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
@@ -75,6 +133,7 @@ jobs:
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
+        if: steps.packaging.outputs.full == 'true'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: codex-npm-staging

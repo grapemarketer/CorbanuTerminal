@@ -1,0 +1,8 @@
+=== fresh
+112 fresh/config.toml
+0 fresh/secrets/.vault.lock
+e2cb613e14aedd9b5373af634d07a3989abbdb9686249223bb49a210f3dae1f8  fresh/config.toml
+=== zaione
+264 zaione/config.toml
+0 zaione/secrets/.vault.lock
+496a5747fe99b4a49e6174c332efa0ee0efbf4a6b0de169a306abc337f18df3b  zaione/config.toml

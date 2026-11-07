@@ -1,0 +1,97 @@
+#!/bin/bash
+# Root-owned launcher, run by the coordinator as: sudo -u LANE -H /opt/agms/bin/agms-launch MODE RUN_ID [GROUP]
+# sudo's env_reset gives a clean environment; everything the run sees is set here.
+set -euo pipefail
+umask 077
+mode="$1"; run_id="$2"; group="${3:-}"; exec_model="${4:-glm-5.3-flash}"
+[[ "$run_id" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "bad run id" >&2; exit 64; }
+export AGMS_RUN="$HOME/runs/$run_id"
+export AGMS_PROXY=http://127.0.0.1:18443
+export HTTPS_PROXY="$AGMS_PROXY" CODEX_CA_CERTIFICATE=/opt/agms/etc/mediation-ca.pem
+export ZAI_API_KEY=agms-synthetic-placeholder-not-a-credential CORBANU_TEST_NO_NATIVE_KEYRING=1
+export PATH=/opt/agms/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export TMPDIR="$AGMS_RUN/tmp/" LANG=en_US.UTF-8 SHELL=/bin/bash TERM=screen-256color
+mkdir -p "$AGMS_RUN"/{evidence,tmp,work,product-home,executor-home,product-logs,fixture}
+# Synthetic fixture: a small git project (the user's task data) plus files outside it.
+if [ ! -d "$AGMS_RUN/fixture/workspace" ]; then
+  /usr/bin/tar -xf /opt/agms/etc/fixture.tar -C "$AGMS_RUN/fixture"
+fi
+# Product profile: the campaign's neutral settings only (no feature flags for the accounting under test).
+if [ ! -f "$AGMS_RUN/product-home/config.toml" ]; then
+  cp /opt/agms/etc/product-config.toml "$AGMS_RUN/product-home/config.toml"
+  chmod 600 "$AGMS_RUN/product-home/config.toml"
+  # The test project is the person's own project: trusted up front, so no trust prompt interrupts the cases.
+  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$(cd "$AGMS_RUN/fixture/workspace" && pwd -P)" >> "$AGMS_RUN/product-home/config.toml"
+fi
+cd "$AGMS_RUN/work"
+TM=(/opt/agms/bin/tmux -f /opt/agms/etc/tmux.conf -S "$AGMS_RUN/tmp/probe-tmux.sock")
+case "$mode" in
+  probe)
+    /usr/bin/python3 /opt/agms/bin/agms-probe all > "$AGMS_RUN/evidence/preflight-launcher.json" || true
+    # Same probes from a process whose parent is a tmux server (the product's position), plus PTY input.
+    "${TM[@]}" new-session -d -s probe -x 120 -y 30 \
+      "/usr/bin/python3 /opt/agms/bin/agms-probe negatives > '$AGMS_RUN/evidence/preflight-tmux-child.json'; exec /bin/cat"
+    for _ in $(seq 1 240); do
+      grep -q '"ok"' "$AGMS_RUN/evidence/preflight-tmux-child.json" 2>/dev/null && break; sleep 0.5
+    done
+    sleep 1
+    "${TM[@]}" send-keys -t probe -l "agms-pty-input-control"
+    "${TM[@]}" send-keys -t probe Enter
+    sleep 1
+    "${TM[@]}" capture-pane -p -t probe > "$AGMS_RUN/evidence/preflight-pty-control.txt"
+    "${TM[@]}" kill-server || true
+    /usr/bin/python3 - "$AGMS_RUN/evidence" <<'PY'
+import json, sys, os
+d = sys.argv[1]
+docs = {}
+for name in ("preflight-launcher.json", "preflight-tmux-child.json"):
+    try:
+        docs[name] = json.load(open(os.path.join(d, name)))
+    except Exception as exc:
+        docs[name] = {"ok": False, "error": repr(exc)}
+pty = open(os.path.join(d, "preflight-pty-control.txt")).read()
+pty_ok = pty.count("agms-pty-input-control") >= 2
+summary = {"launcher_ok": docs["preflight-launcher.json"].get("ok"),
+           "tmux_child_ok": docs["preflight-tmux-child.json"].get("ok"),
+           "pty_input_echoed": pty_ok,
+           "failed": [r for n in docs for r in docs[n].get("probes", []) if not r.get("ok")],
+           "probe_count": len(docs["preflight-launcher.json"].get("probes", [])) +
+                          len(docs["preflight-tmux-child.json"].get("probes", []))}
+summary["ok"] = bool(summary["launcher_ok"] and summary["tmux_child_ok"] and pty_ok)
+json.dump(summary, open(os.path.join(d, "preflight-summary.json"), "w"), indent=1)
+print(json.dumps(summary))
+PY
+    ;;
+  smoke)
+    export CORBANU_HOME="$AGMS_RUN/executor-home" CODEX_HOME="$AGMS_RUN/executor-home"
+    exec /opt/agms/pkg/bin/corbanu exec --json --skip-git-repo-check --ephemeral \
+      -m "${group:-glm-5.3-flash}" -c 'model_provider="zai"' -c 'cli_auth_credentials_store="file"' \
+      -C "$AGMS_RUN/work" "Reply with exactly AGMS-SMOKE-OK and nothing else."
+    ;;
+  tui)
+    # Coordinator-driven product session (packet screenshots only; never used for a case).
+    shift 2
+    exec /opt/agms/bin/agms-tui "$@"
+    ;;
+  executor)
+    [[ "$group" =~ ^[A-Za-z0-9-]+$ ]] && [ -f "/opt/agms/packet/prompts/$group.md" ] || { echo "bad group" >&2; exit 64; }
+    case "$exec_model" in glm-5.3-flash|glm-5.2) ;; *) echo "bad executor model" >&2; exit 64;; esac
+    export CORBANU_HOME="$AGMS_RUN/executor-home" CODEX_HOME="$AGMS_RUN/executor-home"
+    prompt="$(cat "/opt/agms/packet/prompts/$group.md")"
+    # Hard wall-clock budget; SIGALRM terminates the executor.
+    exec /usr/bin/perl -e 'alarm shift; exec @ARGV or die' "${AGMS_BUDGET_SECONDS:-5400}" \
+      /opt/agms/pkg/bin/corbanu exec --json --skip-git-repo-check \
+      --dangerously-bypass-approvals-and-sandbox \
+      -m "$exec_model" -c 'model_provider="zai"' -c 'cli_auth_credentials_store="file"' \
+      -C "$AGMS_RUN/work" "$prompt"
+    ;;
+  cleanup)
+    /opt/agms/bin/tmux -S "$AGMS_RUN/tmux.sock" kill-server 2>/dev/null || true
+    pkill -u "$(id -u)" -f /opt/agms/pkg/ || true
+    ;;
+  collect)
+    cd "$AGMS_RUN"
+    exec /usr/bin/tar -cf - evidence fixture product-logs product-home work 2>/dev/null
+    ;;
+  *) echo "unknown mode" >&2; exit 64;;
+esac

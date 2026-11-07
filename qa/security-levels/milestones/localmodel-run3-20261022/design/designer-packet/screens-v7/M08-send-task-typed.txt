@@ -1,0 +1,15 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+• Spawned Corbanu Terminal Troll pane Burzum. Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit; no task was started.
+
+▌ Send Task to Burzum [troll]
+▌ Task
+▌
+▌ Reply with exactly: pong
+
+Press enter to confirm or esc to go back

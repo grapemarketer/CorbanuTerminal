@@ -89,6 +89,9 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names v3.0.0 is unmaintained (merged into zbus 6; no known vulnerability); pulled in via zbus v4.4.0 under keyring v3.6.3/secret-service v4.0.0 used by codex-keyring-store for the Linux Secret Service; remove when keyring moves to zbus >= 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive v4.2.0 is unmaintained (merged into zbus 6; no known vulnerability); pulled in via zvariant v4.2.0 under zbus v4.4.0, keyring v3.6.3/secret-service v4.0.0 used by codex-keyring-store; remove when keyring moves to zbus >= 6" },
     { id = "RUSTSEC-2026-0374", reason = "basic-toml v0.1.10 is unmaintained (no known vulnerability); used only at compile time by the i18n-embed-fl/i18n-embed-impl proc macros (via i18n-config) to read age's bundled i18n.toml, for codex-secrets local storage; remove when age drops i18n-embed-fl or i18n-config moves to toml" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils v0.1.0 is unmaintained (repository archived 2026-10-01; no known vulnerability; macro-only crate: pin_mut!/unsafe_pinned!); pulled in via hyper 1.8.1, aws-smithy-http 0.62.6/aws-smithy-runtime 1.9.5/aws-smithy-types 1.4.7 under aws-config 1.8.12 (codex-aws-auth), and loom 0.7.2 under tokio-graceful/rama-core (cfg(loom) only, never built); current hyper (1.12) and aws-config (1.13, aws-smithy-http 0.64) no longer use it, but loom 0.7.2 is still the latest loom; remove when the lockfile moves to those releases and loom/tokio-graceful drop pin-utils" },
+    # Owner-approved (D198, #1401). Unlike the entries above, this code path is reached: see the reason.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint v0.5.5 (non-constant-time subtraction and related ops) via elliptic-curve 0.13.8/ecdsa 0.16.9/p256 0.13.2/aws-config 1.8.12 (feature credentials-login) used by codex-aws-auth for Bedrock; reached only when the AWS profile uses an `aws login` session: aws-config then signs a DPoP proof with the session's P-256 key (p256 scalar arithmetic uses crypto-bigint U256 sub_mod/sbb) once per token refresh, client side; exploiting it needs a co-located attacker timing those few signatures, and the key already sits in ~/.aws/login/cache; no compatible fix (aws-config 1.13.0 still requires p256 ^0.13); tracked in #1401; remove when aws-config moves to p256 >= 0.14 (crypto-bigint >= 0.7.6), re-review by 2027-01-31" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
@@ -158,9 +161,8 @@ confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
-    # Each entry is the crate and version constraint, and its specific allow
-    # list
-    #{ allow = ["Zlib"], crate = "adler32" },
+    # Keep the retained libbz2 backend exception scoped to this crate.
+    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,

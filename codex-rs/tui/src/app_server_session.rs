@@ -748,19 +748,42 @@ impl AppServerSession {
         config: &Config,
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_params(config, session_start_source, /*prompt_edit*/ false)
+            .await
+    }
+
+    /// #1038: editing the first message of a conversation continues in a new
+    /// thread with no history; the server is told it is a reopen all the same.
+    pub(crate) async fn start_thread_for_first_prompt_edit(
+        &mut self,
+        config: &Config,
+    ) -> Result<AppServerStartedThread> {
+        self.start_thread_with_params(
+            config, /*session_start_source*/ None, /*prompt_edit*/ true,
+        )
+        .await
+    }
+
+    async fn start_thread_with_params(
+        &mut self,
+        config: &Config,
+        session_start_source: Option<ThreadStartSource>,
+        prompt_edit: bool,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
+        let params = ThreadStartParams {
+            reopened_by_prompt_edit: prompt_edit,
+            ..thread_start_params_from_config(
+                &session_config,
+                self.thread_params_mode(),
+                self.remote_cwd_override.as_deref(),
+                session_start_source,
+            )
+        };
         let response: ThreadStartResponse = self
             .client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id,
-                params: thread_start_params_from_config(
-                    &session_config,
-                    self.thread_params_mode(),
-                    self.remote_cwd_override.as_deref(),
-                    session_start_source,
-                ),
-            })
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
             .await
             .map_err(|err| {
                 bootstrap_request_error("thread/start failed during TUI bootstrap", err)

@@ -1,0 +1,29 @@
+gate gate-agmx0-20261022T024647Z: probes ok=True count=97 smoke=['AGMS-SMOKE-OK'] relay200=True -> PASS
+### 1. conversation on work in the TUI (--account work), then quit
+02:50:01
+02:50:12
+To continue this session, run corbanu resume 01a16184-0165-7653-b2e4-5f376ffe549f
+[agms] product exited with code 0
+### 2. account remove zai work
+02:50:16
+Removed zai account `work`.
+### 3. TUI WITHOUT --account (personal via [provider_accounts]); in-app /resume of the qzero conversation
+02:50:17
+■ This conversation ran on zai account `work` and resumes on it: account `work` of provider `zai` is not configured; add it or pick another account in
+`/providers`
+› Summarize recent commits
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/probe-na05-20261022T024612Z/fixture/workspace · Corbanu Terminal · TPS: -- tok/s
+02:50:32
+02:51:13
+■ This conversation ran on zai account `work` and resumes on it: account `work` of provider `zai` is not configured; add it or pick another account in
+`/providers`
+› reply with the single word qone
+• qone
+› Summarize recent commits
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/probe-na05-20261022T024612Z/fixture/workspace · Corbanu Terminal · TPS: 9.9 tok/s
+│  Model provider:       Z.AI - https://api.z.ai/api/paas/v4 · account personal            │
+│  Session:              01a16184-3d15-7ae0-aac0-9eb3ef873504                              │
+│  Account usage:        personal · 8,544 input · 33 output (28 reasoning)                 │
+### end
+02:51:21
+probe done

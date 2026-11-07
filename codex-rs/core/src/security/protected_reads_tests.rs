@@ -6,6 +6,21 @@ fn shell(script: &str) -> Vec<String> {
     vec!["/bin/zsh".into(), "-lc".into(), script.into()]
 }
 
+/// #1296: a Windows PowerShell command, as Corbanu runs one.
+fn powershell(script: &str) -> Vec<String> {
+    vec![
+        "powershell.exe".into(),
+        "-NoProfile".into(),
+        "-Command".into(),
+        script.into(),
+    ]
+}
+
+/// #1296: a cmd command, as Corbanu runs one.
+fn cmd(script: &str) -> Vec<String> {
+    vec!["cmd.exe".into(), "/c".into(), script.into()]
+}
+
 /// The word the command used for the first denied path it names, through
 /// quoting, redirections, `--flag=` values and home variables.
 #[test]
@@ -30,6 +45,7 @@ fn issue_442_finds_the_denied_path_the_command_names() {
             codex_home,
             denied,
             /*denial_lines*/ None,
+            /*skip_patterns*/ false,
         )
     };
     assert_eq!(word("cat .env"), Some(".env".to_string()));
@@ -58,6 +74,7 @@ fn issue_442_finds_the_denied_path_the_command_names() {
             codex_home,
             denied,
             Some(&lines),
+            /*skip_patterns*/ false,
         ),
         None
     );
@@ -69,7 +86,8 @@ fn issue_442_finds_the_denied_path_the_command_names() {
             Some(user_home),
             codex_home,
             denied,
-            Some(&lines)
+            Some(&lines),
+            /*skip_patterns*/ false,
         ),
         Some(".env".to_string())
     );
@@ -79,45 +97,105 @@ fn issue_442_finds_the_denied_path_the_command_names() {
 /// `ls "$CODEX_HOME"` and `ls home/tmp/..` are attributed to the home; the
 /// listing explanation names the path as the command spelled it.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Unix fixtures (POSIX paths and shell syntax); Windows coverage is #691"
-)]
 fn issue_506_listing_denial_is_attributed_through_variables_and_dot_dot() {
-    let cwd = Path::new("/work/project");
-    let user_home = Path::new("/users/me");
-    let codex_home = Path::new("/users/me/.corbanu");
+    // #1296: on Windows, PowerShell and cmd spellings and denial texts.
+    let (cwd, user_home, codex_home) = if cfg!(windows) {
+        (r"C:\work\project", r"C:\users\me", r"C:\users\me\.corbanu")
+    } else {
+        ("/work/project", "/users/me", "/users/me/.corbanu")
+    };
+    let (cwd, user_home, codex_home) =
+        (Path::new(cwd), Path::new(user_home), Path::new(codex_home));
     let denied = |path: &Path| {
         AbsolutePathBuf::from_absolute_path(path).is_ok_and(|path| path.as_path() == codex_home)
     };
-    let lines = ["ls: /users/me/.corbanu: Operation not permitted".to_string()];
-    for (script, expected) in [
-        ("ls -la \"$CODEX_HOME\"", "$CODEX_HOME"),
-        ("ls ${CORBANU_HOME}", "${CORBANU_HOME}"),
-        ("ls ~/.corbanu/tmp/..", "~/.corbanu/tmp/.."),
-    ] {
+    let (cases, other_command, other_line) = if cfg!(windows) {
+        let line = r"Get-ChildItem : Access to the path 'C:\users\me\.corbanu' is denied.";
+        (
+            vec![
+                (
+                    powershell("Get-ChildItem -Force \"$env:CODEX_HOME\""),
+                    line,
+                    "$env:CODEX_HOME",
+                ),
+                (
+                    powershell("Get-ChildItem ${env:CORBANU_HOME}"),
+                    line,
+                    "${env:CORBANU_HOME}",
+                ),
+                (
+                    powershell("gci $env:corbanu_home"),
+                    line,
+                    "$env:corbanu_home",
+                ),
+                (
+                    powershell(r"Get-ChildItem ~\.corbanu\tmp\.."),
+                    line,
+                    r"~\.corbanu\tmp\..",
+                ),
+                (
+                    powershell(r"Get-ChildItem $HOME\.corbanu"),
+                    line,
+                    r"$HOME\.corbanu",
+                ),
+                (
+                    powershell(r"Get-ChildItem C:\users\me\.corbanu"),
+                    line,
+                    r"C:\users\me\.corbanu",
+                ),
+                // PowerShell 7 writes no space before the colon.
+                (
+                    powershell(r"Get-ChildItem $env:USERPROFILE\.corbanu"),
+                    r"Get-ChildItem: Access to the path 'C:\users\me\.corbanu' is denied.",
+                    r"$env:USERPROFILE\.corbanu",
+                ),
+                // cmd names no path: the path the command names.
+                (cmd("dir %CODEX_HOME%"), "Access is denied.", "%CODEX_HOME%"),
+                (
+                    cmd(r"dir %UserProfile%\.corbanu"),
+                    "Access is denied.",
+                    r"%UserProfile%\.corbanu",
+                ),
+            ],
+            powershell("Get-ChildItem $env:CODEX_HOME other"),
+            r"Get-ChildItem : Access to the path 'C:\users\me\other' is denied.",
+        )
+    } else {
+        let line = "ls: /users/me/.corbanu: Operation not permitted";
+        (
+            vec![
+                (shell("ls -la \"$CODEX_HOME\""), line, "$CODEX_HOME"),
+                (shell("ls ${CORBANU_HOME}"), line, "${CORBANU_HOME}"),
+                (shell("ls ~/.corbanu/tmp/.."), line, "~/.corbanu/tmp/.."),
+            ],
+            shell("ls \"$CODEX_HOME\" other"),
+            "ls: /users/me/other: Operation not permitted",
+        )
+    };
+    for (command, line, expected) in cases {
         assert_eq!(
             denied_word(
-                &shell(script),
+                &command,
                 cwd,
                 Some(user_home),
                 codex_home,
                 denied,
-                Some(&lines),
+                Some(&[line.to_string()]),
+                /*skip_patterns*/ false,
             ),
             Some(expected.to_string()),
-            "{script}"
+            "{command:?}"
         );
     }
-    let other = ["ls: /users/me/other: Operation not permitted".to_string()];
     assert_eq!(
         denied_word(
-            &shell("ls \"$CODEX_HOME\" other"),
+            &other_command,
             cwd,
             Some(user_home),
             codex_home,
             denied,
-            Some(&other),
+            Some(&[other_line.to_string()]),
+            /*skip_patterns*/ false,
         ),
         None
     );
@@ -133,20 +211,21 @@ fn issue_506_listing_denial_is_attributed_through_variables_and_dot_dot() {
 /// folder the command names; the line is attributed to the home as it
 /// spells it, in BSD and GNU forms and relative to the folder a `cd` names.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Unix fixtures (POSIX paths and shell syntax); Windows coverage is #691"
-)]
 fn issue_554_recursive_listing_of_a_parent_is_attributed_to_the_home() {
-    let cwd = Path::new("/work/project");
-    let user_home = Path::new("/users/me");
-    let codex_home = Path::new("/users/me/.corbanu");
+    // #1296: on Windows, PowerShell and cmd spellings and denial texts.
+    let (cwd, user_home, codex_home) = if cfg!(windows) {
+        (r"C:\work\project", r"C:\users\me", r"C:\users\me\.corbanu")
+    } else {
+        ("/work/project", "/users/me", "/users/me/.corbanu")
+    };
+    let (cwd, user_home, codex_home) =
+        (Path::new(cwd), Path::new(user_home), Path::new(codex_home));
     let unlistable = |path: &Path| {
         AbsolutePathBuf::from_absolute_path(path).is_ok_and(|path| path.as_path() == codex_home)
     };
-    let found = |script: &str, line: &str| {
+    let found = |command: &[String], line: &str| {
         unlistable_path_in_lines(
-            &shell(script),
+            command,
             cwd,
             Some(user_home),
             codex_home,
@@ -154,6 +233,59 @@ fn issue_554_recursive_listing_of_a_parent_is_attributed_to_the_home() {
             &unlistable,
         )
     };
+    if cfg!(windows) {
+        let home = r"C:\users\me\.corbanu";
+        let denied = |program: &str, path: &str| {
+            format!("{program} : Access to the path '{path}' is denied.")
+        };
+        for (command, line) in [
+            (
+                powershell("Get-ChildItem -Recurse ~ -Filter *.toml"),
+                denied("Get-ChildItem", home),
+            ),
+            (
+                powershell("Get-ChildItem -Recurse -Force $env:USERPROFILE"),
+                denied("Get-ChildItem", home),
+            ),
+            (
+                powershell(r"gci -r C:\users\me"),
+                denied("Get-ChildItem", home),
+            ),
+            // PowerShell 7 writes no space before the colon.
+            (
+                powershell("Get-ChildItem -Recurse $HOME"),
+                format!("Get-ChildItem: Access to the path '{home}' is denied."),
+            ),
+        ] {
+            assert_eq!(
+                found(&command, &line),
+                Some(home.to_string()),
+                "{command:?}"
+            );
+        }
+        for (command, line) in [
+            // Another folder, or a name that only starts like the home's.
+            (
+                powershell("Get-ChildItem -Recurse ~"),
+                denied("Get-ChildItem", r"C:\users\me\Application Data"),
+            ),
+            (
+                powershell("Get-ChildItem -Recurse ~"),
+                denied("Get-ChildItem", r"C:\users\me\.corbanu-old"),
+            ),
+            // A path below the home, not the home itself.
+            (
+                powershell("Get-ChildItem -Recurse ~"),
+                denied("Get-ChildItem", r"C:\users\me\.corbanu\vault"),
+            ),
+            // cmd's `dir /s` names no path, and a profile holds folders it
+            // is always denied (`Application Data`): nothing to attribute.
+            (cmd(r"dir /s C:\users\me"), "Access is denied.".to_string()),
+        ] {
+            assert_eq!(found(&command, &line), None, "{command:?}: {line}");
+        }
+        return;
+    }
     for (script, line, expected) in [
         (
             "find ~ -name '*.toml'",
@@ -203,7 +335,11 @@ fn issue_554_recursive_listing_of_a_parent_is_attributed_to_the_home() {
             "./.corbanu",
         ),
     ] {
-        assert_eq!(found(script, line), Some(expected.to_string()), "{script}");
+        assert_eq!(
+            found(&shell(script), line),
+            Some(expected.to_string()),
+            "{script}"
+        );
     }
     for (script, line) in [
         // Another folder, or a name that only starts like the home's.
@@ -229,14 +365,13 @@ fn issue_554_recursive_listing_of_a_parent_is_attributed_to_the_home() {
         ),
         ("find ~", "/users/me/.corbanu-old: Operation not permitted"),
     ] {
-        assert_eq!(found(script, line), None, "{script}: {line}");
+        assert_eq!(found(&shell(script), line), None, "{script}: {line}");
     }
 }
 
 /// #442 (milestone AGG-09): under Aggressive a denied read of a protected
 /// file is explained where it failed, naming the level and /security; it is
-/// not explained under Permissive, for a command that succeeded, or for a
-/// failure that is not a denial.
+/// not explained under Permissive or for a failure that is not a denial.
 #[tokio::test]
 async fn issue_442_denied_protected_read_is_explained_under_aggressive() {
     let (session, turn) = crate::session::tests::make_session_and_context().await;
@@ -280,7 +415,9 @@ async fn issue_442_denied_protected_read_is_explained_under_aggressive() {
         explanation.contains("switch to Permissive in /security"),
         "{explanation}"
     );
-    assert_eq!(explain(0, denial).await, None);
+    // #1312: a denial is explained also when the command as a whole
+    // exited 0 (a later command on the line hid the failure).
+    assert_eq!(explain(0, denial).await, Some(explanation));
     assert_eq!(
         explain(1, "cat: auth.json: No such file or directory\n").await,
         None
@@ -372,62 +509,432 @@ async fn issue_1194_a_split_denial_line_is_still_explained() {
 /// like a path argument, so no grant is offered for it; code that names no
 /// protected path is left alone.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Unix fixtures (POSIX paths and shell syntax); Windows coverage is #691"
-)]
 fn issue_621_finds_the_denied_path_inside_interpreter_code() {
-    let cwd = Path::new("/work/project");
-    let user_home = Path::new("/Users/someone");
-    let codex_home = Path::new("/Users/someone/.corbanu");
-    let denied = |path: &Path| {
-        AbsolutePathBuf::from_absolute_path(path).is_ok_and(|path| {
-            path.as_path().starts_with(codex_home)
-                || path.as_path() == Path::new("/work/project/.env")
-        })
+    // #1296: on Windows, PowerShell and cmd spellings.
+    let (cwd, user_home, codex_home, env) = if cfg!(windows) {
+        (
+            r"C:\work\project",
+            r"C:\Users\someone",
+            r"C:\Users\someone\.corbanu",
+            r"C:\work\project\.env",
+        )
+    } else {
+        (
+            "/work/project",
+            "/Users/someone",
+            "/Users/someone/.corbanu",
+            "/work/project/.env",
+        )
     };
-    let word = |script: &str| {
+    let (cwd, user_home, codex_home, env) = (
+        Path::new(cwd),
+        Path::new(user_home),
+        Path::new(codex_home),
+        Path::new(env),
+    );
+    let denied = |path: &Path| {
+        AbsolutePathBuf::from_absolute_path(path)
+            .is_ok_and(|path| path.as_path().starts_with(codex_home) || path.as_path() == env)
+    };
+    let word = |command: &[String]| {
         denied_word(
-            &shell(script),
+            command,
             cwd,
             Some(user_home),
             codex_home,
             denied,
             /*denial_lines*/ None,
+            /*skip_patterns*/ false,
         )
     };
-    for (script, expected) in [
+    let (found, not_found) = if cfg!(windows) {
         (
-            "python3 -c \"import os; print(os.listdir('/Users/someone/.corbanu'))\"",
-            "/Users/someone/.corbanu",
-        ),
+            vec![
+                (
+                    powershell(
+                        r#"python -c "import os; print(os.listdir('C:\Users\someone\.corbanu'))""#,
+                    ),
+                    r"C:\Users\someone\.corbanu",
+                ),
+                (
+                    powershell(
+                        r#"python -c 'print(open(r"C:\Users\someone\.corbanu\auth.json").read())'"#,
+                    ),
+                    r"C:\Users\someone\.corbanu\auth.json",
+                ),
+                (
+                    powershell(
+                        r#"node -e "console.log(require('fs').readdirSync('$env:CORBANU_HOME'))""#,
+                    ),
+                    "$env:CORBANU_HOME",
+                ),
+                (
+                    cmd(r#"python -c "print(open(r'%USERPROFILE%\.corbanu\auth.json').read())""#),
+                    r"%USERPROFILE%\.corbanu\auth.json",
+                ),
+                (
+                    powershell(r#"python -c "print(open('.env').read())""#),
+                    ".env",
+                ),
+            ],
+            vec![
+                powershell(r#"python -c "print(1 + 2)""#),
+                powershell(r#"python -c "import os; print(os.listdir('C:\work\project'))""#),
+                powershell(r#"node -e "console.log('hello, world')""#),
+            ],
+        )
+    } else {
         (
-            "python -c 'print(open(\"/Users/someone/.corbanu/auth.json\").read())'",
-            "/Users/someone/.corbanu/auth.json",
-        ),
-        (
-            "node -e \"console.log(require('fs').readdirSync('$CORBANU_HOME'))\"",
-            "$CORBANU_HOME",
-        ),
-        (
-            "perl -e 'opendir(D, \"~/.corbanu\") or die; print readdir(D)'",
-            "~/.corbanu",
-        ),
-        (
-            "ruby -e 'puts Dir.entries(\"/Users/someone/.corbanu\")'",
-            "/Users/someone/.corbanu",
-        ),
-        ("python3 -c \"print(open('.env').read())\"", ".env"),
-    ] {
-        assert_eq!(word(script), Some(expected.to_string()), "{script}");
+            vec![
+                (
+                    shell("python3 -c \"import os; print(os.listdir('/Users/someone/.corbanu'))\""),
+                    "/Users/someone/.corbanu",
+                ),
+                (
+                    shell("python -c 'print(open(\"/Users/someone/.corbanu/auth.json\").read())'"),
+                    "/Users/someone/.corbanu/auth.json",
+                ),
+                (
+                    shell("node -e \"console.log(require('fs').readdirSync('$CORBANU_HOME'))\""),
+                    "$CORBANU_HOME",
+                ),
+                (
+                    shell("perl -e 'opendir(D, \"~/.corbanu\") or die; print readdir(D)'"),
+                    "~/.corbanu",
+                ),
+                (
+                    shell("ruby -e 'puts Dir.entries(\"/Users/someone/.corbanu\")'"),
+                    "/Users/someone/.corbanu",
+                ),
+                (shell("python3 -c \"print(open('.env').read())\""), ".env"),
+            ],
+            vec![
+                shell("python3 -c \"print(1 + 2)\""),
+                shell("python3 -c \"import os; print(os.listdir('/work/project'))\""),
+                shell("node -e \"console.log('hello, world')\""),
+            ],
+        )
+    };
+    for (command, expected) in found {
+        assert_eq!(word(&command), Some(expected.to_string()), "{command:?}");
     }
-    for script in [
-        "python3 -c \"print(1 + 2)\"",
-        "python3 -c \"import os; print(os.listdir('/work/project'))\"",
-        "node -e \"console.log('hello, world')\"",
-    ] {
-        assert_eq!(word(script), None, "{script}");
+    for command in not_found {
+        assert_eq!(word(&command), None, "{command:?}");
     }
+}
+
+/// #1296: Windows' denial texts, word splitting and home spellings are read
+/// only on Windows (`windows`); elsewhere nothing changes.
+#[test]
+fn issue_1296_windows_texts_are_read_only_on_windows() {
+    for line in [
+        r"Get-Content : Access to the path 'C:\Users\me\.corbanu\auth.json' is denied.",
+        r"Get-Content: Access to the path 'C:\Users\me\.corbanu\auth.json' is denied.",
+        "Access is denied.",
+        "access is denied",
+    ] {
+        assert!(is_denial_line(line, /*windows*/ true), "{line}");
+        assert!(!is_denial_line(line, /*windows*/ false), "{line}");
+    }
+    for line in [
+        "cat: .env: Operation not permitted",
+        "PermissionError: [Errno 13] Permission denied: 'auth.json'",
+    ] {
+        assert!(is_denial_line(line, /*windows*/ true), "{line}");
+        assert!(is_denial_line(line, /*windows*/ false), "{line}");
+    }
+    assert!(!is_denial_line(
+        r"Get-Content : Cannot find path 'C:\x' because it does not exist.",
+        /*windows*/ true
+    ));
+    assert!(names_no_path("Access is denied.\r", /*windows*/ true));
+    assert!(!names_no_path("Access is denied.", /*windows*/ false));
+    assert!(!names_no_path(
+        r"Access to the path 'C:\x' is denied.",
+        /*windows*/ true
+    ));
+
+    let words = |command: Vec<String>, windows| command_words(&command, windows);
+    assert_eq!(
+        words(
+            powershell(r#"Get-Content C:\Users\me\.env 'C:\a b\x' "$env:HOME\y""#),
+            /*windows*/ true
+        ),
+        vec![
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Get-Content",
+            r"C:\Users\me\.env",
+            r"C:\a b\x",
+            r"$env:HOME\y",
+        ]
+    );
+    // A POSIX shell, or any command off Windows, keeps POSIX quoting.
+    let bash = vec![
+        "C:\\Git\\bin\\bash.exe".to_string(),
+        "-lc".into(),
+        r"cat a\ b".into(),
+    ];
+    assert_eq!(words(bash, /*windows*/ true)[1..], ["-lc", "cat", "a b"]);
+    assert_eq!(
+        words(powershell(r"cat C:\x"), /*windows*/ false),
+        vec!["powershell.exe", "-NoProfile", "-Command", "cat", "C:x"]
+    );
+
+    let cwd = Path::new(r"C:\work");
+    let (user_home, codex_home) = (
+        Path::new(r"C:\Users\me"),
+        Path::new(r"C:\Users\me\.corbanu"),
+    );
+    let expand = |word: &str, windows| expand(word, cwd, Some(user_home), codex_home, windows);
+    for (word, expected) in [
+        (r"$env:USERPROFILE\.ssh", r"C:\Users\me\.ssh"),
+        (r"${env:userprofile}\.ssh", r"C:\Users\me\.ssh"),
+        (r"$HOME\.ssh", r"C:\Users\me\.ssh"),
+        (r"%UserProfile%\.ssh", r"C:\Users\me\.ssh"),
+        (r"%CODEX_HOME%\auth.json", r"C:\Users\me\.corbanu\auth.json"),
+        (
+            r"$env:CORBANU_HOME\auth.json",
+            r"C:\Users\me\.corbanu\auth.json",
+        ),
+        (r"$CODEX_HOME\auth.json", r"C:\Users\me\.corbanu\auth.json"),
+        (r"~\.ssh\config", r"C:\Users\me\.ssh\config"),
+        (r"$PWD\.env", r"C:\work\.env"),
+        (r".\.env", r".\.env"),
+    ] {
+        assert_eq!(
+            expand(word, /*windows*/ true),
+            Some(expected.to_string()),
+            "{word}"
+        );
+    }
+    assert_eq!(expand(r"$env:UNKNOWN\.env", /*windows*/ true), None);
+    assert_eq!(expand(r"~other\.ssh", /*windows*/ true), None);
+    // Off Windows, only the POSIX spellings.
+    assert_eq!(expand(r"$env:USERPROFILE\.ssh", /*windows*/ false), None);
+    assert_eq!(expand(r"~\.ssh", /*windows*/ false), None);
+    assert_eq!(
+        expand(r"%USERPROFILE%\.ssh", /*windows*/ false),
+        Some(r"%USERPROFILE%\.ssh".to_string())
+    );
+}
+
+/// #1296: the Windows spellings of a protected path a command names are
+/// found (so no grant is offered for it): unquoted backslash paths, `~\`,
+/// PowerShell's `$env:`, `${env:}` and `$HOME`, cmd's `%NAME%` (any letter
+/// case) and `.\`; a path a POSIX shell names keeps POSIX quoting.
+#[cfg(windows)]
+#[test]
+fn issue_1296_windows_spellings_of_a_protected_path_are_found() {
+    let cwd = Path::new(r"C:\work\project");
+    let user_home = Path::new(r"C:\Users\someone");
+    let codex_home = Path::new(r"C:\Users\someone\.corbanu");
+    let denied = |path: &Path| {
+        AbsolutePathBuf::from_absolute_path(path).is_ok_and(|path| {
+            [
+                Path::new(r"C:\work\project\.env"),
+                Path::new(r"C:\Users\someone\.ssh"),
+                Path::new(r"C:\Users\someone\.corbanu\auth.json"),
+            ]
+            .iter()
+            .any(|denied| path.as_path().starts_with(denied))
+        })
+    };
+    let word = |command: &[String]| {
+        denied_word(
+            command,
+            cwd,
+            Some(user_home),
+            codex_home,
+            denied,
+            /*denial_lines*/ None,
+            /*skip_patterns*/ false,
+        )
+    };
+    for (command, expected) in [
+        (
+            powershell(r"Get-Content C:\Users\someone\.corbanu\auth.json"),
+            r"C:\Users\someone\.corbanu\auth.json",
+        ),
+        (
+            cmd(r"type C:\Users\someone\.corbanu\auth.json"),
+            r"C:\Users\someone\.corbanu\auth.json",
+        ),
+        (
+            powershell(r"Get-Content 'C:\Users\someone\.corbanu\auth.json'"),
+            r"C:\Users\someone\.corbanu\auth.json",
+        ),
+        (
+            powershell("Get-Content C:/Users/someone/.corbanu/auth.json"),
+            "C:/Users/someone/.corbanu/auth.json",
+        ),
+        (
+            powershell(r"Get-Content $env:USERPROFILE\.corbanu\auth.json"),
+            r"$env:USERPROFILE\.corbanu\auth.json",
+        ),
+        (
+            powershell(r"Get-Content ${env:userprofile}\.ssh\id_ed25519"),
+            r"${env:userprofile}\.ssh\id_ed25519",
+        ),
+        (
+            powershell(r"Get-Content $HOME\.ssh\config"),
+            r"$HOME\.ssh\config",
+        ),
+        (
+            powershell(r"Get-Content ~\.corbanu\auth.json"),
+            r"~\.corbanu\auth.json",
+        ),
+        (
+            powershell(r"Get-Content $env:CODEX_HOME\auth.json"),
+            r"$env:CODEX_HOME\auth.json",
+        ),
+        (
+            cmd(r"type %USERPROFILE%\.corbanu\auth.json"),
+            r"%USERPROFILE%\.corbanu\auth.json",
+        ),
+        (
+            cmd(r"type %corbanu_home%\auth.json"),
+            r"%corbanu_home%\auth.json",
+        ),
+        (powershell(r"Get-Content .\.env"), r".\.env"),
+        (powershell(r"Get-Content -Path .env"), ".env"),
+        (cmd(r"type .\.env"), r".\.env"),
+        // A POSIX shell (Git for Windows) keeps POSIX quoting.
+        (
+            vec!["bash.exe".into(), "-lc".into(), "cat ~/.ssh/config".into()],
+            "~/.ssh/config",
+        ),
+    ] {
+        assert_eq!(word(&command), Some(expected.to_string()), "{command:?}");
+    }
+    for command in [
+        powershell(r"Get-Content C:\work\project\notes.txt"),
+        powershell(r"Get-Content $env:UNKNOWN\.env.example"),
+        cmd(r"type %UNKNOWN%\.ssh\config"),
+        cmd(r"type %USERPROFILE:~0%\.ssh\config"),
+    ] {
+        assert_eq!(word(&command), None, "{command:?}");
+    }
+}
+
+/// #1296: under Aggressive on Windows, a protected read PowerShell or cmd
+/// was denied is explained where it failed (Windows PowerShell's, PowerShell
+/// 7's and cmd's denial texts), and a recursive listing of the folder above
+/// the Corbanu home like a listing of the home (#554); not under Permissive
+/// or for a failure that is not a denial.
+#[cfg(windows)]
+#[tokio::test]
+async fn issue_1296_powershell_and_cmd_denials_are_explained_under_aggressive() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let home = turn.config.codex_home.to_path_buf();
+    std::fs::create_dir_all(&home).unwrap();
+    let auth = home.join("auth.json");
+    std::fs::write(&auth, "x").unwrap();
+    let parent = home.parent().expect("the home has a parent").to_path_buf();
+    let (auth, home, parent) = (
+        auth.display().to_string(),
+        home.display().to_string(),
+        parent.display().to_string(),
+    );
+    let ps_denied =
+        |path: &str| format!("Get-Content : Access to the path '{path}' is denied.\r\n");
+    let explain = async |command: &[String], exit_code, output: &str| {
+        denial_explanation(
+            &session,
+            &turn,
+            command,
+            cwd.as_path(),
+            Some(exit_code),
+            output,
+        )
+        .await
+    };
+    let quoted = powershell(&format!("Get-Content '{auth}'"));
+    assert_eq!(
+        explain(&quoted, 1, &ps_denied(&auth)).await,
+        None,
+        "Permissive: unchanged"
+    );
+
+    let client = (*session.services.model_client())
+        .clone()
+        .with_ingress_level(SecurityLevel::Aggressive)
+        .with_source_envelopes(/*enabled*/ true);
+    session.services.replace_model_client(client);
+    for (command, output, shown) in [
+        (quoted.clone(), ps_denied(&auth), auth.clone()),
+        (
+            powershell(&format!("Get-Content {auth}")),
+            format!("Get-Content: Access to the path '{auth}' is denied.\r\n"),
+            auth.clone(),
+        ),
+        (
+            powershell(r"Get-Content $env:CODEX_HOME\auth.json"),
+            ps_denied(&auth),
+            r"$env:CODEX_HOME\auth.json".to_string(),
+        ),
+        (
+            cmd(&format!("type \"{auth}\"")),
+            "Access is denied.\r\n".to_string(),
+            auth.clone(),
+        ),
+        (
+            cmd(r"type %CODEX_HOME%\auth.json"),
+            "Access is denied.\r\n".to_string(),
+            r"%CODEX_HOME%\auth.json".to_string(),
+        ),
+    ] {
+        assert_eq!(
+            explain(&command, 1, &output).await,
+            Some(explanation(&shown)),
+            "{command:?}: {output}"
+        );
+        // #1312: the command names the path, so also when a later command
+        // on the line made it exit 0.
+        assert_eq!(
+            explain(&command, 0, &output).await,
+            Some(explanation(&shown)),
+            "{command:?}"
+        );
+    }
+    let listing = powershell(&format!("Get-ChildItem -Recurse '{parent}'"));
+    assert_eq!(
+        explain(
+            &listing,
+            1,
+            &format!("Get-ChildItem : Access to the path '{home}' is denied.\r\n"),
+        )
+        .await,
+        Some(listing_explanation(&home))
+    );
+    let missing = format!(
+        "Get-Content : Cannot find path '{}' because it does not exist.\r\n",
+        cwd.join("missing.txt").display()
+    );
+    assert_eq!(explain(&quoted, 1, &missing).await, None);
+    assert_eq!(
+        protected_path_in_command(
+            &session,
+            &turn,
+            &powershell(&format!("Get-Content {auth}")),
+            cwd.as_path()
+        )
+        .await,
+        Some(auth.clone())
+    );
+    assert_eq!(
+        protected_path_in_command(
+            &session,
+            &turn,
+            &cmd(r"type %CODEX_HOME%\auth.json"),
+            cwd.as_path()
+        )
+        .await,
+        Some(r"%CODEX_HOME%\auth.json".to_string())
+    );
 }
 
 /// An Aggressive session (with the source labels it turns on).
@@ -881,4 +1388,164 @@ async fn issue_997_unit_test_lookups_outlast_the_production_bound() {
         Some("found")
     });
     assert_eq!(slow.await, Some("found"));
+}
+
+/// #1312 (local-model run 3, AGG-20P-A): under Aggressive, a denied write
+/// outside the current folder is explained where it failed even when a
+/// later command on the same line makes the whole command exit 0, as it is
+/// when the denied write is the last command; and so is a start-up file. A
+/// command with no denial line, or no known exit, is left alone, and so is
+/// one that exited 0 whose output alone reports a denial.
+#[cfg(unix)]
+#[tokio::test]
+async fn issue_1312_denial_hidden_by_a_later_command_is_explained() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let user_home = dirs::home_dir().expect("a home folder");
+    let explain = async |script: &str, exit_code: Option<i32>, output: &str| {
+        denial_explanation(
+            &session,
+            &turn,
+            &shell(script),
+            cwd.as_path(),
+            exit_code,
+            output,
+        )
+        .await
+    };
+    let outside = "echo x >> ../outside-notes.txt; echo \"exit=$?\"";
+    let outside_denied = "/bin/bash: ../outside-notes.txt: Operation not permitted\nexit=1\n";
+    let startup = "echo '# x' >> ~/.zshrc; echo \"exit=$?\"";
+    let startup_denied = format!(
+        "zsh:1: operation not permitted: {}\nexit=1\n",
+        user_home.join(".zshrc").display()
+    );
+    assert_eq!(
+        explain(outside, Some(0), outside_denied).await,
+        None,
+        "Permissive"
+    );
+
+    aggressive(&session);
+    for exit_code in [Some(1), Some(0)] {
+        assert_eq!(
+            explain(outside, exit_code, outside_denied).await,
+            Some(outside_folder_explanation("../outside-notes.txt")),
+            "{exit_code:?}"
+        );
+        assert_eq!(
+            explain(startup, exit_code, &startup_denied).await,
+            Some(startup_explanation("~/.zshrc")),
+            "{exit_code:?}"
+        );
+    }
+    assert_eq!(
+        explain(outside, Some(0), "exit=0\n").await,
+        None,
+        "no denial"
+    );
+    assert_eq!(
+        explain(outside, None, outside_denied).await,
+        None,
+        "no exit"
+    );
+    // A denial line in the output alone, which the command does not name (a
+    // search printing old denial lines), explains nothing when it exited 0;
+    // a failed command is still explained by it (#621).
+    let auth = turn.config.codex_home.join("auth.json");
+    std::fs::create_dir_all(turn.config.codex_home.as_path()).unwrap();
+    std::fs::write(&auth, "x").unwrap();
+    let search = "rg -n 'not permitted' notes.md";
+    let printed = format!(
+        "notes.md:3:cat: {}: Operation not permitted\n",
+        auth.display()
+    );
+    let before = recent_denials(&session, &turn).len();
+    assert_eq!(
+        explain(search, Some(0), &printed).await,
+        None,
+        "output alone"
+    );
+    assert_eq!(
+        recent_denials(&session, &turn).len(),
+        before,
+        "nothing listed"
+    );
+    assert_eq!(
+        explain(search, Some(1), &printed).await,
+        Some(explanation(&auth.display().to_string()))
+    );
+    let denials = recent_denials(&session, &turn);
+    for reason in [
+        "writing outside the current folder",
+        "writing a start-up file outside the current folder",
+    ] {
+        assert!(
+            denials.contains(&(
+                reason,
+                "denied by the sandbox; never granted under Aggressive"
+            )),
+            "{denials:?}"
+        );
+    }
+}
+
+/// #1323: under Aggressive, a search that exited 0 is not explained by its
+/// pattern (`rg ".env" logs/` printing an old denial line naming `.env`),
+/// and lists no recent denial; a protected path it reads, or one a command
+/// before a later one that hid its failure reads, still is (#1312), and a
+/// failed search is explained as before.
+#[cfg(unix)]
+#[tokio::test]
+async fn issue_1323_a_search_pattern_is_not_a_denied_path() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let explain = async |script: &str, exit_code: i32, output: &str| {
+        denial_explanation(
+            &session,
+            &turn,
+            &shell(script),
+            cwd.as_path(),
+            Some(exit_code),
+            output,
+        )
+        .await
+    };
+    aggressive(&session);
+    let auth = turn.config.codex_home.join("auth.json");
+    std::fs::create_dir_all(turn.config.codex_home.as_path()).unwrap();
+    std::fs::write(&auth, "x").unwrap();
+    let auth = auth.display().to_string();
+    let old_line = format!("logs/x.log:5:cat: {auth}: Permission denied\n");
+    let before = recent_denials(&session, &turn).len();
+    for search in [
+        format!("rg '{auth}' logs/"),
+        format!("grep -rn -e '{auth}' logs/"),
+        format!("cat logs/x.log | grep -F '{auth}'"),
+    ] {
+        assert_eq!(explain(&search, 0, &old_line).await, None, "{search}");
+    }
+    assert_eq!(
+        recent_denials(&session, &turn).len(),
+        before,
+        "nothing listed"
+    );
+    let read = Some(explanation(&auth));
+    let denied = format!("cat: {auth}: Permission denied\nexit=1\n");
+    let cat = format!("cat '{auth}'; echo \"exit=$?\"");
+    assert_eq!(explain(&cat, 0, &denied).await, read);
+    let grep_denied = format!("grep: {auth}: Permission denied\nexit=2\n");
+    let grep = format!("grep token '{auth}'; echo \"exit=$?\"");
+    assert_eq!(explain(&grep, 0, &grep_denied).await, read);
+    // A pattern that runs a command: what that command opens is explained.
+    let substituted = format!("grep \"$(cat '{auth}')\" notes.md; echo \"exit=$?\"");
+    assert_eq!(explain(&substituted, 0, &denied).await, read);
+    // A later line's read is not the search's pattern.
+    let lines = format!("rg token logs/\ncat -e '{auth}'\necho done");
+    assert_eq!(explain(&lines, 0, &denied).await, read);
+    // A failed search: unchanged.
+    let search = format!("rg '{auth}' logs/");
+    assert_eq!(explain(&search, 1, &old_line).await, read);
 }

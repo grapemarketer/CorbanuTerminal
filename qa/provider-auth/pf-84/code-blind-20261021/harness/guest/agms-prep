@@ -1,0 +1,79 @@
+#!/bin/bash
+# pf84-cb1: build the run's product homes (tools.md "Homes"), as the lane user, before the tester starts.
+# usage: agms-prep HOME...      (AGMS_RUN set by agms-launch). Synthetic keys only; keys go to the product on stdin.
+set -euo pipefail
+RUN="${AGMS_RUN:?}"
+C=/opt/agms/pkg/bin/corbanu
+WS="$RUN/fixture/workspace"
+LOG="$RUN/evidence/prep.txt"
+mkdir -p "$RUN/homes" "$RUN/homes-meta"
+p() { # p HOME ARGS...: run the product CLI on HOME (output to the prep log; no key is ever an argument)
+  local h="$1"; shift
+  env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" USER="$USER" LANG=en_US.UTF-8 TMPDIR="$RUN/tmp/" \
+    CORBANU_HOME="$RUN/homes/$h" CODEX_HOME="$RUN/homes/$h" PFTERMINAL_HOME="$RUN/homes/$h" \
+    CORBANU_TEST_NO_NATIVE_KEYRING=1 HTTPS_PROXY="$AGMS_PROXY" CODEX_CA_CERTIFICATE=/opt/agms/etc/mediation-ca.pem \
+    "$C" "$@"
+}
+addkey() { # addkey HOME PROVIDER ACCOUNT LABEL
+  echo "\$ corbanu account add $2 $3   (key agms-fake-$4-NNNN on stdin)" >> "$LOG"
+  printf 'agms-fake-%s-%04d' "$4" "$RANDOM" | p "$1" account add "$2" "$3" >> "$LOG" 2>&1
+}
+cfg() { # cfg HOME PROVIDER MODEL FLAG [provider_accounts line]
+  mkdir -p "$RUN/homes/$1" "$RUN/homes-meta/$1"
+  { echo "model = \"$3\""; echo "model_provider = \"$2\""
+    echo 'cli_auth_credentials_store = "file"'
+    echo 'suppress_unstable_features_warning = true'
+    echo; echo '[features]'; echo "named_accounts = $4"
+    if [ -n "${5:-}" ]; then echo; echo '[provider_accounts]'; echo "$5"; fi
+    echo; echo "[projects.\"$WS\"]"; echo 'trust_level = "trusted"'; } > "$RUN/homes/$1/config.toml"
+}
+flag_off() { sed -i '' 's/^named_accounts = true$/named_accounts = false/' "$RUN/homes/$1/config.toml"; }
+desc() { echo "$2" > "$RUN/homes-meta/$1/desc"; }
+zenv() { printf 'agms-fake-zenv-%04d' "$RANDOM" > "$RUN/homes-meta/$1/zai-env"; }
+
+for h in "$@"; do
+  echo "=== home $h $(date -u +%FT%TZ)" >> "$LOG"
+  [ ! -e "$RUN/homes/$h" ] || { echo "home $h exists" >&2; exit 1; }
+  case "$h" in
+    zai3|zai3off)
+      cfg "$h" zai glm-5.3-flash true 'zai = "personal"'; zenv "$h"
+      addkey "$h" zai work zwork; addkey "$h" zai personal zpersonal
+      [ "$h" = zai3 ] && desc "$h" 'Z.AI: default (ZAI_API_KEY, zenv), work (zwork), personal (zpersonal); [provider_accounts] zai = "personal"'
+      [ "$h" = zai3off ] && { flag_off "$h"; desc "$h" 'as zai3, named_accounts = false'; } ;;
+    zaione)
+      cfg "$h" zai glm-5.3-flash true; zenv "$h"; desc "$h" 'Z.AI default only (ZAI_API_KEY, zenv); no named accounts' ;;
+    zainokey|zainokeyoff)
+      cfg "$h" zai glm-5.3-flash true; addkey "$h" zai work zwork
+      [ "$h" = zainokey ] && desc "$h" 'Z.AI, no ZAI_API_KEY and no default key; named account work (zwork)'
+      [ "$h" = zainokeyoff ] && { flag_off "$h"; desc "$h" 'as zainokey, named_accounts = false'; } ;;
+    fresh)
+      mkdir -p "$RUN/homes/$h" "$RUN/homes-meta/$h"
+      { echo 'cli_auth_credentials_store = "file"'; echo 'suppress_unstable_features_warning = true'
+        echo; echo '[features]'; echo 'named_accounts = true'; } > "$RUN/homes/$h/config.toml"
+      desc "$h" 'fresh: no provider chosen, no keys, no ZAI_API_KEY' ;;
+    custom)
+      cfg "$h" zpx glm-5.3-flash true; zenv "$h"
+      cat >> "$RUN/homes/$h/config.toml" << 'TOML'
+
+[model_providers.zpx]
+name = "Z.AI proxy test"
+base_url = "https://api.z.ai/api/paas/v4"
+env_key = "ZAI_API_KEY"
+wire_api = "chat"
+TOML
+      addkey "$h" zpx work zpxwork
+      desc "$h" 'custom provider zpx (Z.AI address, ZAI_API_KEY = zenv); named account work of zpx (zpxwork)' ;;
+    oai1)
+      cfg "$h" openai gpt-5.6-luna true
+      echo '$ corbanu login --with-api-key   (key agms-fake-odefault-NNNN on stdin)' >> "$LOG"
+      printf 'agms-fake-odefault-%04d' "$RANDOM" | p "$h" login --with-api-key >> "$LOG" 2>&1
+      desc "$h" 'OpenAI (gpt-5.6-luna): default = synthetic API key (odefault, always rejected); t1 = live ChatGPT test account (signed in by the coordinator)' ;;
+    *) echo "unknown home $h" >&2; exit 64 ;;
+  esac
+  echo "--- account list ($h)" >> "$LOG"; p "$h" account list >> "$LOG" 2>&1 || echo "account list rc=$?" >> "$LOG"
+done
+# Baseline for the cases' "Files:" checks (added after G9): file list and config/auth.json hashes right after prep.
+( cd "$RUN/homes" && for h in *; do echo "=== $h"; find "$h" -type f -not -path '*/skills/*' -exec stat -f '%z %N' {} + | sort -k2
+  for f in "$h/config.toml" "$h/auth.json"; do [ ! -f "$f" ] || shasum -a 256 "$f"; done; done ) > "$RUN/evidence/homes-after-prep.txt" 2>&1
+echo "prep done $(date -u +%FT%TZ)" >> "$LOG"
+cat "$LOG"

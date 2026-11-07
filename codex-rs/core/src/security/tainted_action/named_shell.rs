@@ -117,6 +117,152 @@ pub(super) fn grammar_proves_data(command: &[String]) -> bool {
         )
 }
 
+/// #1261: how deep `-c` scripts of POSIX shells are followed for
+/// [`windows_reads_follow`].
+const MAX_FOLLOWED_DEPTH: usize = 3;
+/// Programs besides [`DATA_ONLY`] that run no script and change no folder
+/// or mount, in a script [`windows_reads_follow`] follows.
+const FOLLOWED_TOOLS: &[&str] = &["sed", "sort", "uniq", "cut", "tr", "rg"];
+/// Interpreters whose first word, a file, is a script they run.
+const SCRIPT_INTERPRETERS: &[&str] = &["python", "python3", "node", "ruby", "perl"];
+
+/// #1261: whether, on Windows, the first judgment may open the script and
+/// sed program files `command` (the action's argv) runs. Its word lexer
+/// splits inside quoted words and follows only POSIX `cd`, so a file named
+/// in text that cmd, PowerShell or an interpreter's inline code runs may
+/// not be the one that runs (`cmd /c "cd sub & bash run.sh"`). So only: a
+/// POSIX shell (`bash`, `sh`, `dash`, `zsh`, by name) given `-c` (not a
+/// login shell: an MSYS2 or Cygwin profile may `cd` to the home first) and
+/// a script the bash grammar reads as plain commands of literal words
+/// with no shell syntax in them, each a script run by file (`bash x.sh`,
+/// `sh -x x.sh`, `./x`, `source x`, `python3 x.py`), a listed program
+/// that never runs its words or changes a folder (no `cd`, `pushd`,
+/// `popd`, `mount`), or such a shell's `-c` script that is one too.
+pub(super) fn windows_reads_follow(command: &[String]) -> bool {
+    follows(command, /*depth*/ 0)
+}
+
+fn follows(command: &[String], depth: usize) -> bool {
+    let [shell, flag, script, ..] = command else {
+        return false;
+    };
+    if depth > MAX_FOLLOWED_DEPTH
+        // A shell named by a path may be any program (`./bash`, `/bin/bash`
+        // is `\bin\bash` on the working folder's drive under Windows).
+        || shell.contains(['/', '\\'])
+        || !posix_shell(shell)
+        // Not `-lc`: an MSYS2 or Cygwin login shell's profile may `cd` to
+        // the home before the script runs.
+        || flag != "-c"
+        || script.len() > MAX_SCRIPT_BYTES
+        || splits_differently(script)
+    {
+        return false;
+    }
+    codex_shell_command::bash::parse_shell_script_into_plain_words(script).is_some_and(|commands| {
+        !commands.is_empty() && commands.iter().all(|words| followed(words, depth))
+    })
+}
+
+/// A shell named by `word` (any folder, `.exe` or not) that reads POSIX
+/// shell text.
+fn posix_shell(word: &str) -> bool {
+    let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    // Not zsh: it reads `~/.zshenv` (and `/etc/zshenv`, writable under
+    // MSYS2) before any `-c` script.
+    matches!(name, "bash" | "sh" | "dash")
+}
+
+/// One plain command [`windows_reads_follow`] accepts: its words hold no
+/// text a lexer that ignores quotes would split or expand, and it runs no
+/// script in a way the first judgment may follow wrongly: no wrapper before
+/// it (`env -C dir`, `sudo -D dir`, `timeout`, ...), and a shell or
+/// interpreter only with a script file (no inline code, preloads or modules),
+/// or a POSIX shell's `-c` script that is one too.
+fn followed(words: &[PlainWord], depth: usize) -> bool {
+    let texts: Vec<String> = words.iter().map(|word| word.text.clone()).collect();
+    let Some(name) = texts.first() else {
+        return false;
+    };
+    if posix_shell(name) {
+        // A shell named by a path may be any program (see `follows`).
+        if name.contains(['/', '\\']) {
+            return false;
+        }
+        let short = |letter: char| {
+            texts[1..].iter().any(|word| {
+                word.starts_with('-') && !word.starts_with("--") && word.contains(letter)
+            })
+        };
+        // A login shell may start in the home (see `follows`).
+        if short('l') || texts.iter().any(|word| word == "--login") {
+            return false;
+        }
+        if short('c') {
+            return follows(&texts, depth + 1);
+        }
+    }
+    let plain = texts.iter().all(|word| {
+        !word.is_empty()
+            && !word.chars().any(|ch| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        ';' | '&'
+                            | '|'
+                            | '('
+                            | ')'
+                            | '<'
+                            | '>'
+                            | '`'
+                            | '$'
+                            | '\\'
+                            | '\''
+                            | '"'
+                            | '{'
+                            | '}'
+                            | '*'
+                            | '?'
+                            | '['
+                            | ']'
+                            | '#'
+                            | '~'
+                            | '='
+                    )
+            })
+    });
+    if !plain {
+        return false;
+    }
+    let Some((index, command)) = super::indirect::command_word(&texts) else {
+        return false;
+    };
+    if index > 0 {
+        return false;
+    }
+    // A program run by its path (`./x`) is judged by its bare name, so
+    // `./cd` or `./python3 x.py` would read as the builtin or interpreter:
+    // only a path whose name is neither is followed.
+    if name.contains('/') {
+        return !matches!(command.as_str(), "cd" | "pushd" | "popd")
+            && super::invocation::parse(&command, &texts[1..]).is_none();
+    }
+    match super::invocation::parse(&command, &texts[1..]) {
+        // A command that runs nothing and changes no folder or mount (not `cd`: a `cd` that
+        // `&&`, `||`, `&` or a pipeline skips, or `pushd -n`, would leave
+        // the shell elsewhere than the classifier follows).
+        None => command != "cd" && (data_only(words) || FOLLOWED_TOOLS.contains(&command.as_str())),
+        Some(invocation) => {
+            matches!(invocation.code, super::invocation::Code::File(_))
+                && invocation.preloads.is_empty()
+                && (posix_shell(&command)
+                    || matches!(command.as_str(), "source" | ".")
+                    || SCRIPT_INTERPRETERS.contains(&command.as_str()))
+        }
+    }
+}
+
 /// Text the parse may split into words other than bash's: a backslash
 /// (`diff\<newline>tool` is one bash word, two parsed words), a control
 /// character other than newline or tab, or a non-ASCII character before
@@ -174,3 +320,7 @@ fn data_only(words: &[PlainWord]) -> bool {
         name => DATA_ONLY.contains(&name),
     }
 }
+
+#[cfg(test)]
+#[path = "measure_tests.rs"]
+pub(super) mod measure_tests;

@@ -151,9 +151,9 @@ Initial evidence and verification response are different state transitions and u
 "$CORBANU_BIN" tasknode task show <task-id> --json
 ```
 
-The evidence commands preflight the server-reported task actions and reject a mode mismatch. Successful receipts include `pfterminalLifecycle` with `completionConfirmed`, the current phase, and `nextCommand`. Always follow that command. After initial evidence, respond when `actions.canSubmitVerificationEvidence` becomes true. After verification, confirm `rewardOutcome` or an explicit `rewarded` state before reporting completion.
+The evidence commands preflight the server-reported task actions and reject a mode mismatch. Successful receipts include `pfterminalLifecycle` with `completionConfirmed`, the current phase, `nextCommand`, and `submissionRef` (the event id, transaction hash or CID Task Node recorded). If Task Node reports success without any such reference, the command exits non-zero with `task_evidence_receipt_unconfirmed` and `evidenceGateOpen`; do not resubmit blindly, run `task show` first. Always follow the receipt's `nextCommand`. After initial evidence, respond when `actions.canSubmitVerificationEvidence` becomes true. After verification, confirm `rewardOutcome` or an explicit `rewarded` state before reporting completion.
 
-If verification has not materialized yet, query `"$CORBANU_BIN" tasknode tasks list --tab verification --json`. Keep the task pending rather than treating the initial evidence receipt as completion.
+If verification has not materialized yet, query `"$CORBANU_BIN" tasknode tasks list --tab verification --json`. Keep the task pending rather than treating the initial evidence receipt as completion. If the task stays `Submitted` across later work cycles with no verification request and no evidence action, report the task id and `submissionRef` to Task Node operators; do not cancel the task.
 
 Use `--origin <url>` only for explicit local/dev testing. Production defaults to `https://tasknode.postfiat.org` unless the environment or saved session overrides it.
 

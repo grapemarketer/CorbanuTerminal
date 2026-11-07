@@ -1,0 +1,43 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: OpenAI
+Model: GPT-5.6-Luna
+Billing: Pay per use
+Estimated cost: no price available
+Next step for requests with no price: check the bill from OpenAI. No published price covers them, so no cost is shown for them here.
+Tokens: 13,810 tokens
+—— Details ——
+Billed cost: OpenAI doesn't report its charges, so any cost here is an estimate — check OpenAI's bill.
+Request: bdd78617-be04-42d4-bd82-ed3d6c5882ca
+Attempt: c190d985-72d5-4e4e-8d3a-e58404b958b3
+Thread: 01a13d32-a750-7f52-9ab7-2e58f5704995
+Turn: 01a13d32-e378-7ff3-9db3-e3e1f2a3fc35
+Provider: openai
+Account: default
+Model: gpt-5.6-luna
+Opaque scope: 5691e789-08a9-4161-83e3-a49cafa77a13
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T01:35:07.711Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Token cost: unavailable — no applicable price; recorded usage is not a zero-cost claim.
+Billing basis: pay per use
+Input: 13805
+Noncached input (derived for inclusive input): 3 (derived)
+Cache read: 0 (reported)
+Cache write: 13802
+Output: 5
+Reasoning (subset, not separately billed): 0 (reported)
+Total (not separately billed): 13810
+Noncached input cost: unknown — rate unavailable
+Cache read cost: none — 0 tokens
+Cache write cost: unknown — rate unavailable
+Output cost: unknown — rate unavailable
+Known subtotal exact USD: none — no price for these attempts
+Price: none recorded — this request records only its billing basis: pay per use
+Evidence revision 9; source 5350ce4b-515f-4e61-99ad-6ebf56133e97; sequence 9; presence patch
+{"input":13805,"read":0,"write":13802,"output":5,"reasoning":0,"total":13810}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

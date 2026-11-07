@@ -1,0 +1,40 @@
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+
+› reply with the single word ping
+
+• ping
+
+› reply with the single word pong
+
+• pong
+
+/status
+
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Corbanu Terminal (v0.1.48)                                                           │
+│                                                                                          │
+│  Model:                Z.AI GLM 5.3 Flash                                                │
+│  Model provider:       Z.AI - https://api.z.ai/api/paas/v4 · account work                │
+│  Directory:            /tmp/f555proj                                                     │
+│  Permissions:          Next turn: Workspace (Ask for approval)                           │
+│  Security:             Requested Permissive; effective protection unverified (/security) │
+│  Agents.md:            <none>                                                            │
+│  Collaboration mode:   Default                                                           │
+│  Session:              01a12e62-0ebe-7e33-97ac-050c00e595c0                              │
+│                                                                                          │
+│  Token usage:          28K total  (28K input + 25 output)                                │
+│  Context window:       100% left (14.3K used / 950K)                                     │
+│  Account usage:        work · 27,980 input · 576 cached input · 25 output (19 reasoning) │
+│  Limits:               data not available yet                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+› Use /skills to list available skills
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: 6.8 tok/s
+

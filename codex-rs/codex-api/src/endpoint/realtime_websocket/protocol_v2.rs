@@ -11,6 +11,7 @@ use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
+use codex_protocol::protocol::RealtimeResponseUsage;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -69,6 +70,7 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         )),
         "response.done" => Some(RealtimeEvent::ResponseDone(RealtimeResponseDone {
             response_id: parse_response_event_response_id(&parsed),
+            usage: parse_response_usage(&parsed),
         })),
         "error" => parse_error_event(&parsed),
         _ => {
@@ -91,6 +93,29 @@ fn parse_response_event_response_id(parsed: &Value) -> Option<String> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
+}
+
+/// The `response.usage` a `response.done` carries (#889 D223): input, cached
+/// input (`input_token_details.cached_tokens`), output and total tokens, each
+/// absent when unstated. A count that is not an exact nonnegative integer
+/// makes the whole report unusable, so nothing is read from it.
+fn parse_response_usage(parsed: &Value) -> Option<RealtimeResponseUsage> {
+    let usage = parsed.get("response")?.get("usage")?.as_object()?;
+    let count = |value: Option<&Value>| match value {
+        None | Some(Value::Null) => Some(None),
+        Some(value) => value.as_u64().map(Some),
+    };
+    let cached = match usage.get("input_token_details") {
+        None | Some(Value::Null) => None,
+        Some(details) => count(details.as_object()?.get("cached_tokens"))?,
+    };
+    let usage = RealtimeResponseUsage {
+        input_tokens: count(usage.get("input_tokens"))?,
+        cached_input_tokens: cached,
+        output_tokens: count(usage.get("output_tokens"))?,
+        total_tokens: count(usage.get("total_tokens"))?,
+    };
+    (usage != RealtimeResponseUsage::default()).then_some(usage)
 }
 
 fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {

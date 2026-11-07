@@ -1,0 +1,7 @@
+=== home zainokeyoff 2026-10-22T01:09:31Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+--- account list (zainokeyoff)
+Error: named accounts are off; enable them with `[features] named_accounts = true` or `--enable named_accounts`
+account list rc=1
+prep done 2026-10-22T01:09:31Z

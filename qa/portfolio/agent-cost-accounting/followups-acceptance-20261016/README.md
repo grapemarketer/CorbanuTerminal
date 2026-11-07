@@ -4,11 +4,40 @@ PF-60-S10 (#404) runs the acceptance of PF-60-S06 to S09 inside the
 [isolated execution gate](../../../code-blind-functional/isolated-execution.md), discharging PF-60-S05's waiver (b).
 Owner decisions (Travis, 2026-10-15): S06–S09 accepted; S10 may run code-blind on all four before they are archived,
 on VM "macOS 3"; #824 (realtime) is included only if merged before the freeze — it was not, so realtime is the tracked
-known gap. **Not accepted: S10 needs Travis's acceptance.**
+known gap. **Signed off by Travis on 2026-10-27 (D208)**, with ACC-22 and ACC-35 as named limits.
 
-## Result
+## Final disposition (2026-10-27, D207–D209)
 
-37 cases: **29 passed, 1 failed, 7 blocked** ([dispositions.md](dispositions.md), [results.json](results.json)).
+- **35 passed, 0 failed, 2 blocked** of 37. Blocked: ACC-22 (advisory; starting condition not met) and ACC-35
+  (optional; needs real Moonshot spend, D3 not granted). These are S10's named limits (D208).
+- Three of the 35 are **passed by owner decision**, not on the record: ACC-04 (D113) and ACC-11 and ACC-14 (D207).
+  Owner acceptance is not a clean pass. On the record those three stay **blocked** ([dispositions.md](dispositions.md),
+  [results.json](results.json) `cases`); the decisions are listed separately (dispositions.md's last section,
+  results.json `owner_decisions`).
+- On the record alone: 32 passed, 0 failed, 5 blocked.
+
+## Status before D207–D209 (2026-10-27)
+
+- **33 passed, 0 failed, 4 blocked** of 37 cases. Two dated results after the first run, below, produced this count:
+  - **Re-run R1 (2026-10-27):** ACC-06, ACC-15 and ACC-18 passed. ACC-11 and ACC-14 stay blocked, each on one result
+    that the tester judged but did not capture. Record: [rerun-r1-20261022/](rerun-r1-20261022/README.md).
+  - **D113 (2026-10-21):** ACC-04 is recorded as passed.
+- The 4 blocked cases:
+  - ACC-11 and ACC-14 (blockers), see the next point;
+  - ACC-22 (advisory; its starting condition was not met);
+  - ACC-35 (optional; D3 was not granted).
+- No case failed. ACC-11 and ACC-14 have every other result observed and passing:
+  - ACC-11's missing result is "exactly one link contains Reopen warm-up". It shows only in a later capture.
+  - ACC-14's missing result is the exact-cost comparison of its two oldest requests. Those were read only rounded in
+    ACC-14, and exactly later, in ACC-18.
+- [dispositions.md](dispositions.md) and [results.json](results.json) carry the R1 dispositions for the five re-run
+  cases. Each keeps its first-run entry under `prior_run`. Their totals read 32 passed and 5 blocked, because ACC-04
+  stays blocked there and D113 is recorded only in the addendum below (and, since D207, in their owner-decision parts).
+
+## Result (first run, 2026-10-16)
+
+37 cases: **29 passed, 1 failed, 7 blocked**. The first-run dispositions of the five re-run cases are under
+`prior_run` in [results.json](results.json).
 
 - **Failed (1):** ACC-06 (#898): after `/review`, `/cost` shows no `code-review:` request and no new request anywhere. The
   run's ledger (integrator's read, [runs/A/ledger-attempts.txt](runs/A/ledger-attempts.txt)) holds the review's six
@@ -104,7 +133,7 @@ installed at this run's request because the earlier build lacked #859 ([candidat
 - Realtime (#824, fix #882 unmerged at the freeze), TensorCash, DeepSeek holiday calendar, BigModel, older records,
   Windows and Linux; `fork:` (no client makes one); Moonshot unlisted models and K2.7 HighSpeed/K2.6 rates; the 5-minute
   cache lifetime; same-conversation `/resume`; a real Moonshot cache hit (D3 not granted).
-- Request-ID stability across reopens was not observed (ACC-11, 14, 18): the executors re-read costs, not IDs.
+- Request-ID stability across reopens was not observed (ACC-11, 14, 18): the executors re-read costs, not IDs. Observed and passed in re-run R1.
 - `harness/agms-product` was replaced (harness fix 1, corbanu route only) while group F's executor was running, before
   its first product start; packet v2 was installed while group D ran; the fix check used lane agmx0 concurrently with F.
 - Gate attempts 1 and 2 each sent one real Z.AI smoke turn although they failed (see the addendum).
@@ -134,3 +163,39 @@ Dated addendum; the record above is unchanged.
 - **D113** (owner, 2026-10-21): ACC-04 is recorded as **passed**. The 37 cases are now **30 passed, 1 failed (ACC-06),
   6 blocked**. It ran on the local model only, with none of this record's routes or prices (named limit of that
   record).
+
+## After this record: re-run R1 (2026-10-27)
+
+Dated addendum. The first-run sections above are unchanged in substance. This PR adds a current-status section,
+renames the result heading, and adds one note to a named limit.
+
+- ACC-06 (#898 is closed as fixed), ACC-11, ACC-14, ACC-15 and ACC-18 were re-run under amendment R1.
+  - A fresh designer wrote it. A separate reviewer returned CHANGES with a full revised text, and that revised text was
+    frozen word for word, before the first VM started.
+  - The candidate was a private signed build of `63c9daca26`.
+  - Testers were GLM 5.3 Flash, running code-blind on fresh Tart clones. Host relays held the keys, so no real key
+    entered a guest.
+- **ACC-06 passed:** each of the review's five requests shows `Turn: code-review:…`.
+- **ACC-15 passed:** the side turn shows `Turn: side:…`, and exactly one new notice appeared.
+- **ACC-18 passed:** after all the group's reopens, every earlier Request ID comes back with its exact cost, and the per-conversation
+  sums hold for both conversations.
+- **ACC-11 and ACC-14 stay blocked**, each on one result the tester judged without a capture (dispositions.md).
+  - Their first-run gap, re-reading earlier Request IDs after the reopen, is now observed and passes.
+  - The tester reported both as passed.
+- **Attempts that did not count:**
+  - A-R1 on 2026-10-22 (Z.AI balance);
+  - C-R1 attempt 1 (the tester's stream stalled mid-ACC-14).
+- The expired synthetic mediation CA was re-issued.
+- Details, evidence and integrator checks: [rerun-r1-20261022/README.md](rerun-r1-20261022/README.md).
+
+## After this record: owner decisions D207–D209 (2026-10-27)
+
+Dated addendum; the record above is unchanged except the opening status and the final-disposition section.
+
+- **D207:** ACC-11 and ACC-14 are recorded as passed by owner decision, as D113 did for ACC-04. Their recorded
+  disposition stays **blocked**, each on one result not captured in the case's own screens.
+- **D208:** Travis signed off S10 with ACC-22 (advisory) and ACC-35 (needs real Moonshot spend, not granted) as named
+  limits. Final disposition: 35 passed, 0 failed, 2 blocked, with ACC-04, ACC-11 and ACC-14 passed by owner decision.
+- **D209:** this README, [dispositions.md](dispositions.md), [results.json](results.json), the
+  [S10 sprint page](../../../../docs/sprints/archive/portfolio-agent-cost-accounting-followups/pf-60-s10-isolated-code-blind-acceptance.md)
+  and the [sprint index](../../../../docs/sprints/index.md) carry these counts.

@@ -1,0 +1,14 @@
+Executable=/Volumes/CorbanuDrive/Corbanu/.codex-work/acct-rerun-20261022/stage/package/bin/corbanu
+Identifier=com.corbanu.corbanu
+Format=Mach-O thin (arm64)
+CodeDirectory v=20500 size=1696799 flags=0x10000(runtime) hashes=53019+2 location=embedded
+Signature size=9043
+Authority=Developer ID Application: Travis Good (K5N2T25C23)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=22 Oct 2026 at 4:53:08 am
+Info.plist=not bound
+TeamIdentifier=K5N2T25C23
+Runtime Version=26.0.0
+Sealed Resources=none
+Internal requirements count=1 size=180

@@ -1,0 +1,16 @@
+# GROUP HOME...   (frozen group plan, design-cases.md)
+G1 zai3
+G2 zai3
+G3 zai3
+G4 zai3
+G5 zaione fresh
+G6 zainokey
+G7 custom
+G8 zai3off zainokeyoff
+G9 oai1
+G6R zainokey
+G8R zainokeyoff
+R1 zai3
+R2 zai3
+R3 zai3
+R4 zaione fresh

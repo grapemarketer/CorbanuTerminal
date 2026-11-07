@@ -163,6 +163,17 @@ pub(crate) fn remove_cached_directory_plugins(
     }
 }
 
+/// Identifies the catalog that `load_cached_directory_plugins` would read for these inputs,
+/// or `None` when that catalog is never cached.
+pub(super) fn cache_identity(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    scope: RemotePluginScope,
+) -> Option<String> {
+    let cache_key = RemotePluginCatalogCacheKey::new(config, auth, scope)?;
+    serde_json::to_string(&cache_key).ok()
+}
+
 fn cache_path(codex_home: &Path, cache_key: &RemotePluginCatalogCacheKey) -> PathBuf {
     let cache_key_json = serde_json::to_vec(cache_key).unwrap_or_default();
     let mut cache_key_hash = 0xcbf29ce484222325_u64;

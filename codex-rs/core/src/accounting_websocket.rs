@@ -31,14 +31,15 @@ impl Provenance {
         auth: Option<&CodexAuth>,
         api: &codex_api::Provider,
     ) -> Self {
+        let auth_mode = auth.map(CodexAuth::auth_mode);
         Self {
             endpoint: api
                 .websocket_url_for_path("responses")
                 .ok()
                 .map(|url| url.to_string()),
-            api_key: super::responses::legacy_eligible(provider, auth),
-            eligible: super::responses::eligible(provider, auth),
-            auth_mode: auth.map(CodexAuth::auth_mode),
+            api_key: super::responses::legacy_eligible(provider, auth_mode),
+            eligible: super::responses::eligible(provider, auth_mode),
+            auth_mode,
         }
     }
 

@@ -5,6 +5,8 @@
 //! #907: what [`ReadDenials::apply`] costs in filesystem walks.
 
 use super::*;
+// `codex-protocol` is a normal dependency here, so its `cfg(test)` is off.
+// With no per-package `debug-assertions` overrides, our gate matches its counter.
 #[cfg(debug_assertions)]
 use codex_protocol::permissions::effective_path_normalizations_on_this_thread;
 use std::time::Duration;

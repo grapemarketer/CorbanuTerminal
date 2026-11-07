@@ -156,27 +156,7 @@ fn watch<T>(home: &Path, with: impl FnOnce(&HomeWatch) -> T) -> T {
 
 fn run(home: &Path, watch: &Arc<HomeWatch>) {
     let (tx, rx) = mpsc::channel::<()>();
-    // The file is replaced by a rename, so its folder is watched.
-    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let relevant = match &event {
-            Ok(event) => {
-                event.need_rescan()
-                    || event
-                        .paths
-                        .iter()
-                        .any(|path| path.file_name().is_some_and(|name| name == STATE_FILE))
-            }
-            Err(_) => true,
-        };
-        if relevant {
-            let _ = tx.send(());
-        }
-    })
-    .and_then(|mut watcher| {
-        watcher.watch(home, RecursiveMode::NonRecursive)?;
-        Ok(watcher)
-    });
-    let _watcher = match watcher {
+    let _watcher = match notifications(home, tx) {
         Ok(watcher) => Some(watcher),
         Err(error) => {
             tracing::warn!(
@@ -222,6 +202,31 @@ fn run(home: &Path, watch: &Arc<HomeWatch>) {
         }
         while rx.try_recv().is_ok() {}
     }
+}
+
+/// File notifications for `home`'s saved state, sent to `tx`. The file is
+/// replaced by a rename, so its folder is watched. #1491: the watcher is
+/// dropped when the watch ends; notify 8.2.1 or later is required there, as
+/// 8.2.0's macOS backend could use the FSEvents thread's run loop after that
+/// thread had exited (SIGTRAP/SIGSEGV in `FsEventWatcher::stop`).
+fn notifications(home: &Path, tx: mpsc::Sender<()>) -> notify::Result<notify::RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let relevant = match &event {
+            Ok(event) => {
+                event.need_rescan()
+                    || event
+                        .paths
+                        .iter()
+                        .any(|path| path.file_name().is_some_and(|name| name == STATE_FILE))
+            }
+            Err(_) => true,
+        };
+        if relevant {
+            let _ = tx.send(());
+        }
+    })?;
+    watcher.watch(home, RecursiveMode::NonRecursive)?;
+    Ok(watcher)
 }
 
 /// Whether the kill-switch event saved for `home` was made by this process.
@@ -432,3 +437,7 @@ fn raise_to_saved(
 pub(super) fn start_for_test(home: &Path) -> tokio::sync::watch::Receiver<bool> {
     subscribe(home)
 }
+
+#[cfg(test)]
+#[path = "kill_switch_watch_tests.rs"]
+mod tests;

@@ -1,6 +1,5 @@
 //! Refresh-capable access to Claude Code subscription credentials.
 
-use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
@@ -32,6 +31,11 @@ use codex_vault::resolve_claude_auth_source;
 use serde::Deserialize;
 use tokio::process::Command;
 use zeroize::Zeroizing;
+
+#[path = "claude_refresh_lock.rs"]
+mod refresh_lock;
+
+use refresh_lock::ClaudeRefreshLock;
 
 const CLAUDE_CREDENTIALS_FILE: &str = ".credentials.json";
 const CLAUDE_REFRESH_LOCK_FILE: &str = ".pfterminal-oauth-refresh.lock";
@@ -1114,7 +1118,10 @@ fn claude_config_dir_is_default(config_dir: &Path) -> bool {
     dirs::home_dir().is_some_and(|home| config_dir == home.join(".claude"))
 }
 
-async fn acquire_refresh_lock(config_dir: &Path, store: PlatformCredentialStore) -> Result<File> {
+async fn acquire_refresh_lock(
+    config_dir: &Path,
+    store: PlatformCredentialStore,
+) -> Result<ClaudeRefreshLock> {
     let lock_path = refresh_lock_path(config_dir, store)?;
     let lock_dir = lock_path
         .parent()
@@ -1125,15 +1132,14 @@ async fn acquire_refresh_lock(config_dir: &Path, store: PlatformCredentialStore)
             lock_dir.display()
         )
     })?;
-    tokio::task::spawn_blocking(move || -> io::Result<File> {
+    tokio::task::spawn_blocking(move || -> io::Result<ClaudeRefreshLock> {
         let lock_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(lock_path)?;
-        lock_file.lock()?;
-        Ok(lock_file)
+        ClaudeRefreshLock::lock(lock_file)
     })
     .await
     .context("Claude OAuth refresh lock task failed")?
@@ -1176,6 +1182,10 @@ fn current_time_ms() -> u64 {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(all(test, unix))]
+#[path = "claude_refresh_lock_tests.rs"]
+mod refresh_lock_tests;
 
 #[cfg(test)]
 mod tests {

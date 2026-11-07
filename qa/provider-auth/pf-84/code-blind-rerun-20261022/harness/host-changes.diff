@@ -1,0 +1,217 @@
+--- qa/provider-auth/pf-84/code-blind-20261021/harness/host/tart-run.sh	2026-10-22 00:46:55
++++ ht/tart-run.sh	2026-10-22 01:37:05
+@@ -10,15 +10,15 @@
+ # host relay (host_zai_relay.py, 127.0.0.1:11237) adds the Z.AI key; the guest reaches it only through one SSH reverse
+ # tunnel bound to the guest's loopback (18601), which only the coordinator's mediator may use (pf). No local model.
+ set -euo pipefail
+-Q=/Volumes/CorbanuDrive/Corbanu/.codex-work/pf84-cb1-20261021
+-WT=/Volumes/CorbanuDrive/Corbanu/worktrees/pf84-cb1
++Q=<Q>
++WT=<Q>
+ WORKERS=/Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002
+ export TART_QA_WORK=/Volumes/CorbanuDrive/Corbanu/.codex-work/tart-eval   # keys + known_hosts of the base
+ export TART_HOME=/Volumes/CorbanuDrive/Corbanu/.codex-work/tart-home
+ export TART=/Volumes/CorbanuDrive/Corbanu/.codex-work/tart-bin/tart.app/Contents/MacOS/tart
+ # shellcheck source=/dev/null
+ . "$WT/scripts/qa/tart/lib.sh"
+-VM=pf84-cb1-run
++VM=pf84-rerun-d136
+ LOCK=$WORKERS/vm-tart.lock
+ TM=(/opt/homebrew/bin/tmux -S "$Q/tmux.sock")
+ C=$Q/${PAR_COMMON:?set PAR_COMMON to the evidence folder of this clone, e.g. common/T01-20261020T120000Z}
+@@ -35,10 +35,10 @@
+ 
+ case "${1:-}" in
+   up)
+-    [ ! -e "$LOCK" ] || grep -q '^holder: pf84-cb1$' "$LOCK" || die "Tart lock held: $(cat "$LOCK")"
++    [ ! -e "$LOCK" ] || grep -q '^holder: pf84-rerun$' "$LOCK" || die "Tart lock held: $(cat "$LOCK")"
+     [ ! -e "$C" ] || die "evidence folder $C already exists; each clone needs its own (PAR_COMMON)"
+     mkdir -p "$C"
+-    printf 'holder: pf84-cb1\ntaken: %s\nvm: Tart %s (clone of %s)\n' "$(date -u +%FT%TZ)" "$VM" "$TART_QA_BASE" > "$LOCK"
++    printf 'holder: pf84-rerun\ntaken: %s\nvm: Tart %s (clone of %s)\n' "$(date -u +%FT%TZ)" "$VM" "$TART_QA_BASE" > "$LOCK"
+     {
+       date -u +%FT%TZ; "$TART" list; "$UTMCTL" list 2>&1 || true
+       memory_pressure -Q | tail -1
+@@ -79,6 +79,8 @@
+     ;;
+   stage)
+     ag 'mkdir -p -m 700 ~/agms ~/agms/stage ~/agms/mediator; echo ok'
++    # pf84-rerun: a re-stage (resumed clone) must not keep files of the earlier package or packet.
++    ag 'cd ~/agms/stage && for d in package packet h; do [ ! -e "$d" ] || rm -r "$d"; done; echo cleared-stage'
+     COPYFILE_DISABLE=1 tar --no-xattrs -C "$Q/stage" -cf - package package-files.txt packet | agi 'cd ~/agms/stage && tar -xf - && echo staged-package-packet'
+     items="agms-launch agms-probe agms-product agms-tui agms-mcp-notes agms-prep agms_mediator.py tmux.conf mediation-ca.pem product-config.toml fixture.tar expected.json"
+     COPYFILE_DISABLE=1 tar --no-xattrs -C "$Q/h" -czf - $items | agi 'mkdir -p ~/agms/stage/h && cd ~/agms/stage/h && tar -xzf - && echo staged-harness'
+@@ -149,6 +151,91 @@
+     wipe > "$OUT/wipe-after.txt" 2>&1 || true
+     echo "done $RUN $(cat "$OUT/executor-exit.txt" 2>/dev/null)" | tee -a "$Q/runs/seq.log"
+     ;;
++  signin)
++    # pf84-rerun: D136 sign-in ahead of the run, in the clone that the D136 group later runs in (the VM is stopped,
++    # not deleted, in between; `group-continue` then runs the executor in this same RUN without wiping or re-prepping).
++    LANE="$2"; GROUP="$3"
++    RUN="agms-$GROUP-$LANE-$(date -u +%Y%m%dT%H%M%SZ)"
++    OUT="$Q/runs/$RUN"; mkdir -p "$OUT"
++    printf '%s %s %s\n' "$LANE" "$GROUP" "$RUN" > "$Q/d136-run.txt"
++    echo "== $RUN signin (evidence folder $C)" | tee -a "$Q/runs/seq.log"
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch probe $RUN" > "$OUT/preflight-signin.stdout" 2> "$OUT/preflight-signin.stderr" || true
++    grep -q '"ok": true' "$OUT/preflight-signin.stdout" || die "preflight failed for $RUN (see $OUT)"
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch prep $RUN x oai1" > "$OUT/prep.txt" 2>&1 || echo "prep rc=$?" >> "$OUT/prep.txt"
++    "$Q/ht/signin.sh" "$LANE" "$RUN" "$OUT"
++    ;;
++  reseal)
++    # pf84-rerun: after `resume`, re-apply the sealed network that a reboot drops (pf is not enabled at boot; the DNS
++    # responder's LaunchDaemon reloads by itself). `stage` then re-runs setup-agent (mediator, guard) and provision
++    # (per-user pf anchor, read-only package and packet); lane homes are left as they are.
++    printf '%s\n' 'pfctl -f /etc/pf.conf 2>&1 | grep -v -e ALTQ -e "flushing of rules" -e "present in the main" -e "pf.conf for further" -e "^$" || true' \
++      'pfctl -E 2>&1 | grep -v -e ALTQ -e "^$" || true' \
++      'for _ in $(seq 1 20); do lsof -nP -iUDP@127.0.0.1:53 > /dev/null 2>&1 && break; sleep 0.5; done' \
++      'echo "resealed: pf $(pfctl -s info 2>/dev/null | awk "/Status/ {print \$2}"); rules $(pfctl -a corbanu.pf83 -sr | wc -l | tr -d " "); dns $(lsof -nP -iUDP@127.0.0.1:53 > /dev/null 2>&1 && echo listening || echo MISSING)"' \
++      'curl -sS -m 6 -o /dev/null https://example.com 2>&1; echo "example.com rc=$?"' \
++      | root 2>&1 | tee "$C/reseal.out"
++    ;;
++  group-continue)
++    # pf84-rerun: the D136 group in the RUN that `signin` prepared (no wipe, no prep); otherwise as `group`.
++    read -r LANE _SG RUN < "$Q/d136-run.txt"; GROUP="$2"
++    OUT="$Q/runs/$RUN"
++    echo "== $RUN continue as $GROUP (evidence folder $C)" | tee -a "$Q/runs/seq.log"
++    if ! python3 "$Q/h/gate_ok.py" "$C" > "$OUT/gate-check.txt" 2>&1; then
++      echo "gate not passed in this clone ($C); group blocked" | tee "$OUT/BLOCKED" | tee -a "$Q/runs/seq.log"; exit 0
++    fi
++    memory_pressure -Q | tail -1 > "$OUT/memory-before.txt"
++    ag 'tail -1 ~/agms/guard.log; grep -c SECURITYAGENT-SEEN ~/agms/guard.log' > "$OUT/guard-before.txt" 2>&1 || true
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch probe $RUN" > "$OUT/preflight-summary.stdout" 2> "$OUT/preflight.stderr" || true
++    if ! grep -q '"ok": true' "$OUT/preflight-summary.stdout"; then
++      echo "preflight failed for $RUN; group blocked" | tee "$OUT/BLOCKED"
++    else
++      TM2=(/opt/homebrew/bin/tmux -S "$Q/tmux.sock")
++      "${TM2[@]}" has-session -t passthrough 2>/dev/null || \
++        "${TM2[@]}" new-session -d -s passthrough "exec /usr/bin/python3 $Q/h/host_passthrough.py --port 11248 --log $Q/logs/host-passthrough.jsonl"
++      sleep 1
++      date -u +%FT%TZ > "$OUT/executor-start.txt"
++      set +e
++      ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch executor $RUN $GROUP ${AGMS_EXECUTOR_MODEL:-glm-5.3-flash}" \
++        > "$OUT/executor-events.jsonl" 2> "$OUT/executor.stderr"
++      echo "exit=$?" > "$OUT/executor-exit.txt"
++      set -e
++      date -u +%FT%TZ > "$OUT/executor-end.txt"
++    fi
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch cleanup $RUN" > /dev/null 2>&1 || true
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch manifest $RUN" > "$OUT/homes-manifest.txt" 2>&1 || true
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch signin-stop $RUN" > /dev/null 2>&1 || true
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch signout $RUN" > "$OUT/signout.txt" 2>&1 || echo "SIGNOUT FAILED rc=$?" >> "$OUT/signout.txt"
++    "${TM[@]}" kill-session -t passthrough 2> /dev/null && echo "$(date -u +%FT%TZ) host pass-through stopped" >> "$OUT/signout.txt" || true
++    ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch collect $RUN" > "$OUT/collected.tar" 2> "$OUT/collect.stderr" || true
++    ag 'cat ~/agms/mediator/mediator.jsonl' > "$OUT/mediator-at-end.jsonl" 2>&1 || true
++    ag 'tail -1 ~/agms/guard.log; grep -c SECURITYAGENT-SEEN ~/agms/guard.log' > "$OUT/guard-after.txt" 2>&1 || true
++    memory_pressure -Q | tail -1 > "$OUT/memory-after.txt"
++    echo "done $RUN $(cat "$OUT/executor-exit.txt" 2>/dev/null)" | tee -a "$Q/runs/seq.log"
++    ;;
++  pause)
++    # pf84-rerun: stop (not delete) the D136 clone so t1's sign-in survives until the run; the lock stays held.
++    {
++      "${TM[@]}" kill-session -t passthrough 2> /dev/null && echo "host pass-through stopped" || true
++      "${TM[@]}" kill-session -t tunnel 2> /dev/null && echo "tunnel stopped" || true
++      gssh "$(ip_of)" 'sync; sudo shutdown -h now' > /dev/null 2>&1 || true
++      for _ in $(seq 1 60); do "$TART" list | awk -v v="$VM" '$2 == v {print $NF}' | grep -q stopped && break; sleep 2; done
++      "${TM[@]}" kill-session -t vm 2> /dev/null || true
++      date -u +%FT%TZ; "$TART" list
++    } 2>&1 | tee -a "$C/vm-pause.txt"
++    ;;
++  resume)
++    # pf84-rerun: boot the stopped D136 clone again (same evidence folder; the IP may change).
++    {
++      date -u +%FT%TZ; memory_pressure -Q | tail -1
++      guard_slot
++      "${TM[@]}" new-session -d -s vm \
++        "TART_HOME='$TART_HOME' TMPDIR='$TMPDIR' TART_NO_AUTO_PRUNE=1 exec '$TART' run --no-graphics --no-audio --no-clipboard $VM > '$LOGS/$VM.run.log' 2>&1"
++      sleep 2
++      ip="$(wait_ip "$VM" 180)"; echo "$ip" > "$C/vm-ip.txt"
++      wait_ssh "$ip" 180 || die "no SSH on $ip"
++      echo "ssh ready $(date -u +%FT%TZ) $ip"; "$TART" list
++    } 2>&1 | tee -a "$C/vm-resume.txt"
++    ;;
+   status)
+     ag 'tail -2 ~/agms/mediator/mediator.jsonl | cut -c1-300; tail -1 ~/agms/guard.log; grep -c SECURITYAGENT-SEEN ~/agms/guard.log'
+     memory_pressure -Q | tail -1
+--- qa/provider-auth/pf-84/code-blind-20261021/harness/host/signin.sh	2026-10-22 00:46:55
++++ ht/signin.sh	2026-10-22 01:17:15
+@@ -5,12 +5,12 @@
+ # usage: signin.sh LANE RUN OUT      (called by tart-run.sh group; uses its ip/ssh helpers via PAR_COMMON)
+ set -u
+ LANE="$1"; RUN="$2"; OUT="$3"
+-Q=/Volumes/CorbanuDrive/Corbanu/.codex-work/pf84-cb1-20261021
+-HAND=/Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/pf84-cb1.signin.md
++Q=<Q>
++HAND=/Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/pf84-rerun.signin.md
+ C=$Q/${PAR_COMMON:?}
+ export TART_QA_WORK=/Volumes/CorbanuDrive/Corbanu/.codex-work/tart-eval
+ # shellcheck source=/dev/null
+-. /Volumes/CorbanuDrive/Corbanu/worktrees/pf84-cb1/scripts/qa/tart/lib.sh
++. <Q>/scripts/qa/tart/lib.sh
+ ag() { ssh -n "${SSH_OPTS[@]}" "agent@$(cat "$C/vm-ip.txt")" "$@"; }
+ L() { ag "cd /tmp; sudo -n -u $LANE -H /opt/agms/bin/agms-launch $1 $RUN"; }
+ # Host pass-through for chatgpt.com/auth.openai.com (this group only).
+@@ -36,7 +36,7 @@
+     continue
+   fi
+   {
+-    echo "# PF-84 code-blind run: ChatGPT test account sign-in (pf84-cb1) — attempt $attempt"
++    echo "# PF-84 code-blind run: ChatGPT test account sign-in (pf84-rerun, D136 re-run) — attempt $attempt"
+     echo
+     echo "Please approve with the FREE ChatGPT TEST account (not your own)."
+     echo
+--- qa/provider-auth/pf-84/code-blind-20261021/harness/host/to-record.sh	2026-10-22 00:46:55
++++ ht/to-record.sh	2026-10-22 01:52:49
+@@ -4,9 +4,9 @@
+ # usage: to-record.sh GROUP
+ set -euo pipefail
+ G="$1"
+-Q=/Volumes/CorbanuDrive/Corbanu/.codex-work/pf84-cb1-20261021
+-R=/Volumes/CorbanuDrive/Corbanu/worktrees/pf84-cb1/qa/provider-auth/pf-84/code-blind-20261021/runs/$G
+-d=$(ls -d $Q/runs/agms-$G-* | tail -1); c=$(ls -d $Q/common/$G-* | tail -1)
++Q=<Q>
++R=/Volumes/CorbanuDrive/Corbanu/worktrees/pf84-rerun/qa/provider-auth/pf-84/code-blind-rerun-20261022/runs/$G
++d=$(ls -d $Q/runs/agms-${RUNG:-$G}-* | tail -1); c=$(ls -d $Q/common/${RUNG:-$G}-* | tail -1)   # pf84-rerun: S1 ran in the D136 sign-in RUN (RUNG=D136)
+ [ -d "$d/x" ] || { mkdir -p "$d/x"; tar -xf "$d/collected.tar" -C "$d/x"; }
+ mkdir -p "$R"
+ red() { python3 "$Q/ht/redact.py"; }
+@@ -21,7 +21,7 @@
+ ' "$d/executor-events.jsonl" | red > "$R/executor-final.txt"
+ for f in actions.jsonl screens.jsonl prep.txt homes-after-prep.txt; do [ ! -f "$E/$f" ] || red < "$E/$f" > "$R/$f"; done
+ python3 "$Q/ht/relay-table.py" "$d/mediator-at-end.jsonl" | grep -v -E 'github|qwen|127\.0\.0\.1:1860|denied_path' > "$R/relay-product-requests.txt" || true
+-for f in homes-manifest.txt signin.txt signout.txt executor-start.txt executor-end.txt executor-exit.txt gate-check.txt \
++for f in homes-manifest.txt signin.txt prep.txt preflight-signin.stdout signout.txt executor-start.txt executor-end.txt executor-exit.txt gate-check.txt \
+          guard-before.txt guard-after.txt memory-before.txt memory-after.txt preflight-summary.stdout; do
+   [ ! -f "$d/$f" ] || red < "$d/$f" > "$R/$f"
+ done
+--- qa/provider-auth/pf-84/code-blind-20261021/harness/host/redact.py	2026-10-22 00:46:55
++++ ht/redact.py	2026-10-22 01:52:49
+@@ -2,7 +2,7 @@
+ import re
+ import sys
+ 
+-Q = "/Volumes/CorbanuDrive/Corbanu/.codex-work/pf84-cb1-20261021"
++Q = "<Q>"
+ text = sys.stdin.read()
+ 
+ 
+--- qa/provider-auth/pf-84/code-blind-20261021/harness/host/run-tart.sh	2026-10-22 00:46:55
++++ ht/run-tart.sh	2026-10-22 01:17:15
+@@ -1,7 +1,7 @@
+ #!/bin/bash
+ # pf84-cb1 (D137): one fresh Tart clone per group: up, seal, tunnel, stage, gate, group, down. One VM at a time.
+ # usage: run-tart.sh [GROUP...]   (default: every group in groups.txt, in order; groups.txt lines: GROUP HOME...)
+-Q=/Volumes/CorbanuDrive/Corbanu/.codex-work/pf84-cb1-20261021
++Q=<Q>
+ cd $Q
+ LIST="${*:-$(awk '!/^#/ && NF {print $1}' groups.txt)}"
+ lanes=(agmx1 agmx2 agmx3); i=${LANE_OFFSET:-0}
+@@ -11,7 +11,7 @@
+   [ -n "$GROUP_HOMES" ] || { echo "$(date -u +%FT%TZ) no homes for $G" >> runs/seq.log; exit 1; }
+   LANE=${lanes[$((i % 3))]}; i=$((i + 1))
+   [ ! -e "$Q/STOP" ] || { echo "$(date -u +%FT%TZ) STOP file present; stopping before $G" >> runs/seq.log; exit 0; }
+-  while [ -e /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock ] && ! grep -q '^holder: pf84-cb1$' /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock; do
++  while [ -e /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock ] && ! grep -q '^holder: pf84-rerun$' /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock; do
+     echo "$(date -u +%FT%TZ) waiting for the Tart lock ($(head -1 /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock))" >> runs/seq.log; sleep 120; done
+   export PAR_COMMON=common/$G-$(date -u +%Y%m%dT%H%M%SZ)
+   while :; do f=$(memory_pressure -Q | awk '/free percentage/ {gsub("%","",$NF); print $NF}'); [ "${f:-0}" -ge 25 ] && break; echo "$(date -u +%FT%TZ) paused: memory free $f%" >> runs/seq.log; sleep 60; done

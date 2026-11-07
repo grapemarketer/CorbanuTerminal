@@ -127,19 +127,7 @@ impl AuthStorageBackend for VaultAccountAuthStorage {
         else {
             return Ok(None);
         };
-        // The parse error never quotes the value.
-        let auth: AuthDotJson = serde_json::from_str(&raw).map_err(|error| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "the stored sign-in of account `{}` is unreadable ({:?} at line {}, column {})",
-                    self.name,
-                    error.classify(),
-                    error.line(),
-                    error.column()
-                ),
-            )
-        })?;
+        let auth = self.parse(&raw)?;
         // #609: a sign-in saved before its kind was recorded gets it on its
         // next use (the index only; nothing is written once it is there).
         if recorded.is_none() {
@@ -168,6 +156,55 @@ impl AuthStorageBackend for VaultAccountAuthStorage {
         self.vault
             .remove_provider_account(&self.provider_id, &self.name)
             .map_err(std::io::Error::other)
+    }
+
+    /// #1311 (D171): read and saved under one vault lock, and only while the
+    /// account still holds a sign-in.
+    fn update(
+        &self,
+        change: &mut dyn FnMut(&mut AuthDotJson) -> std::io::Result<()>,
+    ) -> std::io::Result<Option<AuthDotJson>> {
+        if self.vault.key_storage() == VaultKeyStorage::NotInitialized {
+            return Ok(None);
+        }
+        let mut updated = None;
+        let found = self.vault.update_provider_account_sign_in(
+            &self.provider_id,
+            &self.name,
+            |raw| -> std::io::Result<_> {
+                let mut auth = self.parse(raw)?;
+                change(&mut auth)?;
+                let raw =
+                    Zeroizing::new(serde_json::to_string(&auth).map_err(std::io::Error::other)?);
+                let kind = sign_in_kind(&auth);
+                updated = Some(auth);
+                Ok((raw, kind))
+            },
+        );
+        let found = found.map_err(std::io::Error::other)??;
+        Ok(updated.filter(|_| found))
+    }
+
+    fn is_named_account(&self) -> bool {
+        true
+    }
+}
+
+impl VaultAccountAuthStorage {
+    /// The stored sign-in; the parse error never quotes the value.
+    fn parse(&self, raw: &str) -> std::io::Result<AuthDotJson> {
+        serde_json::from_str(raw).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the stored sign-in of account `{}` is unreadable ({:?} at line {}, column {})",
+                    self.name,
+                    error.classify(),
+                    error.line(),
+                    error.column()
+                ),
+            )
+        })
     }
 }
 

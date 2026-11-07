@@ -1,4 +1,4 @@
-# PF-84-S04: "Use for this session" in /providers. The default Z.AI account
+# PF-84-S04: "Start a new session on this account" in /providers. The default Z.AI account
 # (real key) replies; after switching to account fake (a fake key) a new
 # session starts, /status names account fake, and the request gets a 401:
 # no fallback to the default key. Record with
@@ -6,7 +6,7 @@
 #     --bin <candidate> --sprint PF-84-S04 --publish
 id = "pf84-switch-account"
 feature = "PF-84-S04: switch the session's account in /providers"
-expected = "Default account replies pong; after 'Use for this session' on fake, /status shows account fake and the next request gets a 401."
+expected = "Default account replies pong; after 'Start a new session on this account' on fake, /status shows account fake and the next request gets a 401."
 model = "glm-5.3-flash"
 provider = "zai"
 config = """
@@ -48,7 +48,7 @@ repeat = 7
 [[steps]]
 key = "Enter"
 [[steps]]
-wait = "Use for this session"
+wait = "Start a new session on this account"
 [[steps]]
 key = "Enter"
 [[steps]]

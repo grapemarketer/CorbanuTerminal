@@ -45,6 +45,7 @@ fn empty_day(empty_day: Option<EmptyDay>) -> InspectionDay {
         requests: Default::default(),
         other_conversations: Some(OtherConversations::default()),
         empty_day,
+        recording_gap: false,
     })
 }
 

@@ -90,7 +90,7 @@ the milestone flags plus config Moderate, GLM 5.3 Flash on `zai`.
 | --- | --- |
 | #739 | Same root as #747 under Permissive; one decision should cover both. |
 | #603 | Open only for review residuals. Decision 16 is implemented; decisions 15 and 20 kept today's behaviour. Not blocking. |
-| #594 | Linux: a Corbanu home reached through a link can be replaced by a protected command (Moderate and Aggressive). |
+| #594 | Linux: a Corbanu home reached through a link can be replaced by a protected command (Moderate and Aggressive). D225 (2026-10-28): when the link sits in a folder commands can write, Moderate warns at start-up and Aggressive refuses to start, be chosen or move to such a folder; the fix is `CORBANU_HOME` set to the real folder. |
 | #674, #675 | macOS `:minimal` platform-default reads; other worktrees' `.git` files. Apply to every protected level. |
 | #607, #716, #743, #745, #348 | Linux sandbox placeholders. Linux isn't in the milestone run (D7), so they are named limits. (The `pf_23_s01` flakes #615 and #673 were fixed by #742 on 2026-10-14.) |
 | #713, #721 (fix #724 awaiting sign-off) | apply_patch foreign paths; `shell_command` on the host for remote environments. Remote environments are out of the milestone run; record as limits. |

@@ -1,0 +1,31 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+● Protected: Moderate; every required control observed or checked at launch
+Observed 11s ago, policy generation 0.1
+  [on] Untrusted content: labelled; none in this session yet [observed: session]
+  [off] Protected boundary: no preflight applies (protected_mode_preflight off, or not Aggressive) [resolved: launch preflight]
+
+Grants
+  Held: none. Grants are never saved: a restart, level change, revocation or the kill switch ends them [observed: Core policy]
+
+Agents
+  [on] main session: Moderate [observed: Core policy]
+  [on] agent 8d8a959b: Moderate [observed: Core policy]
+  [set] Nested agents: on macOS and Linux, `corbanu exec` and `review` started by an agent command run with Moderate enforced, also pointed at another
+      Corbanu home; with this Corbanu home, which they cannot write inside the sandbox, they run in a Corbanu home of their own, without your config,
+      sign-in or model keys. Interactive sessions, `app-server`, `mcp-server` and credential commands they start are refused [configured: /security]
+
+Not contained
+  [off] MCP servers: none configured [resolved: config]
+  [not contained] Hooks: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [resolved: features]
+  [not contained] `!` shell commands: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [fixed]
+  [not contained] App-server command/exec: runs outside the OS sandbox with the environment allowlist; allowed because you configured or started it
+      [fixed]
+
+11 more lines below · ↑/↓ scroll · r refresh · esc back to /security

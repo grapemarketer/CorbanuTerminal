@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     mock-ws-1   /model to change                  │
+│ directory: /Volumes/CorbanuDrive/…/runs/i2-after-skip/ws │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Write tests for @filename
+
+  mock-ws-1 via mockws default · /Volumes/CorbanuDrive/Corbanu/.codex-work/tui-qa2/runs/i2-after-skip/ws · Corbanu Term…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

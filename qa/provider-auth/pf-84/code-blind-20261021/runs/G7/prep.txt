@@ -1,0 +1,6 @@
+=== home custom 2026-10-22T00:19:33Z
+$ corbanu account add zpx work   (key agms-fake-zpxwork-NNNN on stdin)
+Saved zpx account `work` (api_key).
+--- account list (custom)
+zpx	work	api_key
+prep done 2026-10-22T00:19:33Z

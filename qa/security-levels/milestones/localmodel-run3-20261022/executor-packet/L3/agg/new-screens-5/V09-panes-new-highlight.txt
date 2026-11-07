@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+  Panes
+  Switch user panes or inspect the managed /spawn crew.
+
+  Search panes and crew
+  User Panes
+  Corbanu Terminal - Main (current)  glm-5.3-flash; idle
+  Create User Pane
+› + Corbanu Terminal Pane            Create a persistent native Corbanu Terminal pane; choose model next.
+  + Claude Pane                      Create a Claude Code headless pane; choose provider next.
+  Managed Crew (/spawn)
+  No managed crew
+
+  Enter select | F2 rename | type to search
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

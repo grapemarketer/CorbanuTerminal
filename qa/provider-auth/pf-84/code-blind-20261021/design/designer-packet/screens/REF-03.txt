@@ -1,0 +1,16 @@
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+
+› reply with the single word ping
+
+• ping
+
+› Use /skills to list available skills
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: -- tok/s
+

@@ -248,6 +248,16 @@ fn receive_datagram_bytes(socket: &Socket) -> std::io::Result<(Vec<u8>, Vec<Owne
     Ok((data, fds))
 }
 
+/// Registers a socket with the Tokio reactor. Replaces the deprecated
+/// `AsyncFd::new` (RUSTSEC-2026-0386).
+fn register_owned_socket(socket: Socket) -> std::io::Result<AsyncFd<Socket>> {
+    // SAFETY: `Socket` owns its file descriptor, so it stays open and refers to
+    // the same file description until the `AsyncFd` drops it or `into_inner`
+    // returns it. Callers keep the `AsyncFd` in a private field and never swap
+    // the descriptor out from under it.
+    unsafe { AsyncFd::register(socket) }.map_err(std::io::Error::from)
+}
+
 pub(crate) struct AsyncSocket {
     inner: AsyncFd<Socket>,
 }
@@ -255,9 +265,8 @@ pub(crate) struct AsyncSocket {
 impl AsyncSocket {
     fn new(socket: Socket) -> std::io::Result<AsyncSocket> {
         socket.set_nonblocking(true)?;
-        let async_socket = AsyncFd::new(socket)?;
         Ok(AsyncSocket {
-            inner: async_socket,
+            inner: register_owned_socket(socket)?,
         })
     }
 
@@ -371,7 +380,7 @@ impl AsyncDatagramSocket {
     fn new(socket: Socket) -> std::io::Result<Self> {
         socket.set_nonblocking(true)?;
         Ok(Self {
-            inner: AsyncFd::new(socket)?,
+            inner: register_owned_socket(socket)?,
         })
     }
 

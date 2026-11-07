@@ -1,0 +1,22 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+• Spawned Corbanu Terminal Troll pane Burzum. Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit; no task was started.
+
+
+  Spawn Status
+  Nazgul -> Troll -> Orc hierarchy.
+
+  Search spawned work
+  Nazgul
+› Nazgul: Corbanu Terminal - Main (current)  Root role binding; idle; 01a1621d-0c16-78b1-92ca-017fd8fe6633; same user pane listed above.
+  Trolls
+  • Burzum [troll]                           idle; 01a1621d-8955-7641-af9a-1c058d8a959b
+    Send task to Burzum [troll]              Start a turn in this pane.
+    No Orcs for this Troll yet
+
+  Press enter to confirm or esc to go back

@@ -1,0 +1,20 @@
+{"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+Preflight and identity checks passed.
+
+- Executor probe: `"ok": true`, rc 0.
+- Coordinator summaries: both preflight files passed; summary `"ok": true`.
+- Candidate: Corbanu Terminal 0.1.48; binary digest matched.
+- Frozen cases digest matched.
+
+Outcomes:
+
+- `REG-01a`: passed
+- `REG-01b`: passed
+- `REG-01c`: passed
+- `REG-01d`: blocked
+
+REG-01d stopped after `C-c` because the tmux terminal disappeared before the product-exit screen, second C-c, d3, or d4 could be observed. Its earlier onboarding screens were captured successfully.
+
+Full evidence and case detail: `<RUN>/evidence/result.md`
+
+Relay and post-run file checks are left for the integrator, with UTC times recorded in the report.

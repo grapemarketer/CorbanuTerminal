@@ -1,0 +1,19 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Reply with exactly: pong
+
+
+■ Fatal error: the provider base URL `http://api.z.ai/api/paas/v4` cannot be brokered (it needs HTTPS with a DNS name or IPv4 address and no query).
+Security level Moderate turns broker_model_auth on. To send model requests without the broker, choose Permissive in /security, or set
+`broker_model_auth = false` under [features] in config.toml, then restart.
+
+
+› Write tests for @filename
+
+  Z.AI GLM 5.3 Flash via zaihttp default · /Users/tester/run/fixture/workspace · Corbanu Termi…

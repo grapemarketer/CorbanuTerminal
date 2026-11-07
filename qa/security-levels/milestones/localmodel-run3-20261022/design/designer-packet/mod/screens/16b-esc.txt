@@ -1,0 +1,13 @@
+
+Security level
+Active in this session: Moderate
+Core's level: Moderate
+
+  Permissive
+  Moderate  (active)
+> Aggressive
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+Cancelled. Nothing changed.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect

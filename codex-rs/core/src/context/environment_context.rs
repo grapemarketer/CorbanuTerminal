@@ -156,7 +156,7 @@ fn render_file_system_entry(rendered: &mut String, entry: &FileSystemSandboxEntr
         FileSystemPath::Path { path } => {
             push_text_element(rendered, "path", path.to_string_lossy().as_ref());
         }
-        FileSystemPath::GlobPattern { pattern } => {
+        FileSystemPath::GlobPattern { pattern, .. } => {
             push_text_element(rendered, "glob", pattern);
         }
         FileSystemPath::Special { value } => {

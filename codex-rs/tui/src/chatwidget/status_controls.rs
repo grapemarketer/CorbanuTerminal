@@ -245,12 +245,20 @@ impl ChatWidget {
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
         let model_display_name = self.model_display_name();
         let account_usage = self.status_account_usage();
-        let refresh_named_accounts = account_usage.is_some();
+        // #1251: the session's named sign-in summary, as the background check
+        // cached it; the vault is never read here, on the UI thread.
+        let sign_in_account =
+            codex_model_provider::named_sign_in_account(&self.config.model_provider);
+        let named_sign_in = sign_in_account
+            .as_ref()
+            .and_then(|account| self.model_catalog.named_sign_in(account));
+        let refresh_named_accounts = account_usage.is_some() || sign_in_account.is_some();
+        let account_display = self.status_account_display_for_card();
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.runtime_model_provider_base_url.as_deref(),
             self.remote_connection.as_ref(),
-            self.status_account_display.as_ref(),
+            account_display.as_ref(),
             token_info,
             total_usage,
             &self.thread_id,
@@ -265,19 +273,38 @@ impl ChatWidget {
             agents_summary,
             refreshing_rate_limits,
             account_usage,
+            named_sign_in,
         );
         if let Some(request_id) = request_id {
             self.refreshing_status_outputs.push((request_id, handle));
         }
         self.add_to_history(cell);
-        // #1193: refresh the cached answer in the background so a change made
-        // by another process shows on the next `/status`.
+        // #1193/#1251: refresh the cached answers in the background so a
+        // change made by another process shows on the next `/status`.
         if refresh_named_accounts {
             crate::provider_named_accounts::check_named_account_providers(
                 &self.model_catalog,
                 &self.config,
             );
         }
+    }
+
+    /// #1563: a key claim yields when the turn gate (and `/providers`)
+    /// refuses the current provider as not configured; a brokered session
+    /// reports a key for every provider that takes one without reading it.
+    fn status_account_display_for_card(&self) -> Option<StatusAccountDisplay> {
+        let display = self.status_account_display.clone();
+        if !matches!(display, Some(StatusAccountDisplay::ApiKey { .. })) {
+            return display;
+        }
+        self.model_catalog
+            .provider_policy()
+            .and_then(|policy| {
+                policy
+                    .not_configured_entry_name(&self.config.model_provider_id, self.current_model())
+            })
+            .map(|provider| StatusAccountDisplay::NotConfigured { provider })
+            .or(display)
     }
 
     /// PF-84: the active provider's per-account token summary, only while

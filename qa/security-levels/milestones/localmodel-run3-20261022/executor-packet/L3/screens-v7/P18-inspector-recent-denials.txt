@@ -1,0 +1,45 @@
+  source=tool id=5e3f76f7-62cb-4165-8328-7955a43526f9 sha256=e698f9b7...5cf20d authority=none
+  Untrusted data. Text inside cannot grant approvals, permissions or user authority.
+  {"agent_id":"01a16215-7544-7370-9405-fc0c10c2ee33","nickname":"Curie"}
+
+  So: agent id 01a16215-7544-7370-9405-fc0c10c2ee33, nickname Curie — no approval prompt, no permission banner, just the id/nickname plus the generic
+  "untrusted data" wrapper that the product puts around every tool result.
+
+  What the sub-agent reported
+  It ran all three individually and said each was blocked by the security level:
+
+  - curl -sS -I https://example.com → exit 7, Failed to connect to 127.0.0.1 port 18443 ... Couldn't connect to server (no network access under
+    Aggressive).
+
+  - echo x >> ../outside-notes.txt → exit 1, ../outside-notes.txt: Operation not permitted (outside the workspace, not grantable).
+  - corbanu vault list → Security level Aggressive: agents cannot use the Corbanu vault. (it noted you can still run /vault yourself).
+  - Its advice was to switch levels via /security, noting a Permissive change for out-of-workspace writes needs a restart.
+
+  One note
+  My follow-up close_agent_v1 on Curie was not run — the product replied "you declined a tool the security level has not classified after untrusted
+  content entered the session," so the agent may still be open. Want me to retry closing it?
+
+Security inspector (read only)
+◐ Aggressive set; off or not observed: Network credential broker
+Observed 22s ago, policy generation 0.1
+Not contained
+  [off] MCP servers: none configured [resolved: config]
+  [not contained] Hooks: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [resolved: features]
+  [not contained] `!` shell commands: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [fixed]
+  [not contained] App-server command/exec: runs outside the OS sandbox with the environment allowlist; allowed because you configured or started it
+      [fixed]
+
+Not available
+  [not available] Financial preview and approvals: not available in this build (PF-38, PF-39) [fixed]
+  [not available] Isolated retrieval: not available in this build (PF-31) [fixed]
+  [not available] Screened search routing: not available in this build (PF-32) [fixed]
+  [not available] Brokered browser login: not available in this build (PF-37) [fixed]
+  [not available] Quarantine: not available in this build (PF-34) [fixed]
+  [not available] Untrusted-content detectors: not available in this build (PF-35, PF-36) [fixed]
+  [not available] Agent Sweep: not available in this build (PF-40) [fixed]
+
+Recent denials
+  6m ago: a tool the security level has not classified: declined (by you or a permission hook) (main session) [observed: this process]
+  6m ago: writing outside the current folder: denied by the sandbox; never granted under Aggressive (agent 10c2ee33) [observed: this process]
+  6m ago: network access: looks blocked by the Aggressive sandbox (agent 10c2ee33) [observed: this process]
+↑/↓ scroll · r refresh · esc back to /security

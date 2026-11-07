@@ -8,6 +8,7 @@ import { describe, expect, it } from "@jest/globals";
 import {
   assistantMessage,
   responseCompleted,
+  responseCompletedWithoutUsage,
   responseStarted,
   sse,
   responseFailed,
@@ -43,6 +44,34 @@ describe("Codex", () => {
         output_tokens: 5,
         reasoning_output_tokens: 0,
       });
+      expect(thread.id).toEqual(expect.any(String));
+    } finally {
+      cleanup();
+      await close();
+    }
+  });
+
+  it("returns a null usage when the provider reports no usage", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(responseStarted(), assistantMessage("Hi!"), responseCompletedWithoutUsage()),
+      ],
+    });
+    const { client, cleanup } = createMockClient(url);
+
+    try {
+      const thread = client.startThread();
+      const result = await thread.run("Hello, world!");
+
+      expect(result.items).toEqual([
+        {
+          id: expect.any(String),
+          type: "agent_message",
+          text: "Hi!",
+        },
+      ]);
+      expect(result.usage).toBeNull();
       expect(thread.id).toEqual(expect.any(String));
     } finally {
       cleanup();

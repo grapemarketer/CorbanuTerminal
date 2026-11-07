@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Call the read_shared_note tool on the notes server and show its text.
+
+
+• Called notes.read_shared_note({})
+  └ plain note for the revoke check
+
+
+◦ Working (11s • esc to interrupt)
+
+
+› Summarize recent commits
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Termin…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

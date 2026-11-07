@@ -1,0 +1,6 @@
+key scan 2026-10-27T20:03:25Z (acct-rerun2): pattern classes, then exact values from vault labels; names/counts only
+zai_key_3: 0 files with the key value in qa/portfolio/agent-cost-accounting/followups-acceptance-20261016
+openai-api-key: 0 files with the key value in qa/portfolio/agent-cost-accounting/followups-acceptance-20261016
+provider/zai_api_key: 0 files with the key value in qa/portfolio/agent-cost-accounting/followups-acceptance-20261016
+kimi_api3: 0 files with the key value in qa/portfolio/agent-cost-accounting/followups-acceptance-20261016
+files scanned in qa/portfolio/agent-cost-accounting/followups-acceptance-20261016: 1308

@@ -1,0 +1,45 @@
+⚠ Security level Aggressive blocks writing `~/.zshrc`: it is, or leads to, a start-up file outside the current folder, and agent commands can write
+  only inside the current folder, even when you approve them; this cannot be granted, not even once (Grant once lifts the start-up file and git write
+  protections only inside the current folder). To allow it, a person can switch to Permissive in /security (it applies after a restart).
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Blocked by Aggressive security: ~/.zshrc is outside the current writable folder, and startup-file writes can’t be granted. Switch to Permissive in /
+  security if you want to allow it.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command: ln -s .agents ag
+
+
+⚠ Security level Aggressive refused this command before it ran: it creates a link, and `.agents` is or may lead to the project's .codex or .agents
+  folders (agent settings) or Corbanu's own files, which are always read-only under Aggressive, so no link to them is created either (nothing was
+  created). This cannot be granted, not even once. To allow it, a person can switch to Permissive in /security (it applies after a restart).
+
+• Blocked before execution by Aggressive security: linking .agents targets protected agent settings, and this can’t be granted.
+
+
+› Run exactly this command: echo probe >> .agents/notes.md
+
+
+◦ Running echo probe >> .agents/notes.md
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Security level: this is changing a file that runs code later (shell start-up, login items, git hooks) after untrusted content entered the
+  session. Approve only if you asked for it; a cached or automatic approval does not count. Security level Aggressive blocks writing
+  `.agents/notes.md`: agent commands can never write the project's .codex and .agents folders (agent settings) or the Corbanu home (outside its
+  worktrees folder), even when you approve them, and this cannot be granted, not even once. To allow it, a person can switch to Permissive in
+  /security (it applies after a restart).
+
+  $ echo probe >> .agents/notes.md
+
+› 1. Yes, proceed (y)
+  2. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it.
+  Press enter to confirm or esc to cancel

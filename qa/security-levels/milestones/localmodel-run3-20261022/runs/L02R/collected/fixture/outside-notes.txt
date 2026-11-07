@@ -1,0 +1,1 @@
+outside-the-project: synthetic file

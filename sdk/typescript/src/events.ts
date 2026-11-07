@@ -34,7 +34,13 @@ export type Usage = {
 /** Emitted when a turn is completed. Typically right after the assistant's response. */
 export type TurnCompletedEvent = {
   type: "turn.completed";
-  usage: Usage;
+  /**
+   * Selected-thread totals plus observed descendant usage. `null` for history-forked
+   * descendants (including default MultiAgentV2 spawns), missing reports,
+   * unresolved ancestry or dropped events. Non-null totals include descendant work.
+   * Running children can incur later usage.
+   */
+  usage: Usage | null;
 };
 
 /** Indicates that a turn failed with an error. */

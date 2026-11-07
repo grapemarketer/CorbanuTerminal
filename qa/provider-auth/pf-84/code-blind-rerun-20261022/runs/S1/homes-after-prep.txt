@@ -1,0 +1,7 @@
+=== oai1
+75 oai1/auth.json
+268 oai1/config.toml
+80 oai1/log/codex-login.log
+0 oai1/secrets/.vault.lock
+9ee73afcafa3f9a13747248ebfc47152f7ef6c62e2c06366e38a4e4301c68082  oai1/config.toml
+6b2807a4eb9953bf20691cde2f5b217b5d2616f82bbbf14a27967e98d2a20ffd  oai1/auth.json

@@ -1,0 +1,30 @@
+# integrator excerpt: the S3 tester's own shell commands from n6-actions to n6-rfield (executor --json events),
+# with the first 12 lines of each command's output. Source: executor-events.jsonl of the S3 run (not archived in full).
+
+$ /bin/bash -lc 'agms-tui --window w1 key Down; agms-tui --window w1 screen n6-added; agms-tui --window w1 key Enter; sleep 2; agms-tui --window w1 screen n6-actions'
+  | pressed Down
+  | ╭─────────────────────────────────────────────╮
+  | │ >_ Corbanu Terminal (v0.1.48)               │
+  | │                                             │
+  | │ model:     glm-5.3-flash   /model to change │
+  | │ directory: ~/runs/…/fixture/workspace       │
+  | ╰─────────────────────────────────────────────╯
+  | • Saved zai account `added`. Use it from /providers, `--account added` or a spawn `account`.
+  |   Providers
+  |   Configure providers and control whether they are eligible for use.
+  |   Configured means credentials are present, not verified by the provider.
+  |   1. OpenAI          Not configured · unavailable
+
+$ /bin/bash -lc 'agms-tui --window w1 screen n6-rename-hl; sleep 2; agms-tui --window w1 key Enter; sleep 2; agms-tui --window w1 screen n6-rfield'
+  | ╭─────────────────────────────────────────────╮
+  | │ >_ Corbanu Terminal (v0.1.48)               │
+  | │                                             │
+  | │ model:     glm-5.3-flash   /model to change │
+  | │ directory: ~/runs/…/fixture/workspace       │
+  | ╰─────────────────────────────────────────────╯
+  | • Saved zai account `added`. Use it from /providers, `--account added` or a spawn `account`.
+  |   Z.AI · added
+  |   API key · fp f059991063b7
+  | › 1. Start a new session on this account  Leaves this conversation as it is; the new session's requests to this provider use this account.
+  |   2. Make default                         New sessions use this account; this session is unchanged.
+  |   3. Rename                               Give this account another name; its credential is unchanged.

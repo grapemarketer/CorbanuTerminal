@@ -1,0 +1,32 @@
+I'll start by reading the frozen cases and tool documentation, then verify preflight and candidate identity.
+Hashes match. Now let me run the required preflight and inspect the coordinator summary plus the assigned case text.
+Preflight is `ok: true` and both digests match. Let me confirm the exact assigned case text and the launcher interface/home state.
+Beginning NA-12 step 1: starting the TUI in the prepared `custom` home.
+Session started. Now the required model wait, a screen capture, then sending `cone` text and Enter separately.
+Prompt sent at 00:21:45Z. I'll check about every 30 seconds for the `• cone` reply.
+`• cone` appeared. Logging completion, taking `w1-cone`, then running STATUS(c1).
+`c1` is complete and shows `· account default`; SID is `01a160fc-1176-7e70-a3e7-dac26bec6d18`. Now QUIT for this session.
+Step 1 passed. Starting NA-12 step 2 in a new window `w2` with `--account work`.
+`• ctwo` appeared by 00:23:00Z. Now capturing it and running STATUS(c2).
+`c2` shows `· account work`; SID is `01a160fc-d04e-7e72-be13-a1651aa75e20`. Quitting `w2`, then I'll update the report.
+NA-12 step 3: resuming `<c2>` in a new window `w3`.
+`• cthree` appeared by 00:24:44Z. Capturing and running STATUS(c3).
+`c3` shows the same SID `<c2>` and `· account work`. Quitting `w3`.
+NA-12 step 4: running the CLI `exec --account work` in a new window `w4`.
+`cfour` printed and `w4` exited 0. Ending the case's terminals with `agms-tui stop`.
+NA-12 is complete and passed. Starting I426-B step 1: REFUSE with `resume --account ghost <c1>` in `w5`.
+Step 1 refused cleanly with the expected provider/recovery text. Running step 2 in `w6`.
+Step 2 also matched. Running the final REFUSE in `w7`, then stopping all terminals.
+All three refusals completed. Writing the final I426-B assessment and group summary.
+Final verification of the report content and file presence.
+The report file was not present at the required path despite the earlier write tool reporting success. I'll locate it, then restore the complete content directly under `$AGMS_RUN/evidence`.
+Execution complete for group G7.
+
+- Preflight: passed (`ok: true`; candidate and frozen-case SHA-256 both matched).
+- NA-12: passed. TUI default, `--account work`, resume, and CLI `exec --account work` all behaved as visibly expected.
+- I426-B: passed. All three `ghost` refusals exited 1 with the expected `zpx` recovery text; no onboarding/picker screens appeared.
+- Relay-label checks are marked **for the integrator** with UTC request windows.
+- Report: `<RUN>/evidence/result.md`
+
+`VERDICT NA-12: passed`  
+`VERDICT I426-B: passed`

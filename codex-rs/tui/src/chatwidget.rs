@@ -443,6 +443,7 @@ mod campaign_tracker_workflows;
 pub(crate) mod claude_auth_adapter;
 pub(crate) mod claude_auth_presentation;
 pub(crate) mod claude_code_login;
+pub(crate) mod named_account_login;
 mod pfterminal_plan_status;
 pub(crate) mod provider_credentials;
 pub(crate) mod provider_manager;

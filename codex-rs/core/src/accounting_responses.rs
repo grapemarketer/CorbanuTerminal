@@ -7,6 +7,7 @@ use crate::session::session::Session;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -213,8 +214,13 @@ impl DeferredResponsesSampling {
         auth: Option<&CodexAuth>,
         endpoint: &str,
     ) -> Result<Option<Arc<Sampling>>, CodexErr> {
-        self.resolve_path(provider, auth, endpoint, "responses")
-            .await
+        self.resolve_path(
+            provider,
+            auth.map(CodexAuth::auth_mode),
+            endpoint,
+            "responses",
+        )
+        .await
     }
 
     /// Resolve against a specific path under the approved endpoint.
@@ -223,19 +229,24 @@ impl DeferredResponsesSampling {
     /// against `responses` would read as a route change and reject the turn,
     /// which is how the legacy compaction endpoint stayed uncollected.
     ///
+    /// Eligibility needs only the resolved auth mode, never the credential itself.
+    ///
     /// Accounting never stops a request: when it fails, this sampling closes
     /// and the request, like every later one in the turn, is sent unrecorded.
     pub(crate) async fn resolve_path(
         &self,
         provider: &ModelProviderInfo,
-        auth: Option<&CodexAuth>,
+        auth_mode: Option<AuthMode>,
         endpoint: &str,
         path: &str,
     ) -> Result<Option<Arc<Sampling>>, CodexErr> {
         if self.is_closed() {
             return Ok(None);
         }
-        match self.try_resolve_path(provider, auth, endpoint, path).await {
+        match self
+            .try_resolve_path(provider, auth_mode, endpoint, path)
+            .await
+        {
             Ok(sampling) => Ok(sampling),
             Err(error) => {
                 self.reject();
@@ -248,15 +259,15 @@ impl DeferredResponsesSampling {
     async fn try_resolve_path(
         &self,
         provider: &ModelProviderInfo,
-        auth: Option<&CodexAuth>,
+        auth_mode: Option<AuthMode>,
         endpoint: &str,
         path: &str,
     ) -> Result<Option<Arc<Sampling>>, CodexErr> {
         self.check()?;
         let admitted = if matches!(self.mode, AccountingMode::Provider { .. }) {
-            eligible(provider, auth)
+            eligible(provider, auth_mode)
         } else {
-            legacy_eligible(provider, auth)
+            legacy_eligible(provider, auth_mode)
         };
         if !admitted {
             if self.sampling.initialized() {
@@ -302,7 +313,7 @@ impl DeferredResponsesSampling {
                 &self.mode,
                 provider_id,
                 provider,
-                auth.map(CodexAuth::auth_mode),
+                auth_mode,
                 approved_endpoint,
             )
         } else {
@@ -366,13 +377,13 @@ impl DeferredResponsesSampling {
     }
 }
 
-pub(super) fn eligible(provider: &ModelProviderInfo, _auth: Option<&CodexAuth>) -> bool {
+pub(super) fn eligible(provider: &ModelProviderInfo, _auth_mode: Option<AuthMode>) -> bool {
     provider.wire_api == WireApi::Responses && super::route_refusal(provider).is_none()
 }
 
-pub(super) fn legacy_eligible(provider: &ModelProviderInfo, auth: Option<&CodexAuth>) -> bool {
+pub(super) fn legacy_eligible(provider: &ModelProviderInfo, auth_mode: Option<AuthMode>) -> bool {
     provider.wire_api == WireApi::Responses
-        && matches!(auth, Some(CodexAuth::ApiKey(_)))
+        && matches!(auth_mode, Some(AuthMode::ApiKey))
         && provider.auth.is_none()
         && provider.experimental_bearer_token.is_none()
         && provider.api_key_header_name().is_none()

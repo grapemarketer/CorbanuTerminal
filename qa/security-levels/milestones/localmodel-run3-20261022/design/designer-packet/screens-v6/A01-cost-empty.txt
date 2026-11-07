@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace          │
+╰──────────────────────────────────────────────────────────╯
+
+
+  Cost — this conversation
+  Requested UTC day: 2026-10-21
+
+› Unavailable — no requests recorded in this home yet; the accounting ledger is created when the first one is.
+  Next step: send a turn in this conversation, then run /cost again. If it stays unavailable, check your provider's bill.
+  Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+  Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+  Refresh
+  Close
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

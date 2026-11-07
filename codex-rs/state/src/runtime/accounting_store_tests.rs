@@ -2889,6 +2889,108 @@ async fn now_writes_hold_at_the_checkpoint_when_the_clock_is_behind_it() -> anyh
     Ok(())
 }
 
+/// #1518: inspecting at a time behind the checkpoint is still refused, as a
+/// typed clock-behind error the caller can name, never as damage.
+#[tokio::test]
+async fn inspection_behind_the_checkpoint_is_a_typed_clock_refusal() -> anyhow::Result<()> {
+    let path = home();
+    let runtime = open(&path).await?;
+    seed(&runtime).await?;
+    let a = attempt(/*id*/ 1);
+    let checkpoint = 2 * 86_400_000 + 5_000;
+    AccountingStore::open(&runtime, checkpoint)
+        .await?
+        .admit(a.thread_id, &a, &[], checkpoint)
+        .await?;
+    let error = inspected(&runtime, /*day*/ 2, checkpoint - 4_000)
+        .await
+        .expect_err("a read behind the checkpoint is refused");
+    assert_eq!(
+        clock_behind_ledger(&error),
+        Some(ClockBehindLedger { behind_ms: 4_000 })
+    );
+    marker(error, "backward inspection read");
+    let error = AccountingStore::inspect_range(
+        &runtime,
+        a.thread_id,
+        InspectionRange {
+            start_ms: 0,
+            end_ms: 86_400_000,
+            grouping: InspectionGrouping::Day,
+        },
+        checkpoint - 1,
+    )
+    .await
+    .expect_err("a range read behind the checkpoint is refused");
+    assert_eq!(
+        clock_behind_ledger(&error),
+        Some(ClockBehindLedger { behind_ms: 1 })
+    );
+    assert!(
+        inspected(&runtime, /*day*/ 2, checkpoint).await.is_ok(),
+        "the read succeeds once the clock reaches the checkpoint"
+    );
+    runtime.close().await;
+    Ok(())
+}
+
+/// #1522: a view opened while the clock read ahead into a later UTC day and
+/// refreshed after the clock was set back rereads that later day. The read is
+/// still refused, as a typed clock error the caller can name, never as damage.
+#[tokio::test]
+async fn inspection_of_a_day_after_the_clock_is_a_typed_clock_refusal() -> anyhow::Result<()> {
+    let path = home();
+    let runtime = open(&path).await?;
+    seed(&runtime).await?;
+    let a = attempt(/*id*/ 1);
+    let ahead = 3 * 86_400_000 + 5_000;
+    AccountingStore::open(&runtime, ahead)
+        .await?
+        .admit(a.thread_id, &a, &[], ahead)
+        .await?;
+    let set_back = 3 * 86_400_000 - 7_000;
+    let error = inspected(&runtime, /*day*/ 3, set_back)
+        .await
+        .expect_err("a day after the clock is refused");
+    assert_eq!(
+        clock_before_day(&error),
+        Some(ClockBeforeDay { behind_ms: 7_000 })
+    );
+    assert_eq!(clock_behind_ledger(&error), None);
+    marker(error, "invalid or future day");
+    let error = AccountingStore::inspect_range(
+        &runtime,
+        a.thread_id,
+        InspectionRange {
+            start_ms: 3 * 86_400_000,
+            end_ms: 4 * 86_400_000,
+            grouping: InspectionGrouping::Day,
+        },
+        set_back,
+    )
+    .await
+    .expect_err("a range starting on a day after the clock is refused");
+    assert_eq!(
+        clock_before_day(&error),
+        Some(ClockBeforeDay { behind_ms: 7_000 })
+    );
+    let error = inspected(&runtime, /*day*/ -1, set_back)
+        .await
+        .expect_err("a day before the epoch is refused");
+    assert_eq!(clock_before_day(&error), None);
+    marker(error, "invalid or future day");
+    // Reopened at the clock's own day, the read reaches the checkpoint check.
+    let error = inspected(&runtime, /*day*/ 2, set_back)
+        .await
+        .expect_err("the clock is still behind the checkpoint");
+    assert_eq!(
+        clock_behind_ledger(&error),
+        Some(ClockBehindLedger { behind_ms: 12_000 })
+    );
+    runtime.close().await;
+    Ok(())
+}
+
 /// #308: deleting a conversation with the clock behind the checkpoint (58 s and
 /// 6 days in the acceptance run) failed as a backward checkpoint. It now holds
 /// at the checkpoint like ledger writes, and the deleted spend is still counted

@@ -423,7 +423,7 @@ fn issue_743_linux_pane_commands_can_make_temporary_files() {
 /// profile denies user namespaces under Moderate and Aggressive, active or
 /// saved, as agent commands' profiles do (#826). Permissive keeps the
 /// profile, and macOS and Windows keep it at every level (the keychain rule
-/// of #758 under Aggressive is unchanged).
+/// of #758 applies under Aggressive, see #807).
 #[test]
 fn issue_891_contained_panes_deny_user_namespaces_under_protected_levels_on_linux() {
     use crate::security::level::ChosenLevel;
@@ -457,14 +457,15 @@ fn issue_891_contained_panes_deny_user_namespaces_under_protected_levels_on_linu
             .entries
             .retain(|entry| !entry.denies_user_namespaces());
         let mut keychain_only = base.file_system_sandbox_policy();
-        if active == Aggressive {
+        // #807: the keychain rule follows the stricter level too.
+        if protected == Some("Aggressive") {
             keychain_only
                 .entries
                 .push(FileSystemSandboxEntry::deny_keychain_services());
         }
         assert_eq!(
             (
-                user_namespaces_denied(),
+                user_namespaces_denied_at(crate::security::level::protected_level_for_panes()),
                 profile
                     .file_system_sandbox_policy()
                     .denies_user_namespaces(),
@@ -472,6 +473,61 @@ fn issue_891_contained_panes_deny_user_namespaces_under_protected_levels_on_linu
             ),
             (expected, expected.is_some(), true),
             "{active:?}/{stored:?}"
+        );
+    }
+}
+
+/// #807: a contained pane's level rules follow the strictest of the level
+/// active at launch, the saved level and Core's live policy on the home, as
+/// Core's rules for agent commands do: Aggressive saved or live alone keeps
+/// the keychain services out of reach (#758), and on Linux a protected
+/// level saved or live alone denies user namespaces (#891).
+#[test]
+fn issue_807_contained_panes_follow_the_stricter_saved_or_live_level() {
+    use crate::security::level::ChosenLevel;
+    use crate::security::level::protected_level_for_panes;
+    use crate::security::level::test_levels;
+    use ChosenLevel::Aggressive;
+    use ChosenLevel::Moderate;
+    use ChosenLevel::Permissive;
+
+    let cwd = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let containment = ClaudeContainment {
+        state_dir: state.path().join("pane-807"),
+        panes_dir: cwd.path().join("panes"),
+        linux_sandbox_exe: None,
+    };
+    let base = base_profile(&containment).unwrap();
+    assert!(!base.file_system_sandbox_policy().denies_keychain_services());
+    for (active, stored, live, strictest) in [
+        (Permissive, Permissive, Permissive, None),
+        (Aggressive, Permissive, Permissive, Some(Aggressive)),
+        // Saved but not yet active (the launch-time level alone missed it).
+        (Moderate, Aggressive, Permissive, Some(Aggressive)),
+        (Permissive, Aggressive, Permissive, Some(Aggressive)),
+        // Raised in Core's live policy alone.
+        (Permissive, Permissive, Aggressive, Some(Aggressive)),
+        (Moderate, Moderate, Aggressive, Some(Aggressive)),
+        (Permissive, Permissive, Moderate, Some(Moderate)),
+        // A lower live level never lowers the active or saved one.
+        (Aggressive, Aggressive, Permissive, Some(Aggressive)),
+        (Moderate, Permissive, Permissive, Some(Moderate)),
+    ] {
+        let _levels = test_levels::set_with_live(active, stored, live);
+        let policy = level_rules(base.clone()).file_system_sandbox_policy();
+        assert_eq!(
+            (
+                protected_level_for_panes(),
+                policy.denies_keychain_services(),
+                policy.denies_user_namespaces(),
+            ),
+            (
+                strictest,
+                strictest == Some(Aggressive),
+                cfg!(target_os = "linux") && strictest.is_some(),
+            ),
+            "{active:?}/{stored:?}/{live:?}"
         );
     }
 }

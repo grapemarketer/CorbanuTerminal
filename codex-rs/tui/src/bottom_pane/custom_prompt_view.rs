@@ -11,6 +11,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::key_hint;
@@ -29,10 +30,32 @@ use super::textarea::TextAreaState;
 /// Callback invoked when the user submits a custom prompt.
 pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
 
+/// Callback invoked when a one-line field got more than one line.
+pub(crate) type PromptRefused = Box<dyn Fn() + Send + Sync>;
+
+/// How long a one-line field waits, after its submit key, for input to be
+/// quiet before it submits (the paste-burst Enter window). Input that
+/// arrives in that time was sent together with the submit key (a paste, a
+/// tmux `send-keys`), so it is held here instead of reaching whatever the
+/// submit opens or uncovers.
+pub(crate) const SINGLE_LINE_SUBMIT_HOLD: Duration = Duration::from_millis(120);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CustomPromptSubmitMode {
     Enter,
     CtrlD,
+    /// A one-line field (a name). Enter and the editor's other newline keys
+    /// (Ctrl+J, Ctrl+M, Shift+Enter, Alt+Enter) submit; they never become a
+    /// newline. The submit happens once input has been quiet for
+    /// [`SINGLE_LINE_SUBMIT_HOLD`]. Input in that time, or a paste with more
+    /// than one line, is discarded unshown and the field is refused instead.
+    EnterSingleLine,
+}
+
+/// A one-line submit waiting for input to be quiet.
+#[derive(Debug, Clone, Copy)]
+struct HeldSubmit {
+    until: Instant,
 }
 
 /// Minimal multi-line text input view to collect custom review instructions.
@@ -41,6 +64,7 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
+    on_refused: Option<PromptRefused>,
     submit_mode: CustomPromptSubmitMode,
 
     // UI state
@@ -48,6 +72,11 @@ pub(crate) struct CustomPromptView {
     textarea_state: RefCell<TextAreaState>,
     paste_burst: PasteBurst,
     completion: Option<ViewCompletion>,
+    /// One-line mode: a submit key was pressed; see [`SINGLE_LINE_SUBMIT_HOLD`].
+    held_submit: Option<HeldSubmit>,
+    /// One-line mode: the field got more than one line (input after the
+    /// submit key, or the rest of a multi-line paste); refuse, never submit.
+    got_extra_lines: bool,
 }
 
 impl CustomPromptView {
@@ -69,16 +98,26 @@ impl CustomPromptView {
             placeholder,
             context_label,
             on_submit,
+            on_refused: None,
             submit_mode: CustomPromptSubmitMode::Enter,
             textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             paste_burst: PasteBurst::default(),
             completion: None,
+            held_submit: None,
+            got_extra_lines: false,
         }
     }
 
     pub(crate) fn with_submit_mode(mut self, submit_mode: CustomPromptSubmitMode) -> Self {
         self.submit_mode = submit_mode;
+        self
+    }
+
+    /// One-line mode: what the field reports when it got more than one line.
+    /// Nothing of the extra input is passed on.
+    pub(crate) fn with_on_refused(mut self, on_refused: PromptRefused) -> Self {
+        self.on_refused = Some(on_refused);
         self
     }
 
@@ -90,18 +129,70 @@ impl CustomPromptView {
         }
     }
 
+    /// One-line mode: Enter and the editor's newline keys submit. The
+    /// field's own keymap decides which keys those are, so none of them can
+    /// insert a newline.
+    fn is_single_line_submit_key(&self, key_event: KeyEvent) -> bool {
+        key_event.code == KeyCode::Enter || self.textarea.is_insert_newline_key(key_event)
+    }
+
+    fn hold_single_line_submit(&mut self, now: Instant) {
+        if self.textarea.text().trim().is_empty() && !self.got_extra_lines {
+            return;
+        }
+        self.held_submit = Some(HeldSubmit {
+            until: now + SINGLE_LINE_SUBMIT_HOLD,
+        });
+    }
+
+    /// Input that arrives while a one-line submit is held is discarded
+    /// unshown; it makes the submit a refusal and keeps the hold open until
+    /// input is quiet again.
+    fn discard_input_while_held(&mut self, now: Instant) {
+        self.got_extra_lines = true;
+        self.held_submit = Some(HeldSubmit {
+            until: now + SINGLE_LINE_SUBMIT_HOLD,
+        });
+    }
+
+    fn finish_held_submit_if_due(&mut self, now: Instant) -> bool {
+        let Some(held) = self.held_submit else {
+            return false;
+        };
+        if now < held.until {
+            return false;
+        }
+        self.held_submit = None;
+        if self.got_extra_lines {
+            if let Some(on_refused) = &self.on_refused {
+                on_refused();
+            }
+            self.completion = Some(ViewCompletion::Accepted);
+        } else {
+            self.submit_current_text();
+        }
+        true
+    }
+
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
+        let single_line = self.submit_mode == CustomPromptSubmitMode::EnterSingleLine;
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
             }
+            _ if single_line && self.held_submit.is_some() => {
+                self.discard_input_while_held(now);
+            }
             event
                 if self.submit_mode == CustomPromptSubmitMode::CtrlD
                     && key_hint::ctrl(KeyCode::Char('d')).is_press(event) =>
             {
                 self.submit_current_text();
+            }
+            event if single_line && self.is_single_line_submit_key(event) => {
+                self.hold_single_line_submit(now);
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -175,9 +266,40 @@ impl BottomPaneView for CustomPromptView {
         if pasted.is_empty() {
             return false;
         }
+        if self.submit_mode == CustomPromptSubmitMode::EnterSingleLine {
+            if self.held_submit.is_some() {
+                self.discard_input_while_held(Instant::now());
+                return false;
+            }
+            // Only the first line is kept; any other line is discarded
+            // unshown, and the field is refused when it is submitted.
+            if let Some((first_line, rest)) = pasted.split_once('\n') {
+                if !rest.trim().is_empty() {
+                    self.got_extra_lines = true;
+                }
+                self.textarea.insert_str(first_line);
+                self.paste_burst.clear_after_explicit_paste();
+                return true;
+            }
+        }
         self.textarea.insert_str(&pasted);
         self.paste_burst.clear_after_explicit_paste();
         true
+    }
+
+    fn is_in_paste_burst(&self) -> bool {
+        // Keeps the draw loop ticking until the held submit is due.
+        self.held_submit
+            .is_some_and(|held| Instant::now() < held.until)
+    }
+
+    fn pre_draw_tick(&mut self, now: Instant) -> bool {
+        self.finish_held_submit_if_due(now)
+    }
+
+    fn next_frame_delay(&self) -> Option<Duration> {
+        self.held_submit
+            .map(|held| held.until.saturating_duration_since(Instant::now()))
     }
 }
 
@@ -323,7 +445,9 @@ impl CustomPromptView {
 
     fn footer_hint_line(&self) -> Line<'static> {
         match self.submit_mode {
-            CustomPromptSubmitMode::Enter => standard_popup_hint_line(),
+            CustomPromptSubmitMode::Enter | CustomPromptSubmitMode::EnterSingleLine => {
+                standard_popup_hint_line()
+            }
             CustomPromptSubmitMode::CtrlD => Line::from(vec![
                 "Press ".into(),
                 key_hint::ctrl(KeyCode::Char('d')).into(),

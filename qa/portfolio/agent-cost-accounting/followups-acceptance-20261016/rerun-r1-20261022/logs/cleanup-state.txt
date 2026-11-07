@@ -1,0 +1,10 @@
+acct-rerun2 clean-up state, 2026-10-27T19:56:29Z
+== Tart lock (/Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock)
+  ls: /Volumes/CorbanuDrive/Corbanu/.codex-work/workers-20261002/vm-tart.lock: No such file or directory
+== tart list
+  Source Name            Disk  Size  Accessed       State  
+  local  corbanu-qa-base 50 GB 28 GB 54 minutes ago stopped
+== harness tmux server (relays, tunnel, vm, driver)
+  no server running on /Volumes/CorbanuDrive/Corbanu/.codex-work/acct-rerun-20261022/tmux.sock
+== relay ports 11261/11262 listening
+  (none listed above = not listening)

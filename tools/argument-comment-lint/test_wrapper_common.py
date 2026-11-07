@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import tomllib
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -118,6 +119,36 @@ class WrapperCommonTest(unittest.TestCase):
             "-A unknown_lints",
         )
         self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+
+    def test_default_lint_env_maps_clippy_main_to_master(self) -> None:
+        env = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "false",
+        }
+
+        wrapper_common.set_default_lint_env(env)
+        wrapper_common.set_default_lint_env(env)
+
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "core.autocrlf")
+        self.assertEqual(env["GIT_CONFIG_KEY_1"], "remote.origin.fetch")
+        self.assertEqual(
+            env["GIT_CONFIG_VALUE_1"], "+refs/heads/*ain:refs/remotes/*aster"
+        )
+
+    def test_cargo_config_uses_the_same_clippy_refspec(self) -> None:
+        config_path = Path(__file__).resolve().parent / ".cargo" / "config.toml"
+        config = tomllib.loads(config_path.read_text())
+
+        self.assertEqual(
+            config["env"],
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "remote.origin.fetch",
+                "GIT_CONFIG_VALUE_0": wrapper_common.CLIPPY_MASTER_REFSPEC,
+            },
+        )
 
 
 if __name__ == "__main__":

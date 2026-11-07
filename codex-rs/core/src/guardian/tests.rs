@@ -507,6 +507,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
+                    scan: None,
                     pattern: denied_glob.clone(),
                 },
                 access: FileSystemAccessMode::Deny,

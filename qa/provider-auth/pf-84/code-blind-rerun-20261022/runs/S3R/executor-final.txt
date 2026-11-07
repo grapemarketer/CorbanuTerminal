@@ -1,0 +1,7 @@
+Preflight passed; candidate and frozen-case hashes matched, and home `zai3` was present.
+
+Executed NA-06 literally through the TUI/CLI. The account add succeeded with masked key entry, rename succeeded, CLI list showed `renamed` but not `added`, `nren` exited 0, and `nold` was refused with the expected not-configured error. The `/providers` survey was incomplete because 30 Down presses were exhausted, though 15 rows were observed; all other judgeable checks passed. Relay checks are for the integrator.
+
+Report written to `$AGMS_RUN/evidence/result.md`.
+
+`VERDICT NA-06: passed`

@@ -1,0 +1,85 @@
+#!/usr/bin/python3
+"""Fixture MCP server for the Moderate milestone run (stdio, newline-delimited JSON-RPC).
+
+Usage: agms-mcp-notes DIR
+  read_shared_note  returns the text of DIR/shared-note.txt (the tester writes it from their own shell)
+  post_note         appends its text to DIR/posted.txt (a stand-in for sending data somewhere)
+Every request is appended to DIR/mcp-log.jsonl.
+"""
+import json
+import os
+import sys
+import time
+
+DIR = sys.argv[1] if len(sys.argv) > 1 else "."
+TOOLS = [
+    {"name": "read_shared_note",
+     "description": "Read the team's shared note.",
+     "inputSchema": {"type": "object", "properties": {}},
+     "annotations": {"readOnlyHint": True, "openWorldHint": False}},
+    {"name": "post_note",
+     "description": "Post a note to the team's shared board.",
+     "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}},
+]
+
+
+def log(row):
+    with open(os.path.join(DIR, "mcp-log.jsonl"), "a") as out:
+        out.write(json.dumps(dict(utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **row)) + "\n")
+
+
+def reply(msg_id, result=None, error=None):
+    body = {"jsonrpc": "2.0", "id": msg_id}
+    body["error" if error else "result"] = error or result
+    sys.stdout.write(json.dumps(body) + "\n")
+    sys.stdout.flush()
+
+
+def text(value):
+    return {"content": [{"type": "text", "text": value}]}
+
+
+def main():
+    os.makedirs(DIR, exist_ok=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+        log({"method": method, "params": params})
+        if msg_id is None:
+            continue  # notification
+        if method == "initialize":
+            reply(msg_id, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
+                           "capabilities": {"tools": {}},
+                           "serverInfo": {"name": "team-notes", "version": "1.0"}})
+        elif method == "tools/list":
+            reply(msg_id, {"tools": TOOLS})
+        elif method == "tools/call":
+            name = params.get("name")
+            args = params.get("arguments") or {}
+            if name == "read_shared_note":
+                try:
+                    with open(os.path.join(DIR, "shared-note.txt")) as stream:
+                        reply(msg_id, text(stream.read()))
+                except OSError:
+                    reply(msg_id, text("(the shared note is empty)"))
+            elif name == "post_note":
+                with open(os.path.join(DIR, "posted.txt"), "a") as out:
+                    out.write(str(args.get("text", "")) + "\n")
+                reply(msg_id, text("Posted."))
+            else:
+                reply(msg_id, error={"code": -32602, "message": "unknown tool"})
+        elif method == "ping":
+            reply(msg_id, {})
+        else:
+            reply(msg_id, error={"code": -32601, "message": "method not found"})
+
+
+if __name__ == "__main__":
+    main()

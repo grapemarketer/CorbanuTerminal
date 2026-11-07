@@ -537,6 +537,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
                 },
                 FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
+                        scan: None,
                         pattern: "**/.secret".to_string(),
                     },
                     access: FileSystemAccessMode::Deny,

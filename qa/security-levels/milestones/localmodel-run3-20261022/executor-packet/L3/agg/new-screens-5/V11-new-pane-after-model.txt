@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+  Select Reasoning Level for GLM 5.3 Flash · Z.AI (OpenAI-style)
+
+› 1. Low              Low. Lightweight reasoning for faster work.
+  2. High             High. Enhanced reasoning for general coding.
+  3. More reasoning…  Max consumes usage limits faster
+
+  Press enter to confirm or esc to go back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,48 @@
+Attempt, components and original price
+Requested UTC day: 2026-10-15
+Provider: kimi
+Model: kimi-k3
+Billing: Pay per use
+Estimated cost: $0.036627
+Tokens: 12,029 tokens
+—— Details ——
+Billed cost: kimi doesn't report its charges, so any cost here is an estimate — check kimi's bill.
+Request: 13132120-15d0-43e5-b7de-dfa2ad6ca5cd
+Attempt: 8b9bf033-3738-49ce-ad61-a4df4a451c02
+Thread: 01a1419b-2ad4-7103-b38f-0e8651dbf476
+Turn: 01a1419b-6245-7572-9b97-8b3c965c634d
+Account: default
+Opaque scope: 0a4840dc-d596-4062-9290-e403fddc8a8c
+Arithmetic dialect: Inclusive
+Admission time: 2026-10-15T22:07:45.365Z
+Retry predecessor: none
+Completion/billing status: not recorded. Literal wire/endpoint and usage observation wall time: unavailable
+Estimated token cost for recorded attempts: $0.036627
+Billing basis: pay per use
+Input: 11984
+Noncached input (derived for inclusive input): 208 (derived)
+Cache read: 0 (reported)
+Cache write: 11776
+Output: 45
+Reasoning (subset, not separately billed): 29
+Total (not separately billed): 12029
+Noncached input cost: $0.000624; exact USD 0.000624
+Cache read cost: $0.000000; exact USD 0
+Cache write cost: $0.035328; exact USD 0.035328
+Output cost: $0.000675; exact USD 0.000675
+Known subtotal exact USD: 0.036627
+Price ID: 717b7ca9-51c3-450e-9a3e-a630d24a51ec
+Price source: NativeCatalog; reference d2593c06-86a4-5b5a-adfc-bf3c490111d8
+Price currency/unit: Usd / PerMillionTokens
+Price observed/approved: 2026-10-15T22:07:45.365Z / 2026-10-15T22:07:45.365Z
+Price effective interval: [2026-10-15T22:07:45.365Z, unbounded)
+Noncached input rate: 3 USD per million tokens
+Cache read rate: 0.3 USD per million tokens
+Cache write rate: 3 USD per million tokens
+Output rate: 15 USD per million tokens
+Evidence revision 3; source a7215e64-4bd3-46f8-9582-e5f6412628e9; sequence 3; presence patch
+{"input":11984,"read":0,"write":11776,"output":45,"reasoning":29,"total":12029}
+Snapshot is not current; newer activity is unverified
+Back
+Refresh
+Close

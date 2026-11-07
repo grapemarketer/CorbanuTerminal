@@ -1234,7 +1234,10 @@ async fn issue_442_env_file_matched_by_name_is_denied_and_explained() -> anyhow:
                 .entries
                 .extend(credential_file_globs(&cwd).into_iter().map(|pattern| {
                     FileSystemSandboxEntry::new(
-                        FileSystemPath::GlobPattern { pattern },
+                        FileSystemPath::GlobPattern {
+                            pattern,
+                            scan: None,
+                        },
                         FileSystemAccessMode::Deny,
                     )
                 }));
@@ -1248,25 +1251,30 @@ async fn issue_442_env_file_matched_by_name_is_denied_and_explained() -> anyhow:
         },
     )
     .await?;
-    let warning = match wait_for_event(&test.codex, |event| {
+    // #1312: the denied creation is explained too, although its command
+    // exited 0 (`echo made=$?` ran last).
+    let mut warnings = Vec::new();
+    while let EventMsg::Warning(warning) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
             || matches!(event, EventMsg::Warning(warning)
                 if warning.message.starts_with("Security level Aggressive"))
     })
     .await
     {
-        EventMsg::Warning(warning) => warning.message,
-        other => panic!("no warning before the turn ended: {other:?}"),
+        warnings.push(warning.message);
+    }
+    let [made_warning, warning] = warnings.as_slice() else {
+        panic!("expected two warnings before the turn ended: {warnings:?}");
     };
+    assert!(
+        made_warning.starts_with("Security level Aggressive blocked access to `.env.new`"),
+        "{made_warning}"
+    );
     assert!(
         warning.starts_with("Security level Aggressive blocked access to `.env.local`"),
         "{warning}"
     );
     assert!(warning.contains("also ones created"), "{warning}");
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     let requests = captured.requests();
     let made = output_text(&requests[requests.len() - 2], "call-make");
     assert!(made.contains("made=1"), "{made}");
@@ -2548,6 +2556,123 @@ async fn issue_598_an_approved_command_cannot_move_the_corbanu_home() -> anyhow:
     Ok(())
 }
 
+/// #1472: a Corbanu home reached through ordinary folders inside the
+/// command's writable root (`<cwd>/aa/home`, spelled by its real location or
+/// through a link outside the root) cannot be replaced by moving a folder
+/// above it aside (`mv aa aa.old`) and rebuilding the path with a planted
+/// home: #592/#617 pin the home and every folder above it inside the root.
+/// The profile writes only the current folder (as Aggressive's), or
+/// everything (full access). Permissive is unchanged.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_1472_a_home_below_the_working_folder_cannot_be_moved_aside() -> anyhow::Result<()> {
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    // Every name is built at run time (the command-text net cannot see it).
+    // The first move runs in a new user and mount namespace, where the pins
+    // are copies (when the system lets the command create one).
+    let command = "p=\"$(printf 'a%s' a)\"; h=\"$(printf 'ho%s' me)\"; \
+                   unshare -rm mv \"$p\" \"$p.ns\"; echo unshare=$?; \
+                   mv \"$p\" \"$p.old\"; echo mvaa=$?; \
+                   mv \"$p/$h\" \"$p/$h.old\"; echo mvhome=$?; \
+                   mkdir -p \"$p/$h\" && echo planted > \"$p/$h/AGENTS.md\"; echo ran-1472";
+    let mut wrong = Vec::new();
+    for (level, full_access, through_link) in [
+        (SecurityLevel::Moderate, false, false),
+        (SecurityLevel::Moderate, false, true),
+        (SecurityLevel::Moderate, true, false),
+        (SecurityLevel::Aggressive, false, false),
+        (SecurityLevel::Aggressive, false, true),
+        (SecurityLevel::Permissive, false, false),
+        (SecurityLevel::Permissive, false, true),
+    ] {
+        let temp = TempDir::new()?;
+        let base = temp.path().canonicalize()?;
+        let cwd = base.join("ws");
+        let real = cwd.join("aa/home");
+        std::fs::create_dir_all(&real)?;
+        std::fs::write(real.join("AGENTS.md"), "original\n")?;
+        std::fs::write(real.join("auth.json"), CANARY)?;
+        // The link lies outside the writable root, as `~/.corbanu` would.
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link)?;
+        let spelled =
+            AbsolutePathBuf::from_absolute_path(if through_link { &link } else { &real })?;
+        let cwd_abs = AbsolutePathBuf::from_absolute_path(&cwd)?;
+        let (test, captured) = start_turn_in(
+            /*home*/ None,
+            level,
+            AskForApproval::Never,
+            vec![
+                call("call-1472", "shell_command", json!({ "command": command })),
+                done_step(),
+            ],
+            move |config| {
+                config.codex_home = spelled.clone();
+                config.cwd = cwd_abs.clone();
+                let profile = if full_access {
+                    PermissionProfile::Disabled
+                } else {
+                    PermissionProfile::from_runtime_permissions(
+                        &FileSystemSandboxPolicy::restricted(vec![
+                            FileSystemSandboxEntry::new(
+                                FileSystemPath::Special {
+                                    value: FileSystemSpecialPath::Root,
+                                },
+                                FileSystemAccessMode::Read,
+                            ),
+                            FileSystemSandboxEntry::new(
+                                FileSystemPath::Path {
+                                    path: cwd_abs.clone(),
+                                },
+                                FileSystemAccessMode::Write,
+                            ),
+                        ]),
+                        NetworkSandboxPolicy::Restricted,
+                    )
+                };
+                config
+                    .permissions
+                    .set_permission_profile(profile)
+                    .expect("profile");
+            },
+        )
+        .await?;
+        assert!(next_exec_approval(&test).await.is_none());
+        let requests = captured.requests();
+        let output = output_text(&requests[requests.len() - 1], "call-1472");
+        drop(test);
+        let open = level == SecurityLevel::Permissive;
+        let moved = ["aa.old", "aa.ns", "aa/home.old"]
+            .iter()
+            .any(|name| cwd.join(name).exists());
+        let planted =
+            std::fs::read_to_string(real.join("AGENTS.md")).unwrap_or_default() == "planted\n";
+        if !output.contains("ran-1472")
+            || moved != open
+            || planted != open
+            || ["unshare=0", "mvaa=0", "mvhome=0"]
+                .iter()
+                .any(|status| output.contains(status))
+                != open
+        {
+            wrong.push(format!(
+                "{level:?} full_access={full_access} link={through_link}: moved={moved} \
+                 planted={planted}: {output}"
+            ));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+    Ok(())
+}
+
 /// #583: under a protected level with full access, a command cannot create a
 /// missing Corbanu-home entry that Corbanu reads later: exec-policy
 /// `rules/x.rules` (which would approve commands in later sessions) or any
@@ -3078,6 +3203,90 @@ async fn issue_650_other_worktrees_git_folders_stay_read_only() -> anyhow::Resul
     Ok(())
 }
 
+/// #675: a protected command with full access, working in a linked git
+/// worktree, cannot rewrite another worktree's own `.git` file (to point the
+/// person's later git runs there at a planted folder), nor move that
+/// worktree aside and leave a planted one in its place, with the paths built
+/// at run time; the main worktree's command neither. Its own worktree's
+/// files stay writable. Permissive is unchanged.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_675_other_worktrees_dot_git_files_stay_read_only() -> anyhow::Result<()> {
+    use codex_protocol::models::PermissionProfile;
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    let mut wrong = Vec::new();
+    for (level, from, open) in [
+        (SecurityLevel::Moderate, "wt", false),
+        (SecurityLevel::Aggressive, "wt", false),
+        (SecurityLevel::Moderate, "main", false),
+        (SecurityLevel::Permissive, "wt", true),
+    ] {
+        let base = TempDir::new()?;
+        let x = base.path().canonicalize()?;
+        let common = x.join("main/.git");
+        std::fs::create_dir_all(common.join("hooks"))?;
+        std::fs::write(common.join("config"), "[core]\n")?;
+        for name in ["wt", "other"] {
+            let admin = common.join("worktrees").join(name);
+            std::fs::create_dir_all(&admin)?;
+            std::fs::write(admin.join("HEAD"), "ref\n")?;
+            std::fs::write(admin.join("commondir"), "../..\n")?;
+            std::fs::write(
+                admin.join("gitdir"),
+                format!("{}/.git\n", x.join(name).display()),
+            )?;
+            std::fs::create_dir_all(x.join(name))?;
+            std::fs::write(
+                x.join(name).join(".git"),
+                format!("gitdir: {}\n", admin.display()),
+            )?;
+        }
+        let original = std::fs::read_to_string(x.join("other/.git"))?;
+        let path = x.to_string_lossy().into_owned();
+        // Split inside the folder's own name: neither part names it.
+        let (head, tail) = split_home_name(&path);
+        let command = format!(
+            "x=\"$(printf '{head}%s' {tail})\"; g=\".g$(printf it)\"; \
+             printf 'gitdir: /planted\\n' > \"$x/other/$g\"; \
+             mv \"$x/other\" \"$x/moved675\" && mkdir \"$x/other\" && \
+             printf 'gitdir: /planted\\n' > \"$x/other/$g\"; \
+             echo x > \"$x/{from}/file675\"; echo ran-675"
+        );
+        let cwd = AbsolutePathBuf::from_absolute_path(x.join(from))?;
+        let (test, captured) = start_turn_in(
+            /*home*/ None,
+            level,
+            AskForApproval::Never,
+            vec![
+                call("call-675", "shell_command", json!({ "command": command })),
+                done_step(),
+            ],
+            move |config| {
+                config.cwd = cwd.clone();
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("full access");
+            },
+        )
+        .await?;
+        assert!(next_exec_approval(&test).await.is_none());
+        let requests = captured.requests();
+        let output = output_text(&requests[requests.len() - 1], "call-675");
+        let changed = std::fs::read_to_string(x.join("other/.git")).unwrap_or_default() != original;
+        if !output.contains("ran-675") || changed != open || !x.join(from).join("file675").exists()
+        {
+            wrong.push(format!(
+                "{level:?} from {from}: changed {changed}: {output}"
+            ));
+        }
+        drop(test);
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+    Ok(())
+}
+
 /// Issue #651: a protected command working inside a separate database
 /// folder whose path holds glob syntax runs (bubblewrap's glob scan accepts
 /// the escaped pattern) and still cannot read a database there, write the
@@ -3142,6 +3351,139 @@ async fn issue_651_a_database_folder_with_glob_syntax_is_protected() -> anyhow::
         }
         drop(test);
         drop(base);
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+    Ok(())
+}
+
+/// Issue #732 (D226): the outputs of one command run at each level in a
+/// separate database folder holding its working folder (`work`), a database
+/// at the folder's top level (`canary.sqlite`), Corbanu's own runtime
+/// databases (made at session start) and a project database below it
+/// (`work/fixture.sqlite`); with `unreadable`, also a `systemd-private-*`
+/// subfolder the user cannot read (as in `/tmp`). `None` when the user can
+/// read it anyway (root), which cannot reproduce the issue.
+#[cfg(target_os = "linux")]
+async fn issue_732_database_folder_outputs(
+    unreadable: bool,
+) -> anyhow::Result<Option<Vec<(SecurityLevel, bool, String)>>> {
+    use codex_protocol::models::PermissionProfile;
+    use std::os::unix::fs::PermissionsExt;
+    let mut outputs = Vec::new();
+    for (level, open) in [
+        (SecurityLevel::Moderate, false),
+        (SecurityLevel::Aggressive, false),
+        (SecurityLevel::Permissive, true),
+    ] {
+        let base = TempDir::new()?;
+        let folder = base.path().canonicalize()?.join("databases");
+        let work = folder.join("work");
+        let private = folder.join("systemd-private-732-systemd-resolved.service-x");
+        std::fs::create_dir_all(&work)?;
+        std::fs::create_dir_all(&private)?;
+        std::fs::write(private.join("inside.sqlite"), "private")?;
+        std::fs::write(work.join("fixture.sqlite"), "project-732")?;
+        // Every top-level database: their first bytes, or the canary.
+        let command = "for f in ../*.sqlite*; do head -c 16 \"$f\"; echo; done; \
+                       cat fixture.sqlite; echo; echo ran-732";
+        let sqlite_home = AbsolutePathBuf::from_absolute_path(&folder)?;
+        let cwd = AbsolutePathBuf::from_absolute_path(&work)?;
+        let canary = folder.join("canary.sqlite");
+        let locked = private.clone();
+        let (test, captured) = start_turn_after(
+            /*home*/ None,
+            level,
+            AskForApproval::Never,
+            vec![
+                call("call-732", "shell_command", json!({ "command": command })),
+                done_step(),
+            ],
+            move |config| {
+                config.cwd = cwd.clone();
+                config.sqlite = codex_state::SqliteConfig::from_sqlite_home(sqlite_home.clone());
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("full access");
+            },
+            move |_| {
+                std::fs::write(&canary, CANARY).expect("canary database");
+                if unreadable {
+                    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+                        .expect("lock the private folder");
+                }
+            },
+        )
+        .await?;
+        let readable = std::fs::read_dir(&private).is_ok();
+        assert!(next_exec_approval(&test).await.is_none());
+        let requests = captured.requests();
+        let output = output_text(&requests[requests.len() - 1], "call-732");
+        drop(test);
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755))?;
+        drop(base);
+        if unreadable && readable {
+            return Ok(None);
+        }
+        outputs.push((level, open, output));
+    }
+    Ok(Some(outputs))
+}
+
+/// Issue #732 (D226): a subfolder the user cannot read (`systemd-private-*`
+/// in `/tmp`, say) in a separate database folder that holds the command's
+/// folder no longer makes every protected command fail: the database scan
+/// stays at the folder's top level. Before, ripgrep's error on that
+/// subfolder refused the command under Moderate and Aggressive.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_732_an_unreadable_subfolder_does_not_stop_protected_commands() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    let Some(outputs) = issue_732_database_folder_outputs(/*unreadable*/ true).await? else {
+        eprintln!("skipping: this user can read a 0o000 folder (root), so #732 cannot occur");
+        return Ok(());
+    };
+    let wrong: Vec<String> = outputs
+        .into_iter()
+        .filter(|(_, _, output)| !output.contains("ran-732"))
+        .map(|(level, _, output)| format!("{level:?}: {output}"))
+        .collect();
+    assert_eq!(wrong, Vec::<String>::new());
+    Ok(())
+}
+
+/// Issue #732 (D226): with the scan at the top level, Corbanu's own runtime
+/// databases there (and the canary database) stay unreadable to protected
+/// commands, also beside an unreadable subfolder; a project's database
+/// below the folder is no longer hidden. Permissive is unchanged.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_732_top_level_runtime_databases_stay_hidden() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    let mut wrong = Vec::new();
+    for unreadable in [false, true] {
+        let Some(outputs) = issue_732_database_folder_outputs(unreadable).await? else {
+            eprintln!("skipping the unreadable case: this user can read a 0o000 folder (root)");
+            continue;
+        };
+        for (level, open, output) in outputs {
+            // `head -c 16` prints the canary's first 16 bytes.
+            let achieved = [
+                output.contains("SQLite format 3"),
+                output.contains(&CANARY[..16]),
+            ];
+            if !output.contains("ran-732")
+                || !output.contains("project-732")
+                || achieved != [open; 2]
+            {
+                wrong.push(format!(
+                    "{level:?} unreadable={unreadable}: {achieved:?}: {output}"
+                ));
+            }
+        }
     }
     assert_eq!(wrong, Vec::<String>::new());
     Ok(())

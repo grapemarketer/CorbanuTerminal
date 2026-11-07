@@ -172,19 +172,24 @@ impl Denied {
     }
 }
 
-/// The explanation for a command that failed with `denial_lines`, when
+/// The explanation for a command that printed `denial_lines`, when
 /// Moderate's rules denied a path it names (or reports) and the person's
-/// own permissions would have allowed it, and what was denied.
+/// own permissions would have allowed it, and what was denied. #1312: a
+/// command that exited 0 (`failed` false) is explained only by a path it
+/// names itself, not by its folder or the output alone.
 pub(super) async fn denial_explanation(
     inputs: ReadPolicyInputs,
     command: &[String],
     cwd: &Path,
     denial_lines: Vec<String>,
+    failed: bool,
 ) -> Option<(Denied, String)> {
     let contract = crate::security::launch_contract::active();
     let (command, cwd) = (command.to_vec(), cwd.to_path_buf());
-    super::off_thread(move || explain_denied(&inputs, contract, &command, &cwd, &denial_lines))
-        .await
+    super::off_thread(move || {
+        explain_denied(&inputs, contract, &command, &cwd, &denial_lines, failed)
+    })
+    .await
 }
 
 #[cfg(all(test, unix))]
@@ -195,7 +200,15 @@ fn explain(
     cwd: &Path,
     denial_lines: &[String],
 ) -> Option<String> {
-    explain_denied(inputs, contract, command, cwd, denial_lines).map(|(_, text)| text)
+    explain_denied(
+        inputs,
+        contract,
+        command,
+        cwd,
+        denial_lines,
+        /*failed*/ true,
+    )
+    .map(|(_, text)| text)
 }
 
 fn explain_denied(
@@ -204,6 +217,7 @@ fn explain_denied(
     command: &[String],
     cwd: &Path,
     denial_lines: &[String],
+    failed: bool,
 ) -> Option<(Denied, String)> {
     let own_profile = own_profile(inputs);
     let base = own_profile.file_system_sandbox_policy();
@@ -246,8 +260,14 @@ fn explain_denied(
         }
         blocked
     };
-    let lines = &denial_lines[..denial_lines.len().min(MAX_REPORTED_LINES)];
-    let read_word = read(cwd)
+    // #1312: the steps that go by the output or the folder alone need a
+    // failed command.
+    let lines = if failed {
+        &denial_lines[..denial_lines.len().min(MAX_REPORTED_LINES)]
+    } else {
+        &[]
+    };
+    let read_word = (failed && read(cwd))
         .then(|| cwd.display().to_string())
         .or_else(|| {
             super::denied_word(
@@ -257,6 +277,7 @@ fn explain_denied(
                 codex_home,
                 read,
                 Some(denial_lines),
+                /*skip_patterns*/ !failed,
             )
         })
         // #621: a path built at run time that the denial line reports.

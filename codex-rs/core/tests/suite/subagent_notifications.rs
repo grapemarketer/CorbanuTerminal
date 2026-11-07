@@ -19,7 +19,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
-use codex_state::AgentMailboxPhase;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
@@ -121,6 +120,26 @@ fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     line.split_ascii_whitespace()
         .find_map(|field| field.strip_prefix(&prefix))
         .map(|value| value.trim_matches('"'))
+}
+
+/// Whether the agent-communication log shows `parent_thread_id` receiving a
+/// subagent result: a `kind="result"` send to it and the receive event with the
+/// same communication ID.
+fn parent_received_subagent_result(logs: &str, parent_thread_id: ThreadId) -> bool {
+    let receiver = format!("receiver_thread_id={parent_thread_id}");
+    logs.lines()
+        .filter(|line| {
+            line.contains("state=\"send\"")
+                && line.contains("kind=\"result\"")
+                && line.contains(&receiver)
+        })
+        .filter_map(|line| log_field(line, "communication_id"))
+        .any(|communication_id| {
+            logs.lines().any(|line| {
+                line.contains("state=\"receive\"")
+                    && log_field(line, "communication_id") == Some(communication_id)
+            })
+        })
 }
 
 fn has_subagent_notification(req: &ResponsesRequest) -> bool {
@@ -915,9 +934,19 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// #1177, #1058: a current-thread runtime runs every task on this thread, so the
+// subscriber set below sees the parent's agent-communication log.
+#[tokio::test]
 async fn subagent_notification_is_included_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::INFO)
+        .with_writer(MockWriter::new(output))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
     let (test, spawned_id) = setup_turn_one_with_spawned_child(
@@ -935,44 +964,18 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
         }
     })
     .await?;
-    let state_db = test.codex.state_db().expect("mailbox state db");
-    let message_id = tokio::time::timeout(POSITIVE_WAIT, async {
-        loop {
-            if let Some(message) = state_db
-                .list_recoverable_agent_messages(test.session_configured.thread_id)
-                .await
-                .expect("parent mailbox")
-                .into_iter()
-                .next()
-            {
-                break message
-                    .communication
-                    .message_id
-                    .expect("mailbox row should have a message id");
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    // #1177: the row is recoverable (`Ready`) before AgentControl hands the
-    // notification to the parent session, which marks it `Submitted` only
-    // after the hand-off. Submit turn 2 after that: the parent handles
-    // submissions in order, so the notification is queued ahead of turn 2.
+    // #1177, #1058: submit turn 2 only after the parent session has queued the
+    // notification. The mailbox phase is no signal for that: the row is marked
+    // `Submitted` before the hand-off. AgentControl logs `state="send"` once the
+    // hand-off has returned, and the parent logs `state="receive"` with the same
+    // communication ID once the notification is in its mailbox. Turn 2 then
+    // finds it there.
+    let parent_thread_id = test.session_configured.thread_id;
     tokio::time::timeout(POSITIVE_WAIT, async {
         loop {
-            let phase = state_db
-                .get_agent_message(&message_id)
-                .await
-                .expect("parent mailbox row")
-                .expect("parent mailbox row should exist")
-                .phase;
-            if !matches!(
-                phase,
-                AgentMailboxPhase::Admitted
-                    | AgentMailboxPhase::Ready
-                    | AgentMailboxPhase::Submitting
-                    | AgentMailboxPhase::RetryableFailure
-            ) {
+            let logs = String::from_utf8(output.lock().expect("buffer lock").clone())
+                .expect("logs should be UTF-8");
+            if parent_received_subagent_result(&logs, parent_thread_id) {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

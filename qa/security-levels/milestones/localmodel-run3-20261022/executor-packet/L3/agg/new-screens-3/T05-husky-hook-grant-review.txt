@@ -1,0 +1,40 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: echo '# grant-once-1' >> .husky/pre-commit
+
+
+◦ Running echo '# grant-once-1' >> .husky/pre-commit
+
+
+ Grant this command?
+ Under Aggressive, Grant once lets one command write files that run code later, which Aggressive otherwise keeps read-only, and only inside the
+ current folder: git hooks and config kept outside a .git folder (a hooks folder set with core.hooksPath, such as Husky's .husky, or a git folder
+ with another name), and, when the current folder holds your home folder, your shell and git start-up files (such as .zshrc, .profile, .gitconfig
+ and .local/bin), login agents and services, and .claude settings. Nothing else changes: credential files and Corbanu's sign-in, vault, config and
+ history stay unreadable; Corbanu's own files and the project's .git, .codex and .agents stay read-only; other folders and the network stay closed.
+ An approval alone never lifts this. A start-up file written this way runs code later, outside the sandbox.
+
+   Agent       human:session:01a135b5-32ff-7102-9806-36e91f3d964f → agent:01a135b5-32ff-7102-9806-36e91f3d964f
+   Session     01a135b5-32ff-7102-9806-36e91f3d964f
+   Action      execute
+   Resource    protected_data/sandbox_protected_paths
+   Command     $ echo '# grant-once-1' >> .husky/pre-commit
+   Folder      /Users/tester/run/fixture/workspace
+   Digest      command:sha256:0415c8b367b8110a2b7df4f6b82bfb851e5689ac1459ef45c9cce60f29a39ad3
+   Destination none
+   Limit       1 run (press u for any run until it expires)
+   Expires     10 minutes after you confirm, or at a level change, revocation, kill switch or restart
+
+ Still denied: any other command or folder, this command a second time, its parent, sibling and child agents, other sessions, and everything else
+ Aggressive denies.
+
+ › Back to the approval (nothing granted)
+   Grant and run
+
+ ↑/↓ choose · enter confirm · u change limit · esc back to the approval

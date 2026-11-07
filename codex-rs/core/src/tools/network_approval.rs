@@ -11,6 +11,7 @@ use crate::tools::events::truncate_rejection_message;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_analytics::GuardianApprovalRequestSource;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_hooks::PermissionRequestDecision;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -269,6 +270,19 @@ fn abandoned_network_approval_outcome(
     cancellation_token.is_cancelled().then(|| {
         NetworkApprovalOutcome::DeniedByPolicy(ABANDONED_NETWORK_APPROVAL_MESSAGE.to_string())
     })
+}
+
+/// Whether `environment_id` runs remotely; an unknown non-local id counts.
+fn is_remote_environment(
+    environments: &crate::environment_selection::TurnEnvironmentSnapshot,
+    environment_id: &str,
+) -> bool {
+    environments
+        .turn_environments()
+        .find(|environment| environment.environment_id == environment_id)
+        .map_or(environment_id != LOCAL_ENVIRONMENT_ID, |environment| {
+            environment.environment.is_remote()
+        })
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -911,6 +925,13 @@ impl NetworkApprovalService {
         )
         .await
         {
+            // #722 (D246): a hook may not allow a remote request without a
+            // prompt; Guardian or the user decides it.
+            Some(PermissionRequestDecision::Allow)
+                if is_remote_environment(&turn_context.environments, &environment_id) =>
+            {
+                None
+            }
             Some(PermissionRequestDecision::Allow) => Some(ReviewDecision::Approved),
             Some(PermissionRequestDecision::Deny { message }) => {
                 if let Some(owner_call) = owner_call.as_ref() {

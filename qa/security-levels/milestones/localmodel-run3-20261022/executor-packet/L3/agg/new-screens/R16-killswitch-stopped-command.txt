@@ -1,0 +1,45 @@
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+
+› Run exactly this command: sleep 90; echo finished
+
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+
+› Run exactly this command: sleep 90; echo finished
+
+
+✗ You canceled the request to run sleep 90; echo finished
+
+✗ Did not run sleep 90; echo finished
+  └ Approval declined
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› y
+
+
+⚠ Stopped: the security kill switch was turned on, so Corbanu ended this reply and the commands it was running, and sends nothing to the model until
+  the switch is turned off. Messages from other agents wait until then. To turn it off, open /security, press g, choose "Turn the kill switch off" and
+  confirm.
+
+■ Turn stopped by the security kill switch.
+
+Security level
+Active in this session: Aggressive
+Core's level: Aggressive
+Kill switch: on. Model turns in every pane (Claude panes too), new grants and protected actions after untrusted content are refused, and messages and
+tasks from other agents wait; press g to turn it off.
+
+  Permissive
+  Moderate  not available yet
+> Aggressive  (active)
+
+Sensitive access denied by default, built from existing sandbox, approval, network and exec-policy controls.
+
+↑/↓ move · enter choose · g grants and kill switch · esc close · i inspect

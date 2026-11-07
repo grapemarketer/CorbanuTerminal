@@ -1,0 +1,8 @@
+
+Saved: Aggressive (nested agents: refuse)
+Restart Corbanu Terminal to activate Aggressive. Until then this session stays Permissive.
+Core's level is Aggressive now in this session, and from every start.
+Press r to restart now: Corbanu Terminal closes this session and starts again in this folder with the same options. Conversations from before cannot
+be resumed under Aggressive.
+
+r restart now · enter or esc close · i inspect

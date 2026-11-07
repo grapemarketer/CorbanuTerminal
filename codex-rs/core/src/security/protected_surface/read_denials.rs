@@ -224,7 +224,7 @@ pub(crate) struct ReadDenials {
     existing: Vec<AbsolutePathBuf>,
     /// Fixed locations that may not exist yet.
     fixed: Vec<AbsolutePathBuf>,
-    globs: Vec<String>,
+    globs: Vec<FileSystemPath>,
     /// Readable but never writable (PF-23-S02), even before they exist.
     read_only: Vec<AbsolutePathBuf>,
     /// The same for the Corbanu home's runtime entries (`tmp` holds the
@@ -344,11 +344,12 @@ impl ReadDenials {
         }
         denials.add_security_files(&codex_home, keep);
         // #651: the home escaped, should its path hold glob syntax.
-        denials.globs.push(
-            crate::security::preflight::database_glob(codex_home.as_path())
+        denials.globs.push(FileSystemPath::GlobPattern {
+            pattern: crate::security::preflight::database_glob(codex_home.as_path())
                 .to_string_lossy()
                 .into_owned(),
-        );
+            scan: None,
+        });
         if let Some(home) =
             user_home.and_then(|home| AbsolutePathBuf::from_absolute_path(home).ok())
         {
@@ -567,9 +568,26 @@ impl ReadDenials {
                 }
             }
         }
-        let databases = crate::security::preflight::database_glob(folder.as_path())
-            .to_string_lossy()
-            .into_owned();
+        // #732: only these direct database entries are generated here. Keep
+        // their provenance through the permission profile so Linux never
+        // recurses through unrelated descendants when expanding this rule.
+        // #732 review: the top-level scan does not reach the backups folder's
+        // databases; where the command works inside it (so it is not denied
+        // whole), they keep the recursive scan they had.
+        let backups = folder.join("db-backups");
+        if Self::holds_kept(&backups, keep) {
+            let backups = FileSystemPath::GlobPattern {
+                pattern: format!(
+                    "{}/**/*.sqlite*",
+                    crate::security::preflight::glob_escape_path(backups.as_path())
+                ),
+                scan: None,
+            };
+            if !self.globs.contains(&backups) {
+                self.globs.push(backups);
+            }
+        }
+        let databases = FileSystemPath::database_entries(folder);
         if !self.globs.contains(&databases) {
             self.globs.push(databases);
         }
@@ -1038,23 +1056,18 @@ impl ReadDenials {
     /// additional permissions may never open. A malformed pattern matches
     /// every path (fail closed).
     pub(crate) fn matcher(&self) -> Option<ReadDenyMatcher> {
-        let entries: Vec<FileSystemSandboxEntry> = self
-            .paths()
-            .map(|path| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::Path { path: path.clone() },
-                    FileSystemAccessMode::Deny,
-                )
-            })
-            .chain(self.globs.iter().map(|pattern| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern {
-                        pattern: pattern.clone(),
-                    },
-                    FileSystemAccessMode::Deny,
-                )
-            }))
-            .collect();
+        let entries: Vec<FileSystemSandboxEntry> =
+            self.paths()
+                .map(|path| {
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path { path: path.clone() },
+                        FileSystemAccessMode::Deny,
+                    )
+                })
+                .chain(self.globs.iter().map(|path| {
+                    FileSystemSandboxEntry::new(path.clone(), FileSystemAccessMode::Deny)
+                }))
+                .collect();
         let cwd = self
             .cwd
             .as_ref()
@@ -1089,49 +1102,44 @@ impl ReadDenials {
             }
         }
         let (mut file_system, network) = profile.to_runtime_permissions();
-        let entries: Vec<FileSystemSandboxEntry> = self
-            .existing
-            .iter()
-            .map(|path| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::Path { path: path.clone() },
-                    FileSystemAccessMode::Deny,
+        let entries: Vec<FileSystemSandboxEntry> =
+            self.existing
+                .iter()
+                .map(|path| {
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path { path: path.clone() },
+                        FileSystemAccessMode::Deny,
+                    )
+                })
+                .chain(self.fixed.iter().map(|path| {
+                    FileSystemSandboxEntry::skip_missing_path(
+                        FileSystemPath::Path { path: path.clone() },
+                        FileSystemAccessMode::Deny,
+                    )
+                }))
+                .chain(self.globs.iter().map(|path| {
+                    FileSystemSandboxEntry::new(path.clone(), FileSystemAccessMode::Deny)
+                }))
+                .chain(
+                    self.unlistable_home()
+                        .map(FileSystemSandboxEntry::deny_directory_listing),
                 )
-            })
-            .chain(self.fixed.iter().map(|path| {
-                FileSystemSandboxEntry::skip_missing_path(
-                    FileSystemPath::Path { path: path.clone() },
-                    FileSystemAccessMode::Deny,
+                .chain(
+                    self.unmovable
+                        .iter()
+                        .map(FileSystemSandboxEntry::deny_moving),
                 )
-            }))
-            .chain(self.globs.iter().map(|pattern| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::GlobPattern {
-                        pattern: pattern.clone(),
-                    },
-                    FileSystemAccessMode::Deny,
+                .chain(
+                    self.keychain_services_denied
+                        .then(FileSystemSandboxEntry::deny_keychain_services),
                 )
-            }))
-            .chain(
-                self.unlistable_home()
-                    .map(FileSystemSandboxEntry::deny_directory_listing),
-            )
-            .chain(
-                self.unmovable
-                    .iter()
-                    .map(FileSystemSandboxEntry::deny_moving),
-            )
-            .chain(
-                self.keychain_services_denied
-                    .then(FileSystemSandboxEntry::deny_keychain_services),
-            )
-            .chain(self.moderate_marker.iter().map(|path| {
-                FileSystemSandboxEntry::new(
-                    FileSystemPath::Path { path: path.clone() },
-                    FileSystemAccessMode::Deny,
-                )
-            }))
-            .collect();
+                .chain(self.moderate_marker.iter().map(|path| {
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path { path: path.clone() },
+                        FileSystemAccessMode::Deny,
+                    )
+                }))
+                .collect();
         if entries.is_empty()
             && self.read_only.is_empty()
             && self.runtime_read_only.is_empty()
@@ -1789,8 +1797,18 @@ fn with_real_locations(policy: &FileSystemSandboxPolicy) -> FileSystemSandboxPol
                             })
                 })
                 .map(|path| FileSystemPath::Path { path }),
-            FileSystemPath::GlobPattern { pattern } => {
-                real_pattern(pattern).map(|pattern| FileSystemPath::GlobPattern { pattern })
+            FileSystemPath::GlobPattern { pattern, scan } => {
+                real_pattern(pattern).map(|pattern| FileSystemPath::GlobPattern {
+                    pattern,
+                    scan: scan.as_ref().map(|scan| match scan {
+                        codex_protocol::permissions::FileSystemGlobScan::DatabaseEntries {
+                            directory,
+                        } => codex_protocol::permissions::FileSystemGlobScan::DatabaseEntries {
+                            directory: real_location(directory)
+                                .unwrap_or_else(|| directory.clone()),
+                        },
+                    }),
+                })
             }
             FileSystemPath::Special { .. } => None,
         };
@@ -1827,3 +1845,7 @@ mod tests;
 #[cfg(test)]
 #[path = "read_denials_907_tests.rs"]
 mod issue_907_tests;
+
+#[cfg(test)]
+#[path = "read_denials_732_tests.rs"]
+mod issue_732_tests;

@@ -102,6 +102,9 @@ use wiremock::matchers::path;
 const TEST_CHATGPT_ID_TOKEN: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzNDUiLCJ1c2VyX2lkIjoidXNlci0xMjM0NSIsImNoYXRncHRfcGxhbl90eXBlIjoicHJvIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjb3VudC0xMjMifX0.c2ln";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+#[path = "client_connection_identity_tests.rs"]
+mod connection_identity;
+
 #[test]
 fn pf_30_s01_all_native_wire_builders_reject_missing_admission() {
     for level in [
@@ -1568,6 +1571,124 @@ fn test_model_info() -> ModelInfo {
     .expect("deserialize test model info")
 }
 
+#[tokio::test]
+async fn catalogue_issue_128_saved_id_wire_requests_omit_output_limits() {
+    use codex_models_manager::ModelsManagerConfig;
+    use codex_models_manager::manager::ModelsManager;
+    use codex_models_manager::manager::RefreshStrategy;
+    use codex_models_manager::manager::StaticModelsManager;
+    use codex_protocol::openai_models::ModelOrchestrationMetadata;
+
+    let manager = StaticModelsManager::new(
+        /*auth_manager*/ None,
+        codex_models_manager::bundled_models_response().expect("bundled catalog"),
+    );
+    for (slug, provider_id) in [
+        ("x-ai/grok-4.6", "openrouter"),
+        ("openrouter/owl-alpha", "openrouter"),
+        ("x-ai/grok-4.5", "openrouter"),
+        ("deepseek/deepseek-v4-pro", "openrouter"),
+        ("deepseek/deepseek-v4-flash-0731", "openrouter"),
+        ("gpt-5.5", "openai"),
+    ] {
+        let saved = Some(slug.to_string());
+        let selected = manager
+            .get_default_model(
+                &saved,
+                /*allow_provider_model_fallback*/ false,
+                RefreshStrategy::Offline,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
+        let mut model = manager
+            .get_model_info(&selected, &ModelsManagerConfig::default())
+            .await;
+        assert_eq!(
+            (
+                selected.as_str(),
+                model
+                    .orchestration
+                    .as_ref()
+                    .map(ModelOrchestrationMetadata::provider_id),
+                model.used_fallback_model_metadata,
+            ),
+            (slug, Some(provider_id), false)
+        );
+        let provider = if provider_id == "openai" {
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+        } else {
+            ModelProviderInfo::create_openrouter_provider()
+        };
+        let client = test_model_client(SessionSource::Cli).for_provider(&provider);
+        let prompt = Prompt {
+            base_instructions: BaseInstructions {
+                text: "Compatibility contract fixture".to_string(),
+            },
+            input: vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Keep this saved model identity".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }],
+            ..Default::default()
+        };
+        let metadata = test_responses_metadata_for_client(
+            &client,
+            /*turn_id*/ None,
+            format!("{}:0", client.state.thread_id),
+            /*parent_thread_id*/ None,
+            TestCodexResponsesRequestKind::Turn,
+        );
+        let mut baseline = None;
+        // Start with the current catalogue value, including its explicit caps.
+        // These builders still omit wire output budgets when metadata changes.
+        let catalogue_output_metadata = model.max_output_tokens;
+        for output_metadata in [catalogue_output_metadata, None, Some(0), Some(8_192)] {
+            model.max_output_tokens = output_metadata;
+            let encoded = if provider_id == "openai" {
+                assert_eq!(provider.wire_api, WireApi::Responses);
+                let api_provider = provider.to_api_provider(/*auth_mode*/ None).unwrap();
+                let request = client
+                    .build_responses_request(
+                        &api_provider,
+                        &prompt,
+                        &model,
+                        /*effort*/ None,
+                        super::ReasoningSummaryConfig::None,
+                        /*service_tier*/ None,
+                        &metadata,
+                    )
+                    .expect("saved OpenAI Responses request");
+                serde_json::to_vec(&request).expect("serialize Responses request")
+            } else {
+                assert_eq!(provider.wire_api, WireApi::Chat);
+                let request = client
+                    .build_chat_completions_request(
+                        &prompt, &model, /*effort*/ None, &metadata,
+                    )
+                    .expect("saved OpenRouter Chat Completions request");
+                serde_json::to_vec(&request).expect("serialize Chat Completions request")
+            };
+            let body: serde_json::Value = serde_json::from_slice(&encoded).expect("request JSON");
+            assert_eq!(body["model"], slug);
+            for field in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
+                assert!(
+                    body.get(field).is_none(),
+                    "{slug} unexpectedly serialized {field} from {output_metadata:?}"
+                );
+            }
+            if let Some(expected) = &baseline {
+                assert_eq!(&body, expected, "output metadata changed {slug}'s request");
+            } else {
+                baseline = Some(body);
+            }
+        }
+    }
+}
+
 #[test]
 fn corbanu_flash_request_omits_parallel_control_with_function_tools() {
     let model = codex_models_manager::bundled_models_response()
@@ -1744,6 +1865,50 @@ fn ambient_required_low_reasoning_is_enabled_without_duplicate_scalar_control() 
     );
     assert_eq!(request.reasoning_effort, None);
     assert_eq!(request.enable_thinking, None);
+}
+
+#[test]
+fn plan_sends_ambient_reasoning_only_for_its_ambient_glm_row() {
+    let client = test_model_client(SessionSource::Cli)
+        .for_provider(&ModelProviderInfo::create_pfterminal_plan_provider());
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        /*turn_id*/ None,
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let request = |slug: &str, effort| {
+        let mut model = test_ambient_model_info();
+        model.slug = slug.to_string();
+        let request = client
+            .build_chat_completions_request(
+                &Prompt::default(),
+                &model,
+                Some(effort),
+                &responses_metadata,
+            )
+            .expect("Plan chat request");
+        (
+            request.reasoning,
+            request.reasoning_effort,
+            request.enable_thinking,
+        )
+    };
+
+    assert_eq!(
+        request(AMBIENT_DEFAULT_MODEL, ReasoningEffort::Medium),
+        (Some(json!({"enabled": true, "effort": "high"})), None, None)
+    );
+    assert_eq!(
+        request(AMBIENT_DEFAULT_MODEL, ReasoningEffort::XHigh),
+        (Some(json!({"enabled": true, "effort": "max"})), None, None)
+    );
+    // Other Plan rows keep the OpenAI-style default.
+    assert_eq!(
+        request("corbanu/glm-5.3-flash", ReasoningEffort::XHigh),
+        (None, None, None)
+    );
 }
 
 #[test]
@@ -2741,6 +2906,68 @@ async fn openai_unauthorized_without_credentials_names_the_variables_to_set() {
     assert!(message.contains("Set OPENAI_API_KEY"), "{message}");
     assert!(message.contains("CODEX_API_KEY"), "{message}");
     assert!(message.contains("corbanu login"), "{message}");
+}
+
+/// #1311 (D171): a request on a named account that gets a 401 because the
+/// account was removed meanwhile (removal revokes its tokens) is reported
+/// with the account's recovery, as the next request would be, not with a
+/// generic unauthorized error. While the account still holds a sign-in, the
+/// provider's error is kept.
+#[tokio::test]
+async fn unauthorized_after_the_named_account_was_removed_names_the_recovery() {
+    let home = TempDir::new().expect("home");
+    let work = codex_login::NamedChatgptAccount {
+        provider_id: "openai".to_string(),
+        name: "work".to_string(),
+    };
+    codex_login::login_named_account_with_api_key(home.path(), &work, "sk-work-canary")
+        .expect("named sign-in");
+    let base = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("sk-default-canary"),
+        home.path().to_path_buf(),
+    );
+    let named = base.for_named_account_loaded(work).await;
+    let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    info.account = Some(codex_model_provider_info::NamedProviderAccount {
+        provider_id: "openai".to_string(),
+        name: "work".to_string(),
+    });
+    let provider = create_model_provider(info, Some(Arc::clone(&named)));
+
+    let signed_in = openai_unauthorized_error(&provider).await;
+    assert!(
+        !signed_in.contains("corbanu login --account work"),
+        "{signed_in}"
+    );
+
+    let name = codex_vault::ProviderAccountName::parse("work").expect("name");
+    assert!(
+        codex_vault::Vault::new(home.path().to_path_buf())
+            .remove_provider_account("openai", &name)
+            .expect("remove")
+    );
+    let mut auth_recovery = Some(named.unauthorized_recovery());
+    let removed = super::handle_unauthorized(
+        TransportError::Http {
+            status: http::StatusCode::UNAUTHORIZED,
+            url: Some("wss://api.openai.com/v1/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"error":{"message":"token revoked"}}"#.to_string()),
+        },
+        &mut auth_recovery,
+        &test_session_telemetry(),
+        &provider,
+    )
+    .await
+    .expect_err("401 should fail")
+    .to_string();
+
+    assert!(
+        removed.contains("account `work` has no sign-in (it may have been removed or signed out)")
+            && removed.contains("corbanu login --account work"),
+        "{removed}"
+    );
+    assert!(!removed.contains("sk-"), "{removed}");
 }
 
 #[tokio::test]
@@ -3863,7 +4090,23 @@ fn issue688_v1_history_does_not_alias_unrelated_namespace() {
             "mcp__synthetic",
             "spawn_agent",
             &["spawn_agent", "spawn_agent_v1"],
-            "spawn_agent",
+            // Not offered: never the built-in's bare name either (#688).
+            "mcp__synthetic__spawn_agent",
+        );
+    }
+}
+/// #688: an MCP call recorded for a tool this request does not offer (its
+/// server was removed, or the tool limit dropped it) must not replay as a call
+/// of the built-in that shares its bare name.
+#[test]
+fn issue688_unoffered_mcp_history_does_not_take_a_builtin_name() {
+    for anthropic in [false, true] {
+        issue688_v1_history_wire_case(
+            anthropic,
+            "mcp__orders",
+            "shell",
+            &["shell"],
+            "mcp__orders__shell",
         );
     }
 }

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/named_account_login_tests.rs
+assertion_line: 404
+expression: "render(&view, 80)"
+---
+Sign in openai account `work`
+
+Requesting a one-time device code…
+Esc or Ctrl-C cancels the sign-in.

@@ -2,6 +2,20 @@
 use crate::session::turn_context::TurnContext;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 
+/// OpenAI's regional processing domain prefixes (`<prefix>.api.openai.com`), as listed in
+/// the OpenAI platform data controls guide (checked 2026-10-28). New regions need adding here.
+const OPENAI_REGIONAL_DOMAIN_PREFIXES: [&str; 10] =
+    ["ae", "au", "ca", "eu", "gb", "in", "jp", "kr", "sg", "us"];
+
+/// `api.openai.com` or a documented regional domain, with at most one trailing root dot.
+fn is_official_openai_api_host(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host == "api.openai.com"
+        || host
+            .strip_suffix(".api.openai.com")
+            .is_some_and(|prefix| OPENAI_REGIONAL_DOMAIN_PREFIXES.contains(&prefix))
+}
+
 /// The collaboration wire contract follows the endpoint, not a custom display name.
 /// Keep this narrower than provider identity: it must not grant OpenAI auth or capabilities.
 pub(super) fn uses_openai_reserved_collaboration_schema(turn_context: &TurnContext) -> bool {
@@ -13,7 +27,7 @@ pub(super) fn uses_openai_reserved_collaboration_schema(turn_context: &TurnConte
         && provider.base_url.as_deref().is_some_and(|base_url| {
             url::Url::parse(base_url).is_ok_and(|url| {
                 url.scheme() == "https"
-                    && url.host_str() == Some("api.openai.com")
+                    && url.host_str().is_some_and(is_official_openai_api_host)
                     && url.port_or_known_default() == Some(443)
                     && url.path().trim_end_matches('/') == "/v1"
                     && url.username().is_empty()

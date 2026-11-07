@@ -1,0 +1,9 @@
+> You are in /Users/agmx0/runs/cap-20261010T224124Z/fixture/workspace
+
+  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection. Trusting the directory
+  allows project-local config, hooks, and exec policies to load.
+
+› 1. Yes, continue
+  2. No, quit
+
+  Press enter to continue

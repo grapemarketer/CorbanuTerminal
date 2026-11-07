@@ -1,0 +1,17 @@
+https://api.z.ai/api/paas/v4/models 000
+curl: (60) SSL certificate problem: certificate has expired
+More details here: https://curl.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+https://api.openai.com/v1/models 000
+curl: (60) SSL certificate problem: certificate has expired
+More details here: https://curl.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+{"conn": "1793123286451709000-49241", "error": "SSLError(1, '[SSL: SSLV3_ALERT_CERTIFICATE_EXPIRED] sslv3 alert certificate expired (_ssl.c:1129)')", "event": "client_tls_error", "host": "api.z.ai", "time_ns": 1793123286455022000, "ts": "2026-10-27T17:48:06+0000"}
+{"conn": "1793123286574489000-49242", "error": "SSLError(1, '[SSL: SSLV3_ALERT_CERTIFICATE_EXPIRED] sslv3 alert certificate expired (_ssl.c:1129)')", "event": "client_tls_error", "host": "api.z.ai", "time_ns": 1793123286596171000, "ts": "2026-10-27T17:48:06+0000"}
+{"conn": "1793123286608716000-49243", "error": "SSLError(1, '[SSL: SSLV3_ALERT_CERTIFICATE_EXPIRED] sslv3 alert certificate expired (_ssl.c:1129)')", "event": "client_tls_error", "host": "api.openai.com", "time_ns": 1793123286613047000, "ts": "2026-10-27T17:48:06+0000"}

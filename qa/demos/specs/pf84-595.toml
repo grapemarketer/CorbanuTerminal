@@ -70,12 +70,12 @@ wait = "› +1\\. OpenAI · default"
 [[steps]]
 key = "Enter"
 [[steps]]
-wait = "Use default account for this session"
+wait = "Start a new session on the default account"
 [[steps]]
 key = "Down"
 repeat = 4
 [[steps]]
-wait = "› +5\\. Use default account for this session"
+wait = "› +5\\. Start a new session on the default account"
 [[steps]]
 key = "Enter"
 [[steps]]

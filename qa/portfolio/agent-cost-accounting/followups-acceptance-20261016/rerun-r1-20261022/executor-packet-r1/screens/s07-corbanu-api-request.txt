@@ -1,0 +1,17 @@
+Request
+Requested UTC day: 2026-10-15
+Provider: Corbanu API
+Model: DeepSeek V4.1 Flash
+Billing: Pay per use
+Cost: $0.002145, charged by Corbanu API
+Price basis: the charge Corbanu API reported with the response (usage.corbanu_charge_usd)
+Tokens: 9,289 tokens
+—— Details ——
+Billed cost: $0.002145 — as stated by the provider with each response
+Request: f788dd2a-7ab8-432c-86e2-17ea46794671
+Snapshot is not current; newer activity is unverified
+—— Open ——
+→ Technical details (attempt 1)
+Back
+Refresh
+Close

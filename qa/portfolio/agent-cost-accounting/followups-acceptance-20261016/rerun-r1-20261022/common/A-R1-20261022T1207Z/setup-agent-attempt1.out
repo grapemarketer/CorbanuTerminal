@@ -1,0 +1,4 @@
+key file zai_api_key absent
+key file openai_api_key absent
+key file kimi_api_key absent
+REAL KEY FILE PRESENT: auth.json

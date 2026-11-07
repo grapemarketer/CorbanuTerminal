@@ -482,7 +482,7 @@ impl<'a> Walk<'a> {
         // The body starts on the line after the operator's (one
         // here-document per line) and ends at the first line that is the
         // delimiter (after leading tabs for `<<-`).
-        let end_line = text[..end.start_byte()].rfind('\n').map_or(0, |at| at + 1);
+        let end_line = work::rfind(&text[..end.start_byte()], "\n").map_or(0, |at| at + 1);
         let body_start = body.map_or(end_line, |body| body.start_byte());
         let (Some(between), Some(body_text)) = (
             text.get(start.end_byte()..body_start),

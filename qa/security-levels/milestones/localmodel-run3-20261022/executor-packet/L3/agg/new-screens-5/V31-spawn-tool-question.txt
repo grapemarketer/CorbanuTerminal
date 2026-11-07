@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: printf ok > cap-v.txt
+
+
+✗ You canceled the request to run printf ok > cap-v.txt
+
+✗ Did not run printf ok > cap-v.txt
+  └ Approval declined
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› hello
+
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+
+› Spawn a child agent and have it run: echo hi > cap-child.txt
+
+
+
+  Question 1/1 (1 unanswered)
+  Allow `spawn_agent_v1`? Security level: this is a tool the security level has not classified after untrusted content entered the session. Approve
+  only if you asked for it; a cached or automatic approval does not count.
+
+  › 1. Allow once  Run this one call; ask again next time.
+    2. Cancel      Do not run it.
+
+  tab to add notes | enter to submit answer | esc to interrupt
+
+
+
+
+
+
+

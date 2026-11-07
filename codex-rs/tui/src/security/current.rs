@@ -28,6 +28,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::shell_environment::create_env_from_vars;
 
@@ -145,9 +146,11 @@ fn evaluate(
     // outside the sandbox (`unsandboxed_execution_allowed` in core); the
     // denied reads of Aggressive's rules keep them in it. #739: protected
     // launch (secretless_agent_launch) refuses every run outside it, so none
-    // is offered.
+    // is offered. #1468: on macOS a policy that keeps the keychain services
+    // away keeps them in it too (#807), as in core.
     let escapes = restricted
         && !file_system.has_denied_read_restrictions()
+        && !keychain_keeps_sandbox(&file_system)
         && !moderate
         && !aggressive_rules
         && !secretless;
@@ -219,6 +222,14 @@ fn evaluate(
         } else {
             "; with protected launch (secretless_agent_launch) no command runs outside the sandbox, so none is offered"
         });
+    } else if restricted
+        && !file_system.has_denied_read_restrictions()
+        && keychain_keeps_sandbox(&file_system)
+    {
+        // #1468: the keychain rule does it (#807).
+        sandbox.push_str(
+            "; approved and allow-listed commands stay inside the sandbox, which keeps the macOS keychain away",
+        );
     }
     let request_tools = config.features.enabled(Feature::RequestPermissionsTool)
         || config.features.enabled(Feature::ExecPermissionApprovals);
@@ -374,6 +385,13 @@ fn evaluate(
         [sandbox, approvals, network, vault, model_keys, children],
         facts,
     )
+}
+
+/// #1468: core's `unsandboxed_execution_allowed` keeps a run inside a
+/// policy that keeps the macOS keychain services away (#807): leaving it
+/// would drop that rule.
+fn keychain_keeps_sandbox(file_system: &FileSystemSandboxPolicy) -> bool {
+    cfg!(target_os = "macos") && file_system.denies_keychain_services()
 }
 
 /// Secret-like name fragments whose variables reach agent commands: the fixed

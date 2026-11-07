@@ -1,0 +1,12 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation: no recorded requests.
+Other conversations on this day, not included above: 1 request in 1 conversation.
+• Corbanu API · DeepSeek V4.1 Flash — Pay per use. 1 request, 9,289 tokens. Cost: $0.002145, charged by Corbanu API.
+Other conversations' cost: $0.002145, charged by Corbanu API.
+To see those requests, open that conversation with /resume and run /cost there.
+Costs marked "charged by Corbanu API" are the charges Corbanu API reported with those responses.
+—— Details ——
+No recorded attempts in this conversation or its subagents; collection coverage unknown.
+Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+↑↓ scroll · Enter open · Esc back/close

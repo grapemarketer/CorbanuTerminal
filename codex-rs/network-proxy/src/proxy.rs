@@ -858,9 +858,9 @@ impl NetworkProxy {
     /// Returns the policy decider with trusted execution attribution restored.
     pub fn remote_policy_decider(&self) -> Option<Arc<dyn NetworkPolicyDecider>> {
         let scope = self.execution_scope.as_ref()?;
-        self.state.for_execution_token(&scope.attribution_token)?;
+        let scoped_state = self.state.for_execution_token(&scope.attribution_token)?;
         let decider = Arc::clone(self.policy_decider.as_ref()?);
-        let state = Arc::clone(&self.state);
+        let state = Arc::new(scoped_state);
         let environment_id = scope.environment_id.clone();
         let execution_id = scope.execution_id.clone();
         let execution_lifetime = scope.lifetime_tx.subscribe();
@@ -883,6 +883,12 @@ impl NetworkProxy {
                                 decider.decide(request).await
                             }
                             Ok(HostBlockDecision::Blocked(reason)) => {
+                                // #722 (D246): report it here, as a local
+                                // proxy would, so the command ends as failed.
+                                let blocked = remote_baseline_blocked_request(&request, reason);
+                                if let Err(err) = state.record_blocked(blocked).await {
+                                    warn!("failed to record remote network denial: {err}");
+                                }
                                 NetworkDecision::deny_with_source(
                                     reason.as_str(),
                                     NetworkDecisionSource::BaselinePolicy,
@@ -1536,6 +1542,34 @@ impl Drop for NetworkProxyHandle {
     }
 }
 
+/// The blocked-request record for a remote request this host's baseline
+/// policy refused while deciding it (#722, D246).
+fn remote_baseline_blocked_request(
+    request: &crate::NetworkPolicyRequest,
+    reason: HostBlockReason,
+) -> crate::BlockedRequest {
+    crate::BlockedRequest::new(crate::BlockedRequestArgs {
+        host: request.host.clone(),
+        reason: reason.as_str().to_string(),
+        client: request.client_addr.clone(),
+        method: request.method.clone(),
+        mode: None,
+        protocol: match request.protocol {
+            crate::NetworkProtocol::Http => "http",
+            crate::NetworkProtocol::HttpsConnect => "http-connect",
+            crate::NetworkProtocol::Socks5Tcp => "socks5",
+            crate::NetworkProtocol::Socks5Udp => "socks5-udp",
+        }
+        .to_string(),
+        decision: Some(
+            crate::network_policy::NetworkPolicyDecision::Deny
+                .as_str()
+                .to_string(),
+        ),
+        source: Some(NetworkDecisionSource::BaselinePolicy.as_str().to_string()),
+        port: Some(request.port),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1622,6 +1656,78 @@ mod tests {
                 Some("remote".to_string()),
                 Some("execution-1".to_string())
             ))
+        );
+        Ok(())
+    }
+
+    /// #722 (D246): a remote request this host's policy refuses while
+    /// deciding it is reported here, with its execution, as a local one is.
+    #[tokio::test]
+    async fn remote_policy_decider_reports_baseline_denials_for_its_execution() -> Result<()> {
+        let blocked = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&blocked);
+        let config = NetworkProxyConfig {
+            allow_local_binding: true,
+            ..NetworkProxyConfig::default()
+        };
+        let proxy = NetworkProxy::builder()
+            .state(Arc::new(network_proxy_state_for_policy(config)))
+            .policy_decider(|_request: crate::NetworkPolicyRequest| async {
+                crate::NetworkDecision::deny(crate::reasons::REASON_NOT_ALLOWED)
+            })
+            .blocked_request_observer(move |request: crate::BlockedRequest| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    observed
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(request);
+                }
+            })
+            .managed_by_codex(/*managed_by_codex*/ false)
+            .build()
+            .await?;
+        let scoped = proxy.for_execution("remote", "execution-1", "token-1".to_string())?;
+        let decider = scoped
+            .remote_policy_decider()
+            .expect("execution-scoped proxy should expose its policy decider");
+
+        // An allowlist miss goes to the decider, which reports its own denials.
+        decider.decide(https_request("unlisted.example")).await;
+        assert!(
+            blocked
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+
+        scoped.add_denied_domain("denied.example").await?;
+        decider.decide(https_request("denied.example")).await;
+        let blocked = blocked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(blocked.len(), 1);
+        let request = &blocked[0];
+        assert_eq!(
+            (
+                request.host.as_str(),
+                request.reason.as_str(),
+                request.protocol.as_str(),
+                request.port,
+                request.decision.as_deref(),
+                request.source.as_deref(),
+                request.execution_id.as_deref(),
+            ),
+            (
+                "denied.example",
+                crate::reasons::REASON_DENIED,
+                "http-connect",
+                Some(443),
+                Some("deny"),
+                Some("baseline_policy"),
+                Some("execution-1"),
+            )
         );
         Ok(())
     }

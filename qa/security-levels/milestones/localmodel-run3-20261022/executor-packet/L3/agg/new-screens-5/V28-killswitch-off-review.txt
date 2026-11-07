@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: printf ok > cap-v.txt
+
+
+✗ You canceled the request to run printf ok > cap-v.txt
+
+✗ Did not run printf ok > cap-v.txt
+  └ Approval declined
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› hello
+
+
+■ Not sent: the security kill switch is on, so Corbanu sends nothing to the model, and this message was not kept. To turn it off, open /security,
+press g, choose "Turn the kill switch off" and confirm.
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: on
+
+Turn the kill switch off?
+Turns are sent to the model again, in Codex and Claude panes, but nothing restarts on its own: no pane starts a turn, stopped replies and commands
+do not restart, and paused assignments and whips stay paused until you resume them. Messages and tasks from other agents that waited go with each
+pane's next turn, when someone types in it or it gets new work. Protected actions can be approved again and grants can be issued. Revoked grants and
+approvals do not come back. Other Corbanu Terminals running on this home take it within about a second.
+The level stays Aggressive: turning the kill switch off never lowers it.
+
+› Back (the kill switch stays on)
+  Turn the kill switch off
+
+↑/↓ choose · enter confirm · esc cancel, nothing changes
+
+
+
+
+
+

@@ -5,11 +5,11 @@ expression: explanation
   Cost — this conversation
   Requested UTC day: 1970-01-01
 
-  $0.000180 (1 attempt had no price).
   Other conversations on this day, not included above: 1 request in 1 conversation.
   • synthetic · synthetic-model — Pay per use. 1 request, 140 tokens. Estimated cost: at least
   $0.000180 (1 attempt had no price).
   Other conversations' estimated cost: at least $0.000180 (1 attempt had no price).
+  Of these, 1 request is a reopen warm-up.
   For conversations with saved turns, open them with /resume and run /cost there.
   A conversation with only a reopen warm-up and no saved turns cannot be opened with /resume.
 › The warm-up is still billed and remains included in the recorded cost.

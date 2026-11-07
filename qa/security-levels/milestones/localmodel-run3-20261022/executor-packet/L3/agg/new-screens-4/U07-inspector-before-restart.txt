@@ -1,0 +1,25 @@
+
+Security inspector (read only)
+▲ Aggressive degraded: Aggressive's session controls apply after restart, Model key broker, Credential broker
+Observed 2s ago, policy generation 1.1
+
+Level
+  Saved: Aggressive [configured: /security]
+  Core config: Permissive [configured: config layers]
+  [set] Active this run: Permissive [resolved: launch check]
+  [on] Live policy: Aggressive in force; next start Aggressive; kill switch off; generation 1.1 [observed: Core policy]
+
+This session
+  [set] Sandbox: commands can write to the current folder, /private/tmp, ~/run/
+      tmp; approved or allow-listed commands can run outside the sandbox; permission-request tools are off [resolved: session config]
+  [set] Approvals: untrusted (reviewer: you) [resolved: session config]
+  [set] Network: off inside the sandbox, on for commands that run outside it; web search cached [resolved: session config]
+  [set] Vault: the vault store and sign-in file are readable to agent commands; only allowlisted environment variables reach agent commands (for
+      example PATH, HOME, locale, terminal, proxy and tool locations; secretless_agent_launch); set others explicitly in shell_environment_policy.set;
+      login profiles and shell snapshots are not used [resolved: session config]
+  [set] Model keys: Corbanu reads provider keys itself (broker_model_auth off) [resolved: session config]
+  [set] Child agents: spawned agents get this session's values [resolved: session config]
+  [set] Sandbox backend: macOS Seatbelt [resolved: platform]
+  [set] Egress destinations: proxy destination policy on (url_destination_policy) [resolved: features]
+
+↑/↓ scroll · r refresh · esc back to /security

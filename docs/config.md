@@ -151,7 +151,7 @@ The model picker maps these model slugs to the correct built-in provider.
 ## Reopen Warm-Up
 
 When you reopen a conversation (`/resume`, restarting Corbanu on it) or fork it (`/side`, editing an earlier
-message) on a provider that uses a WebSocket connection, such as OpenAI, Corbanu sends one warm-up request to prime
+message, including the first one) on a provider that uses a WebSocket connection, such as OpenAI, Corbanu sends one warm-up request to prime
 the model's cache, so the first reply is faster. It is billed like any request (the session's instructions and
 tools, typically 10,000 to 15,000 input tokens), and Corbanu says so once it has been sent. To skip it, set this at
 the top level of `config.toml` (or pass `-c skip_reopen_warmup=true`):
@@ -165,8 +165,10 @@ the first review instead of on reopen. A new conversation still warms up, and so
 
 App-server clients that start a thread only for realtime voice (`thread/start`, then `thread/realtime/start`) get
 the new-conversation warm-up too, on the thread's text model, which realtime uses only for handoffs (and the
-optional end-of-session transcript turn). Pass a cheap
-`model` on `thread/start` to make it cheaper; see "Realtime-only threads" in `codex-rs/app-server/README.md` (#1045).
+optional end-of-session transcript turn). Such a client should pass `config: {"skip_startup_warmup": true}` on
+`thread/start` so no warm-up is sent; see "Realtime-only threads" in `codex-rs/app-server/README.md` (#1045).
+`skip_startup_warmup = true` in `config.toml` skips every warm-up, new or reopened, for all conversations, including
+sub-agents and the auto-reviewer (whose session then starts at the first review).
 
 ## Vault And Secrets
 

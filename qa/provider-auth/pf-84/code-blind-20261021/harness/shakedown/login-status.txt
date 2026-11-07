@@ -1,0 +1,2 @@
+Not logged in
+Logged in using an API key - API key configured

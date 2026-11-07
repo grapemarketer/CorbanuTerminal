@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace              │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Reply with exactly: pong
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+• pong
+
+Security inspector (read only)
+◐ Aggressive set; off or not observed: Network credential broker
+Observed 2s ago, policy generation 0.1
+
+Level
+  Saved: Aggressive [configured: /security]
+  Core config: Permissive [configured: config layers]
+  [set] Active this run: Aggressive; rows marked "checked at launch" passed the launch check (runtime controls below show what is observed now)
+      [resolved: launch check]
+  [on] Live policy: Aggressive in force; next start Aggressive; kill switch off; generation 0.1 [observed: Core policy]
+
+This session
+  [set] Sandbox: profile corbanu-aggressive: commands can write to the current folder; permission-request tools are off [resolved: session config,
+      checked at launch]
+  [set] Approvals: untrusted (reviewer: you) [resolved: session config, checked at launch]
+  [set] Network: off for agent commands; web search disabled [resolved: session config, checked at launch]
+  [set] Vault: the vault store and sign-in file are unreadable (Aggressive, also when you approve a command) to agent commands, and direct `corbanu
+      vault …` commands are refused; only allowlisted environment variables reach agent commands (for example PATH, HOME, locale, terminal, proxy and
+      tool locations; secretless_agent_launch); set others explicitly in shell_environment_policy.set; login profiles and shell snapshots are not used
+      [resolved: session config, checked at launch]
+  [set] Model keys: held by the isolated credential broker (broker_model_auth on) [resolved: session config]
+  [set] Child agents: spawned agents get this session's values [resolved: session config, checked at launch]
+  [set] Sandbox backend: macOS Seatbelt [resolved: platform]
+51 more lines below · ↑/↓ scroll · r refresh · esc back to /security

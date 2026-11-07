@@ -14,7 +14,7 @@ before scroll:
   6. Item 6  desc 6                                                                             
   7. Item 7  desc 7                                                                             
   8. Item 8  desc 8                                                                             
-                                                                                                
+                                                                                         1 / 9  
 
 after scroll:
                                                                                                 
@@ -27,4 +27,5 @@ after scroll:
   6. Item 6                                         desc 6                                      
   7. Item 7                                         desc 7                                      
   8. Item 8                                         desc 8                                      
-› 9. Item 9 with an intentionally much longer name  desc 9
+› 9. Item 9 with an intentionally much longer name  desc 9                                      
+                                                                                         9 / 9

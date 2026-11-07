@@ -1,0 +1,34 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+◐ Moderate set; off or not observed: Credential broker
+Observed 17s ago, policy generation 0.1
+  [set] Egress destinations: proxy destination policy on (url_destination_policy) [resolved: features]
+
+Runtime controls
+  [on] Secretless launch: environment allowlist and launch checks armed [observed: this process]
+  [on] Output gate: managed secrets and stored vault credentials are removed from output (values added from another terminal: from the next turn)
+      [observed: this process]
+  [unobserved] Model key broker: installed; its health is not probed [installed: this process]
+  [unobserved] Credential broker: on in config; its health is not observed here [resolved: features]
+  [on] Untrusted content: labelled; none in this session yet [observed: session]
+  [off] Protected boundary: no preflight applies (protected_mode_preflight off, or not Aggressive) [resolved: launch preflight]
+
+Grants
+  Held: none. Grants are never saved: a restart, level change, revocation or the kill switch ends them [observed: Core policy]
+
+Agents
+  [on] main session: Moderate [observed: Core policy]
+  [set] Nested agents: not refused: an agent command can start another agent (`corbanu exec`, `review`). With this Corbanu home it cannot read
+      Corbanu's config, sign-in or security state inside the sandbox, so it stops at start (with secretless_agent_launch on, also when you approve the
+      command); pointed at another Corbanu home it runs at that home's level, because Moderate is not carried over [configured: /security]
+
+↑/↓ scroll · r refresh · esc back to /security

@@ -197,6 +197,15 @@ pub struct ManifestEntry {
     pub finding_id: String,
     pub path: PathBuf,
     pub scope: Scope,
+    /// The path itself is a symlink, a dangling one included.
+    pub symlink: bool,
+    /// The path itself is a regular file (not a folder, link, pipe, socket
+    /// or device).
+    pub regular: bool,
+    /// Hard links to a file that is not a folder, on Unix and Windows.
+    pub links: Option<u64>,
+    /// Where the symlink at the path leads; for a dangling one, where a file
+    /// created through it would land (#1441).
     pub symlink_target: Option<PathBuf>,
     /// `(device, inode)` on Unix.
     pub identity: Option<(u64, u64)>,
@@ -221,15 +230,18 @@ impl std::fmt::Debug for Manifest {
 }
 
 impl Manifest {
-    /// Digest of every entry; any change in identity, size, mode or content
-    /// changes it.
+    /// Digest of every entry; any change in file type, link count, symlink
+    /// target, identity, size, mode, content or status changes it.
     pub fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         for entry in &self.entries {
             hasher.update(entry.finding_id.as_bytes());
             hasher.update(entry.path.to_string_lossy().as_bytes());
             hasher.update(format!(
-                "|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}\n",
+                "|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}\n",
+                entry.symlink,
+                entry.regular,
+                entry.links,
                 entry.symlink_target,
                 entry.identity,
                 entry.len,
@@ -423,6 +435,9 @@ fn has_url_password(text: &str) -> bool {
 
 /// File facts gathered without following a symlink silently.
 struct Probe {
+    is_symlink: bool,
+    is_regular: bool,
+    links: Option<u64>,
     symlink_target: Option<PathBuf>,
     identity: Option<(u64, u64)>,
     len: Option<u64>,
@@ -433,15 +448,20 @@ struct Probe {
 
 fn probe(path: &Path) -> Option<Probe> {
     let link = std::fs::symlink_metadata(path).ok()?;
-    let (symlink_target, metadata) = if link.file_type().is_symlink() {
+    let is_symlink = link.file_type().is_symlink();
+    let is_regular = link.file_type().is_file();
+    let (symlink_target, metadata) = if is_symlink {
         match (std::fs::canonicalize(path), std::fs::metadata(path)) {
             (Ok(target), Ok(metadata)) => (Some(target), Ok(metadata)),
-            (_, Err(err)) | (Err(err), _) => (None, Err(err)),
+            (_, Err(err)) | (Err(err), _) => (would_be_target(path), Err(err)),
         }
     } else {
         (None, Ok(link))
     };
     let mut probe = Probe {
+        is_symlink,
+        is_regular,
+        links: None,
         symlink_target,
         identity: None,
         len: None,
@@ -458,11 +478,77 @@ fn probe(path: &Path) -> Option<Probe> {
                 use std::os::unix::fs::MetadataExt as _;
                 probe.identity = Some((metadata.dev(), metadata.ino()));
                 probe.mode = Some(metadata.mode() & 0o7777);
+                probe.links = (!probe.is_dir).then_some(metadata.nlink());
+            }
+            #[cfg(windows)]
+            if !probe.is_dir {
+                probe.links = windows_link_count(path);
             }
         }
         Err(err) => probe.error = Some(format!("dangling or looping symlink ({})", err.kind())),
     }
     Some(probe)
+}
+
+/// Most symlinks followed in one chain (Linux's `MAXSYMLINKS`).
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// #1441: where a file created through the dangling symlink at `path` would
+/// land (SQLite creates `-wal` and `-journal` files through one): the end of
+/// its chain, with the part that exists canonical. `None` for a loop.
+///
+/// Always `None` on Windows: its sandbox creates a folder at every missing
+/// path it denies, so a planted link would choose where Corbanu creates one.
+fn would_be_target(path: &Path) -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    let mut link = path.to_path_buf();
+    for _ in 0..MAX_SYMLINK_HOPS {
+        let target = std::fs::read_link(&link).ok()?;
+        let next = match link.parent() {
+            Some(parent) => parent.join(target),
+            None => target,
+        };
+        if !std::fs::symlink_metadata(&next).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Some(canonical_prefix(&next));
+        }
+        link = next;
+    }
+    None
+}
+
+/// `path` with its longest existing ancestor canonical.
+fn canonical_prefix(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find_map(|ancestor| {
+            let rest = path.strip_prefix(ancestor).ok()?;
+            let canonical = std::fs::canonicalize(ancestor).ok()?;
+            // `join("")` would add a trailing separator.
+            Some(if rest.as_os_str().is_empty() {
+                canonical
+            } else {
+                canonical.join(rest)
+            })
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// #1441: hard links to the file at `path` (followed), read through a handle
+/// opened for its attributes only.
+#[cfg(windows)]
+fn windows_link_count(path: &Path) -> Option<u64> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const SHARE_ALL: u32 = 0x7;
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(SHARE_ALL)
+        .open(path)
+        .ok()?;
+    codex_windows_sandbox::file_link_count(&file)
+        .ok()
+        .map(u64::from)
 }
 
 /// Opens regular files only, without blocking: a device (`/dev/zero`) would
@@ -602,16 +688,24 @@ impl<'a> Collector<'a> {
         let Some(id) = self.push(spec.kind, spec.class, spec.disposition, location, paths) else {
             return true;
         };
-        let (digest, status) = match (&probe.error, spec.unsupported, probe.is_dir) {
+        self.manifest_entry(id, spec.path, spec.scope, spec.unsupported, probe);
+        true
+    }
+
+    /// Records the manifest entry for probed `path` under finding `id`.
+    fn manifest_entry(
+        &mut self,
+        id: String,
+        path: &Path,
+        scope: Scope,
+        unsupported: Option<&'static str>,
+        probe: Probe,
+    ) {
+        let (digest, status) = match (&probe.error, unsupported, probe.is_dir) {
             (Some(error), _, _) => (None, EntryStatus::Unreadable(error.clone())),
-            (None, Some(reason), true) => {
-                (self.dir_digest(spec.path), EntryStatus::Unsupported(reason))
-            }
-            (None, None, true) => (
-                self.dir_digest(spec.path),
-                EntryStatus::Unsupported("directory"),
-            ),
-            (None, unsupported, false) => match read_bounded(spec.path) {
+            (None, Some(reason), true) => (self.dir_digest(path), EntryStatus::Unsupported(reason)),
+            (None, None, true) => (self.dir_digest(path), EntryStatus::Unsupported("directory")),
+            (None, unsupported, false) => match read_bounded(path) {
                 Ok(bytes) => (
                     Some(self.manifest.keyed_digest(&bytes)),
                     unsupported.map_or(EntryStatus::Supported, EntryStatus::Unsupported),
@@ -621,8 +715,11 @@ impl<'a> Collector<'a> {
         };
         self.manifest.entries.push(ManifestEntry {
             finding_id: id,
-            path: spec.path.to_path_buf(),
-            scope: spec.scope,
+            path: path.to_path_buf(),
+            scope,
+            symlink: probe.is_symlink,
+            regular: probe.is_regular,
+            links: probe.links,
             symlink_target: probe.symlink_target,
             identity: probe.identity,
             len: probe.len,
@@ -630,7 +727,6 @@ impl<'a> Collector<'a> {
             digest,
             status,
         });
-        true
     }
 
     /// One level: names, sizes and modification times.
@@ -759,7 +855,9 @@ impl<'a> Collector<'a> {
                 unsupported,
             });
         }
-        // One finding per database: `x.sqlite` plus its `-wal`/`-shm` files.
+        // One finding per database: `x.sqlite` plus its `-wal`, `-shm` and
+        // `-journal` files, each one probed and recorded (#1428), so a
+        // symlink there is drift and its target is isolated.
         let mut databases = std::collections::BTreeMap::<String, Vec<PathBuf>>::new();
         for name in std::fs::read_dir(&home)
             .into_iter()
@@ -797,10 +895,23 @@ impl<'a> Collector<'a> {
                 detail: None,
                 unsupported: Some("state database"),
             });
-            if self.findings.len() > before
-                && let Some(finding) = self.findings.last_mut()
-            {
-                finding.paths.extend(files.into_iter().skip(1));
+            if self.findings.len() <= before {
+                continue;
+            }
+            let id = self.findings[before].id.clone();
+            for file in files.into_iter().skip(1) {
+                let mut paths = vec![file.clone()];
+                if let Some(probe) = probe(&file) {
+                    paths.extend(probe.symlink_target.clone());
+                    self.manifest_entry(
+                        id.clone(),
+                        &file,
+                        Scope::CorbanuHome,
+                        Some("state database"),
+                        probe,
+                    );
+                }
+                self.findings[before].paths.extend(paths);
             }
         }
         self.memories();

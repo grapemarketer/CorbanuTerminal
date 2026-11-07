@@ -1,0 +1,9 @@
+Preflight and candidate identity passed. Only assigned case executed:
+
+- `REG-01d`: passed.
+- d1 showed the Z.AI onboarding key screen; d2 remained onboarding after Escape.
+- d3 showed exit code 0 and normal terminal settings.
+- d4 showed the requested echo, with `^C` and a doubled echo line recorded exactly.
+- Report written to `$AGMS_RUN/evidence/result.md`.
+
+`VERDICT REG-01d: passed`

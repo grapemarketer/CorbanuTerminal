@@ -1,0 +1,28 @@
+gate gate-agmx0-20261022T024026Z: probes ok=True count=97 smoke=['AGMS-SMOKE-OK'] relay200=True -> PASS
+### 1. conversation on work (exec --account work)
+02:43:39
+session id: 01a1617e-27d8-7791-b250-bcd060733910
+reply with the single word qzero
+qzero
+### 2. account remove zai work
+02:43:46
+Removed zai account `work`.
+### 3. TUI WITHOUT --account (personal via [provider_accounts]); in-app /resume of the qzero conversation
+02:43:47
+ Resume a previous session
+ Search: qzero                                                                                          Filter: [Cwd] All    Sort: [Updated] Created
+  No results for your search
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 0 / 0 · 100% ─
+ enter resume   esc clear search   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
+02:44:02
+02:44:43
+ Resume a previous session
+ Search: qzeroreply with the single word qone                                                           Filter: [Cwd] All    Sort: [Updated] Created
+  No results for your search
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 0 / 0 · 100% ─
+ enter resume   esc clear search   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
+### end
+02:44:51
+probe done

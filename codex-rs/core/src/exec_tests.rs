@@ -947,6 +947,7 @@ fn windows_elevated_supports_unreadable_globs() {
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
             path: codex_protocol::permissions::FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: "**/*.env".to_string(),
             },
             access: codex_protocol::permissions::FileSystemAccessMode::Deny,

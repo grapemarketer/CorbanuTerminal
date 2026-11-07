@@ -101,7 +101,9 @@ async fn accounting_admission_matrix_agrees_at_all_three_gates() -> Result<()> {
                     let mut request = chat_body();
                     request.provider = provider.chat_completions_provider.clone();
                     let eligible = match wire {
-                        WireApi::Responses => responses::eligible(&provider, auth),
+                        WireApi::Responses => {
+                            responses::eligible(&provider, auth.map(CodexAuth::auth_mode))
+                        }
                         WireApi::Chat => chat::eligible(&provider, auth, &request),
                         WireApi::Anthropic => route_refusal(&provider).is_none(),
                     };

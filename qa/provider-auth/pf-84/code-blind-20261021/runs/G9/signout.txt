@@ -1,0 +1,2 @@
+SIGNOUT FAILED rc=1
+2026-10-21T22:32:05Z host pass-through stopped

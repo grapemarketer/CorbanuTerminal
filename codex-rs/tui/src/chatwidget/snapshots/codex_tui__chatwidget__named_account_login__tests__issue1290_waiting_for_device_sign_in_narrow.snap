@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/named_account_login_tests.rs
+assertion_line: 408
+expression: "render(&view, 32)"
+---
+Sign in openai account `work`
+
+Open this link in your browser
+and sign in:
+https://example.com/device
+
+Enter this one-time code:
+TEST-CODE
+
+Device codes are a common
+phishing target. Never share
+this code.
+Waiting for the sign-in…
+Esc or Ctrl-C cancels the sign-
+in.

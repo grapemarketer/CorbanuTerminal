@@ -1,0 +1,12 @@
+=== zai3off
+303 zai3off/config.toml
+0 zai3off/secrets/.vault.lock
+44 zai3off/secrets/keyring-fallback/cd32112b9eeddfdeb2f870954fc0b4cd51f2d5ff622633de8d9d7166fd66d6da.key
+1053 zai3off/secrets/local.age
+2720e711497aa79768320e50957a452e004fdf7336d3f357a84c84b2085ea2b5  zai3off/config.toml
+=== zainokeyoff
+265 zainokeyoff/config.toml
+0 zainokeyoff/secrets/.vault.lock
+44 zainokeyoff/secrets/keyring-fallback/8915ae569896f908608afd49e900a84cd8126e0819b90066cf1d9542fdd75541.key
+709 zainokeyoff/secrets/local.age
+2094b8a8aedf30525c439b91e67c24b4bb83179cac18474256888f6cb4c0fb4f  zainokeyoff/config.toml

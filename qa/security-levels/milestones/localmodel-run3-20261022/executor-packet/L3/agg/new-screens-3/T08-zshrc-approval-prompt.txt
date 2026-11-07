@@ -1,0 +1,45 @@
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command again: echo '# grant-once-1' >> .husky/pre-commit
+
+
+✔ You approved Corbanu to run echo '# grant-once-1' >> .husky/pre-commit this time
+
+• Ran echo '# grant-once-1' >> .husky/pre-commit
+  └ /bin/bash: .husky/pre-commit: Operation not permitted
+
+⚠ Security level Aggressive blocked this command: agent commands can write only inside this project, even when you approve them, and can never read
+  protected files (such as .env and keychains), not even once. To lift these limits, choose another level with /security.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• It failed with Operation not permitted: Aggressive security blocks writing through .husky/pre-commit because it appears to point outside this
+  workspace. You can change the security level with /security.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command: echo '# zshrc-probe' >> ~/.zshrc
+
+
+• Running echo '# zshrc-probe' >> ~/.zshrc
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Security level: this is changing a file that runs code later (shell start-up, login items, git hooks) after untrusted content entered the
+  session. Approve only if you asked for it; a cached or automatic approval does not count. Security level Aggressive blocks writing `~/.zshrc`: it
+  is, or leads to, a start-up file outside the current folder, and agent commands can write only inside the current folder, even when you approve
+  them; this cannot be granted, not even once (Grant once lifts the start-up file and git write protections only inside the current folder). To
+  allow it, a person can switch to Permissive in /security (it applies after a restart).
+
+  $ echo '# zshrc-probe' >> ~/.zshrc
+
+› 1. Yes, proceed (y)
+  2. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it.
+  Press enter to confirm or esc to cancel

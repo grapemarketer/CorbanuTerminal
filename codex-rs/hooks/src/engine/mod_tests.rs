@@ -238,6 +238,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         matcher_aliases: Vec::new(),
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start: false,
     });
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source_path, managed_dir);
@@ -255,6 +256,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             matcher_aliases: Vec::new(),
             tool_use_id: "tool-1".to_string(),
             tool_input: serde_json::json!({ "command": "echo hello" }),
+            block_if_hook_cannot_start: false,
         })
         .await;
 
@@ -328,6 +330,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
             matcher_aliases: Vec::new(),
             tool_use_id: "tool-1".to_string(),
             tool_input: serde_json::json!({ "command": "echo hello" }),
+            block_if_hook_cannot_start: false,
         })
         .await;
 
@@ -720,6 +723,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         matcher_aliases: Vec::new(),
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start: false,
     });
     assert_eq!(preview.len(), 1);
     assert_eq!(engine.handlers[0].command, "echo hi");
@@ -1126,6 +1130,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         matcher_aliases: Vec::new(),
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start: false,
     });
     assert_eq!(preview.len(), 2);
     assert_eq!(
@@ -1216,6 +1221,7 @@ fn profile_user_layers_load_shared_hooks_json_once() {
         matcher_aliases: Vec::new(),
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start: false,
     });
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source_path, hooks_json_path);
@@ -1360,6 +1366,7 @@ print(json.dumps({
         matcher_aliases: Vec::new(),
         tool_use_id: "tool-1".to_string(),
         tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start: false,
     });
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source, HookSource::Plugin);
@@ -1392,6 +1399,7 @@ print(json.dumps({
             matcher_aliases: Vec::new(),
             tool_use_id: "tool-1".to_string(),
             tool_input: serde_json::json!({ "command": "echo hello" }),
+            block_if_hook_cannot_start: false,
         })
         .await;
 
@@ -1513,4 +1521,166 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
+}
+
+fn managed_pre_tool_use_engine(
+    managed_dir: &Path,
+    command: &str,
+    command_windows: &str,
+) -> ClaudeHooksEngine {
+    let managed_dir = AbsolutePathBuf::try_from(managed_dir).expect("absolute path");
+    fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
+    let mut hooks = pre_tool_use_hook_events(command);
+    if let HookHandlerConfig::Command {
+        command_windows: windows,
+        ..
+    } = &mut hooks.pre_tool_use[0].hooks[0]
+    {
+        *windows = Some(command_windows.to_string());
+    }
+    let managed_hooks = managed_hooks_for_current_platform(managed_dir, hooks);
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(managed_hooks.clone()),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
+            )),
+            ..ConfigRequirements::default()
+        },
+        ConfigRequirementsToml {
+            hooks: Some(managed_hooks),
+            ..ConfigRequirementsToml::default()
+        },
+    )
+    .expect("config layer stack");
+    ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    )
+}
+
+fn bash_pre_tool_use_request(
+    cwd: AbsolutePathBuf,
+    block_if_hook_cannot_start: bool,
+) -> PreToolUseRequest {
+    PreToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        subagent: None,
+        cwd,
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-1".to_string(),
+        tool_input: serde_json::json!({ "command": "echo hello" }),
+        block_if_hook_cannot_start,
+    }
+}
+
+/// #722 (D245): a hook given a cwd that doesn't exist on this host (the
+/// remote cwd) can't spawn. In a remote turn it blocks; locally it is skipped.
+#[tokio::test]
+async fn pre_tool_use_hook_that_cannot_spawn_blocks_only_when_fail_closed() {
+    let temp = tempdir().expect("create temp dir");
+    let engine = managed_pre_tool_use_engine(&temp.path().join("managed"), "exit 0", "exit /B 0");
+    let missing_cwd =
+        AbsolutePathBuf::try_from(temp.path().join("remote-only-cwd")).expect("absolute path");
+
+    let remote = engine
+        .run_pre_tool_use(bash_pre_tool_use_request(
+            missing_cwd.clone(),
+            /*block_if_hook_cannot_start*/ true,
+        ))
+        .await;
+    assert!(remote.should_block);
+    let reason = remote.block_reason.expect("block reason");
+    assert!(
+        reason.starts_with(&format!(
+            "the hook could not start on this machine (its working folder {} does not exist here: ",
+            missing_cwd.display()
+        )),
+        "{reason}"
+    );
+    assert!(
+        reason.ends_with(
+            "On remote work a hook that cannot start blocks the action instead of being skipped"
+        ),
+        "{reason}"
+    );
+    assert_eq!(remote.hook_events.len(), 1);
+    assert_eq!(remote.hook_events[0].run.status, HookRunStatus::Blocked);
+    assert_eq!(
+        remote.hook_events[0].run.entries.last(),
+        Some(&HookOutputEntry {
+            kind: HookOutputEntryKind::Feedback,
+            text: reason,
+        })
+    );
+
+    let local = engine
+        .run_pre_tool_use(bash_pre_tool_use_request(
+            missing_cwd,
+            /*block_if_hook_cannot_start*/ false,
+        ))
+        .await;
+    assert!(!local.should_block);
+    assert_eq!(local.block_reason, None);
+    assert_eq!(local.hook_events[0].run.status, HookRunStatus::Failed);
+}
+
+/// A hook whose command is missing on this host exits 127 from the shell:
+/// it never ran, so a remote turn blocks.
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_tool_use_hook_command_not_found_blocks_when_fail_closed() {
+    let temp = tempdir().expect("create temp dir");
+    let engine = managed_pre_tool_use_engine(
+        &temp.path().join("managed"),
+        "./.codex/hooks/remote-only-guard.sh",
+        "exit /B 0",
+    );
+
+    let outcome = engine
+        .run_pre_tool_use(bash_pre_tool_use_request(
+            AbsolutePathBuf::try_from(temp.path()).expect("absolute path"),
+            /*block_if_hook_cannot_start*/ true,
+        ))
+        .await;
+
+    assert!(outcome.should_block);
+    let reason = outcome.block_reason.expect("block reason");
+    assert!(
+        reason.starts_with("the hook could not start on this machine (hook exited with code 127"),
+        "{reason}"
+    );
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Blocked);
+}
+
+/// Fail-closed covers only hooks that could not start: a hook that ran and
+/// failed keeps today's non-blocking behaviour.
+#[tokio::test]
+async fn pre_tool_use_hook_that_ran_and_failed_does_not_block_when_fail_closed() {
+    let temp = tempdir().expect("create temp dir");
+    let engine = managed_pre_tool_use_engine(&temp.path().join("managed"), "exit 1", "exit /B 1");
+
+    let outcome = engine
+        .run_pre_tool_use(bash_pre_tool_use_request(
+            cwd(),
+            /*block_if_hook_cannot_start*/ true,
+        ))
+        .await;
+
+    assert!(!outcome.should_block);
+    assert_eq!(outcome.block_reason, None);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Failed);
 }

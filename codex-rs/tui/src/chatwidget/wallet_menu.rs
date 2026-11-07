@@ -1698,6 +1698,11 @@ fn shared_provider_status_description(
         status.eligibility,
         status.availability,
     ) {
+        (Configuration::Configured, Eligibility::Active, Availability::Ready)
+            if super::provider_manager::is_unchecked_local_runtime(status) =>
+        {
+            "Local (not checked) · active".to_string()
+        }
         (Configuration::Configured, Eligibility::Active, Availability::Ready) => {
             "Configured · active · ready".to_string()
         }
@@ -2098,6 +2103,31 @@ mod tests {
             }) if runtime_provider_id.as_str()
                 == codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID
         ));
+    }
+
+    /// Ollama and LM Studio are never probed; the shared setup rows say so
+    /// instead of "ready".
+    #[tokio::test]
+    async fn shared_provider_setup_marks_local_runtimes_not_checked() {
+        let (mut chat, _rx, _op_rx) =
+            crate::chatwidget::tests::helpers::make_chatwidget_manual(/*model_override*/ None)
+                .await;
+        let host = crate::provider_status_host::ProviderStatusHost::from_config(
+            &chat.config,
+            crate::provider_status_host::ProviderAccountMetadata::default(),
+        );
+
+        chat.open_shared_provider_setup(
+            &host, /*queued_corbanu*/ false, /*can_finish*/ false,
+        );
+        for character in "local runtime".chars() {
+            chat.handle_key_event(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(character),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        let rendered = render_bottom_pane(&chat, /*width*/ 100);
+        insta::assert_snapshot!("shared_provider_setup_local_runtimes", rendered);
     }
 
     #[tokio::test]

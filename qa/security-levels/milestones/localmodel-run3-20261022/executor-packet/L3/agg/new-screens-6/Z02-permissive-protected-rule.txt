@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: echo remembered >> ../outside-notes.txt
+
+
+⚠ A remembered approval or allow rule would run this command outside the OS sandbox, which isn't possible here: protected launch
+  (secretless_agent_launch) keeps every agent command inside it, also at security level Permissive. This command, and others such rules match in this
+  session, still skip the prompt but run inside the sandbox, so writes outside your writable folders and network the sandbox blocks fail.
+
+• Ran echo remembered >> ../outside-notes.txt
+  └ /bin/bash: ../outside-notes.txt: Operation not permitted
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The command ran but the sandbox blocked the write:
+
+  /bin/bash: ../outside-notes.txt: Operation not permitted
+
+  Protected launch keeps execution inside the sandbox, so writing to the parent directory isn't allowed even with approval.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Write tests for @filename
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Ter…
+
+
+
+
+
+
+
+
+
+
+
+
+

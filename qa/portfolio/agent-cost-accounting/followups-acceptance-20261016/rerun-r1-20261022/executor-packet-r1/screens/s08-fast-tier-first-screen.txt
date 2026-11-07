@@ -1,0 +1,43 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• OpenAI · GPT-5.6-Luna — Pay per use. 2 requests, 24,363 tokens. Estimated cost: no price available.
+Other conversations on this day, not included above: 6 requests in 2 conversations.
+• OpenAI · GPT-6 Luna — Pay per use. 6 requests, 97,681 tokens. Estimated cost: $0.009059 (rounded).
+Other conversations' estimated cost: $0.009059 (rounded).
+To see those requests, open that conversation with /resume and run /cost there.
+Next step for requests with no price: check the bill from OpenAI. No published price covers them, so no cost is shown for them here.
+Costs are estimates from published prices; OpenAI doesn't report its charges — check OpenAI's bill.
+Select a provider below to see its requests.
+—— Details ——
+Estimated token cost: unknown
+Full recorded estimate: unavailable (2 of 2 billed attempts incomplete)
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Attempts with no price for any recorded tokens: 2 on OpenAI · GPT-5.6-Luna (openai/gpt-5.6-luna). No money is stated for those attempts, which is not
+a zero-cost claim, and says nothing about the other attempts on the same model. A price can be absent because the catalogue states no rate for the row,
+because this route's credential or service tier is not one the quoted rates apply to, or because no rate was in effect at dispatch.
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T01:35:57.135Z; ledger current to: 2026-10-15T01:35:08.807Z (48328 ms behind)
+Retention: request detail kept since 2026-07-17T01:35:57.135Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: none — no price for these attempts
+Input: 24,358
+Noncached input (derived for inclusive input): 10,556
+Cache read: 0
+Cache write: 13,802
+Output: 5
+Reasoning (subset, not separately billed): 0
+Total (not separately billed): 24,363
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ OpenAI · GPT-5.6-Luna — no price available (2 requests)
+→ Request 1 · OpenAI · GPT-5.6-Luna · no price available
+→ Request 2 · OpenAI · GPT-5.6-Luna · no price available
+→ Root's own attempts (2 attempts)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

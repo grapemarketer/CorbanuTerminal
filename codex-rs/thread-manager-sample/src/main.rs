@@ -317,6 +317,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         features: Default::default(),
         suppress_unstable_features_warning: false,
         skip_reopen_warmup: false,
+        skip_startup_warmup: false,
+        reopened_by_prompt_edit: false,
         active_project: ProjectConfig { trust_level: None },
         notices: Notice::default(),
         check_for_update_on_startup: false,

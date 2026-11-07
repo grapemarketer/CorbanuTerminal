@@ -1,0 +1,45 @@
+╰─────────────────────────────────────────────────────────╯
+
+Saved: Moderate
+Active now in this session: agent commands always stay in the sandbox; unless you approve that one command, they cannot read credential files in your
+home folder or Corbanu's sign-in, vault, config, history and state, or write files that run code later (Corbanu's security state and keys stay closed
+to them even then); after untrusted content, protected actions need your fresh approval.
+Starts when you restart: model keys held by the credential broker (unless your own config turns broker_model_auth off), and Moderate shown as the
+active level. Commands already running keep the permissions they started with until they end.
+Other Corbanu Terminals running on this Corbanu home take Core's Moderate rules within about a second and say so; their model keys move to the
+credential broker when they restart.
+Core's level is Moderate now in this session, and from every start.
+Press r to restart now: Corbanu Terminal closes this session and starts again in this folder with the same options. Resume this conversation with /
+resume afterwards.
+
+r restart now · enter or esc close · i inspect
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

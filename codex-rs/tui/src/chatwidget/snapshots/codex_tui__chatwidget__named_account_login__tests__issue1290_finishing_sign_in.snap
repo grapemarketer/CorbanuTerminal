@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/named_account_login_tests.rs
+assertion_line: 420
+expression: "render(&view, 80)"
+---
+Sign in openai account `work`
+
+Finishing the sign-in…
+Esc or Ctrl-C closes this screen; the sign-in result will appear.

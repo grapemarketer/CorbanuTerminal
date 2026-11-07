@@ -527,6 +527,7 @@ mod thread_processor_behavior_tests {
                     },
                     FileSystemSandboxEntry {
                         path: FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: "/tmp/project/**/*.env".to_string(),
                         },
                         access: FileSystemAccessMode::Deny,

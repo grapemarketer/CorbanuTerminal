@@ -2616,8 +2616,11 @@ impl App {
         if let Some(manager) = holder_node_id.as_deref() {
             self.fire_destination_for_node(manager)?;
         }
+        // One clock read for the whole attach: the requested duration is measured
+        // from the same instant the assignment's duration is computed against.
+        let now = self.orchestrate_now();
         let resolved_expiry = expiry
-            .map(|value| resolve_expiry_arg(value, self.orchestrate_now()))
+            .map(|value| resolve_expiry_arg(value, now))
             .transpose()?;
         let options = ResolvedAttachOptions {
             mode: Some(resolved_mode),
@@ -2644,10 +2647,9 @@ impl App {
             target_node_id.clone(),
             whip_name.clone(),
             options,
-            self.orchestrate_now(),
+            now,
         );
         if create_assignment {
-            let now = self.orchestrate_now();
             let execution_duration_s = whip
                 .expires_at
                 .map(|expiry| (expiry - now).num_seconds().max(1));
@@ -3846,12 +3848,17 @@ fn assignment_dispatch_instructions(
 }
 
 fn format_duration_seconds(seconds: i64) -> String {
-    if seconds % 3600 == 0 {
-        format!("{} hours", seconds / 3600)
+    let (count, unit) = if seconds % 3600 == 0 {
+        (seconds / 3600, "hour")
     } else if seconds % 60 == 0 {
-        format!("{} minutes", seconds / 60)
+        (seconds / 60, "minute")
     } else {
-        format!("{seconds} seconds")
+        (seconds, "second")
+    };
+    if count == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{count} {unit}s")
     }
 }
 
@@ -4141,6 +4148,16 @@ mod tests {
             *execution_duration_s = None;
         }
         assert_eq!(assignment_expiry_label(&whip, now), "unlimited");
+    }
+
+    #[test]
+    fn assignment_duration_label_uses_singular_units() {
+        assert_eq!(format_duration_seconds(/*seconds*/ 60 * 60), "1 hour");
+        assert_eq!(format_duration_seconds(/*seconds*/ 60), "1 minute");
+        assert_eq!(format_duration_seconds(/*seconds*/ 1), "1 second");
+        assert_eq!(format_duration_seconds(/*seconds*/ 2 * 60 * 60), "2 hours");
+        assert_eq!(format_duration_seconds(/*seconds*/ 90 * 60), "90 minutes");
+        assert_eq!(format_duration_seconds(/*seconds*/ 3599), "3599 seconds");
     }
 
     #[test]

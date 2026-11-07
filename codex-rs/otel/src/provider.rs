@@ -17,6 +17,7 @@ use opentelemetry_otlp::LogExporter;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT;
 use opentelemetry_otlp::Protocol;
+use opentelemetry_otlp::RetryPolicy;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
@@ -319,6 +320,7 @@ fn build_logger(
 
             let exporter = LogExporter::builder()
                 .with_tonic()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_metadata(MetadataMap::from_headers(header_map))
                 .with_tls_config(tls_config)
@@ -339,18 +341,16 @@ fn build_logger(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = LogExporter::builder()
+            let exporter_builder = LogExporter::builder()
                 .with_http()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if let Some(tls) = tls.as_ref() {
-                let client = crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
-
-            let exporter = exporter_builder.build()?;
+            let client =
+                crate::otlp::build_http_client(tls.as_ref(), OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
+            let exporter = exporter_builder.with_http_client(client).build()?;
 
             builder = builder.with_batch_exporter(exporter);
         }
@@ -387,6 +387,7 @@ fn build_tracer_provider(
 
             SpanExporter::builder()
                 .with_tonic()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_metadata(MetadataMap::from_headers(header_map))
                 .with_tls_config(tls_config)
@@ -408,6 +409,7 @@ fn build_tracer_provider(
 
                 let mut exporter_builder = SpanExporter::builder()
                     .with_http()
+                    .with_retry_policy(RetryPolicy::disabled())
                     .with_endpoint(endpoint)
                     .with_protocol(protocol)
                     .with_headers(headers);
@@ -432,19 +434,16 @@ fn build_tracer_provider(
                 OtelHttpProtocol::Json => Protocol::HttpJson,
             };
 
-            let mut exporter_builder = SpanExporter::builder()
+            let exporter_builder = SpanExporter::builder()
                 .with_http()
+                .with_retry_policy(RetryPolicy::disabled())
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT)?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
-
-            exporter_builder.build()?
+            let client =
+                crate::otlp::build_http_client(tls.as_ref(), OTEL_EXPORTER_OTLP_TRACES_TIMEOUT)?;
+            exporter_builder.with_http_client(client).build()?
         }
     };
 

@@ -15,6 +15,9 @@ pub(super) mod native;
 
 #[path = "accounting_types.rs"]
 mod types;
+
+#[path = "accounting_gap_days.rs"]
+pub(in crate::runtime) mod gap_days;
 use types::Attempt;
 use types::Observation;
 use types::replay;

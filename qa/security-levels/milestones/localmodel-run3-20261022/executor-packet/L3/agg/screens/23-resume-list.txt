@@ -1,0 +1,44 @@
+ Resume a previous session
+
+ Type to search                                                                                         Filter: [Cwd] All    Sort: [Updated] Created 
+
+  ❯ 1m ago      Add a note "call the bank" by running: python3 src/notes.py add call the bank
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 1 · 100% ─
+ enter resume   esc exit   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse

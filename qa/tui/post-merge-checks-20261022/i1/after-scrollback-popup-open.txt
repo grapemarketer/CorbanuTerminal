@@ -1,0 +1,132 @@
+
+╭────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     loading   /model to change                  │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i1-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+
+› Improve documentation in @filename
+
+  Z.AI GLM 5.3 Flash via zai default · /Volumes/CorbanuDrive/Corbanu/.codex-work/tui-qa2/runs/i1-af…
+
+╭────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                          │
+│                                                        │
+│ model:     glm-5.3-flash   /model to change            │
+│ directory: /Volumes/CorbanuDrive/Corbanu/…/i1-after/ws │
+╰────────────────────────────────────────────────────────╯
+
+
+› Write the numbers 1 to 60, one per line, each followed by a short fruit name. No other text.
+
+
+
+
+
+
+
+• Working (2s • esc to interrupt)
+
+
+› Improve documentation in @filename
+
+  Z.AI GLM 5.3 Flash via zai default · /Volumes/CorbanuDrive/Corbanu/.codex-work/tui-qa2/runs/i1-af…
+
+
+› /
+
+  /model          choose what model and reasoning effort to use
+  /gpu            rent, inspect, or terminate GPU capacity
+  /ide            include current selection, open files, and other context from your IDE
+  /permissions    choose what Corbanu Terminal is allowed to do
+  /security       explore security profiles and protection readiness (read only)
+  /keymap         remap TUI shortcuts
+  /vim            toggle Vim mode for the composer
+  /experimental   toggle experimental features
+
+• 1 apple
+  2 fig
+  3 kiwi
+  4 plum
+  5 pear
+  6 lime
+  7 mango
+  8 grape
+  9 peach
+  10 berry
+  11 lemon
+  12 apple
+  13 fig
+  14 kiwi
+  15 plum
+  16 pear
+  17 lime
+
+
+› /
+
+  /model          choose what model and reasoning effort to use
+  /gpu            rent, inspect, or terminate GPU capacity
+  /ide            include current selection, open files, and other context from your IDE
+  /permissions    choose what Corbanu Terminal is allowed to do
+  /security       explore security profiles and protection readiness (read only)
+  /keymap         remap TUI shortcuts
+  /vim            toggle Vim mode for the composer
+  /experimental   toggle experimental features
+  18 mango
+  19 grape
+  20 peach
+  21 berry
+  22 lemon
+  23 apple
+  24 fig
+  25 kiwi
+  26 plum
+  27 pear
+  28 lime
+  29 mango
+  30 grape
+  31 peach
+  32 berry
+  33 lemon
+  34 apple
+  35 fig
+  36 kiwi
+  37 plum
+  38 pear
+  39 lime
+  40 mango
+  41 grape
+  42 peach
+  43 berry
+  44 lemon
+
+
+› /
+
+  /model          choose what model and reasoning effort to use
+  /gpu            rent, inspect, or terminate GPU capacity
+  /ide            include current selection, open files, and other context from your IDE
+  /permissions    choose what Corbanu Terminal is allowed to do
+  /security       explore security profiles and protection readiness (read only)
+  /keymap         remap TUI shortcuts
+  /vim            toggle Vim mode for the composer
+  /experimental   toggle experimental features
+  45 apple
+  46 fig
+  47 kiwi
+  48 plum
+  49 pear
+  50 lime
+  51 mango
+  52 grape
+  53 peach
+  54 berry
+  55 lemon
+  56 apple
+  57 fig
+  58 kiwi
+  59 plum
+  60 pear

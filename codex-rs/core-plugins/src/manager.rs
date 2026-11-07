@@ -227,6 +227,8 @@ struct RemoteCatalogCacheRefreshRequest {
     auth: Option<CodexAuth>,
     scopes: BTreeSet<RemotePluginScope>,
     mode: RemoteCatalogCacheRefreshMode,
+    /// A catalog download that started at or after this instant satisfies the request.
+    requested_at: Instant,
 }
 
 impl RemoteCatalogCacheRefreshRequest {
@@ -1175,6 +1177,7 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         scopes: BTreeSet<RemotePluginScope>,
         mode: RemoteCatalogCacheRefreshMode,
+        requested_at: Instant,
     ) {
         if !config.plugins_enabled || scopes.is_empty() {
             return;
@@ -1185,6 +1188,7 @@ impl PluginsManager {
             auth,
             scopes,
             mode,
+            requested_at,
         });
     }
 
@@ -1202,6 +1206,7 @@ impl PluginsManager {
             auth.clone(),
             options.remote_catalog_cache_refresh_scopes,
             RemoteCatalogCacheRefreshMode::OnlyIfStale,
+            Instant::now(),
         );
         self.maybe_start_remote_plugin_caches_refresh(
             config,
@@ -2170,6 +2175,9 @@ impl PluginsManager {
                     warn!("failed to start configured marketplace auto-upgrade task: {err}");
                 }
             }
+            // Catalog downloads that `plugin/list` starts after this point count as this start's
+            // refresh, so startup fetches the catalog once.
+            let remote_catalog_refresh_requested_at = Instant::now();
             let config_for_remote_sync = config.clone();
             let manager = Arc::clone(self);
             let auth_manager_for_remote_sync = auth_manager.clone();
@@ -2201,6 +2209,7 @@ impl PluginsManager {
                     auth,
                     scopes,
                     RemoteCatalogCacheRefreshMode::Force,
+                    remote_catalog_refresh_requested_at,
                 );
             });
 
@@ -2402,6 +2411,7 @@ impl PluginsManager {
             {
                 pending.scopes.extend(request.scopes);
                 pending.auth = request.auth;
+                pending.requested_at = pending.requested_at.max(request.requested_at);
                 pending.mode = match (pending.mode, request.mode) {
                     (RemoteCatalogCacheRefreshMode::Force, _)
                     | (_, RemoteCatalogCacheRefreshMode::Force) => {
@@ -2804,6 +2814,7 @@ impl PluginsManager {
                     &request.service_config,
                     request.auth.as_ref(),
                     scope,
+                    request.requested_at,
                 )
                 .await
                 {

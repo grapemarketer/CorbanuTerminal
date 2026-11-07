@@ -1,0 +1,30 @@
+22:47:41  passthrough_error  chatgpt.com:443          
+22:47:42  passthrough_error  chatgpt.com:443          
+22:49:17  passthrough_error  chatgpt.com:443          
+22:49:17  passthrough_error  chatgpt.com:443          
+22:50:47  passthrough_error  chatgpt.com:443          
+22:50:47  passthrough_error  chatgpt.com:443          
+22:50:59  forwarded  zai  /api/paas/v4/chat/completions  200  zwork  glm-5.3-flash  
+22:51:19  passthrough_error  chatgpt.com:443          
+22:51:20  passthrough_error  chatgpt.com:443          
+22:51:39  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  
+22:52:00  passthrough_error  chatgpt.com:443          
+22:52:00  passthrough_error  chatgpt.com:443          
+22:52:26  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  
+22:52:52  passthrough_error  chatgpt.com:443          
+22:52:52  passthrough_error  chatgpt.com:443          
+22:53:15  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  
+22:53:41  passthrough_error  chatgpt.com:443          
+22:53:42  passthrough_error  chatgpt.com:443          
+22:54:03  forwarded  zai  /api/paas/v4/chat/completions  200  zenv  glm-5.3-flash  
+22:54:39  passthrough_error  chatgpt.com:443          
+22:54:39  passthrough_error  chatgpt.com:443          
+22:55:05  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  
+22:55:25  passthrough_error  chatgpt.com:443          
+22:55:25  passthrough_error  chatgpt.com:443          
+22:56:27  passthrough_error  chatgpt.com:443          
+22:56:27  passthrough_error  chatgpt.com:443          
+22:56:38  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  
+22:56:53  passthrough_error  chatgpt.com:443          
+22:56:53  passthrough_error  chatgpt.com:443          
+22:57:42  forwarded  zai  /api/paas/v4/chat/completions  200  zpersonal  glm-5.3-flash  

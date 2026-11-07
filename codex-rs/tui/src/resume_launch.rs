@@ -111,7 +111,7 @@ pub(crate) async fn select_resume_launch_session(
         let Some(app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume --last");
         };
-        let target = crate::lookup_latest_session_target_with_app_server(
+        let target = crate::lookup_resume_last_target_with_app_server(
             app_server,
             config,
             filter_cwd,
@@ -291,6 +291,73 @@ pub(crate) fn resume_account_error(
         recorded.provider_id,
         recorded.account,
         opening.runs_on_it()
+    ))
+}
+
+/// D172 (#1287): a one-line notice when the in-app `/resume` opened a
+/// conversation on another account of its provider than the one it ran on:
+/// an account selected for this session (`--account`, or a new session
+/// started from `/providers`) wins over the recorded one, also when that one
+/// is gone (or cannot be read). `resumed_account` is the `<provider>:<name>` the app server
+/// reported for the resumed thread. `None` when it runs on the recorded
+/// account or on another provider.
+pub(crate) fn resume_account_notice(
+    config: &Config,
+    recorded: &RecordedProviderAccount,
+    resumed_account: Option<&str>,
+) -> Option<String> {
+    let (provider_id, current) = resumed_account?.split_once(':')?;
+    if provider_id != recorded.provider_id || current == recorded.account {
+        return None;
+    }
+    let provider = if recorded.provider_id == config.model_provider_id {
+        Some(&config.model_provider)
+    } else {
+        config.model_providers.get(&recorded.provider_id)
+    };
+    // `default` always exists; a borrowed account (`<owner>:<name>`) is not
+    // this provider's own.
+    let named = matches!(
+        codex_vault::parse_provider_account_selection(&recorded.account),
+        Ok(Some(_))
+    );
+    let gone = named
+        && provider.is_some_and(|provider| {
+            let mut recorded_provider = provider.clone();
+            recorded_provider.account = Some(codex_model_provider_info::NamedProviderAccount {
+                provider_id: recorded.provider_id.clone(),
+                name: recorded.account.clone(),
+            });
+            codex_model_provider::selected_account_error(
+                config.codex_home.as_path(),
+                &recorded_provider,
+            )
+            .is_some()
+        });
+    // `--account <name>` selects the session provider's account; another
+    // provider's needs `<provider>:<name>`.
+    let selected_for_provider =
+        config
+            .provider_account_override
+            .as_deref()
+            .is_some_and(|selection| match selection.split_once(':') {
+                Some((provider_id, _)) => provider_id == recorded.provider_id,
+                None => config.model_provider_id == recorded.provider_id,
+            });
+    let selected_by = if selected_for_provider {
+        ", the account selected for this session (with `--account` or in `/providers`)"
+    } else {
+        ""
+    };
+    Some(format!(
+        "This conversation ran on {provider_id} account `{recorded_name}`{gone}; it resumes on \
+         `{current}`{selected_by}.",
+        recorded_name = recorded.account,
+        gone = if gone {
+            ", which is no longer available"
+        } else {
+            ""
+        },
     ))
 }
 
@@ -475,6 +542,67 @@ mod tests {
                 ThreadOpening::Resume
             ),
             None
+        );
+        Ok(())
+    }
+
+    /// D172 (#1287): with `--account personal`, the in-app `/resume` of a
+    /// conversation that ran on `work` resumes on `personal` and says so,
+    /// also naming `work` as gone when it is; on the recorded account, on
+    /// another provider or without the app server's answer it says nothing,
+    /// and `default` is never called gone.
+    #[tokio::test]
+    async fn resuming_on_the_launch_account_names_both_accounts() -> std::io::Result<()> {
+        let home = TempDir::new()?;
+        let config = zai_config(&home, Some("personal"), "zai:work").await?;
+        let notice = |recorded_account: &str, resumed: Option<&str>| {
+            resume_account_notice(&config, &recorded("zai", recorded_account), resumed)
+        };
+        assert_eq!(
+            notice("work", Some("zai:personal")).as_deref(),
+            Some(
+                "This conversation ran on zai account `work`, which is no longer available; it \
+                 resumes on `personal`, the account selected for this session (with `--account` \
+                 or in `/providers`)."
+            )
+        );
+        assert_eq!(
+            notice("default", Some("zai:personal")).as_deref(),
+            Some(
+                "This conversation ran on zai account `default`; it resumes on `personal`, the \
+                 account selected for this session (with `--account` or in `/providers`)."
+            )
+        );
+        assert_eq!(
+            [
+                notice("work", Some("zai:work")),
+                notice("work", Some("kimi-code:personal")),
+                notice("work", /*resumed*/ None),
+            ],
+            [None, None, None]
+        );
+        // An account selected for another provider is not named as the cause.
+        let other = zai_config(&home, Some("kimi-code:personal"), "zai:work").await?;
+        assert_eq!(
+            resume_account_notice(&other, &recorded("zai", "default"), Some("zai:personal"))
+                .as_deref(),
+            Some("This conversation ran on zai account `default`; it resumes on `personal`.")
+        );
+        let name = codex_vault::ProviderAccountName::parse("work").expect("name");
+        codex_vault::Vault::new(home.path().to_path_buf())
+            .write_provider_account(
+                "zai",
+                &name,
+                codex_vault::ProviderAccountKind::ApiKey,
+                "test-key-not-a-secret",
+            )
+            .expect("add work");
+        assert_eq!(
+            notice("work", Some("zai:personal")).as_deref(),
+            Some(
+                "This conversation ran on zai account `work`; it resumes on `personal`, the \
+                 account selected for this session (with `--account` or in `/providers`)."
+            )
         );
         Ok(())
     }

@@ -1,0 +1,5 @@
+https://api.z.ai/api/paas/v4/models 200
+https://api.openai.com/v1/models 200
+{"conn": "1792670995052102000-49208", "event": "forwarded", "host": "api.z.ai", "method": "POST", "model": "glm-5.3-flash", "path": "/api/paas/v4/chat/completions", "real": true, "request_bytes": 26874, "response_bytes": 17851, "seconds": 7.059, "service_tier": null, "status": "200", "stream": true,
+{"conn": "1792671002211551000-49213", "event": "forwarded", "host": "api.z.ai", "method": "GET", "path": "/api/paas/v4/models", "real": true, "request_bytes": 0, "response_bytes": 1510, "seconds": 0.416, "status": "200", "time_ns": 1792671002631263000, "ts": "2026-10-22T12:10:02+0000", "usage": null
+{"conn": "1792671002639600000-49215", "event": "forwarded", "host": "api.openai.com", "method": "GET", "path": "/v1/models", "real": true, "request_bytes": 0, "response_bytes": 22204, "seconds": 1.262, "status": "200", "time_ns": 1792671003904881000, "ts": "2026-10-22T12:10:03+0000", "usage": null, 

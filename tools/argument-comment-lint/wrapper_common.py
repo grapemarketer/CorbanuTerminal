@@ -19,6 +19,8 @@ STRICT_LINTS = [
 ]
 NOISE_LINT = "unknown_lints"
 TOOLCHAIN_CHANNEL = "nightly-2026-08-08"
+# `main` -> `refs/remotes/master`; see `add_clippy_master_ref`.
+CLIPPY_MASTER_REFSPEC = "+refs/heads/*ain:refs/remotes/*aster"
 
 _TARGET_SELECTION_ARGS = {
     "--all-targets",
@@ -131,12 +133,36 @@ def append_env_flag(env: MutableMapping[str, str], key: str, flag: str) -> None:
         env[key] = f"{value} {flag}"
 
 
+def add_clippy_master_ref(env: MutableMapping[str, str]) -> None:
+    """Let dylint 6.1.1 check out rust-clippy's `master`, now named `main` (#1479).
+
+    Building the Dylint driver clones rust-clippy and checks out `master`, which
+    rust-clippy renamed to `main` on 2026-10-28 (trailofbits/dylint#2146). This
+    adds a command-scope fetch refspec so the clone also records `main` as
+    `refs/remotes/master`. Unlike a plain `refs/heads/main` source, the glob
+    never fails a clone or fetch of a repository without `main`; it only adds
+    `refs/remotes/<x>aster` refs for branches named `<x>ain`. Remove once CI
+    pins a dylint release with the upstream fix.
+    """
+    count = int(env.get("GIT_CONFIG_COUNT") or "0")
+    for index in range(count):
+        if (
+            env.get(f"GIT_CONFIG_KEY_{index}") == "remote.origin.fetch"
+            and env.get(f"GIT_CONFIG_VALUE_{index}") == CLIPPY_MASTER_REFSPEC
+        ):
+            return
+    env[f"GIT_CONFIG_KEY_{count}"] = "remote.origin.fetch"
+    env[f"GIT_CONFIG_VALUE_{count}"] = CLIPPY_MASTER_REFSPEC
+    env["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
 def set_default_lint_env(env: MutableMapping[str, str]) -> None:
     for strict_lint in STRICT_LINTS:
         append_env_flag(env, "DYLINT_RUSTFLAGS", f"-D {strict_lint}")
     append_env_flag(env, "DYLINT_RUSTFLAGS", f"-A {NOISE_LINT}")
     if not env.get("CARGO_INCREMENTAL"):
         env["CARGO_INCREMENTAL"] = "0"
+    add_clippy_master_ref(env)
 
 
 def die(message: str) -> "Never":

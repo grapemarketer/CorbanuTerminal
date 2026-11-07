@@ -1,0 +1,33 @@
+
+
+› Run exactly this command and show its output: ls "$CORBANU_HOME"
+
+
+• Ran ls "$CORBANU_HOME"
+  └ ls: /Users/agmx0/runs/cap-20261012T044403Z/product-home: Operation not permitted
+
+⚠ Security level Aggressive blocked listing `$CORBANU_HOME`: agent commands can never list the Corbanu home or read its protected files (Corbanu's
+  sign-in, vault, config and history), and this cannot be granted, not even once. To allow it, a person can switch to Permissive in /security (it
+  applies after a restart).
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I ran exactly ls "$CORBANU_HOME". Here is its output:
+
+  ls: /Users/agmx0/runs/cap-20261012T044403Z/product-home: Operation not permitted
+
+  The sandbox blocked the listing (exit code 1) with this explanation:
+
+  > Security level Aggressive blocked listing $CORBANU_HOME: agent commands can never list the Corbanu home or read its protected files (Corbanu's
+  > sign-in, vault, config and history), and this cannot be granted, not even once. To allow it, a person can switch to Permissive in /security (it
+  > applies after a restart).
+
+  This is enforced by Corbanu's security policy and can't be overridden from my side — only you can switch the security level to Permissive via /
+  security (it takes effect after a restart) if you want this to be listable.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Write tests for @filename
+
+  Z.AI GLM 5.3 Flash via zai default · ~/runs/cap-20261012T044403Z/fixture/workspace · Corbanu Terminal · TPS: 36.6 tok/s

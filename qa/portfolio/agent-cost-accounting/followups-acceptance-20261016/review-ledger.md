@@ -19,3 +19,16 @@ Budget at the freeze: 2 of 5 used; 3 remain for independent evidence checks.
 Budget: 5 of 5 used. No extension requested: the last check found statement corrections, no disposition change and no
 major defect (binding rule of 2026-10-14). The last independent verdict is **fail**; its corrections are applied but
 not re-checked.
+
+## Re-run R1 (acct-rerun / acct-rerun2, 2026-10-22 to 2026-10-27)
+
+A separate budget, set by the coordinator's acct-rerun brief. The brief requires a fresh designer, a separate design
+review, and then an independent read-only Opus 5.5 High review of the record PR, with a budget of 3 rounds. The first
+run's 5 of 5 above is unchanged, and no extension was used or requested.
+
+| # | Kind | Session | Model | Window (UTC) | Result |
+| --- | --- | --- | --- | --- | --- |
+| R1-design | Code-blind amendment R1 (fresh designer), from the intent packet | see [design-r1/access-record.md](rerun-r1-20261022/design-r1/access-record.md) | claude-opus-5-5-plan, high | 2026-10-22 11:50:06–11:58:35 | proposal ([design-r1/designer-output.md](rerun-r1-20261022/design-r1/designer-output.md)) |
+| R1-design-review | Independent design review | see access record | claude-opus-5-5-plan, high | 2026-10-22 11:58:56–12:05:21 | **CHANGES**, with a full revised text (b); (b) was frozen word for word, without a second review |
+| R1-PR-1 | Independent PR review, round 1 of 3 (#1411, head 71aacd3f62) | `01a17ee6-251f-7261-8959-f2beda1c3882` | claude-opus-5-5-plan, high | 2026-10-27 19:46:13–19:53:12 | **CHANGES**: ACC-11 and ACC-14 each have one result not observed; disclosure and record fixes. All applied; ACC-11 and ACC-14 dispositioned as blocked. |
+| R1-PR-2 | Independent PR review, round 2 of 3 (#1411, head fc9ba2c216) | `01a17ef0-b0e5-7541-a485-a18f07122e41` | claude-opus-5-5-plan, high | 2026-10-27 19:57:45–20:03:00 | **CHANGES**: round-1 fixes confirmed (ACC-11/14 correctly blocked, ACC-06/15/18 pass, references and totals consistent); remaining: attempt logs ignored by `.gitignore` (renamed `*.log.txt`), three wording fixes. All applied. |

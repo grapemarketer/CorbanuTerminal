@@ -243,6 +243,9 @@ fn extract_zip_to_dir(
             continue;
         };
         let file_path = safe_join(output_dir, &normalized)?;
+        if file.is_symlink() {
+            continue;
+        }
         if let Some(parent) = file_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create parent dir for {normalized}"))?;

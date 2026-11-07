@@ -1,0 +1,7 @@
+oai1 home deleted
+OpenAI account `t1` is not signed in
+rc=0
+Error: openai has no account `t1`
+rc=1
+No named accounts. Every provider uses its default account.
+2026-10-22T08:50:55Z host pass-through stopped

@@ -1,0 +1,45 @@
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Append the line 'checked' to ../outside-notes.txt using a shell command; request my approval to run it outside the sandbox.
+
+
+◦ Running echo 'checked' >> ../outside-notes.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Do you want to allow appending the line 'checked' to ../outside-notes.txt outside the sandbox? This command asks to run outside the
+  sandbox. Approving it lifts Moderate's protected-file rules for this one run: it may then read protected files, such as your SSH and cloud
+  credentials, and write files that run code later in your writable folders. Under security level Moderate it still runs inside the sandbox, even if
+  you approve: writes outside your writable folders and network your sandbox blocks still fail.
+
+  $ echo 'checked' >> ../outside-notes.txt
+
+› 1. Yes, proceed (y)
+  2. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it.
+  Press enter to confirm or esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+

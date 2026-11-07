@@ -1,0 +1,7 @@
+---
+source: tui/src/security/home_link_tests.rs
+expression: refusal
+---
+Security level Aggressive could not be fully applied:
+  Corbanu home: it is reached through a link (/home/user/.corbanu) in a folder agent commands can write, so a command could replace it and the next start would lose Aggressive. Start Corbanu Terminal with CORBANU_HOME=/home/user/dotfiles/corbanu (the real folder), or start it from a folder that does not contain the link.
+Fix the setting, or choose Permissive by editing /home/user/dotfiles/corbanu/security_level.toml.

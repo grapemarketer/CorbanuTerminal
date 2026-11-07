@@ -1,0 +1,201 @@
+#!/usr/bin/python3
+"""Neutral terminal driver for the code-blind executor.
+
+Every invocation is appended to $AGMS_RUN/evidence/actions.jsonl with a
+timestamp; every screen read is appended to screens.jsonl. The product runs in
+a private tmux server on $AGMS_RUN/tmux.sock; raw terminal output is piped to
+evidence/pty.raw.
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+RUN = os.environ["AGMS_RUN"]
+EVIDENCE = os.path.join(RUN, "evidence")
+SOCK = os.path.join(RUN, "tmux.sock")
+TMUX = ["/opt/agms/bin/tmux", "-f", "/opt/agms/etc/tmux.conf", "-S", SOCK]
+TARGET = "product"
+PTY_NAME = "pty.raw"
+FIXTURE = os.path.join(RUN, "fixture")
+MCP_DIR = os.path.join(FIXTURE, "mcp")
+USAGE = """usage (pf84-cb1):
+  agms-tui homes                    list the prepared product homes
+  agms-tui start --home NAME [--env NAME=synthetic...] [--stdin TEXT] [PRODUCT ARGS...]
+                                    run `corbanu [PRODUCT ARGS]` with that home, in the test project. PRODUCT ARGS may
+                                    start with a subcommand: resume ..., fork ..., account ..., login ..., logout ...,
+                                    exec ...; with none it starts the TUI. When the program exits the terminal stays
+                                    open, shows "[agms] product exited with code N" and the terminal settings the
+                                    program left, and echoes text typed afterwards. --stdin TEXT pipes TEXT (letters,
+                                    digits, . _ -) into the program's standard input, like `printf TEXT | corbanu ...`.
+  agms-tui text 'literal text'      type text (does not press Enter)
+  agms-tui key KEY [KEY...]         press keys: Enter Escape Up Down Left Right Tab
+                                    BSpace Space C-c C-d y n 1 2 3 ... (tmux key names)
+  agms-tui screen [LABEL]           print the current screen
+  agms-tui wait REGEX [SECONDS]     wait until the screen matches REGEX (default 60s)
+  agms-tui stop                     end every terminal
+  agms-tui --window B COMMAND ...   the same commands for a second, separate terminal "B" (any 1-8 letters/digits)
+"""
+
+
+def log(kind, row):
+    row = dict(time_ns=time.time_ns(), utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **row)
+    with open(os.path.join(EVIDENCE, kind), "a") as out:
+        out.write(json.dumps(row) + "\n")
+
+
+def tmux(*args, check=True):
+    result = subprocess.run(TMUX + list(args), capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise SystemExit("tmux error: " + result.stderr.strip())
+    return result
+
+
+def pty_offset():
+    path = os.path.join(EVIDENCE, PTY_NAME)
+    return os.path.getsize(path) if os.path.exists(path) else 0
+
+
+def capture():
+    return tmux("capture-pane", "-p", "-t", "=" + TARGET + ":").stdout
+
+
+def show(label, screen):
+    log("screens.jsonl", dict(label=label, pty_offset=pty_offset(), screen=screen))
+    print(screen.rstrip("\n"))
+
+
+def fixture_state():
+    state = {}
+    for base, dirs, files in os.walk(FIXTURE):
+        dirs.sort()
+        if os.path.basename(base) == ".git":
+            # git internals: list hooks/config, skip object storage
+            dirs[:] = [d for d in dirs if d in ("hooks", "info")]
+        for name in sorted(files):
+            path = os.path.join(base, name)
+            rel = os.path.relpath(path, FIXTURE)
+            try:
+                with open(path, "rb") as stream:
+                    data = stream.read(4096)
+                if name.startswith(".env"):
+                    # Credential-like test data: hash only, so synthetic tokens never reach executor transcripts.
+                    with open(path, "rb") as stream:
+                        whole = stream.read()
+                    state[rel] = "<credential file: %d bytes, sha256 %s>" % (
+                        len(whole), hashlib.sha256(whole).hexdigest())
+                else:
+                    state[rel] = data.decode("utf-8", "replace")
+            except OSError as exc:
+                state[rel] = "<unreadable: %s>" % exc.strerror
+    return state
+
+
+def main(argv):
+    global TARGET, PTY_NAME
+    if argv[:1] == ["--window"] and len(argv) > 1:
+        # Second product window on the same profile (moderate-first): its own tmux session and PTY log.
+        if not re.fullmatch(r"[A-Za-z0-9]{1,8}", argv[1]):
+            print("bad window name")
+            return 1
+        TARGET, PTY_NAME = "product-" + argv[1], "pty-%s.raw" % argv[1]
+        argv = argv[2:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    cmd, args = argv[0], argv[1:]
+    log("actions.jsonl", dict(requested=cmd, args=args, window=TARGET))
+    if cmd == "homes":
+        base = os.path.join(RUN, "homes-meta")
+        for name in sorted(os.listdir(os.path.join(RUN, "homes"))):
+            desc = ""
+            try:
+                desc = open(os.path.join(base, name, "desc")).read().strip()
+            except OSError:
+                pass
+            print("%-12s %s" % (name, desc))
+        return 0
+    if cmd == "start":
+        home, extra, stdin_text = None, [], None
+        while args[:1] and args[0] in ("--home", "--env", "--stdin"):
+            if args[0] == "--home":
+                home = args[1]
+            elif args[0] == "--stdin":
+                stdin_text = args[1]
+            else:
+                extra.append(args[1])
+            args = args[2:]
+        if stdin_text is not None and not re.fullmatch(r"[A-Za-z0-9._-]+", stdin_text):
+            print("--stdin takes letters, digits, . _ - only")
+            return 1
+        if not home or not re.fullmatch(r"[a-z0-9]+", home) or not os.path.isdir(os.path.join(RUN, "homes", home)):
+            print("start needs --home NAME (see: agms-tui homes)")
+            return 1
+        if tmux("has-session", "-t", "=" + TARGET, check=False).returncode == 0:
+            print("a product session is already running in this window; use 'agms-tui stop' or another --window")
+            return 1
+        product = ["/opt/agms/bin/agms-product", home] + args
+        quoted = " ".join("'" + a.replace("'", "'\\''") + "'" for a in product)
+        if stdin_text is not None:
+            # pf84-cb1 amendment (after G1): feed the text to the program's stdin through a pipe, as `printf | corbanu`.
+            quoted = "printf '%s' '" + stdin_text + "' | " + quoted
+        # pf84-cb1 (after G8): a C-c that reaches the wrapper's process group must not end the window before the exit
+        # line is shown, and must not end the echo stage either.
+        shell = ("trap ':' INT; " + quoted + '; rc=$?; printf "\\n[agms] product exited with code %s\\n" "$rc"; '
+                 'printf "[agms] terminal settings left: %s\\n" "$(stty -a | tr \' \' \'\\n\' | '
+                 'grep -E \'^-?(echo|icanon|isig|icrnl|opost)$\' | tr \'\\n\' \' \')"; trap \'\' INT; exec /bin/cat')
+        tmux("new-session", "-d", "-s", TARGET, "-x", "150", "-y", "45",
+             "-e", "AGMS_EXTRA_ENV=" + "\n".join(extra), "/bin/bash -c " + "'" + shell.replace("'", "'\\''") + "'")
+        tmux("pipe-pane", "-o", "-t", "=" + TARGET + ":", "cat >> '%s'" % os.path.join(EVIDENCE, PTY_NAME))
+        time.sleep(2)
+        log("actions.jsonl", dict(executed="start", argv=product, home=home, stdin_piped=stdin_text is not None))
+        show("after-start", capture())
+    elif cmd == "text":
+        text = " ".join(args)
+        tmux("send-keys", "-t", "=" + TARGET + ":", "-l", text)
+        log("actions.jsonl", dict(executed="text", text=text, pty_offset=pty_offset()))
+        print("typed %d characters" % len(text))
+    elif cmd == "key":
+        for key in args:
+            tmux("send-keys", "-t", "=" + TARGET + ":", key)
+            log("actions.jsonl", dict(executed="key", key=key, pty_offset=pty_offset()))
+            time.sleep(0.15)
+        print("pressed " + " ".join(args))
+    elif cmd == "ansi":
+        # Coloured capture (coordinator screenshots).
+        screen = tmux("capture-pane", "-e", "-p", "-t", "=" + TARGET + ":").stdout
+        log("screens.jsonl", dict(label=(args[0] if args else "ansi"), pty_offset=pty_offset(), ansi=True, screen=screen))
+        print(screen.rstrip("\n"))
+    elif cmd == "screen":
+        show(args[0] if args else "screen", capture())
+    elif cmd == "wait":
+        pattern = re.compile(args[0])
+        limit = float(args[1]) if len(args) > 1 else 60.0
+        deadline = time.time() + limit
+        while True:
+            screen = capture()
+            if pattern.search(screen):
+                log("actions.jsonl", dict(executed="wait", pattern=args[0], matched=True))
+                show("wait-matched:" + args[0], screen)
+                return 0
+            if time.time() > deadline:
+                log("actions.jsonl", dict(executed="wait", pattern=args[0], matched=False))
+                show("wait-timeout:" + args[0], screen)
+                print("TIMEOUT: pattern not seen within %ss" % limit)
+                return 2
+            time.sleep(0.5)
+    elif cmd == "stop":
+        tmux("kill-server", check=False)
+        log("actions.jsonl", dict(executed="stop"))
+        print("stopped")
+    else:
+        print(USAGE)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

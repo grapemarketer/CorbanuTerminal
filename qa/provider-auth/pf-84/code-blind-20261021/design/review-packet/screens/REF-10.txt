@@ -1,0 +1,35 @@
+
+╭───────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)         │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: /tmp/f555proj              │
+╰───────────────────────────────────────╯
+
+› Use /skills to list available skills
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: -- tok/s
+
+╭─────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)               │
+│                                             │
+│ model:     glm-5.3-flash   /model to change │
+│ directory: /tmp/f555proj                    │
+╰─────────────────────────────────────────────╯
+ Resume a previous session
+
+ Type to search                                                                                         Filter: [Cwd] All    Sort: [Updated] Created
+
+  ❯ 15s ago     reply with the single word ping
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 1 · 100% ─
+ enter resume   esc exit   ctrl+c exit   tab focus sort/filter   ←/→ change option
+ ctrl+o comfortable view   ctrl+t transcript   ctrl+e expand   ↑/↓ browse
+
+■ This conversation ran on zai account `work` and resumes on it: account `work` of provider `zai` is not configured; add it or pick another account in
+`/providers`
+
+› Use /skills to list available skills
+
+  Z.AI GLM 5.3 Flash via zai default · /tmp/f555proj · Corbanu Terminal · TPS: -- tok/s
+

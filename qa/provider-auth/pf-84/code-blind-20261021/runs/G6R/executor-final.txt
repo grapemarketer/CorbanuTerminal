@@ -1,0 +1,7 @@
+Execution complete for G6R. Preflight and candidate identity matched. Results:
+
+- **NA-11: passed** — named `work` account started and resumed without onboarding; default-credential CLI failed closed with exit 1.
+- **ESC-01: failed** — picker, Escape exit code 0, and terminal restoration passed, but `e3` showed `echo restored 9` twice instead of once.
+- **I426-A: passed** — all three ghost-account resume variants exited 1 before any onboarding/picker.
+
+Relay assertions are marked for the integrator. Full evidence and verdicts are in `$AGMS_RUN/evidence/result.md`.

@@ -1,0 +1,8 @@
+{
+ "launcher_ok": true,
+ "tmux_child_ok": true,
+ "pty_input_echoed": true,
+ "failed": [],
+ "probe_count": 99,
+ "ok": true
+}

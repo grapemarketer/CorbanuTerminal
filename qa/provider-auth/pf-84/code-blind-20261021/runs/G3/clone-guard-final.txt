@@ -1,0 +1,3 @@
+2026-10-21T23:14:26Z clear (baseline login-window SecurityAgent only)
+SECURITYAGENT-SEEN lines: 0
+checks:      821

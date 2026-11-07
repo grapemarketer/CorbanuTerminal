@@ -1,0 +1,15 @@
+
+Return to Permissive?
+Protections removed at the next start:
+Your own settings from config apply instead of each of these.
+• Sandbox: a command you approve to run outside the sandbox, a retry without it and a remembered rule that skips it run outside it again
+• Protected files: credential files in your home folder and Corbanu's sign-in, vault, config, history and state are no longer denied to agent
+    commands, and files that run code later are no longer read-only; your own sandbox settings decide
+• Untrusted content: protected actions after untrusted content no longer need your fresh approval
+• Model keys: Corbanu reads provider keys itself again, unless your own config turns broker_model_auth on
+Core's level stays Moderate in this session and becomes Permissive from the next start. Grants, "for session" approvals and child agents' authority in
+this session end as soon as you confirm.
+Your own approval, sandbox, network, web search and environment settings from config apply exactly as saved.
+Takes effect when you restart Corbanu Terminal; Core's Moderate rules stay on in this session until then.
+
+enter confirm and save · esc back, nothing changes · i inspect

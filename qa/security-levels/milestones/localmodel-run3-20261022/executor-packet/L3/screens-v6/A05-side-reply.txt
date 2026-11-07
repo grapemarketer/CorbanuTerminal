@@ -1,0 +1,13 @@
+
+› Reply with the single word SIDE.
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+• SIDE
+
+
+› Will this algorithm scale well?
+
+  Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit via qwen default · ~/runs/agm… Side from main thread · ctrl + / to switch · ctrl + c to close

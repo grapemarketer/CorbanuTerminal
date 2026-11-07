@@ -331,6 +331,7 @@ mod tests {
                     },
                     FileSystemSandboxEntry {
                         path: FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: "**/.env".to_string(),
                         },
                         access: FileSystemAccessMode::Deny,

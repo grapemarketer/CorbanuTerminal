@@ -1,0 +1,37 @@
+Restarting Corbanu Terminal to apply the saved security level…
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Add a note "call the bank" by running: python3 src/notes.py add call the bank
+
+
+◦ Running python3 src/notes.py add call the bank
+
+
+ Grant this command?
+ Under Aggressive an approval never lifts the protected-path rules (credential files, the Corbanu home, shell and git startup files). This grant lets
+ exactly this command run without them.
+
+   Agent       human:session:01a127fb-5682-77c0-8212-e9d6c641c102 → agent:01a127fb-5682-77c0-8212-e9d6c641c102
+   Session     01a127fb-5682-77c0-8212-e9d6c641c102
+   Action      execute
+   Resource    protected_data/sandbox_protected_paths
+   Command     $ python3 src/notes.py add call the bank
+   Folder      /Users/agmx0/runs/cap-20261010T224124Z/fixture/workspace
+   Digest      command:sha256:0edd04b337709f4e685f7328f1edd3d204c3c9f8c4ead4306eed37df3c9e628f
+   Destination none
+   Limit       1 run (press u for any run until it expires)
+   Expires     10 minutes after you confirm, or at a level change, revocation, kill switch or restart
+
+ Still denied: any other command or folder, this command a second time, its parent, sibling and child agents, other sessions, and everything else
+ Aggressive denies.
+
+ › Back to the approval (nothing granted)
+   Grant and run
+
+ ↑/↓ choose · enter confirm · u change limit · esc back to the approval

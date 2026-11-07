@@ -1,0 +1,12 @@
+guest Neos-Virtual-Machine.local 2026-10-22T07:46:15Z user agent
+--- before (names and metadata only, no content read)
+total 16
+drwx------   4 agent  staff   128 Oct 16 01:05 .
+drwx------@ 42 agent  staff  1344 Oct 21 12:29 ..
+-rw-------   1 agent  staff  4002 Sep 15 13:06 auth.json
+-rw-------   1 agent  staff    49 Oct  2 15:36 zai_api_key
+rm rc=0
+--- after
+/Users/agent/.pf83-auth: absent
+ls: /Users/agent/.pf83-auth: No such file or directory
+matching paths left under /Users/agent: 0

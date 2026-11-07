@@ -60,6 +60,43 @@ Profiles do not copy the default account's token, so logging out the default
 account cannot revoke a newly linked named profile. Completing a relink and
 running `/tasknode status` replaces that profile's old token after validation.
 
+### Prove your wallet link
+
+When a task asks you to confirm the wallet linked to your Task Node account,
+use `/tasknode status` in the Corbanu profile where you accepted the task. The
+reply appears in the conversation under `Task Node status`. Copy these rows
+from that one reply, exactly as shown:
+
+```text
+profile: <local profile name, or default>
+account: <Task Node account ID>
+github:  <GitHub username>
+wallet:  <full wallet address>
+```
+
+Copy the whole address after `wallet:`, keeping every character and its
+capitalization. A readable screenshot that shows the `Task Node status` heading
+and those four rows together works too. Never send a seed phrase, private key,
+passcode, API key or session token; proving the link needs no payment, unlock
+or signature.
+
+Don't use the address from `/wallet`. That is your local Solana wallet, and its
+header shortens the address. It is not the wallet linked to your Task Node
+account. The `profile:` row is only a local label; the `account:` and
+`github:` rows identify the Task Node account that the `wallet:` row belongs to.
+
+If the rows are missing or wrong:
+
+- `wallet:` says `not linked` or is blank, or status shows an error: report
+  that result in the task. Don't substitute another address, and don't create
+  a local Solana wallet to fill the gap.
+- The session isn't linked: run `/tasknode link`, finish the login, then run
+  `/tasknode status` again.
+- `github:` shows the wrong account: open the intended Corbanu profile, or
+  relink it to the intended account, and run status again.
+- The correct account still has no wallet: report "Task Node wallet not
+  linked" so the task reviewer can send the current linking steps.
+
 ## Work with tasks
 
 ```text
@@ -79,9 +116,13 @@ verification-related work.
 
 Use this workflow when an agent or script needs to carry a task from acceptance
 through evidence and verification. The commands below are available in Corbanu
-0.1.48. Replace `my-profile`, `TASK_ID`, file paths and the artifact URL with your
-own values; run each stage only when the task's current actions allow it. These
-are real task actions, not a sandbox demonstration.
+0.1.48 and later. Replace `my-profile`, `TASK_ID`, file paths and the artifact URL
+with your own values; run each stage only when the task's current actions allow
+it. These are real task actions, not a sandbox demonstration.
+
+Inside a Corbanu agent session, omit `--profile my-profile` from these examples
+or replace `my-profile` with the active tab's exact profile. A different profile
+is rejected; switch profiles in Corbanu first if you need another account.
 
 First check the linked identity and inspect the task:
 
@@ -111,12 +152,13 @@ artifacts you are authorized to share, then provide their stable URL:
 corbanu tasknode --profile my-profile task evidence TASK_ID \
   --body-file ./evidence.md \
   --artifact https://example.org/your-evidence --json
-corbanu tasknode --profile my-profile task show TASK_ID --json
 ```
 
-A successful submission is not a reward. Reopen the task to confirm its recorded
-state and evidence. If a command times out or fails after sending, inspect the
-task before retrying: the original action may already have been recorded.
+Read the lifecycle summary in the evidence response. A successful submission is
+not a reward. Use `task show TASK_ID --json` when you need current task details
+or the response does not establish the recorded state. If a command times out
+or fails after sending, inspect the task before retrying: the original action
+may already have been recorded.
 
 Check for a verifier question using the verification tab and task detail:
 
@@ -146,7 +188,10 @@ corbanu tasknode --profile my-profile balance --json
 
 These task actions use the linked terminal session. They do not require a wallet
 seed or a wallet transaction signature when the server advertises unsigned
-terminal task actions. This does not authorize transfers or other financial
+terminal task actions: `server.terminalTaskActions` is `true` in `status --json`,
+and the TUI status shows “terminal direct-write enabled”. When it is `false`,
+the TUI shows “wallet handoff required”; do not assume these direct-write
+examples are available. This does not authorize transfers or other financial
 actions. Keep JSON responses and evidence private unless reviewed for sharing;
 never publish session files, credentials, wallet secrets, or private task content.
 

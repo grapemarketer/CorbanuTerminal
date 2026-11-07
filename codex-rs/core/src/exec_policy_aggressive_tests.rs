@@ -340,12 +340,10 @@ async fn issue_626_note_names_only_suspended_rules() {
 }
 
 /// #626 (review r1): where prompts are rejected (approval policy never),
-/// the rejection says a remembered approval was suspended.
+/// the rejection says a remembered approval was suspended. On Windows the
+/// default (elevated) Windows sandbox is set up, as Aggressive requires
+/// there (#691): without it a read-only command is refused for that first.
 #[tokio::test]
-#[cfg_attr(
-    windows,
-    ignore = "without a Windows sandbox the read-only command is refused for that first, before the suspended rule is named (#691)"
-)]
 async fn issue_626_rejection_names_the_suspended_rule() {
     let home = TempDir::new().expect("home");
     let project = TempDir::new().expect("project");
@@ -366,7 +364,11 @@ async fn issue_626_rejection_names_the_suspended_rule() {
                 command: &command,
                 approval_policy: AskForApproval::Never,
                 permission_profile: PermissionProfile::read_only(),
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_level: if cfg!(windows) {
+                    WindowsSandboxLevel::Elevated
+                } else {
+                    WindowsSandboxLevel::Disabled
+                },
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             },

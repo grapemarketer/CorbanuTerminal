@@ -473,9 +473,35 @@ where
     }
 
     /// Clear from `position` through the end of the visible screen and force a full redraw.
+    ///
+    /// #1340: this erases row by row (`EL`), never with `ED` ("erase to end of screen"). When
+    /// `position` is the home position, `ED` clears the whole screen, and tmux (`scroll-on-clear`,
+    /// on by default) copies the whole screen into scrollback first, so every clear of a viewport
+    /// at the top of the screen (a full-screen popup, history inserted under it, a viewport that
+    /// grew to the top) left a stale copy of the composer or popup in history.
     pub(crate) fn clear_after_position(&mut self, position: Position) -> io::Result<()> {
-        self.backend.set_cursor_position(position)?;
-        self.backend.clear_region(ClearType::AfterCursor)?;
+        // Exactly the rows `ED 0` would erase: the screen as it is now.
+        let screen_height = self
+            .backend
+            .size()
+            .map_or(self.last_known_screen_size.height, |size| size.height);
+        use crossterm::terminal::ClearType as CrosstermClearType;
+        queue!(
+            self.backend,
+            MoveTo(position.x, position.y),
+            Clear(CrosstermClearType::UntilNewLine)
+        )?;
+        for y in position.y.saturating_add(1)..screen_height {
+            queue!(
+                self.backend,
+                MoveTo(/*x*/ 0, y),
+                Clear(CrosstermClearType::CurrentLine)
+            )?;
+        }
+        // Like `ED 0`, leave the cursor at `position`: callers (exit, fatal-error output) print
+        // from there.
+        queue!(self.backend, MoveTo(position.x, position.y))?;
+        Write::flush(&mut self.backend)?;
         // Reset the back buffer to make sure the next update will redraw everything.
         self.previous_buffer_mut().reset();
         Ok(())
@@ -801,6 +827,78 @@ mod tests {
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::Widget;
     use ratatui::widgets::Wrap;
+
+    /// #1340: clearing from the home position must not be a whole-screen erase, which tmux
+    /// (`scroll-on-clear`, default on) copies into scrollback; it still blanks every row.
+    #[test]
+    fn clear_after_home_position_erases_rows_without_a_whole_screen_clear() {
+        let width: u16 = 12;
+        let height: u16 = 3;
+        let mut terminal =
+            Terminal::with_options(crate::test_backend::VT100Backend::new(width, height))
+                .expect("terminal");
+        write!(
+            terminal.backend_mut(),
+            "popup row 1\r\npopup row 2\r\npopup row 3"
+        )
+        .expect("prefill terminal");
+
+        terminal
+            .clear_after_position(Position { x: 0, y: 0 })
+            .expect("clear");
+
+        assert_eq!(
+            terminal.backend().scroll_on_clear_saves(),
+            &[] as &[String],
+            "no whole-screen erase"
+        );
+        let rows: Vec<String> = terminal
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .collect();
+        assert_eq!(rows, vec![String::new(); usize::from(height)]);
+        assert_eq!(
+            terminal.backend().vt100().screen().cursor_position(),
+            (0, 0)
+        );
+    }
+
+    /// Like `ED 0`, a clear from a column keeps the cells before it on that row and the rows
+    /// above, and blanks the rest of the row and every row below.
+    #[test]
+    fn clear_after_position_keeps_cells_before_it() {
+        let width: u16 = 12;
+        let height: u16 = 4;
+        let mut terminal =
+            Terminal::with_options(crate::test_backend::VT100Backend::new(width, height))
+                .expect("terminal");
+        write!(
+            terminal.backend_mut(),
+            "history\r\nkeep|stale\r\nstale row\r\nstale row"
+        )
+        .expect("prefill terminal");
+
+        terminal
+            .clear_after_position(Position { x: 4, y: 1 })
+            .expect("clear");
+
+        let rows: Vec<String> = terminal
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .map(|row| row.trim_end().to_string())
+            .collect();
+        assert_eq!(rows, vec!["history", "keep", "", ""]);
+        assert_eq!(
+            terminal.backend().vt100().screen().cursor_position(),
+            (1, 4),
+            "like ED 0, the cursor stays at the position"
+        );
+        assert_eq!(terminal.backend().scroll_on_clear_saves(), &[] as &[String]);
+    }
 
     struct CaptureBackend {
         output: Vec<u8>,

@@ -1,0 +1,18 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace                 │
+╰──────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Permissive
+
+> Permissive  (active)
+  Moderate
+  Aggressive
+
+Your approval, sandbox, network, vault and agent settings apply as configured, except that protected launch (secretless_agent_launch) is on: agent
+commands never run outside the sandbox, even when you approve, so that is not offered.
+
+↑/↓ move · enter choose · esc close · i inspect

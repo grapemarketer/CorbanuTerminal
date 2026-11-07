@@ -1,0 +1,9 @@
+
+Saved: Permissive
+Restart Corbanu Terminal to activate Permissive. Until then this session stays Moderate.
+Core's level stays Moderate in this session and is Permissive from the next start; grants and "for session" approvals ended now.
+Restart now is not available: this session removed ZAI_API_KEY from its environment (the credential broker holds the key, or it was discarded when
+the broker could not start), so a restart from here would not have it. Quit Corbanu Terminal (/quit) and start it again from your shell to apply the
+saved level.
+
+enter or esc close · i inspect

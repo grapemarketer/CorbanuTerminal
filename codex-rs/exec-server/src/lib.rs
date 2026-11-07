@@ -34,6 +34,8 @@ mod runtime_paths;
 mod sandboxed_file_system;
 mod server;
 mod telemetry;
+#[cfg(test)]
+mod test_tracing;
 mod trace_context;
 mod websocket_pong_watchdog;
 

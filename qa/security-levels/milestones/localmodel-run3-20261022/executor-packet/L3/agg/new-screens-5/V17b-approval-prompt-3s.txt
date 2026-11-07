@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command: printf ok > cap-v.txt
+
+
+◦ Running printf ok > cap-v.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Grant once is not offered for this command: under security level Aggressive it only lifts the write protection of git hooks and config
+  kept outside a .git folder and, when the current folder holds your home folder, of start-up files, and nothing this command writes is protected
+  that way.
+
+  $ printf ok > cap-v.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `printf ok > cap-v.txt`
+  3. No, and tell Corbanu Terminal what to do differently (esc)
+
+  A letter in brackets only highlights its option; enter confirms it. Options that last beyond this request: choose with ↑/↓, then enter.
+  Press enter to confirm or esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -112,6 +112,19 @@ jobs:
           done
           df -h /
 
+      # The Linux sandbox expands unreadable globs with `rg` from PATH, and its
+      # regression tests require real ripgrep (#1376). Install the ripgrep the
+      # package ships: the sha256-pinned DotSlash manifest that rust-release.yml
+      # also fetches. /usr/local/bin is on Bazel's fixed Linux test PATH too.
+      - name: Install packaged ripgrep (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rg_bin="$(dotslash -- fetch "${GITHUB_WORKSPACE}/scripts/codex_package/rg")"
+          sudo install -m 0755 "${rg_bin}" /usr/local/bin/rg
+          rg --version
+
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}

@@ -143,7 +143,12 @@ impl WriterLockCoordinator {
             match file.try_lock() {
                 Ok(()) => {
                     // Release before close even if another descriptor still exists.
-                    let _ = file.unlock();
+                    if let Err(err) = file.unlock() {
+                        warn!(
+                            "failed to unlock stale thread writer lock {}: {err}",
+                            path.display()
+                        );
+                    }
                     drop(file);
                     if let Err(err) = fs::remove_file(&path)
                         && err.kind() != io::ErrorKind::NotFound
@@ -180,14 +185,19 @@ impl Drop for CoordinationLock {
     }
 }
 
-impl Drop for WriterLockGuard {
-    fn drop(&mut self) {
+impl WriterLockGuard {
+    fn cleanup(&mut self) {
         let coordination_lock = self.coordinator.lock_coordination();
         // Closing alone can leave the lock held through an inherited descriptor.
         // Release it even if coordinating the pathname cleanup failed. On the
         // successful path, the coordination lock still protects cleanup below.
-        if let Some(file) = self.file.take() {
-            let _ = file.unlock();
+        if let Some(file) = self.file.take()
+            && let Err(err) = file.unlock()
+        {
+            warn!(
+                "failed to unlock thread writer lock {}: {err}",
+                self.path.display()
+            );
         }
         let coordination_lock = match coordination_lock {
             Ok(lock) => lock,
@@ -207,6 +217,12 @@ impl Drop for WriterLockGuard {
             );
         }
         drop(coordination_lock);
+    }
+}
+
+impl Drop for WriterLockGuard {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 

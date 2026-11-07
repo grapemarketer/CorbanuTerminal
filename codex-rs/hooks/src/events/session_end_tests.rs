@@ -50,6 +50,7 @@ fn session_end_ignores_successful_output() {
             stdout: r#"{"continue":false,"decision":"block","reason":"ignored"}"#.to_string(),
             stderr: String::new(),
             error: None,
+            start_failed: false,
         },
         /*turn_id*/ None,
     );

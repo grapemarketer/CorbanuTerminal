@@ -51,6 +51,7 @@ async fn refresh_without_id_token() {
     );
     let updated = super::persist_tokens(
         &storage,
+        /*refreshed_from*/ "unused-for-the-default-login",
         /*id_token*/ None,
         Some("new-access-token".to_string()),
         Some("new-refresh-token".to_string()),
@@ -1413,6 +1414,41 @@ async fn provider_auth_command_validation_preserves_actionable_failures() {
     assert!(error.to_string().contains("exited with status"));
 }
 
+// Keep the same writable-file condition as an inherited descriptor without
+// depending on a concurrent fork landing in a timing window.
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_auth_fixture_accepts_token_while_script_is_open_for_writing() {
+    let script = ProviderAuthScript::new(&["provider-token"]).unwrap();
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(script.tempdir.path().join("print-token.sh"))
+        .unwrap();
+
+    crate::auth::validate_provider_auth_command(&script.auth_config())
+        .await
+        .expect("the interpreter should read the fixture while its write descriptor is open");
+
+    drop(writer);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_auth_fixture_preserves_failure_while_script_is_open_for_writing() {
+    let script = ProviderAuthScript::new_failing().unwrap();
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(script.tempdir.path().join("fail.sh"))
+        .unwrap();
+
+    let error = crate::auth::validate_provider_auth_command(&script.auth_config())
+        .await
+        .expect_err("the fixture should still exit unsuccessfully");
+
+    assert!(error.to_string().contains("exited with status"));
+    drop(writer);
+}
+
 /// Writes `name` in a temp dir: prints `stderr` to stderr and fails.
 #[cfg(unix)]
 fn failing_helper(
@@ -1656,13 +1692,9 @@ tail -n +2 tokens.txt > tokens.next
 mv tokens.next tokens.txt
 "#,
             )?;
-            let mut permissions = std::fs::metadata(&script_path)?.permissions();
-            {
-                use std::os::unix::fs::PermissionsExt;
-                permissions.set_mode(0o755);
-            }
-            std::fs::set_permissions(&script_path, permissions)?;
-            ("./print-token.sh".to_string(), Vec::new())
+            // Execute the stable interpreter, not a just-written script whose write
+            // descriptor another test's fork may still hold (ETXTBSY on Linux).
+            ("/bin/sh".to_string(), vec!["./print-token.sh".to_string()])
         };
 
         #[cfg(windows)]
@@ -1716,13 +1748,7 @@ move /y tokens.next tokens.txt >nul
 exit 1
 "#,
             )?;
-            let mut permissions = std::fs::metadata(&script_path)?.permissions();
-            {
-                use std::os::unix::fs::PermissionsExt;
-                permissions.set_mode(0o755);
-            }
-            std::fs::set_permissions(&script_path, permissions)?;
-            ("./fail.sh".to_string(), Vec::new())
+            ("/bin/sh".to_string(), vec!["./fail.sh".to_string()])
         };
 
         #[cfg(windows)]
@@ -1750,7 +1776,11 @@ exit 1
             "args": self.args,
             // Process startup can be slow on loaded Windows CI workers, so leave enough slack to
             // avoid turning these auth-cache assertions into a process-launch timing test.
-            "timeout_ms": 10_000,
+            // #1201: 10 s was not enough. On the native Windows lane, `cmd.exe` helper runs
+            // that take ~20 ms took 1.5-4.4 s, and occasionally over 10 s, while Bazel built
+            // other targets (such as `core-unit-tests-bin`) next to this binary. No test here
+            // exercises the timeout; the product default stays 5 s.
+            "timeout_ms": 60_000,
             "refresh_interval_ms": 60000,
             "cwd": self.tempdir.path(),
         }))

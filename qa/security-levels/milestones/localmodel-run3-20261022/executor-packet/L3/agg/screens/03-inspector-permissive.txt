@@ -1,0 +1,31 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     glm-5.3-flash   /model to change              │
+│ directory: ~/runs/cap-20261010T224124Z/fixture/workspace │
+╰──────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+○ Permissive: no protection added by /security
+Observed 2s ago, policy generation 0.0
+
+Level
+  Saved: Permissive (nothing saved) [configured: /security]
+  Core config: Permissive [configured: config layers]
+  [set] Active this run: Permissive [resolved: launch check]
+  [on] Live policy: Permissive in force; next start Permissive; kill switch off; generation 0.0 [observed: Core policy]
+
+This session
+  [set] Sandbox: commands can write to the current folder, /private/tmp, /Users/agmx0/runs/cap-20261010T224124Z/tmp; approved or allow-listed commands
+      can run outside the sandbox; permission-request tools are off [resolved: session config]
+  [set] Approvals: on-request (reviewer: you) [resolved: session config]
+  [set] Network: off inside the sandbox, on for commands that run outside it; web search cached [resolved: session config]
+  [set] Vault: the vault store and sign-in file are readable to agent commands; secret-like environment variables are passed through (KEY, SECRET,
+      TOKEN, VAULT, PASSWORD, PASSPHRASE, CREDENTIAL); login profiles and shell snapshots are not used [resolved: session config]
+  [set] Model keys: Corbanu reads provider keys itself (broker_model_auth off) [resolved: session config]
+  [set] Child agents: spawned agents get this session's values [resolved: session config]
+  [set] Sandbox backend: macOS Seatbelt [resolved: platform]
+  [set] Egress destinations: proxy destination policy on (url_destination_policy) [resolved: features]
+
+Runtime controls
+↑/↓ scroll · r refresh · esc back to /security

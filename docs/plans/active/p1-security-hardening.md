@@ -249,6 +249,8 @@ Windows records need a real Windows machine for this step.
 
 ## Human acceptance
 
+2026-10-22 owner update: [D182–D185](../../../qa/security-levels/milestones/localmodel-run3-20261022/owner-decisions-20261022.md) accept MOD-11's observed behavior with its setup deviations disclosed, accept AGG-20P-A's command-dependent wording differences, and record MOD-21's evidenced pass. The accepted Aggressive disposition is 62/0/2, including D183's exception; Moderate is 32 passed and 2 accepted of 34 when acceptance is counted separately, or 33 passed and 1 accepted under D182's owner disposition; MOD-11's deviations and D43 limit remain explicit. Original run outcomes and prior sign-off records below remain unchanged; no new release sign-off is asserted.
+
 | Milestone | Tester | Result |
 | --- | --- | --- |
 | Aggressive ships | Travis Good | **Signed off 2026-10-16** (D10, comment on #867) on the third targeted re-run ([record](../../../qa/security-levels/milestones/aggressive-20261015-targeted3/README.md), #868: 58 passed, 0 failed, 2 blocked, 4 accepted of 64), with the known limits in the milestone row above; since then (D110, D113, [#1191](https://github.com/CorbanuCore/CorbanuTerminal/pull/1191)) 61 passed, 0 failed, 3 blocked of 64, sign-off unchanged |

@@ -182,10 +182,6 @@ fn return_to_permissive_while_aggressive_is_active() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
-)]
 fn unreadable_state_is_reported_and_aggressive_selected() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -199,8 +195,11 @@ fn unreadable_state_is_reported_and_aggressive_selected() {
         /*preflight_input*/ None,
         RuntimeKeymap::defaults().list,
     );
-    let rendered =
-        render(&picker, /*width*/ 400).replace(&home.path().display().to_string(), "<home>");
+    // The state file's full path, so the snapshot holds on Windows too (#691).
+    let rendered = render(&picker, /*width*/ 400).replace(
+        &level::state_path(home.path()).display().to_string(),
+        "<home>/security_level.toml",
+    );
     insta::assert_snapshot!("security_level_picker_unreadable", rendered);
 }
 
@@ -450,6 +449,60 @@ mod pf_29_s01 {
         // The refreshed review can now be confirmed.
         picker.handle_key_event(key(KeyCode::Enter));
         assert_eq!(saved_level(&picker), Some(ChosenLevel::Aggressive));
+    }
+
+    /// #802: Corbanu's own start-up writes to its databases and history
+    /// between the review and the confirmation do not refuse the save.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so readiness is never clean (#691)"
+    )]
+    fn pf_29_s01_corbanu_own_writes_after_review_still_save() {
+        let machine = Machine::new();
+        let corbanu = machine.corbanu();
+        std::fs::write(corbanu.join("pfterminal_logs_2.sqlite"), "one").unwrap();
+        let mut picker = machine.picker(/*flags_on*/ true, ChosenLevel::Permissive);
+        review_aggressive(&mut picker);
+        std::fs::write(corbanu.join("pfterminal_logs_2.sqlite"), "one, two").unwrap();
+        std::fs::write(corbanu.join("pfterminal_state_5.sqlite"), "state").unwrap();
+        std::fs::create_dir_all(corbanu.join("sessions/2026")).unwrap();
+        picker.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(
+            saved_level(&picker),
+            Some(ChosenLevel::Aggressive),
+            "{}",
+            text(&picker)
+        );
+    }
+
+    /// #1428: a symlink placed at a database's `-wal` file between the
+    /// review and the confirmation refuses the save, while Corbanu's own
+    /// writes to that file do not.
+    #[cfg(unix)]
+    #[test]
+    fn pf_29_s01_symlinked_database_side_file_after_review_refuses_save() {
+        let machine = Machine::new();
+        let corbanu = machine.corbanu();
+        std::fs::write(corbanu.join("pfterminal_state_5.sqlite"), "pages").unwrap();
+        std::fs::write(corbanu.join("pfterminal_state_5.sqlite-wal"), "one").unwrap();
+        std::fs::write(machine.home().join("secret.txt"), "TOKEN=1").unwrap();
+        let mut picker = machine.picker(/*flags_on*/ true, ChosenLevel::Permissive);
+        review_aggressive(&mut picker);
+        std::fs::write(corbanu.join("pfterminal_state_5.sqlite-wal"), "one, two").unwrap();
+        std::os::unix::fs::symlink(
+            machine.home().join("secret.txt"),
+            corbanu.join("pfterminal_state_5.sqlite-shm"),
+        )
+        .unwrap();
+        picker.handle_key_event(key(KeyCode::Enter));
+        assert_eq!(picker.screen, Screen::Review(ChosenLevel::Aggressive));
+        assert!(
+            text(&picker).contains("Not saved: 1 item changed since you reviewed this."),
+            "{}",
+            text(&picker)
+        );
+        assert_eq!(level::load(&machine.corbanu()), StoredLevel::Absent);
     }
 
     /// Toggling nested agents on a saved Aggressive skips the preflight only
@@ -798,7 +851,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_aggressive_raises_core_and_offers_restart() {
         let machine = Machine::new();
@@ -838,7 +891,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn issue_739_downgrade_under_protected_launch_keeps_corbanu_files_denied() {
         let machine = Machine::new();
@@ -869,7 +922,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_downgrade_shows_removed_protections_first() {
         let machine = Machine::new();
@@ -928,7 +981,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_downgrade_never_restarts_without_the_environment_key() {
         let machine = Machine::new();
@@ -959,7 +1012,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_write_failure_keeps_the_view_open() {
         let machine = Machine::new();
@@ -992,7 +1045,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_state_changed_elsewhere_reviews_again() {
         let machine = Machine::new();
@@ -1023,7 +1076,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_level_file_edited_by_an_agent_is_caught() {
         let machine = Machine::new();
@@ -1077,7 +1130,7 @@ mod pf_24_s02 {
     #[test]
     #[cfg_attr(
         windows,
-        ignore = "Aggressive cannot be fully applied on a Windows test machine without the Windows sandbox (#691)"
+        ignore = "PF-27-S06: protected launch is not available on Windows yet, so the preflight never passes and Aggressive is never confirmed with Core (#691)"
     )]
     fn security_confirm_saving_screen_until_the_commit_finishes() {
         let machine = Machine::new();

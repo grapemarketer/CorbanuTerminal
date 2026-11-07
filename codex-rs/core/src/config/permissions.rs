@@ -247,7 +247,7 @@ fn insert_filesystem_permission_toml(
                 FilesystemPermissionToml::Access(entry.access),
             );
         }
-        FileSystemPath::GlobPattern { pattern } => {
+        FileSystemPath::GlobPattern { pattern, .. } => {
             entries.insert(pattern, FilesystemPermissionToml::Access(entry.access));
         }
         FileSystemPath::Special { value } => {
@@ -546,6 +546,7 @@ fn compile_filesystem_permission(
                     // exact-path parser so existing path semantics stay intact.
                     let entry = FileSystemSandboxEntry {
                         path: FileSystemPath::GlobPattern {
+                            scan: None,
                             pattern: compile_scoped_filesystem_pattern(path, subpath, *access)?,
                         },
                         access: *access,
@@ -581,6 +582,7 @@ fn compile_filesystem_access_path(
         // becoming policy patterns; relative project-root glob syntax is
         // handled by `compile_scoped_filesystem_pattern`.
         return Ok(FileSystemPath::GlobPattern {
+            scan: None,
             pattern: parse_absolute_path(path)?.to_string_lossy().into_owned(),
         });
     }

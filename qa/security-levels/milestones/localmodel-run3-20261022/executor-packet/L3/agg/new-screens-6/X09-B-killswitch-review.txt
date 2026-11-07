@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/…/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Grants and kill switch
+Core's level: Aggressive · Kill switch: off
+
+Turn the kill switch on?
+Everything "Revoke all" ends, and work running now in every pane of this Corbanu Terminal stops, Claude panes included: a reply in progress is
+cancelled and its commands are stopped, as when you interrupt it, and background terminals end.
+Until you turn it off here: this Corbanu Terminal sends nothing to the model (each new turn is refused with a message saying so), messages and
+tasks from other agents wait (a Claude pane keeps only the newest task; a task for a Corbanu pane you opened yourself in /panes is refused instead),
+assignments and whips are paused, no grant can be issued, protected actions after untrusted content are refused, the browser and memory writes are
+refused, and the credential broker stays closed. Another Corbanu Terminal on this home takes the switch when it next starts.
+Other Corbanu Terminals running on this home take it too, within about a second: their running work stops the same way and they refuse new turns.
+Saved in security_state.json: it holds after a restart. The level stays Aggressive. Turning it off later restarts nothing: work resumes only when
+someone acts.
+
+enter confirm · esc cancel, nothing changes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

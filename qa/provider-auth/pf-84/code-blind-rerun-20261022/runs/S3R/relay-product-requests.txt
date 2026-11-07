@@ -1,0 +1,10 @@
+09:28:06  passthrough_error  chatgpt.com:443          
+09:28:06  passthrough_error  chatgpt.com:443          
+09:29:44  passthrough_error  chatgpt.com:443          
+09:29:45  passthrough_error  chatgpt.com:443          
+09:32:37  passthrough_error  chatgpt.com:443          
+09:32:38  passthrough_error  chatgpt.com:443          
+09:38:28  passthrough_error  chatgpt.com:443          
+09:38:28  passthrough_error  chatgpt.com:443          
+09:38:35  forwarded  zai  /api/paas/v4/chat/completions  200  zadded  glm-5.3-flash  
+09:38:44  passthrough_error  chatgpt.com:443          

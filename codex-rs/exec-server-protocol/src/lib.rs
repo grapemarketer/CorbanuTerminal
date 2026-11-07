@@ -3,6 +3,10 @@ mod process_id;
 mod protocol;
 pub mod rpc;
 
+#[cfg(test)]
+#[path = "glob_scan_transport_tests.rs"]
+mod glob_scan_transport_tests;
+
 pub use network_policy::*;
 pub use process_id::ProcessId;
 pub use protocol::*;

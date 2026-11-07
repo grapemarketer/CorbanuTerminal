@@ -336,10 +336,13 @@ pub(crate) fn sandbox_override_for_first_attempt(
 /// Denied reads only exist inside the sandbox. If a policy contains any
 /// denied-read paths, bypassing the sandbox would silently grant those reads,
 /// so escalation must keep the command sandboxed with the denied reads intact.
+/// #807: so does keeping the macOS keychain services away (#758), by itself
+/// (it denies no file read).
 pub(crate) fn unsandboxed_execution_allowed(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> bool {
     !file_system_sandbox_policy.has_denied_read_restrictions()
+        && !(cfg!(target_os = "macos") && file_system_sandbox_policy.denies_keychain_services())
 }
 
 pub(crate) fn sandbox_permissions_preserving_denied_reads(

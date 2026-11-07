@@ -182,6 +182,18 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
+    complete_device_code_login_with_persistence_guard(opts, device_code, || Ok(())).await
+}
+
+/// Completes device authorization, then calls `before_persist` immediately before
+/// starting credential persistence. A cancellable caller must atomically stop
+/// accepting cancellation in this guard: a started blocking save cannot be
+/// aborted. A guard error leaves the credentials unsaved.
+pub async fn complete_device_code_login_with_persistence_guard(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    before_persist: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
     let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
@@ -219,6 +231,7 @@ pub async fn complete_device_code_login(
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
     }
 
+    before_persist()?;
     crate::server::persist_tokens_async(
         &opts.codex_home,
         /*api_key*/ None,

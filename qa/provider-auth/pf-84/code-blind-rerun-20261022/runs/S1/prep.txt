@@ -1,0 +1,7 @@
+=== home oai1 2026-10-22T08:20:36Z
+$ corbanu login --with-api-key   (key agms-fake-odefault-NNNN on stdin)
+Reading API key from stdin...
+Successfully logged in
+--- account list (oai1)
+No named accounts. Every provider uses its default account.
+prep done 2026-10-22T08:20:36Z

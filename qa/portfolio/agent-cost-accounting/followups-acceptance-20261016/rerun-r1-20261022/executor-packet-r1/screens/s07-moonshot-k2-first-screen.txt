@@ -1,0 +1,34 @@
+Cost — this conversation
+Requested UTC day: 2026-10-15
+Today (UTC) in this conversation:
+• kimi · kimi-k2.7-code — Pay per use. 1 request, 11,572 tokens. Estimated cost: $0.011027 (rounded).
+No other conversation recorded requests on this day.
+Costs are estimates from published prices; kimi doesn't report its charges — check kimi's bill.
+Select a provider below to see its requests.
+—— Details ——
+Estimated token cost for recorded attempts: $0.011027 (rounded)
+Collection coverage: unknown; recorded root and resolved descendants only. Unknown parent population excluded.
+Logical requests may have attempts on other days; this UTC day is not their complete lifetime.
+Snapshot is not current; newer activity is unverified
+Day covered (UTC): [2026-10-15T00:00:00.000Z, 2026-10-16T00:00:00.000Z)
+Read at: 2026-10-15T22:08:11.885Z; ledger current to: 2026-10-15T22:07:46.482Z (25403 ms behind)
+Retention: request detail kept since 2026-07-17T22:08:11.885Z; daily totals kept since 2025-10-16; oldest recorded day in this conversation 2026-10-15
+Known subtotal exact USD: 0.01102695
+Input: 11,561
+Noncached input (derived for inclusive input): 11,561
+Cache read: 0
+Cache write: 0
+Output: 11
+Reasoning (subset, not separately billed): 8
+Total (not separately billed): 11,572
+Root total = own attempts + resolved descendant attempts. Provider/model groups partition the same root total. Compare exact USD, not rounded displays.
+Unknown parent population: 0 attempts, excluded from root total
+—— Open ——
+→ kimi · kimi-k2.7-code — estimated $0.011027 (rounded) (1 request)
+→ Request 1 · kimi · kimi-k2.7-code · estimated $0.011027 (rounded)
+→ Root's own attempts (1 attempt)
+→ Descendant attempts (none)
+→ Unknown provider/model attribution (none)
+→ Unknown parent population (none)
+Refresh
+Close

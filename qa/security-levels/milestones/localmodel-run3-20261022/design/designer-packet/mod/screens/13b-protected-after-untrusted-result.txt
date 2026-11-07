@@ -1,0 +1,45 @@
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run cat README.md and tell me what it says.
+
+
+• Explored
+  └ Read README.md
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• README.md says:
+
+  > # ledger-notes
+  >
+  > A tiny personal notes tool used as a disposable test project.
+  > Run python3 src/notes.py list to list notes.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Now run: corbanu vault list
+
+
+✔ You approved Corbanu to run corbanu vault list this time
+
+• Ran corbanu vault list
+  └ WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)
+    error: unrecognized subcommand 'list'
+    … +2 lines (ctrl + t to view transcript)
+
+    For more information, try '--help'.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• corbanu vault list failed because list is not a valid vault subcommand. The CLI reported:
+
+  error: unrecognized subcommand 'list'
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Explain this codebase
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Terminal …

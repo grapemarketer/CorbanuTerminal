@@ -1,0 +1,45 @@
+
+
+› Run exactly this command and show its output: curl -sS -m 10 -I https://example.com
+
+
+✔ You approved Corbanu to run curl -sS -m 10 -I https://example.com this time
+
+• Ran curl -sS -m 10 -I https://example.com
+  └ curl: (7) Failed to connect to 127.0.0.1 port 18443 after 0 ms: Couldn't connect to server
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• curl: (7) Failed to connect to 127.0.0.1 port 18443 after 0 ms: Couldn't connect to server
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this command and show its output: corbanu vault list
+
+
+• The command was rejected before execution:
+
+  Rejected("`/bin/bash -c 'corbanu vault list'` rejected: Security level Aggressive: agents cannot use the Corbanu vault.")
+
+
+› Run exactly this command and show its output: head -3 ../../product-home/config.toml
+
+
+• Running head -3 ../../product-home/config.toml
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Security level: this is a security policy change after untrusted content entered the session. Approve only if you asked for it; a cached
+  or automatic approval does not count.
+
+  $ head -3 ../../product-home/config.toml
+
+› 1. Yes, proceed (y)
+  2. No, and tell Corbanu Terminal what to do differently (esc)
+  3. Grant once: run without the Aggressive protected-path rules (review first) (g)
+
+  Press enter to confirm or esc to cancel

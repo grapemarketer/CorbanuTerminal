@@ -1,0 +1,7 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+Unavailable — your system clock reads earlier than the day this view shows (less than a minute before it starts). This is not a sign of damage; nothing was read or changed. Next step: check your system date and time, then select Refresh, or close this view and run <cost command> again for the clock's current day.
+Unavailable — your system clock reads earlier than the day this view shows (about 3 hours before it starts). This is not a sign of damage; nothing was read or changed. Next step: check your system date and time, then select Refresh, or close this view and run <cost command> again for the clock's current day.
+Unavailable — your system clock reads earlier than the day this view shows (about 6 days before it starts). This is not a sign of damage; nothing was read or changed. Next step: check your system date and time, then select Refresh, or close this view and run <cost command> again for the clock's current day.

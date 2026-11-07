@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: "render_bottom_popup(&chat, 100)"
+---
+  Possibly planted project folders
+
+  These folders appeared while a non-admin Windows sandbox command ran, so a command may have
+  planted them. Corbanu Terminal isn't loading their config, hooks or skills:
+    project/.codex
+    project/.agents
+  Check their contents before you load them.
+
+› 1. Keep ignoring them  Ask again next time
+  2. Load them           I checked them; load them from the next start
+
+  Press enter to confirm or esc to go back

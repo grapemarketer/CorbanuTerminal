@@ -77,7 +77,7 @@ pause = 2.0
 [[steps]]
 key = "Enter"
 [[steps]]
-wait = "Use for this session"
+wait = "Start a new session on this account"
 [[steps]]
 key = "Enter"
 [[steps]]

@@ -1,0 +1,6 @@
+=== home zainokey 2026-10-21T23:48:29Z
+$ corbanu account add zai work   (key agms-fake-zwork-NNNN on stdin)
+Saved zai account `work` (api_key).
+--- account list (zainokey)
+zai	work	api_key
+prep done 2026-10-21T23:48:30Z

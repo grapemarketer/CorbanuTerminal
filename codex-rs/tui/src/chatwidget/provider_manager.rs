@@ -18,6 +18,10 @@ use crate::provider_named_accounts::ProviderAccountEvent;
 
 const MANAGER_VIEW_ID: &str = "provider-manager";
 
+#[cfg(test)]
+#[path = "provider_manager_status_account_tests.rs"]
+mod status_account_tests;
+
 impl ChatWidget {
     pub(crate) fn open_provider_manager_api_key(
         &mut self,
@@ -126,8 +130,8 @@ impl ChatWidget {
         let mut items = Vec::new();
         if accounts.session_account(&provider_id) != name.as_str() {
             items.push(account_event_item(
-                "Use for this session",
-                "Start a new session whose requests to this provider use this account.",
+                "Start a new session on this account",
+                "Leaves this conversation as it is; the new session's requests to this provider use this account.",
                 ProviderAccountEvent::UseForSession {
                     provider_id: provider_id.clone(),
                     name: Some(name.clone()),
@@ -173,6 +177,7 @@ impl ChatWidget {
         methods: Vec<crate::provider_named_accounts::AddAccountMethod>,
     ) {
         let tx = self.app_event_tx.clone();
+        let refused_tx = self.app_event_tx.clone();
         let title = match &rename_from {
             Some(from) => format!("Rename {provider_display_name} account `{from}`"),
             None => format!("Add a {provider_display_name} account"),
@@ -216,7 +221,19 @@ impl ChatWidget {
                 };
                 tx.send(AppEvent::ProviderAccount(event));
             }),
-        );
+        )
+        // #1289: Enter submits the name even right after fast typing; a
+        // newline would leave the next (secret) input in this clear field.
+        // Input sent together with the submit (a key) is held, not passed
+        // on to whatever the submit opens, and the name is refused.
+        .with_submit_mode(
+            crate::bottom_pane::custom_prompt_view::CustomPromptSubmitMode::EnterSingleLine,
+        )
+        .with_on_refused(Box::new(move || {
+            refused_tx.send(AppEvent::ProviderAccount(ProviderAccountEvent::Finished {
+                result: Err(codex_vault::ProviderAccountError::InvalidName.to_string()),
+            }));
+        }));
         self.bottom_pane.show_view(Box::new(view));
     }
 
@@ -399,7 +416,11 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from(entry.display_name.clone().bold()));
         header.push(Line::from(status_description(status)));
-        if status.configuration == ProviderConfigurationState::Configured {
+        if is_unchecked_local_runtime(status) {
+            header.push(Line::from(
+                "Local server: not checked; the first request shows whether it is running.",
+            ));
+        } else if status.configuration == ProviderConfigurationState::Configured {
             header.push(Line::from(
                 "Credentials are present; a successful request is needed to verify access.",
             ));
@@ -694,8 +715,8 @@ fn push_default_account_items(
     ));
     if accounts.session_account(provider_id) != codex_vault::DEFAULT_PROVIDER_ACCOUNT {
         items.push(account_event_item(
-            "Use default account for this session",
-            "Start a new session whose requests use this provider's default account.",
+            "Start a new session on the default account",
+            "Leaves this conversation as it is; the new session's requests use this provider's default account.",
             ProviderAccountEvent::UseForSession {
                 provider_id: provider_id.to_string(),
                 name: None,
@@ -737,6 +758,11 @@ fn policy_item(
 fn status_description(status: &ProviderStatusSnapshot) -> String {
     let state = match status.configuration {
         ProviderConfigurationState::Configured => match status.eligibility {
+            // Ollama and LM Studio are never probed (no credential, no startup
+            // request), so their row must not claim more than that.
+            ProviderEligibilityState::Active if is_unchecked_local_runtime(status) => {
+                "Enabled · local (not checked)"
+            }
             ProviderEligibilityState::Active => "Enabled · configured",
             ProviderEligibilityState::Inactive => "Inactive",
             _ => "Configured",
@@ -754,6 +780,21 @@ fn status_description(status: &ProviderStatusSnapshot) -> String {
         current.unwrap_or(""),
         unavailable.unwrap_or("")
     )
+}
+
+/// A local runtime (Ollama, LM Studio) is reported configured without any
+/// probe: nothing is checked until a request is sent to it.
+pub(super) fn is_unchecked_local_runtime(status: &ProviderStatusSnapshot) -> bool {
+    status.methods.iter().any(|method| {
+        matches!(method.capability, ProviderSetupCapability::Local { .. })
+            && matches!(
+                method.state,
+                ProviderMethodState::Configured {
+                    source: codex_provider_auth::ProviderCredentialSource::Local,
+                    ..
+                }
+            )
+    })
 }
 
 fn credential_control_note(status: &ProviderStatusSnapshot) -> Option<&'static str> {
@@ -809,6 +850,188 @@ fn setup_description(capability: &ProviderSetupCapability) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn type_keys(chat: &mut ChatWidget, keys: &[crossterm::event::KeyCode]) {
+        for key in keys {
+            chat.handle_key_event(crossterm::event::KeyEvent::new(
+                *key,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+    }
+
+    /// #1289: the name prompt submits once input has been quiet for
+    /// `SINGLE_LINE_SUBMIT_HOLD`; wait that out and run what the app's draw
+    /// loop runs (paste-burst flush, then the pre-draw tick).
+    fn wait_out_submit_hold(chat: &mut ChatWidget) {
+        std::thread::sleep(
+            crate::bottom_pane::custom_prompt_view::SINGLE_LINE_SUBMIT_HOLD
+                + std::time::Duration::from_millis(50),
+        );
+        if !chat.handle_paste_burst_tick(crate::tui::FrameRequester::test_dummy()) {
+            chat.pre_draw_tick();
+        }
+    }
+
+    fn open_zai_name_prompt(chat: &mut ChatWidget) {
+        chat.open_provider_account_name_prompt(
+            "Z.AI",
+            "zai".to_string(),
+            /*rename_from*/ None,
+            vec![crate::provider_named_accounts::AddAccountMethod::ApiKey],
+        );
+    }
+
+    /// #1289: typing the name and pressing Enter at once (as fast as a paste)
+    /// moves on to the key entry; the Enter is not taken as a newline.
+    #[tokio::test]
+    async fn add_account_name_enter_right_after_typing_submits() {
+        use crossterm::event::KeyCode;
+        let (mut chat, _tx, mut rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        chat.open_provider_account_name_prompt(
+            "Z.AI",
+            "zai".to_string(),
+            /*rename_from*/ None,
+            vec![crate::provider_named_accounts::AddAccountMethod::ApiKey],
+        );
+        let mut keys: Vec<KeyCode> = "work".chars().map(KeyCode::Char).collect();
+        keys.push(KeyCode::Enter);
+        type_keys(&mut chat, &keys);
+        wait_out_submit_hold(&mut chat);
+
+        let Ok(AppEvent::ProviderAccount(ProviderAccountEvent::AddNamed {
+            provider_id,
+            name,
+            method,
+        })) = rx.try_recv()
+        else {
+            let popup =
+                crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+            panic!("one Enter must submit the name; the prompt still shows:\n{popup}");
+        };
+        assert_eq!(
+            (provider_id.as_str(), name.as_str(), method),
+            (
+                "zai",
+                "work",
+                crate::provider_named_accounts::AddAccountMethod::ApiKey
+            )
+        );
+    }
+
+    /// #1289: a name holding a newline (a paste) is refused before the key
+    /// entry opens, and the refusal does not echo what was entered.
+    #[tokio::test]
+    async fn add_account_name_with_a_newline_is_refused_before_key_entry() {
+        let (mut chat, _tx, mut rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        chat.open_provider_account_name_prompt(
+            "Z.AI",
+            "zai".to_string(),
+            /*rename_from*/ None,
+            vec![crate::provider_named_accounts::AddAccountMethod::ApiKey],
+        );
+        chat.handle_paste("work\npf1289-not-a-real-key".to_string());
+        let shown =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(
+            !shown.contains("pf1289"),
+            "only the first pasted line may be shown:\n{shown}"
+        );
+        type_keys(&mut chat, &[crossterm::event::KeyCode::Enter]);
+        wait_out_submit_hold(&mut chat);
+
+        let Ok(AppEvent::ProviderAccount(ProviderAccountEvent::Finished { result })) =
+            rx.try_recv()
+        else {
+            panic!("a name with a newline must be refused");
+        };
+        let error = result.expect_err("refused");
+        assert!(error.starts_with("invalid account name"), "{error}");
+        assert!(!error.contains("pf1289"), "{error}");
+        assert!(rx.try_recv().is_err(), "nothing may follow the refusal");
+    }
+
+    /// #1337 review: Ctrl+J (an editor newline key, and what a raw-mode
+    /// terminal can report for a pasted line feed) submits the name like
+    /// Enter. The key typed next goes to the masked entry, never in clear.
+    #[tokio::test]
+    async fn add_account_name_ctrl_j_submits_and_the_key_stays_masked() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        let (mut chat, _tx, mut rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        open_zai_name_prompt(&mut chat);
+        let keys: Vec<KeyCode> = "work".chars().map(KeyCode::Char).collect();
+        type_keys(&mut chat, &keys);
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        wait_out_submit_hold(&mut chat);
+
+        let Ok(AppEvent::ProviderAccount(ProviderAccountEvent::AddNamed {
+            provider_id,
+            name,
+            method,
+        })) = rx.try_recv()
+        else {
+            let keys: Vec<KeyCode> = "sk-fake-0000".chars().map(KeyCode::Char).collect();
+            type_keys(&mut chat, &keys);
+            let popup =
+                crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+            panic!("Ctrl+J must submit the name; after typing a key the prompt shows:\n{popup}");
+        };
+        // What the app does with AddNamed for an API-key account.
+        chat.open_provider_account_value_entry("Z.AI", provider_id, name, method);
+        let keys: Vec<KeyCode> = "sk-fake-0000".chars().map(KeyCode::Char).collect();
+        type_keys(&mut chat, &keys);
+
+        let shown =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(!shown.contains("sk-fake"), "{shown}");
+        assert_eq!(chat.composer_text_with_pending(), "");
+    }
+
+    /// #1337 review: a key sent in the same burst as the name and its Enter
+    /// reaches nothing: not the chat composer, not a view under the prompt.
+    /// The prompt keeps it out, refuses with the fixed text and saves nothing.
+    #[tokio::test]
+    async fn add_account_name_keys_right_after_enter_reach_nothing() {
+        use crossterm::event::KeyCode;
+        let (mut chat, _tx, mut rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        open_zai_name_prompt(&mut chat);
+        let mut keys: Vec<KeyCode> = "work".chars().map(KeyCode::Char).collect();
+        keys.push(KeyCode::Enter);
+        keys.extend("sk-fake-0000".chars().map(KeyCode::Char));
+        type_keys(&mut chat, &keys);
+
+        let shown =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(!shown.contains("sk-fake"), "{shown}");
+        wait_out_submit_hold(&mut chat);
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        let shown =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert_eq!(
+            chat.composer_text_with_pending(),
+            "",
+            "events: {events:?}\n{shown}"
+        );
+        assert!(!shown.contains("sk-fake"), "{shown}");
+        assert!(!chat.has_active_view(), "{shown}");
+        let [AppEvent::ProviderAccount(ProviderAccountEvent::Finished { result: Err(error) })] =
+            events.as_slice()
+        else {
+            panic!("only the refusal may be sent: {events:?}");
+        };
+        assert!(error.starts_with("invalid account name"), "{error}");
+        assert!(!error.contains("sk-fake"), "{error}");
+    }
 
     #[tokio::test]
     async fn configured_credentials_can_be_replaced_while_active_or_inactive() {
@@ -1016,6 +1239,23 @@ mod tests {
         let rendered =
             crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 100);
         insta::assert_snapshot!("provider_manager_account_actions", rendered);
+        // D174: choosing another account starts a new session, and says so.
+        chat.open_provider_account_actions(&claude, &accounts.rows[0], &accounts);
+        let rendered =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 120);
+        insta::assert_snapshot!("provider_manager_account_actions_new_session", rendered);
+        let mut items = Vec::new();
+        push_default_account_items(&mut items, "zai", &accounts);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.name == "Start a new session on the default account"),
+            "{:?}",
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>()
+        );
 
         chat.open_provider_account_removal(
             &zai,
@@ -1101,6 +1341,122 @@ mod tests {
             Ok(AppEvent::OpenProviderManagerActions { provider_id }) if provider_id == entry.id
         ));
         assert_eq!(chat.provider_manager_selected_index(), Some(0));
+    }
+
+    /// #1288: /providers shows eight rows at a time; when there are more, the
+    /// popup says which row is selected out of how many.
+    #[tokio::test]
+    async fn provider_manager_shows_position_when_rows_exceed_the_window() {
+        let (mut chat, _tx, _rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        let catalog = ProviderCatalog::from_runtime_providers(&chat.config_ref().model_providers);
+        let statuses = catalog
+            .entries()
+            .iter()
+            .map(|entry| ProviderStatusSnapshot {
+                id: entry.id.clone(),
+                methods: Vec::new(),
+                configuration: ProviderConfigurationState::Configured,
+                eligibility: ProviderEligibilityState::Active,
+                current: ProviderCurrentState::NotCurrent,
+                availability: ProviderAvailabilityState::Ready,
+            })
+            .collect::<Vec<_>>();
+        let total = provider_manager_rows(&catalog, &statuses, /*accounts*/ None).len();
+        assert!(
+            total > crate::bottom_pane::popup_consts::MAX_POPUP_ROWS,
+            "{total} rows"
+        );
+
+        chat.open_provider_manager(
+            &catalog, &statuses, /*focused_provider*/ None, /*accounts*/ None,
+        );
+        let rendered =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(rendered.contains(&format!("1 / {total}")), "{rendered}");
+
+        chat.handle_key_event(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let rendered =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(rendered.contains(&format!("2 / {total}")), "{rendered}");
+
+        chat.open_provider_manager(
+            &catalog,
+            &statuses[..3],
+            /*focused_provider*/ None,
+            /*accounts*/ None,
+        );
+        let rendered =
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80);
+        assert!(!rendered.contains(" / 3"), "{rendered}");
+    }
+
+    /// Ollama and LM Studio are listed without any probe, so their rows and
+    /// action header say "local (not checked)" rather than "configured".
+    #[tokio::test]
+    async fn provider_manager_marks_local_runtimes_not_checked() {
+        let (mut chat, _tx, _rx, _op_rx) =
+            crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+        let catalog = ProviderCatalog::from_runtime_providers(&chat.config_ref().model_providers);
+        let mut metadata = codex_provider_auth::ProviderMetadataSnapshot::default();
+        for id in [
+            codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID,
+            codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID,
+        ] {
+            metadata.insert(
+                catalog.get(id).expect("local runtime entry"),
+                codex_provider_auth::ProviderMetadata::Local(
+                    codex_provider_auth::LocalProviderMetadata::Available,
+                ),
+            );
+        }
+        let resolved = codex_provider_auth::ProviderStatusResolver::resolve(
+            &catalog,
+            &metadata,
+            &codex_provider_auth::ProviderEligibilitySnapshot::Loaded(Default::default()),
+            &codex_provider_auth::CurrentProviderSelection::None,
+        );
+        let openai = catalog
+            .get(codex_model_provider_info::OPENAI_PROVIDER_ID)
+            .expect("OpenAI entry");
+        let statuses = vec![
+            ProviderStatusSnapshot {
+                id: openai.id.clone(),
+                methods: Vec::new(),
+                configuration: ProviderConfigurationState::Configured,
+                eligibility: ProviderEligibilityState::Active,
+                current: ProviderCurrentState::NotCurrent,
+                availability: ProviderAvailabilityState::Ready,
+            },
+            resolved
+                .get(codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID)
+                .expect("Ollama status")
+                .clone(),
+            resolved
+                .get(codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID)
+                .expect("LM Studio status")
+                .clone(),
+        ];
+
+        chat.open_provider_manager(
+            &catalog, &statuses, /*focused_provider*/ None, /*accounts*/ None,
+        );
+        insta::assert_snapshot!(
+            "provider_manager_local_runtimes",
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80)
+        );
+
+        let ollama = catalog
+            .get(codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID)
+            .expect("Ollama entry");
+        chat.open_provider_manager_actions(ollama, &statuses[1], /*account_provider*/ None);
+        insta::assert_snapshot!(
+            "provider_actions_local_runtime",
+            crate::chatwidget::tests::helpers::render_bottom_popup(&chat, /*width*/ 80)
+        );
     }
 
     #[test]

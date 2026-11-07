@@ -369,6 +369,149 @@ class RunScopedCachePruneTest(unittest.TestCase):
         self.assertEqual(holders, {"cache-prune.yml"})
 
 
+class PrAppServerSchemaFixturesTest(unittest.TestCase):
+    """#1165: app-server-protocol schema fixture tests on PRs that change a
+    crate whose types are in the exported schemas (or rust-ci.yml)."""
+
+    SCHEMA_CRATES = (
+        "protocol",
+        "app-server-protocol",
+        "security-policy",
+        "utils/absolute-path",
+        "utils/path-uri",
+        "ext/items",
+    )
+
+    def workflow(self, name: str) -> str:
+        return (REPO_ROOT / ".github" / "workflows" / name).read_text()
+
+    def job(self, text: str, name: str) -> str:
+        match = re.search(rf"(?ms)^  {re.escape(name)}:\n.*?(?=^  \S|\Z)", text)
+        self.assertIsNotNone(match, name)
+        return match.group(0)
+
+    def detect(self, files: list[str]) -> bool:
+        """Runs the `changed` job's path loop on `files`."""
+        script = self.job(self.workflow("rust-ci.yml"), "changed")
+        loop = re.search(r'(?ms)^ +for f in "\$\{files\[@\]\}"; do\n.*?^ +done$', script)
+        self.assertIsNotNone(loop)
+        program = "\n".join(
+            [
+                "set -euo pipefail",
+                "files=(" + " ".join(f"'{f}'" for f in files) + ")",
+                "codex=false argument_comment_lint=false argument_comment_lint_package=false",
+                "workflows=false windows_native_tests=false app_server_schema=false",
+                loop.group(0),
+                'echo "$app_server_schema"',
+            ]
+        )
+        result = subprocess.run(
+            ["bash", "-c", program], capture_output=True, text=True, check=True
+        )
+        return result.stdout.strip() == "true"
+
+    def test_runs_for_the_schema_crates_and_this_workflow(self) -> None:
+        for crate in self.SCHEMA_CRATES:
+            with self.subTest(crate=crate):
+                self.assertTrue(self.detect(["README.md", f"codex-rs/{crate}/src/lib.rs"]))
+        self.assertTrue(self.detect([".github/workflows/rust-ci.yml"]))
+        for files in (
+            ["codex-rs/core/src/lib.rs", "README.md", "docs/ci.md"],
+            ["codex-rs/protocol-extra/src/lib.rs", "codex-rs/app-server/src/lib.rs"],
+            ["codex-rs/utils/path-utils/src/lib.rs", "codex-rs/ext/web-search/src/lib.rs"],
+            [".github/workflows/rust-ci-full.yml", "codex-rs/Cargo.lock.bak"],
+            ["codex-rs/Cargo.toml.bak"],
+            ["codex-rs/codex-experimental-api-macros-extra/src/lib.rs"],
+        ):
+            with self.subTest(files=files):
+                self.assertFalse(self.detect(files))
+
+    def test_runs_for_schema_generation_inputs(self) -> None:
+        # #1298: the macro controls experimental-field filtering, and a
+        # schemars/ts-rs feature or lockfile update can change the output.
+        for path in (
+            "codex-rs/codex-experimental-api-macros/src/lib.rs",
+            "codex-rs/codex-experimental-api-macros/Cargo.toml",
+            "codex-rs/Cargo.toml",
+            "codex-rs/Cargo.lock",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(self.detect([path]))
+
+    def test_watches_every_schema_deriving_dependency(self) -> None:
+        # Workspace crates that codex-app-server-protocol depends on
+        # (transitively, normal and build dependencies) and that derive
+        # JsonSchema or TS can change the exported schemas.
+        import tomllib
+
+        codex_rs = REPO_ROOT / "codex-rs"
+        workspace = tomllib.loads((codex_rs / "Cargo.toml").read_text())
+        paths = {
+            name: spec["path"]
+            for name, spec in workspace["workspace"]["dependencies"].items()
+            if isinstance(spec, dict) and "path" in spec
+        }
+        seen, todo = set(), ["codex-app-server-protocol"]
+        while todo:
+            manifest = tomllib.loads((codex_rs / paths[todo.pop()] / "Cargo.toml").read_text())
+            for section in ("dependencies", "build-dependencies"):
+                for dep in manifest.get(section, {}):
+                    if dep in paths and dep not in seen:
+                        seen.add(dep)
+                        todo.append(dep)
+        derive = re.compile(r"#\[derive\([^\]]*\b(JsonSchema|TS)\b")
+        exporting = sorted(
+            paths[dep]
+            for dep in seen
+            if any(derive.search(rs.read_text()) for rs in (codex_rs / paths[dep]).rglob("*.rs"))
+        )
+        self.assertEqual(sorted(set(self.SCHEMA_CRATES) - {"app-server-protocol"}), exporting)
+        for path in exporting:
+            with self.subTest(path=path):
+                self.assertTrue(self.detect([f"codex-rs/{path}/src/lib.rs"]))
+
+    def test_skipped_on_main_pushes_and_nightly(self) -> None:
+        # Non-PR events get the forced file list; postmerge rust-ci-full
+        # runs the schema fixture tests on main.
+        forced = re.search(
+            r'(?m)^            files=\((.*)\)$', self.job(self.workflow("rust-ci.yml"), "changed")
+        )
+        self.assertIsNotNone(forced)
+        files = re.findall(r'"([^"]+)"', forced.group(1))
+        self.assertIn("codex-rs/force", files)
+        self.assertFalse(self.detect(files))
+
+    def test_pr_job_runs_the_schema_fixture_tests(self) -> None:
+        rust_ci = self.workflow("rust-ci.yml")
+        self.assertIn(
+            "app_server_schema: ${{ steps.detect.outputs.app_server_schema }}",
+            self.job(rust_ci, "changed"),
+        )
+        job = self.job(rust_ci, "app_server_schema_fixtures")
+        self.assertRegex(
+            job,
+            r"(?m)^    needs: changed\n"
+            r"    if: \$\{\{ needs\.changed\.outputs\.app_server_schema == 'true' \}\}$",
+        )
+        self.assertIn(
+            "run: cargo test --locked -p codex-app-server-protocol --lib schema_fixtures", job
+        )
+        self.assertIn("uses: ./.github/actions/check-clean-worktree", job)
+
+    def test_required_when_it_runs(self) -> None:
+        rust_ci = self.workflow("rust-ci.yml")
+        self.assertRegex(rust_ci, r"(?ms)^  results:\n.*?^        app_server_schema_fixtures,$")
+        self.assertIn(
+            "if [[ \"${NEEDS_CHANGED_OUTPUTS_APP_SERVER_SCHEMA}\" == 'true' ]]; then\n"
+            "            [[ '${{ needs.app_server_schema_fixtures.result }}' == 'success' ]]",
+            rust_ci,
+        )
+        self.assertIn(
+            "NEEDS_CHANGED_OUTPUTS_APP_SERVER_SCHEMA: "
+            "${{ needs.changed.outputs.app_server_schema }}",
+            rust_ci,
+        )
+
 class PrWindowsNativeTestsTest(unittest.TestCase):
     """#636 (owner decision 2026-10-15): native Windows tests on PRs that
     change codex-tui, codex-core, codex-state or codex-login."""

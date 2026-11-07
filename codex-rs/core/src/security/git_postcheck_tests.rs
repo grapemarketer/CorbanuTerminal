@@ -797,6 +797,12 @@ fn issue_874_an_empty_git_folder_replaced_by_another() {
         kinds(&check(thread, &repos)),
         vec![format!("config {}", git.join("config.worktree").display())]
     );
+    // #943 (r8 N3): the empty `config` that came with it, filled in place.
+    fill(&git.join("config"));
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("config {}", git.join("config").display())]
+    );
 }
 
 /// Review r7 (B1): a full `.git` replaced by an empty folder is reported
@@ -810,6 +816,84 @@ fn issue_874_a_full_git_folder_replaced_by_an_empty_one() {
     std::fs::create_dir(&git).expect("empty .git");
     assert_eq!(
         kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    assert!(project.held().contains(&git.display().to_string()));
+}
+
+/// #943 (r8 N1): after a reported swap for an empty folder, swapping that
+/// for another empty folder is reported again, and still held: the hold
+/// doesn't lapse unreported. An empty folder never held stays quiet when
+/// swapped (the Linux sandbox's mount points, above).
+#[test]
+fn issue_943_a_held_empty_git_folder_swapped_again_is_reported() {
+    let project = Project::new();
+    let git = project.git();
+    let (thread, repos) = baseline(&project);
+    std::fs::rename(&git, project.base.join("saved-git")).expect("moved");
+    std::fs::create_dir(&git).expect("empty .git");
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    assert!(project.held().contains(&git.display().to_string()));
+    std::fs::rename(&git, project.base.join("first-empty")).expect("moved");
+    std::fs::create_dir(&git).expect("another empty .git");
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    assert!(project.held().contains(&git.display().to_string()));
+}
+
+/// #943 (#1497 review): a `held_for` (of any session) between the second
+/// swap and this session's next look drops the first swap's hold, which no
+/// longer stands; the second swap is still reported, and held.
+#[test]
+fn issue_943_a_held_swap_dropped_before_the_next_look_is_still_reported() {
+    let project = Project::new();
+    let git = project.git();
+    let (thread, repos) = baseline(&project);
+    std::fs::rename(&git, project.base.join("saved-git")).expect("moved");
+    std::fs::create_dir(&git).expect("empty .git");
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    // An unchanged look keeps it held.
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    std::fs::rename(&git, project.base.join("first-empty")).expect("moved");
+    std::fs::create_dir(&git).expect("another empty .git");
+    // Another session's check prunes the hold that no longer stands.
+    assert!(!project.held().contains(&git.display().to_string()));
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    assert!(project.held().contains(&git.display().to_string()));
+}
+
+/// #943 (#1502 review): a session whose last look saw the empty `.git`
+/// before another session reported it as a swap still reports the next swap
+/// after that hold was dropped.
+#[test]
+fn issue_943_a_swap_another_session_reported_is_reported_after_its_hold_went() {
+    let project = Project::new();
+    let git = project.git();
+    let (thread, repos) = baseline(&project);
+    std::fs::rename(&git, project.base.join("saved-git")).expect("moved");
+    std::fs::create_dir(&git).expect("empty .git");
+    let other = ThreadId::new();
+    assert_eq!(begin(other, &repos, "Moderate"), None);
+    assert_eq!(
+        kinds(&check(thread, &repos)),
+        vec![format!("replaced {}", git.display())]
+    );
+    std::fs::rename(&git, project.base.join("first-empty")).expect("moved");
+    std::fs::create_dir(&git).expect("another empty .git");
+    assert!(!project.held().contains(&git.display().to_string()));
+    assert_eq!(
+        kinds(&check(other, &repos)),
         vec![format!("replaced {}", git.display())]
     );
     assert!(project.held().contains(&git.display().to_string()));
@@ -1670,4 +1754,183 @@ fn issue_943_a_git_folder_copied_up_on_overlay_isnt_replaced() {
     assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
     assert_eq!(held_for(&[git]), Vec::<String>::new());
     drop(mounts);
+}
+
+/// #943 (#1502 review): past `MAX_SWAPPED` different reported swaps, every
+/// `.git` folder counts as swapped (reports more, never less); a `.git` that
+/// isn't a folder is neither remembered nor counted.
+#[test]
+fn issue_943_past_the_swapped_cap_every_git_folder_counts_as_swapped() {
+    use super::unix::DotGit;
+    use super::unix::Global;
+    use super::unix::MAX_SWAPPED;
+    let folder = |ino: u64| DotGit::Folder {
+        dev: 1,
+        ino,
+        born: None,
+    };
+    let file = DotGit::File {
+        dev: 1,
+        ino: 0,
+        born: None,
+        text: None,
+    };
+    let mut global = Global::default();
+    global.note_swapped(&file);
+    assert!(!global.is_swapped(&file));
+    for ino in 1..=MAX_SWAPPED as u64 {
+        global.note_swapped(&folder(ino));
+    }
+    // Full, but a repeated report doesn't overflow it.
+    global.note_swapped(&folder(1));
+    let never = folder(u64::MAX);
+    assert_eq!(
+        (global.is_swapped(&folder(1)), global.is_swapped(&never)),
+        (true, false)
+    );
+    global.note_swapped(&folder(MAX_SWAPPED as u64 + 1));
+    assert_eq!(
+        (
+            global.is_swapped(&folder(1)),
+            global.is_swapped(&never),
+            global.is_swapped(&file),
+            global.is_swapped(&DotGit::Missing),
+        ),
+        (true, true, false, false)
+    );
+}
+
+/// #943 r8 N2: past the limit on remembered empty entries, a new empty
+/// config file is reported once, not at every look, and stays held; it is
+/// reported again once filled, and when made again after it went.
+#[test]
+fn issue_943_an_empty_config_past_the_limit_is_reported_once() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            super::unix::TEST_MAX_EMPTY_NEW.with(|max| max.set(None));
+        }
+    }
+    let _reset = Reset;
+    super::unix::TEST_MAX_EMPTY_NEW.with(|max| max.set(Some(0)));
+    let project = Project::new();
+    let git = project.git();
+    let (thread, repos) = baseline(&project);
+    let config = git.join("config.worktree");
+    let reported = vec![format!("config {}", config.display())];
+    std::fs::write(&config, "").expect("empty config");
+    assert_eq!(kinds(&check(thread, &repos)), reported);
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    let (message, held) = recheck(thread, "Moderate", &[project.root.as_path()]);
+    assert_eq!(
+        (message, held),
+        (None, shown(std::slice::from_ref(&config)))
+    );
+    // Made again empty before anything noticed it went: still held, not
+    // told again.
+    std::fs::remove_file(&config).expect("removed");
+    std::fs::write(&config, "").expect("empty again");
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    assert_eq!(project.held(), shown(std::slice::from_ref(&config)));
+    fill(&config);
+    assert_eq!(kinds(&check(thread, &repos)), reported);
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    std::fs::remove_file(&config).expect("removed");
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    assert_eq!(project.held(), Vec::<String>::new());
+    std::fs::write(&config, "").expect("empty again");
+    assert_eq!(kinds(&check(thread, &repos)), reported);
+    assert_eq!(kinds(&check(thread, &repos)), Vec::<String>::new());
+    assert_eq!(project.held(), shown(&[config]));
+}
+
+/// #943 item 14: a command's own look (`finish`, with the git folders found
+/// before it ran) after another look of this session saw its `.git`
+/// replaced still reports what is new in those folders, and doesn't make the
+/// next command's look report again what that look reported; what is new
+/// there afterwards still is.
+#[test]
+fn issue_943_a_stale_finish_does_not_make_the_next_look_report_again() {
+    let project = Project::new();
+    let worktree_git = project.git().join("worktrees/feature");
+    std::fs::create_dir_all(&worktree_git).expect("worktree git folder");
+    std::fs::write(worktree_git.join("HEAD"), "ref: refs/heads/feature\n").expect("HEAD");
+    std::fs::write(worktree_git.join("commondir"), "../..\n").expect("commondir");
+    let worktree = project.base.join("feature");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let text = format!("gitdir: {}\n", worktree_git.display());
+    std::fs::write(worktree.join(".git"), &text).expect("git file");
+    let thread = ThreadId::new();
+    let old = repos(&[worktree.as_path()]);
+    assert_eq!(begin(thread, &old, "Moderate"), None);
+    // The command replaces the `.git` file by a folder; another command's
+    // look sees it first.
+    std::fs::remove_file(worktree.join(".git")).expect("removed");
+    let git = worktree.join(".git");
+    for folder in ["objects", "refs/heads", "hooks"] {
+        std::fs::create_dir_all(git.join(folder)).expect("git folder");
+    }
+    std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+    std::fs::write(git.join("config"), "[core]\n\tfsmonitor = /tmp/run-me\n").expect("config");
+    std::fs::write(git.join("hooks/pre-commit"), "#!/bin/sh\n").expect("hook");
+    std::fs::create_dir_all(git.join("rebase-merge")).expect("rebase");
+    let todo = git.join("rebase-merge/git-rebase-todo");
+    std::fs::write(&todo, "exec ./run-me\n").expect("todo");
+    let hard = git.join("description");
+    std::fs::hard_link(project.outside.join("zshrc"), &hard).expect("hard link");
+    let git = git.canonicalize().expect("canonical");
+    let (todo, hard) = (
+        git.join("rebase-merge/git-rebase-todo"),
+        git.join("description"),
+    );
+    let (message, _) = recheck(thread, "Moderate", &[worktree.as_path()]);
+    let message = message.expect("reported");
+    for path in [
+        git.join("config"),
+        git.join("hooks"),
+        git.join("rebase-merge"),
+        hard.clone(),
+    ] {
+        let path = path.display().to_string();
+        assert!(message.contains(&path), "{path}: {message}");
+    }
+    // Then it plants a link in the old git folder; its own look still
+    // reports it.
+    let link = worktree_git.join("COMMIT_EDITMSG");
+    symlink(project.outside.join("zshrc"), &link).expect("link");
+    assert_eq!(
+        kinds(&check(thread, &old)),
+        vec![format!("link {}", link.display())]
+    );
+    let (message, _) = recheck(thread, "Moderate", &[worktree.as_path()]);
+    assert_eq!(message, None);
+    // The step emptied and the hard link removed: their holds go. Both are
+    // put back the same.
+    std::fs::write(&todo, "").expect("emptied");
+    std::fs::remove_file(&hard).expect("unlinked");
+    let (_, held) = recheck(thread, "Moderate", &[worktree.as_path()]);
+    assert!(!held.contains(&todo.display().to_string()), "{held:?}");
+    std::fs::write(&todo, "exec ./run-me\n").expect("todo again");
+    std::fs::hard_link(project.outside.join("zshrc"), &hard).expect("hard link again");
+    // The next command, with the git folders found now: those two are
+    // reported (and held) again; config and hooks, still held, aren't.
+    let fresh = repos(&[worktree.as_path()]);
+    assert_eq!(begin(thread, &fresh, "Moderate"), None);
+    assert_eq!(
+        kinds(&check(thread, &fresh)),
+        vec![
+            format!("hard link {}", hard.display()),
+            format!("exec {}", todo.display()),
+        ]
+    );
+    let held = held_for(std::slice::from_ref(&git));
+    for path in shown(&[git.join("config"), git.join("hooks"), todo, hard]) {
+        assert!(held.contains(&path), "{path}: {held:?}");
+    }
+    assert_eq!(kinds(&check(thread, &fresh)), Vec::<String>::new());
+    std::fs::write(git.join("config.worktree"), "[core]\n").expect("config.worktree");
+    assert_eq!(
+        kinds(&check(thread, &fresh)),
+        vec![format!("config {}", git.join("config.worktree").display())]
+    );
 }

@@ -1,0 +1,34 @@
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Security inspector (read only)
+▲ Moderate degraded: status observed 34s ago; press r, Credential broker
+Observed 34s ago, policy generation 0.1: stale, press r
+      command); pointed at another Corbanu home it runs at that home's level, because Moderate is not carried over [configured: /security]
+
+Not contained
+  [off] MCP servers: none configured [resolved: config]
+  [not contained] Hooks: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [resolved: features]
+  [not contained] `!` shell commands: run outside the OS sandbox with the environment allowlist; allowed because you configured or started it [fixed]
+  [not contained] App-server command/exec: runs outside the OS sandbox with the environment allowlist; allowed because you configured or started it
+      [fixed]
+
+Not available
+  [not available] Financial preview and approvals: not available in this build (PF-38, PF-39) [fixed]
+  [not available] Isolated retrieval: not available in this build (PF-31) [fixed]
+  [not available] Screened search routing: not available in this build (PF-32) [fixed]
+  [not available] Brokered browser login: not available in this build (PF-37) [fixed]
+  [not available] Quarantine: not available in this build (PF-34) [fixed]
+  [not available] Untrusted-content detectors: not available in this build (PF-35, PF-36) [fixed]
+  [not available] Agent Sweep: not available in this build (PF-40) [fixed]
+
+Recent denials
+  None: nothing refused in this process [observed: this process]
+↑/↓ scroll · r refresh · esc back to /security

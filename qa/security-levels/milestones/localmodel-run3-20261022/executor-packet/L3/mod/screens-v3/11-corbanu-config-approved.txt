@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Call the post_note tool on the notes server with text 'hello'.
+
+
+• Called notes.post_note({"text":"hello"})
+  └ Error: user cancelled MCP tool call
+
+• The post_note tool call was cancelled by the user — no note was posted.
+
+
+› Run exactly this command: cat /Users/tester/run/product-home/config.toml
+
+
+✔ You approved Corbanu to run cat /Users/tester/run/product-home/... this time
+
+• Explored
+  └ Read config.toml
+
+⚠ Secretless agent launch blocked access to `/Users/tester/run/product-home/config.toml`: at
+  every security level, Moderate included, agent commands can't read Corbanu's own files (such as its sign-in, vault, config and history) or common
+  CLI tokens, even when you approve them, so changing the level would not allow it.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The command failed with Operation not permitted. The sandbox blocks agent commands from reading Corbanu's own files (config, vault, sign-in,
+  history) at every security level — approving or changing the security level would not lift this.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run /review on my current changes
+
+  Z.AI GLM 5.3 Flash via zai default · /Users/tester/run/fixture/workspace · Corbanu Termin…
+
+
+
+
+

@@ -183,6 +183,7 @@ fn policies(layout: &Layout) -> Vec<(&'static str, FileSystemSandboxPolicy)> {
         ),
         FileSystemSandboxEntry::new(
             FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: real.join("ws/**/*.key").to_string_lossy().into_owned(),
             },
             Deny,

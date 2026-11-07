@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: /Users/tester/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+
+› Call the post_note tool on the notes server with text 'hello'.
+
+
+◦ Calling notes.post_note({"text":"hello"})
+
+
+  Field 1/1
+  Allow the notes MCP server to run tool "post_note"?
+
+  text: hello
+
+  › 1. Allow                   Run the tool and continue.
+    2. Allow for this session  Run the tool and remember this choice for this session.
+    3. Always allow            Run the tool and remember this choice for future tool calls.
+    4. Cancel                  Cancel this tool call
+  enter to submit | ↑/↓ then enter for options that last beyond this request | esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

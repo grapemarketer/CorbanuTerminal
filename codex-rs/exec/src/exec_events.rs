@@ -48,7 +48,11 @@ pub struct TurnStartedEvent {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnCompletedEvent {
-    pub usage: Usage,
+    /// Provider-reported totals for the selected thread plus usage observed
+    /// from its descendants during this execution. `None` for history-forked
+    /// descendants (including default MultiAgentV2 spawns), missing reports,
+    /// unresolved ancestry or dropped events. Unknown usage is never free work.
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]

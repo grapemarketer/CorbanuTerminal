@@ -449,6 +449,15 @@ fn verify_sandbox(config: &Config, failures: &mut Vec<String>) {
         }
     }
     verify_credential_names(&file_system, cwd, failures);
+    // #594 (D225): on Linux, a home reached through a link agent commands
+    // could replace; at launch and for every later folder.
+    if super::home_link::applies()
+        && let Some((real, links)) = super::home_link::check(&config.codex_home, |given| {
+            super::home_link::exposed_links_under_aggressive(given, Some(&file_system), cwd)
+        })
+    {
+        failures.push(super::home_link::aggressive_refusal(&real, &links));
+    }
 }
 
 /// #442: a credential file created after launch is denied by its name: below

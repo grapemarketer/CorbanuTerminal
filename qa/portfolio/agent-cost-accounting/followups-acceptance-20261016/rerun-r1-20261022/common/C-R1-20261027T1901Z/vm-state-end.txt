@@ -1,0 +1,15 @@
+agmx0 home entries left: 0
+agmx1 home entries left: 0
+agmx2 home entries left: 0
+agmx3 home entries left: 0
+mediator leaf key: absent
+real key file zai_api_key: absent (never placed)
+real key file openai_api_key: absent (never placed)
+real key file kimi_api_key: absent (never placed)
+auth.json: synthetic placeholder only
+tunnel stopped
+2026-10-27T19:39:47Z
+deleted acct-rerun-run
+Source Name            Disk  Size  Accessed       State  
+local  corbanu-qa-base 50 GB 28 GB 38 minutes ago stopped
+2026-10-27T19:39:48Z

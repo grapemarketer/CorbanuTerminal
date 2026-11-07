@@ -263,14 +263,25 @@ fn named_account_enrollment(
     enrollment
 }
 
-/// #609: the named account each catalog entry's status follows (the same
-/// selection as [`named_account_enrollment`]), by entry id.
-fn named_account_names(catalog: &ProviderCatalog, config: &Config) -> BTreeMap<String, String> {
+/// #609: the named account each catalog entry's status follows, by entry id.
+/// Shared entries follow an enrolled connection in catalog order; other
+/// entries keep the selection from [`named_account_enrollment`].
+fn named_account_names(
+    catalog: &ProviderCatalog,
+    config: &Config,
+    connection_credentials: &BTreeMap<String, BTreeMap<String, ConnectionCredential>>,
+) -> BTreeMap<String, String> {
     catalog
         .entries()
         .iter()
         .filter_map(|entry| {
             let account = entry.runtime_provider_ids.iter().find_map(|id| {
+                if let Some(connections) = connection_credentials.get(entry.id.as_str())
+                    && connections.get(id.as_str())
+                        != Some(&ConnectionCredential::NamedAccount { enrolled: true })
+                {
+                    return None;
+                }
                 config
                     .model_providers
                     .get(id.as_str())
@@ -389,8 +400,12 @@ impl ProviderStatusHost {
     ) -> Self {
         let catalog = ProviderCatalog::from_runtime_providers(&config.model_providers);
         let named_accounts = Arc::new(named_account_enrollment(&catalog, config, &holds));
-        let named_account_names = Arc::new(named_account_names(&catalog, config));
         let connection_credentials = Arc::new(connection_credentials(&catalog, config, &holds));
+        let named_account_names = Arc::new(named_account_names(
+            &catalog,
+            config,
+            &connection_credentials,
+        ));
         let session_sign_in_entry =
             codex_model_provider::named_sign_in_account(&config.model_provider)
                 .and_then(|_| {

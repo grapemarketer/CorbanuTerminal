@@ -1,0 +1,45 @@
+╭───────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                 │
+│                                               │
+│ model:     glm-5.3-flash   /model to change   │
+│ directory: /Users/tester/run/workspace │
+╰───────────────────────────────────────────────╯
+
+
+› Reply with the single word READY.
+
+
+• READY
+
+
+  Attempt, components and original price
+  Requested UTC day: 2026-10-14
+
+  Tokens: 4,625 tokens
+  —— Details ——
+  Billed cost: Z.AI doesn't report its charges, so any cost here is an estimate — check Z.AI's bill.
+  Request: a5e3f6a2-f5a0-4c46-88e3-91d34622e6a0
+  Attempt: 18b6e3c7-7ed7-49d1-be9b-0dc9c7efc54e
+  Thread: 01a13a74-aff3-7221-a0fc-ce24e585a1f1
+  Turn: side:review:01a13a76-f3c0-79c1-832f-02fd40132af6
+› Provider: zai
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

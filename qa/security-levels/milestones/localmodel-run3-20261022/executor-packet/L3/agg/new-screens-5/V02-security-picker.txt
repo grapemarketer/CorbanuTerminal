@@ -1,0 +1,45 @@
+╭─────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                           │
+│                                                         │
+│ model:     glm-5.3-flash   /model to change             │
+│ directory: ~/run/fixture/workspace │
+╰─────────────────────────────────────────────────────────╯
+
+Security level
+Active in this session: Permissive
+
+> Permissive  (active)
+  Moderate
+  Aggressive
+
+Today's behaviour. Your approval, sandbox, network, vault and agent settings apply exactly as configured.
+
+↑/↓ move · enter choose · esc close · i inspect
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

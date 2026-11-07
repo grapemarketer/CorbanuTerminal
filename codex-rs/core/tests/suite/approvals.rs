@@ -3601,6 +3601,7 @@ allow_local_binding = true
         .entries
         .push(FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern {
+                scan: None,
                 pattern: format!("{}/**/*.env", test.config.cwd.as_path().display()),
             },
             access: FileSystemAccessMode::Deny,

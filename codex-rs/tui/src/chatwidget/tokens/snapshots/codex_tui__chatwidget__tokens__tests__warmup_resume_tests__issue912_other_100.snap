@@ -12,7 +12,7 @@ expression: "render_bottom_popup_with_height(&chat, width, 60)"
   • synthetic · synthetic-model — Pay per use. 1 request, 140 tokens. Estimated cost: at least
   $0.000180 (1 attempt had no price).
   Other conversations' estimated cost: at least $0.000180 (1 attempt had no price).
-  For conversations with saved turns, open them with /resume and run /cost there.
+  Of these, 1 request is a reopen warm-up.
 
   Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
   ↑↓ scroll · Enter open · Esc back/close

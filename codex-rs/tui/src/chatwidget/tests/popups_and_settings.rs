@@ -3643,6 +3643,87 @@ async fn spawn_effort_popup_snapshot_and_create_path_leave_session_unchanged() {
     assert!(rx.try_recv().is_err());
 }
 
+/// #1266: Standard is the catalogue's internal Medium effort, even though its
+/// provider description says `reasoning_effort=high`. The role's Deep default
+/// must only preselect the popup; moving to Standard must forward Medium.
+#[tokio::test]
+async fn spawn_glm_reasoning_choice_is_forwarded_without_changing_session() {
+    for selected_effort in [ReasoningEffort::Medium, ReasoningEffort::XHigh] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
+        let original = (
+            chat.current_model().to_string(),
+            chat.current_reasoning_effort(),
+        );
+        let preset = chat
+            .model_catalog
+            .try_list_models()
+            .expect("model catalog")
+            .into_iter()
+            .find(|preset| preset.model == ZAI_DEFAULT_MODEL)
+            .expect("Z.AI GLM 5.2 preset");
+        chat.open_reasoning_popup_for_purpose(
+            preset,
+            spawn_model_purpose(SpawnRole::Troll, Some("thread:parent"), ZAI_DEFAULT_MODEL),
+        );
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(popup.contains("Standard (default)"));
+        assert!(
+            popup
+                .lines()
+                .any(|line| line.contains('›') && line.contains("Deep"))
+        );
+        if selected_effort == ReasoningEffort::Medium {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let created = loop {
+            match rx.try_recv().expect("create event") {
+                AppEvent::CreateSpawnAgent {
+                    role,
+                    parent_node_id,
+                    model,
+                    provider,
+                    effort,
+                    ..
+                } => break (role, parent_node_id, model, provider, effort),
+                AppEvent::SettingsSelectionClosed => continue,
+                event => panic!("spawn selection mutated session: {event:?}"),
+            }
+        };
+        assert_eq!(
+            created,
+            (
+                SpawnRole::Troll,
+                Some("thread:parent".to_string()),
+                ZAI_DEFAULT_MODEL.to_string(),
+                Some("zai".to_string()),
+                Some(selected_effort.clone()),
+            )
+        );
+        assert_eq!(
+            ChatWidget::status_line_reasoning_effort_label_for_model(
+                ZAI_DEFAULT_MODEL,
+                Some(&selected_effort),
+            ),
+            if selected_effort == ReasoningEffort::Medium {
+                "standard"
+            } else {
+                "deep"
+            }
+        );
+        assert_eq!(
+            (
+                chat.current_model().to_string(),
+                chat.current_reasoning_effort(),
+            ),
+            original
+        );
+        assert!(chat.no_modal_or_popup_active());
+        assert!(rx.try_recv().is_err());
+    }
+}
+
 #[tokio::test]
 async fn spawn_single_effort_model_creates_directly_for_troll() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some(AMBIENT_DEFAULT_MODEL)).await;

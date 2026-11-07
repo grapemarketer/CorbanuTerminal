@@ -9,11 +9,26 @@ sandbox** needs a one-time Administrator setup. The **non-admin sandbox**
 (also called the unelevated or legacy sandbox) needs no setup, but it protects
 less.
 
-**What the non-admin sandbox does not stop.** A sandboxed command can delete
-or move files and folders outside your workspace when they sit in a folder you
-own, which includes most of your user profile. This applies in both Read Only
-and workspace-write modes. Creating or changing files outside your workspace is
-still blocked. The default sandbox does not have this gap.
+**What the non-admin sandbox stops.** Sandboxed commands run at Low
+integrity. In both Read Only and workspace-write modes they can't create,
+change, delete or move files and folders outside the folders they may write
+to, except in places marked low-integrity: `AppData\LocalLow`, anything you
+or a program labelled Low, and folders another non-admin sandbox session is
+using at that moment.
+
+**What it does not stop.**
+
+- Reading your files (see "Files a profile protects from reading" below).
+- Network access by programs that ignore proxy settings: the network block
+  only sets proxy variables and offline settings for common tools.
+- A few ways of starting programs that leave the command's job, so cancelling
+  doesn't end them (see #1507 in `codex-rs/core/README.md`; measured on a
+  server without a desktop session, not yet on a desktop).
+- Drives without Windows permissions, such as FAT or exFAT USB drives: neither
+  sandbox can protect files there.
+
+The default sandbox runs commands as a separate account with a firewall-based
+network block, and protects more.
 
 **When you will see a warning.** If your sandboxed commands run in the
 non-admin sandbox, Corbanu Terminal tells you once per session:
@@ -26,6 +41,15 @@ non-admin sandbox, Corbanu Terminal tells you once per session:
 - in app-server clients, as a configuration warning.
 
 The warning never blocks a command.
+
+**Project folders created while a command runs.** If the `.codex` or
+`.agents` folder at the top of your workspace (or of another folder commands
+may write to) doesn't exist when a non-admin sandbox command starts and
+exists when it ends, a command may have planted it. Corbanu Terminal then
+doesn't load its config, hooks or skills, warns you at startup, and asks in
+the TUI whether to load it (once the command, and anything it left running,
+has ended). Check its contents before you choose to load it. Such folders
+deeper in your workspace aren't covered yet.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

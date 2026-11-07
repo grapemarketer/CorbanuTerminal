@@ -85,12 +85,12 @@ When submitting initial evidence for an accepted task, first inspect the task wi
 
 Initial evidence is not completion. After every initial evidence receipt:
 
-1. Read `pfterminalLifecycle` in the receipt and run its `nextCommand`.
+1. Read `pfterminalLifecycle` in the receipt and run its `nextCommand`. Keep its `submissionRef`. If the command instead fails with `task_evidence_receipt_unconfirmed`, do not resubmit blindly; follow its `nextCommand` and message.
 2. Re-read the task with `"$CORBANU_BIN" tasknode task show <task-id> --json`.
 3. If `actions.canSubmitVerificationEvidence` is true, answer `currentVerificationRequest` using the Verification Response template and submit it with `"$CORBANU_BIN" tasknode verification respond <task-id> --body-file <path> --json`.
 4. Re-read the task after the verification response. Claim completion only when `rewardOutcome` exists or the task is explicitly `rewarded`.
 
-Verification generation can be asynchronous. If the task is still submitted but has no verification request yet, keep it classified as awaiting verification, check `"$CORBANU_BIN" tasknode tasks list --tab verification --json` before ending the Task Node work cycle, and do not report it as complete. At the beginning of later Task Node work, drain any pending verification requests before starting new submissions.
+Verification generation can be asynchronous. If the task is still submitted but has no verification request yet, keep it classified as awaiting verification, check `"$CORBANU_BIN" tasknode tasks list --tab verification --json` before ending the Task Node work cycle, and do not report it as complete. At the beginning of later Task Node work, drain any pending verification requests before starting new submissions. If a task stays submitted with no verification request across later work cycles, report the task id and `submissionRef` to Task Node operators; never cancel it to get a fresh evidence step.
 
 When submitting evidence, make it easy for the verifier to prove the work happened. Include artifacts, exact commands, test output summaries, PRs, commits, screenshots, route probes, or file references as applicable.
 

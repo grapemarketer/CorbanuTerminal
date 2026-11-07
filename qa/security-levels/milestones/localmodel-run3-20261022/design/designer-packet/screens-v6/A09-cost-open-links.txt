@@ -1,0 +1,33 @@
+╭──────────────────────────────────────────────────────────╮
+│ >_ Corbanu Terminal (v0.1.48)                            │
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace          │
+╰──────────────────────────────────────────────────────────╯
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+
+› Reply with the single word OK.
+
+
+• OK
+
+  OK
+
+
+  Cost — this conversation
+  Requested UTC day: 2026-10-21
+
+  → Request 1 · qwen · Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit · billing basis not declared
+  → Request 2 · qwen · Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit · billing basis not declared
+  → Root's own attempts (2 attempts)
+  → Descendant attempts (none)
+  → Unknown provider/model attribution (none)
+  → Unknown parent population (none)
+  Refresh
+› Close
+
+  Other dates: /cost [YYYY-MM-DD]  or  START END hour|day|week|month  (UTC)
+  ↑↓ scroll · Enter open · Esc back/close

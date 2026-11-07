@@ -1,0 +1,45 @@
+│                                                          │
+│ model:     Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixe… │
+│ directory: ~/run/fixture/workspace              │
+╰──────────────────────────────────────────────────────────╯
+
+
+› Run exactly this command and show its output: printf shakedown-ok > shakedown.txt
+
+
+⚠ Model metadata for `Qwen3.8-Flash-Next-Uncensored-MLX-Serve-mixed-4-8bit` not found. Defaulting to fallback metadata; this can degrade performance
+  and cause issues.
+
+✔ You approved Corbanu to run printf shakedown-ok > shakedown.txt this time
+
+• Ran printf shakedown-ok > shakedown.txt
+  └ (no output)
+
+• Explored
+  └ Read shakedown.txt
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Done — printf shakedown-ok > shakedown.txt ran cleanly (exit code 0, no output), and the resulting shakedown.txt contains exactly shakedown-ok.
+
+─ Worked for 1m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  Spawn
+  Create supervised native agents or bind a root pane.
+
+  Search spawn roles
+  Quick start
+› Create standard crew: Nazgul + Troll + 3 Orcs                        Create persistent named panes (Nazgul Claude Fable Plan, Troll GPT-5.6-Sol
+                                                                       xhigh, Orcs GPT-5.6-Luna xhigh, GPT-5.6-Terra xhigh, and OpenRouter Grok
+                                                                       4.6). No task is started.
+  Create Corbanu API crew: Kimi K3 Nazgul + Luna Troll + 3 Flash Orcs  Create persistent named panes using wallet-funded Corbanu API routes (Nazgul
+                                                                       Kimi K3, Troll GPT-5.6 Luna xhigh, and 3 Orcs on GLM 5.3 Flash). No task is
+                                                                       started.
+  Roles
+  Nazgul                                                               Create a Nazgul root pane or bind an existing pane.
+  Troll                                                                Create a persistent supervisor agent pane.
+  Orc                                                                  Create a persistent executor agent pane.
+  Status
+
+  Press enter to confirm or esc to go back

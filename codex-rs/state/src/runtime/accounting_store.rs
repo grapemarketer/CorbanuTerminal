@@ -77,12 +77,18 @@ pub struct Inspection {
     /// means when neither this conversation nor a resolved subagent has a
     /// recorded attempt there. `None` when they have one.
     pub empty_day: Option<EmptyDay>,
+    /// #314 (D228): accounting failed to record at least one model request of
+    /// this conversation or a thread of its spawn tree on this UTC day
+    /// (`AccountingStore::record_gap`), so the totals above may be
+    /// incomplete: that request was sent and billed but has no record.
+    pub recording_gap: bool,
 }
 
 /// A day on which neither the conversation nor a resolved subagent has a
 /// recorded attempt. Only `BeforeConversation` says there were no requests:
-/// the ledger keeps no record of when a writer ran or which writes failed
-/// (#314), so an empty day inside the ledger's life proves nothing.
+/// the ledger keeps no record of when a writer ran, and marks only the writes
+/// known to have failed (#314), so an empty day inside the ledger's life
+/// proves nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmptyDay {
     /// Proven: the whole UTC day ends before the conversation started, and no
@@ -312,6 +318,60 @@ impl AsOf {
     }
 }
 
+/// #1518: an inspection read at a time behind the ledger's checkpoint. The
+/// ledger is intact; the system clock reads earlier than its newest record, so
+/// the read is refused until the clock catches up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockBehindLedger {
+    pub behind_ms: i64,
+}
+
+impl std::fmt::Display for ClockBehindLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "backward inspection read: the system clock is {} ms behind the accounting ledger checkpoint",
+            self.behind_ms
+        )
+    }
+}
+
+impl std::error::Error for ClockBehindLedger {}
+
+/// The clock-behind refusal in `error`'s chain, if that is what it is.
+pub fn clock_behind_ledger(error: &anyhow::Error) -> Option<ClockBehindLedger> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ClockBehindLedger>().copied())
+}
+
+/// #1522: an inspection of a UTC day that starts after the read time, e.g. a
+/// `/cost` view opened while the clock read ahead and refreshed after it was
+/// set back. Still refused; typed so the caller can name the clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockBeforeDay {
+    pub behind_ms: i64,
+}
+
+impl std::fmt::Display for ClockBeforeDay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid or future day: the system clock is {} ms before the requested UTC day",
+            self.behind_ms
+        )
+    }
+}
+
+impl std::error::Error for ClockBeforeDay {}
+
+/// The future-day refusal in `error`'s chain, if that is what it is.
+pub fn clock_before_day(error: &anyhow::Error) -> Option<ClockBeforeDay> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ClockBeforeDay>().copied())
+}
+
 /// Say once per process that the clock is behind the ledger.
 fn warn_clock_behind(behind_ms: i64) {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -391,7 +451,13 @@ impl<'a> AccountingStore<'a> {
         requested: Option<InspectionRange>,
     ) -> anyhow::Result<InspectionDay> {
         let start = utc_day.checked_mul(86_400_000).context("day overflow")?;
-        ensure!(utc_day >= 0 && read_at_ms >= start, "invalid or future day");
+        ensure!(utc_day >= 0, "invalid or future day");
+        if read_at_ms < start {
+            return Err(ClockBeforeDay {
+                behind_ms: start.saturating_sub(read_at_ms),
+            }
+            .into());
+        }
         start.checked_add(86_400_000).context("day end overflow")?;
         let mut tx = runtime.pool.begin().await?;
         if !ledger_exists(&mut tx).await? {
@@ -441,6 +507,53 @@ impl<'a> AccountingStore<'a> {
                 Err(error)
             }
         }
+    }
+
+    /// #314 (D228): durably mark that accounting failed to record at least one
+    /// of `owner`'s model requests sent between `from_ms` and `to_ms` (UTC
+    /// ms, either order), so `/cost` says those days' totals may be
+    /// incomplete. Every UTC day of the span is marked (the first and the 32
+    /// ending on the last, for a longer span), and, when the clock reads
+    /// behind the ledger's checkpoint, the checkpoint's day too: the earliest
+    /// day the true time can be, which retention will not expire at once.
+    /// Upgrades the ledger to format 7 in the same transaction; it
+    /// runs no retention or clock check, since the failure it marks may be
+    /// one. Marking a day twice is one marker. A home with no ledger is left
+    /// without one: its `/cost` already reads unavailable, never complete,
+    /// and an unrecorded request does not install a ledger.
+    pub async fn record_gap(
+        runtime: &StateRuntime,
+        owner: ThreadId,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> anyhow::Result<()> {
+        let (from_ms, to_ms) = (from_ms.min(to_ms), from_ms.max(to_ms));
+        ensure!(from_ms >= 0, "negative gap time");
+        let mut tx = crate::runtime::db_lock::begin_immediate(&runtime.pool).await?;
+        let result = async {
+            if !ledger_exists(&mut tx).await? {
+                return Ok(());
+            }
+            validate_on_connection(&mut tx).await?;
+            require_format_on_connection(&mut tx, super::gap_days::FORMAT).await?;
+            let checkpoint = match super::retention_fixture_on_connection(&mut tx).await? {
+                super::RetentionFixture::Active(checkpoint) => Some(checkpoint),
+                super::RetentionFixture::Staging | super::RetentionFixture::Absent => None,
+            };
+            for day in super::gap_days::days(from_ms, to_ms, checkpoint) {
+                super::gap_days::mark_on_connection(&mut tx, owner, day).await?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => tx.commit().await?,
+            Err(error) => {
+                tx.rollback().await?;
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Refuse a ledger written in a newer format (`NewerLedgerFormat`); a
@@ -1032,6 +1145,8 @@ async fn inspect_tree_window(
         view.other_conversations =
             Some(scope::other_conversations(conn, unrelated, day, read_at_ms, work).await);
     }
+    // #314 (D228): a request of this tree that day went unrecorded.
+    view.recording_gap = empty_day::gap_recorded(conn, owner, day).await?;
     // Last, so the start's scan never takes budget the rest of the view needs.
     // #1196: a range bucket's part of the day is classified the same way.
     if view.totals.attempts == 0 {

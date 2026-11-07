@@ -1,0 +1,90 @@
+#!/bin/bash
+# Launch the exact pinned package with the run's private profile. Usage:
+#   agms-product ROUTE MODEL [ARGS...]            the TUI (ARGS may start with: resume ...)
+#   agms-product --exec ROUTE MODEL [ARGS...]     `corbanu exec` on the same profile and project
+#   agms-product --realtime openai MODEL TEXT      acc-tart1: one realtime session through `corbanu app-server`
+#                                                  (S09's driver), after an API-key sign-in with the placeholder
+# AGMS_PROVIDER_NAME (moonshot route only) names the person-configured provider (default kimi).
+set -u
+R="${AGMS_ROOT:-/opt/agms}"
+mode=tui
+if [ "${1:-}" = "--exec" ]; then mode=exec; shift; fi
+if [ "${1:-}" = "--realtime" ]; then mode=realtime; shift; fi
+route="$1"; model="$2"; shift 2
+RUN="${AGMS_RUN:?}"
+models_for() {
+  case "$1" in
+    zai) echo "glm-5.3-flash" ;;
+    openai) echo "gpt-6-luna gpt-5.6-luna gpt-5.6-sol gpt-6.1-sol gpt-5.4" ;;
+    moonshot) echo "kimi-k3 kimi-k2.7-code" ;;
+    chatgpt) echo "gpt-5.4 gpt-mock-unlisted" ;;
+    openrouter) echo "z-ai/glm-5.3-flash deepseek/deepseek-v4.1-flash xiaomi/mimo-v2.6-pro standin/uncatalogued" ;;
+    vercel) echo "zai/glm-5.3-flash" ;;
+    corbanu) echo "corbanu/deepseek-v4.1-flash" ;;
+    custom) echo "lab-model-1" ;;
+    *) return 1 ;;
+  esac
+}
+allowed="$(models_for "$route")" || { echo "unknown route $route" >&2; exit 64; }
+case " $allowed " in *" $model "*) ;; *) echo "model $model is not offered on route $route (offered: $allowed)" >&2; exit 64;; esac
+name="${AGMS_PROVIDER_NAME:-kimi}"
+[[ "$name" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || { echo "bad provider name" >&2; exit 64; }
+P="agms-synthetic-placeholder-not-a-credential"
+keys=(ZAI_API_KEY="$P" MOONSHOT_API_KEY="$P" OPENROUTER_API_KEY="$P" AI_GATEWAY_API_KEY="$P"
+      PFTERMINAL_PLAN_API_KEY="$P" MYLAB_API_KEY="$P")
+case "$route" in
+  zai) provider=(-c 'model_provider="zai"') ;;
+  openai) provider=(-c 'model_provider="openai"'); keys+=(OPENAI_API_KEY="$P") ;;
+  moonshot) provider=(-c "model_providers.$name={name=\"$name\",base_url=\"https://api.moonshot.ai/v1\",env_key=\"MOONSHOT_API_KEY\",wire_api=\"chat\"}"
+                      -c "model_provider=\"$name\"") ;;
+  chatgpt) provider=(-c 'model_provider="openai"') ;;
+  openrouter) provider=(-c 'model_provider="openrouter"') ;;
+  vercel) provider=(-c 'model_provider="vercel"') ;;
+  corbanu) provider=() ;;
+  custom) provider=(-c 'model_providers.mylab={name="mylab",base_url="https://llm.mylab.test/v1",env_key="MYLAB_API_KEY",wire_api="chat",billing="pay_per_use"}'
+                    -c 'model_provider="mylab"') ;;
+esac
+# Synthetic extra environment requested by the tester (AGMS_EXTRA_ENV: NAME=value lines; letters, digits, . _ -).
+extra_env=()
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  [[ "$line" =~ ^[A-Z][A-Z0-9_]*=[A-Za-z0-9._-]+$ ]] || { echo "refused extra env: $line" >&2; exit 64; }
+  extra_env+=("$line")
+done <<< "${AGMS_EXTRA_ENV:-}"
+cd "$RUN/fixture/workspace" || exit 66
+env_args=(-i PATH="$R/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$HOME" USER="$USER"
+  LOGNAME="$USER" SHELL=/bin/bash TERM="${TERM:-screen-256color}" LANG=en_US.UTF-8
+  TMPDIR="$RUN/tmp/" CORBANU_HOME="$RUN/product-home" CODEX_HOME="$RUN/product-home"
+  PFTERMINAL_HOME="$RUN/product-home" CORBANU_TEST_NO_NATIVE_KEYRING=1
+  HTTPS_PROXY="$AGMS_PROXY" CODEX_CA_CERTIFICATE="$R/etc/mediation-ca.pem"
+  "${keys[@]}" AGMS_RUN="$RUN" ${extra_env[@]+"${extra_env[@]}"})
+BIN="$R/pkg/bin/corbanu"
+# ChatGPT route: sign in once against the stand-in sign-in server (fake tokens), before the first start.
+if [ "$route" = chatgpt ] && ! grep -q '"tokens"' "$RUN/product-home/auth.json" 2>/dev/null; then
+  env "${env_args[@]}" "$BIN" login --device-auth -c 'cli_auth_credentials_store="file"' \
+    >> "$RUN/evidence/chatgpt-sign-in.txt" 2>&1 < /dev/null
+  echo "[agms] signed in to the ChatGPT stand-in (exit $?); output in evidence/chatgpt-sign-in.txt"
+fi
+common=(-m "$model" ${provider[@]+"${provider[@]}"} -c 'cli_auth_credentials_store="file"' -c "log_dir=\"$RUN/product-logs\"")
+if [ "$mode" = realtime ]; then
+  [ "$route" = openai ] || { echo "realtime runs on the openai route only" >&2; exit 64; }
+  # S09's driver README: realtime needs an API-key sign-in on the profile. The key is the synthetic placeholder;
+  # the relay injects the real key (D16). Done once per profile.
+  if ! grep -q '"OPENAI_API_KEY": *"agms-synthetic' "$RUN/product-home/auth.json" 2>/dev/null; then
+    printf '%s\n' "$P" | env "${env_args[@]}" "$BIN" login --with-api-key -c 'cli_auth_credentials_store="file"' \
+      >> "$RUN/evidence/realtime-sign-in.txt" 2>&1
+    echo "[agms] API-key sign-in with the synthetic placeholder (exit $?); output in evidence/realtime-sign-in.txt"
+  fi
+  exec env "${env_args[@]}" /usr/bin/python3 "$R/bin/agms-realtime-driver" "$BIN" "$RUN/fixture/workspace" \
+    --config 'features.realtime_conversation=true' --config 'cli_auth_credentials_store="file"' \
+    --config "log_dir=\"$RUN/product-logs\"" --text "${1:?text}"
+fi
+if [ "$mode" = exec ]; then
+  exec env "${env_args[@]}" "$BIN" exec --skip-git-repo-check "${common[@]}" -C "$RUN/fixture/workspace" "$@"
+fi
+cfg=(--no-alt-screen "${common[@]}" -C "$RUN/fixture/workspace")
+if [ "${1:-}" = "resume" ]; then
+  shift
+  exec env "${env_args[@]}" "$BIN" resume "$@" "${cfg[@]}"
+fi
+exec env "${env_args[@]}" "$BIN" "${cfg[@]}" "$@"

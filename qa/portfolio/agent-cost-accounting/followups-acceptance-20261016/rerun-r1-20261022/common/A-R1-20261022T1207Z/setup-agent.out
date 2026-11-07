@@ -1,0 +1,14 @@
+key file zai_api_key absent
+key file openai_api_key absent
+key file kimi_api_key absent
+auth.json: seal-guest.sh synthetic placeholder
+caps: moonshot 0, realtime 0
+{"event": "started", "moonshot_cap": 0, "pins": {}, "port": 18443, "real_hosts": {"api.moonshot.ai": ["/v1/chat/completions", "/v1/models"], "api.openai.com": ["/v1/responses", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/realtime"], "api.z.ai": ["/api/paas/v4/", "/api/coding/paas/v4/", "/api/anthropic/"]}, "realtime_cap": 0, "realtime_port": 0, "relays": {"openai": 18622, "zai": 18621}, "standin_hosts": {"ab.chatgpt.com": 18601, "ai-gateway.vercel.sh": 18602, "api.corbanu.com": 18602, "auth.openai.com": 18601, "chatgpt.com": 18601, "llm.mylab.test": 18602, "openrouter.ai": 18602}, "time_ns": 1792670893221343000, "ts": "2026-10-22T12:08:13+0000"}
+{"event": "started", "port": 18602, "t": 1792670893.265}
+2026-10-22T12:08:14Z clear (baseline login-window SecurityAgent only)
+/Users/agent 700 agent
+/Users/agent/agms 700 agent
+/Users/agent/agms-canary 700 agent
+/private/tmp/agms-canary-ipc 700 agent
+/Users/Shared/agms-canary-ipc.pid 644 agent
+setup-agent done

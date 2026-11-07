@@ -1,0 +1,4 @@
+Preflight passed. Reading only the assigned frozen packet, tool facts, and current home listing.
+Preflight verified. Starting NA-11 exactly as written.
+{"type": "error", "message": "the model provider stopped generation at its output or context limit; the response may contain an incomplete tool call and the turn was stopped without executing further model work"}
+{"type": "turn.failed", "error": {"message": "the model provider stopped generation at its output or context limit; the response may contain an incomplete tool call and the turn was stopped without executing further model work"}}
