@@ -68,8 +68,12 @@ pub(crate) enum Coverage {
     /// Code mode: the cell has no host access of its own; each tool it calls
     /// is dispatched and checked like a direct call.
     NestedCallsOnly,
-    /// Hands work to another agent, which inherits the taint and the level.
+    /// Hands work to another agent, which inherits the taint and the level,
+    /// or waits on one.
     ChildAgent,
+    /// Starts a new agent: asks the human after untrusted content, naming it
+    /// as an agent launch (D320, #1653).
+    AgentLaunch,
     /// Changes what the agent may do (permissions, plugins): asks the human
     /// itself unless an automatic reviewer would answer.
     PolicyRequest,
@@ -87,9 +91,11 @@ const APPROVAL_SEAM: &[&str] = &[
     "structured_edit",
     "structured_write",
 ];
+/// D320 (#1653): starting an agent, on every route. `spawn_agent_v1` is the
+/// plain-function alias for providers without namespace tools (Chat
+/// Completions, Claude-style).
+const AGENT_LAUNCH: &[&str] = &["spawn_agent", "spawn_agent_plaintext", "spawn_agent_v1"];
 const CHILD_AGENT: &[&str] = &[
-    "spawn_agent",
-    "spawn_agent_plaintext",
     "send_input",
     "send_message",
     "send_message_plaintext",
@@ -100,6 +106,9 @@ const CHILD_AGENT: &[&str] = &[
     "interrupt_agent",
     "list_agents",
     "wait_agent",
+    // D320 (#1653): waiting on an agent is always allowed, also through the
+    // plain-function alias.
+    "wait_agent_v1",
 ];
 const NO_PROTECTED_EFFECT: &[&str] = &[
     "update_plan",
@@ -154,6 +163,7 @@ pub(crate) fn coverage(origin: ToolOrigin, name: &ToolName) -> Coverage {
             "write_stdin" => Coverage::OwnCheck,
             "exec" | "wait" => Coverage::NestedCallsOnly,
             "request_permissions" | "request_plugin_install" => Coverage::PolicyRequest,
+            _ if AGENT_LAUNCH.contains(&plain) => Coverage::AgentLaunch,
             _ if CHILD_AGENT.contains(&plain) => Coverage::ChildAgent,
             _ if NO_PROTECTED_EFFECT.contains(&plain) => Coverage::NoProtectedEffect,
             _ => Coverage::Unclassified,
