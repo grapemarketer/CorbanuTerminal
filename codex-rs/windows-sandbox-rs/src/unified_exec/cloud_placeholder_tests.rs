@@ -1,6 +1,12 @@
 //! #1668: cloud-file placeholder folders (OneDrive Files On-Demand and other
 //! Cloud Files sync providers) at or above an explicit read-only path get
 //! the same protection as plain folders.
+//!
+//! Windows hides placeholders' reparse points from most programs outside the
+//! Windows folder (they see plain folders, which main already protects), but
+//! shows them to a process that asks (`PHCM_EXPOSE_PLACEHOLDERS`); other
+//! non-link reparse points, such as ProjFS (VFS for Git) folders, are never
+//! hidden. The test asks, so the sandbox code sees what such a process sees.
 
 use super::carve_out_link::run_script;
 use super::*;
@@ -56,15 +62,20 @@ type RegisterFn =
 type UnregisterFn = unsafe extern "system" fn(*const u16) -> i32;
 type CreatePlaceholdersFn =
     unsafe extern "system" fn(*const u16, *mut PlaceholderCreateInfo, u32, u32, *mut u32) -> i32;
+type PlaceholderModeFn = unsafe extern "system" fn(i8) -> i8;
 
 /// `name` from cldapi.dll (loaded at run time, so nothing links against it).
 fn cloud_api(name: &str) -> unsafe extern "system" fn() -> isize {
-    let library = to_wide("cldapi.dll");
+    library_proc("cldapi.dll", name)
+}
+
+fn library_proc(library: &str, name: &str) -> unsafe extern "system" fn() -> isize {
+    let library = to_wide(library);
     let name = std::ffi::CString::new(name).expect("name");
     // SAFETY: plain library and symbol lookups with NUL-terminated names.
     unsafe {
         let module = LoadLibraryW(library.as_ptr());
-        assert!(module != 0, "load cldapi.dll");
+        assert!(module != 0, "load library for {name}");
         GetProcAddress(module, name.as_ptr().cast()).expect("cldapi symbol")
     }
 }
@@ -150,6 +161,35 @@ impl Drop for SyncRoot {
     }
 }
 
+/// This process sees placeholders as they are (`PHCM_EXPOSE_PLACEHOLDERS`)
+/// until dropped.
+struct ExposePlaceholders(i8);
+
+impl ExposePlaceholders {
+    fn new() -> Self {
+        let previous = set_placeholder_mode(/*PHCM_EXPOSE_PLACEHOLDERS*/ 2);
+        assert!(previous >= 0, "RtlSetProcessPlaceholderCompatibilityMode");
+        Self(previous)
+    }
+}
+
+impl Drop for ExposePlaceholders {
+    fn drop(&mut self) {
+        set_placeholder_mode(self.0);
+    }
+}
+
+fn set_placeholder_mode(mode: i8) -> i8 {
+    // SAFETY: the signature is `RtlSetProcessPlaceholderCompatibilityMode`'s.
+    unsafe {
+        let set: PlaceholderModeFn = std::mem::transmute(library_proc(
+            "ntdll.dll",
+            "RtlSetProcessPlaceholderCompatibilityMode",
+        ));
+        set(mode)
+    }
+}
+
 /// A reparse point that isn't a link (a junction, symbolic link or mount
 /// point), as cloud placeholders are.
 fn is_placeholder(path: &Path) -> bool {
@@ -164,6 +204,7 @@ fn is_placeholder(path: &Path) -> bool {
 #[test]
 fn legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved() {
     let _guard = legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
     let test_root = user_owned_test_root();
     let workspace = test_root.path().join("workspace");
     let cloud = workspace.join("cloud");
