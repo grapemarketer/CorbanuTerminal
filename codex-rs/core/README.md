@@ -230,11 +230,17 @@ lock are per Windows account, so in the milliseconds between one account's
 sweep finding a folder not Low and removing the deny, another account's
 session could label the folder Low and start a command that relies on that
 deny. A deny that D263 needs above an explicit nested read-only
-path must be in place, or the command doesn't start. A link (junction or
-symbolic link) between the writable root and such a path stops the command
-too (#1542 item 1, D293): D263's denies land on the link's target, so the
-link itself could be removed and the read-only path recreated behind it.
-Configure the path through the link's target instead. A read-only path spelled
+path must be in place, or the command doesn't start. So must there be no
+link (junction, symbolic link or mount point) above such a path that a
+command could replace, that is, one whose folder lies inside a writable
+root, whether in the path as configured or on the way to a link's target
+(#1542 item 1, D293). D263's denies land on the link's target, so the link
+itself could be removed and the read-only path recreated behind it.
+Configure the path through the link's target instead. The check runs again
+once the denies are in place, so a link a running command swaps in
+meanwhile is caught too; a root spelled through a link from outside the
+writable roots is fine. Other reparse points, such as OneDrive placeholders,
+don't count. A read-only path spelled
 through a writable root's link, and so listed against the root's resolved
 path, gets the same protection (#1542 item 2). An entry that was already there and isn't recorded (one
 the user made, or one left by a version before this change) is never

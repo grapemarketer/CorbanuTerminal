@@ -200,21 +200,34 @@ fn legacy_read_only_path_through_a_linked_root_keeps_its_ancestors() {
     );
 }
 
-/// Item 1: which folders count. The root may be spelled through a link; a
-/// folder below it that links back to the root, or anywhere else, counts.
+/// Item 1: which links count: any above the read-only path whose folder
+/// lies inside a writable root (so a command can replace it), also on the
+/// way to a link's target; not a root spelled through a link from outside
+/// the roots.
 #[test]
 fn link_above_carve_out_finds_links_below_the_root() {
     let test_root = user_owned_test_root();
-    let root = dunce::canonicalize(test_root.path())
-        .expect("canonical")
-        .join("root");
-    fs::create_dir_all(root.join("real\\b\\c")).expect("create");
-    fs::create_dir_all(root.join("plain\\b\\c")).expect("create");
+    let base = dunce::canonicalize(test_root.path()).expect("canonical");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    for dir in [
+        root.join("real\\b\\c"),
+        root.join("plain\\b\\c"),
+        outside.join("inner\\x\\y"),
+        outside.join("away\\b\\c"),
+    ] {
+        fs::create_dir_all(dir).expect("create");
+    }
     junction(&root.join("a"), &root.join("real"));
     junction(&root.join("alias"), &root);
-    let linked_root = root.with_file_name("linked-root");
+    junction(&root.join("inner"), &outside.join("inner"));
+    junction(&root.join("out"), &outside.join("away"));
+    let linked_root = base.join("linked-root");
     junction(&linked_root, &root);
-    let find = |path: &Path| crate::workspace_acl::link_above_carve_out(path, &root);
+    let alias_outside = base.join("alias-outside");
+    junction(&alias_outside, &root.join("a"));
+    let roots = [root.clone(), outside.join("inner")];
+    let find = |path: &Path| crate::workspace_acl::link_above_carve_out(path, &roots);
 
     assert_eq!(
         (
@@ -223,6 +236,12 @@ fn link_above_carve_out_finds_links_below_the_root() {
             find(&root.join("alias\\plain\\b\\c")),
             find(&linked_root.join("plain\\b\\c")),
             find(&linked_root.join("a\\b\\c")),
+            // A nested writable root reached through a junction in the outer one.
+            find(&root.join("inner\\x\\y")),
+            // A junction whose target leaves the roots.
+            find(&root.join("out\\b\\c")),
+            // A link outside the roots pointing at a junction inside one.
+            find(&alias_outside.join("b\\c")),
         ),
         (
             None,
@@ -230,6 +249,9 @@ fn link_above_carve_out_finds_links_below_the_root() {
             Some(root.join("alias")),
             None,
             Some(linked_root.join("a")),
+            Some(root.join("inner")),
+            Some(root.join("out")),
+            Some(root.join("a")),
         )
     );
 }
