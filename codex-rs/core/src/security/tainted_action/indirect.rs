@@ -406,13 +406,21 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
 /// shell removes from the words it runs, and without the targets the
 /// command is one this reading judges by its file: a program named by a
 /// path or a shell or interpreter. The words keep the targets, so that
-/// command is never judged. `2>/dev/null git status` is read as before.
+/// command is never judged. A descriptor number before a target (`2>log`,
+/// lexed as `2` and `log`) is part of the redirection. `2>/dev/null git
+/// status` is read as before.
 pub(super) fn redirect_hides_command(command: &SimpleCommand, words: &[String]) -> bool {
-    let target = |at: usize| {
+    let redirected = |at: usize| {
         work::step();
         command.writes_to.contains(&at)
             || command.stdin_from == Some(at)
             || command.here_string == Some(at)
+    };
+    let target = |at: usize| {
+        redirected(at)
+            || (redirected(at + 1)
+                && !words[at].is_empty()
+                && words[at].bytes().all(|byte| byte.is_ascii_digit()))
     };
     if !command_word(words).is_some_and(|(at, _)| target(at)) {
         return false;

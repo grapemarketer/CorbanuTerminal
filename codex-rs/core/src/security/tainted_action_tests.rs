@@ -7021,13 +7021,13 @@ fn issue_1482_unknown_cluster_letters_keep_one_word() {
     assert_eq!(quiet, Vec::<&str>::new(), "should ask");
 }
 
-/// #1482 items 2-5: a redirection's target read as the command (`sudo -R
-/// >log -C sub ./run.sh`, `>log ./x`), `eval` text without the
-/// wrapper-folder check (`eval 'sudo -C 3 ./run.sh'`), sudo running code the
-/// words do not name (`-i` from the target user's home, `-A` an askpass
-/// helper, `-e` an editor) and one argv element holding a space (`["true
-/// ./x"]`, one file of that name) ask. The lines around them stay as they
-/// were.
+/// #1482 items 2-5 ask: a redirection's target read as the command
+/// (`sudo -R >log -C sub ./run.sh`, `>log ./x`), `eval` text without the
+/// wrapper-folder check (`eval 'sudo -C 3 ./run.sh'`), sudo running code
+/// the words do not name (`-i` from the target user's home, `-A` an
+/// askpass helper, `-e` an editor) and one argv element holding a space
+/// (`["true ./x"]`, one file of that name). The lines around them stay as
+/// they were.
 #[cfg(unix)]
 #[test]
 fn issue_1482_items_2_to_5_ask() {
@@ -7044,6 +7044,7 @@ fn issue_1482_items_2_to_5_ask() {
         (x_evil, "sudo >log ./x"),
         (x_evil, "env >log ./x"),
         (x_evil, "2>log sh x"),
+        (x_evil, "sudo 2>log ./x"),
         (x_evil, "<log sh x"),
         // Item 3.
         (three_evil, "eval 'sudo -C 3 ./run.sh'"),
