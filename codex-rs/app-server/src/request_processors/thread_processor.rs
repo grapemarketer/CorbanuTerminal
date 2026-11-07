@@ -6012,7 +6012,9 @@ fn build_thread_from_snapshot(
         id: thread_id.to_string(),
         extra: None,
         session_id,
-        forked_from_id: None,
+        forked_from_id: config_snapshot
+            .forked_from_thread_id
+            .map(|id| id.to_string()),
         parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,

@@ -1,5 +1,6 @@
 use super::*;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use pretty_assertions::assert_eq;
 
 fn counters(input: i64) -> TokenUsageBreakdown {
@@ -93,7 +94,9 @@ fn seeded_fork_update_before_live_usage_keeps_total_unknown() {
 #[test]
 fn baseline_overflow_is_unknown_instead_of_panicking() {
     let mut usage = JsonUsage::default();
-    let mut notification = report("root", /*total*/ 0, /*last*/ 0);
+    usage.register_thread("child", "root");
+    usage.observe(&report("root", /*total*/ 100, /*last*/ 100));
+    let mut notification = report("child", /*total*/ 0, /*last*/ 0);
     let ServerNotification::ThreadTokenUsageUpdated(update) = &mut notification else {
         unreachable!()
     };
@@ -101,7 +104,38 @@ fn baseline_overflow_is_unknown_instead_of_panicking() {
     update.token_usage.last.input_tokens = 1;
     usage.observe(&notification);
     assert_eq!(usage.for_thread("root"), None);
-    assert!(!usage.is_valid());
+}
+
+/// #1637: the root counts from zero, so its first report needs no inherited
+/// prefix. A resumed root whose first report has `total < last` (possible after
+/// a compaction estimate) keeps a known total, and so does a descendant whose
+/// first report only has `total_tokens` below `last` (`Usage` does not export it).
+#[test]
+fn root_first_report_and_total_tokens_do_not_need_a_baseline() {
+    let mut usage = JsonUsage::default();
+    usage.register_thread("child", "root");
+    let mut root = report("root", /*total*/ 100, /*last*/ 100);
+    let ServerNotification::ThreadTokenUsageUpdated(update) = &mut root else {
+        unreachable!()
+    };
+    update.token_usage.last.input_tokens = 150;
+    let mut child = report("child", /*total*/ 40, /*last*/ 40);
+    let ServerNotification::ThreadTokenUsageUpdated(update) = &mut child else {
+        unreachable!()
+    };
+    update.token_usage.last.total_tokens = update.token_usage.total.total_tokens + 1;
+    usage.observe(&root);
+    usage.observe(&child);
+    assert_eq!(
+        usage.for_thread("root"),
+        Some(Usage {
+            input_tokens: 140,
+            cached_input_tokens: 14,
+            cache_write_input_tokens: 7,
+            output_tokens: 70,
+            reasoning_output_tokens: 35,
+        })
+    );
 }
 
 #[test]

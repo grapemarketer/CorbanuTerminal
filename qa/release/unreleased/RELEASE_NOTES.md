@@ -16,9 +16,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - **Usage includes observed descendant work** (#290, #1601, thanks to
   @white-guy-01). Repeated cumulative reports are counted once. Every
   history-forked descendant makes the total `null`, as do a descendant with no
-  report,
-  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
-  thread's own totals are not a difference from the start of the invocation.
+  report, a failed or timed-out ancestry read, or dropped events (`Lagged`).
+  The selected thread's own totals are not a difference from the start of the
+  invocation, so its first report needs no inherited baseline: a resumed
+  thread whose first report follows a compaction estimate keeps a known total
+  (#1637).
   Detached children can incur further usage after this snapshot.
 - **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
   defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs

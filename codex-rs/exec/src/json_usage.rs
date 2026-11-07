@@ -7,7 +7,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
-use codex_app_server_protocol::TokenUsageBreakdown;
 
 use crate::RequestIdSequencer;
 use crate::event_processor::EventProcessor;
@@ -21,7 +20,9 @@ const ANCESTRY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 #[derive(Default)]
 pub(crate) struct JsonUsage {
     reports: HashMap<String, ThreadTokenUsage>,
-    baselines: HashMap<String, TokenUsageBreakdown>,
+    /// Each thread's first report, from which a descendant's inherited prefix
+    /// is derived. The root counts from zero, so its first report is unused.
+    first_reports: HashMap<String, ThreadTokenUsage>,
     children: HashMap<String, HashSet<String>>,
     forked_threads: HashSet<String>,
     incomplete: bool,
@@ -55,14 +56,9 @@ impl JsonUsage {
             {
                 return;
             }
-            if !self.baselines.contains_key(&notification.thread_id) {
-                let Some(baseline) = inherited_prefix(usage) else {
-                    self.invalidate();
-                    return;
-                };
-                self.baselines
-                    .insert(notification.thread_id.clone(), baseline);
-            }
+            self.first_reports
+                .entry(notification.thread_id.clone())
+                .or_insert_with(|| usage.clone());
             self.reports.insert(
                 notification.thread_id.clone(),
                 notification.token_usage.clone(),
@@ -97,18 +93,10 @@ impl JsonUsage {
             // A missing report from any participant makes the total unknown,
             // rather than silently claiming its work was free.
             let usage = &self.reports.get(thread_id)?.total;
-            let zero = TokenUsageBreakdown {
-                input_tokens: 0,
-                cached_input_tokens: 0,
-                cache_write_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                total_tokens: 0,
-            };
             let baseline = if thread_id == root {
-                &zero
+                Usage::default()
             } else {
-                self.baselines.get(thread_id)?
+                inherited_prefix(self.first_reports.get(thread_id)?)?
             };
             result.input_tokens = result.input_tokens.checked_add(nonnegative_difference(
                 usage.input_tokens,
@@ -218,8 +206,10 @@ pub(crate) async fn observe_subagent(
     processor.observe_unselected_notification(notification, selected_thread_id);
 }
 
-fn inherited_prefix(usage: &ThreadTokenUsage) -> Option<TokenUsageBreakdown> {
-    Some(TokenUsageBreakdown {
+/// The counters a descendant's first report carried in before its own first
+/// request. `total_tokens` is left out: `Usage` does not export it.
+fn inherited_prefix(usage: &ThreadTokenUsage) -> Option<Usage> {
+    Some(Usage {
         input_tokens: nonnegative_difference(usage.total.input_tokens, usage.last.input_tokens)?,
         cached_input_tokens: nonnegative_difference(
             usage.total.cached_input_tokens,
@@ -234,7 +224,6 @@ fn inherited_prefix(usage: &ThreadTokenUsage) -> Option<TokenUsageBreakdown> {
             usage.total.reasoning_output_tokens,
             usage.last.reasoning_output_tokens,
         )?,
-        total_tokens: nonnegative_difference(usage.total.total_tokens, usage.last.total_tokens)?,
     })
 }
 
