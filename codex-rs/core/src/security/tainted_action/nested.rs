@@ -717,8 +717,19 @@ impl Classifier {
                         // folder; a wrapper before the command moved it
                         // (`sudo -D ~ git config -f .zshenv …`).
                         let moved = elsewhere_from.is_some_and(|from| from < at);
+                        // #1661: and a `submodule foreach` or `bisect run`
+                        // runs its inner git in the submodule or an unknown
+                        // folder, so the inner git's relative outputs ask
+                        // even where the outer git was told a folder (`git
+                        // -C ~/r submodule foreach git log
+                        // --output=../../.zshenv`).
+                        let wrapped = git_helpers::runs_wrapped_git(&texts, at);
                         if files.iter().any(|file| {
-                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                            self.unknown_folder_file(
+                                folders,
+                                moved || wrapped || folders.unchecked,
+                                file,
+                            )
                         }) {
                             note_git(found, ProtectedActionKind::Persistence);
                         }

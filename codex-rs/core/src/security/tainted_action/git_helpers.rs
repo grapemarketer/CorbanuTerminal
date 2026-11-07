@@ -27,6 +27,63 @@ pub(super) fn git_name(word: &str) -> Option<Option<String>> {
         .map(|subcommand| Some(subcommand.to_string()))
 }
 
+/// #1661: whether the git at `at` runs a git of its own in another folder:
+/// `submodule foreach` or `bisect run` (`git -C ~/r submodule foreach
+/// git log --output=...`, `git bisect run git log --output=...`). After
+/// git's global options, the words `submodule` + `foreach` or `bisect` +
+/// `run`; a dashed helper (`git-submodule`) already names its subcommand.
+pub(super) fn runs_wrapped_git(words: &[String], at: usize) -> bool {
+    let Some(word) = words.get(at) else {
+        return false;
+    };
+    // A dashed helper (`git-submodule`, `git-bisect`) already names the
+    // subcommand it runs.
+    if let Some(Some(subcommand)) = git_name(word) {
+        return matches!(
+            (subcommand.as_str(), words.get(at + 1).map(String::as_str)),
+            ("submodule", Some("foreach")) | ("bisect", Some("run"))
+        );
+    }
+    if !shell::basename(word).eq_ignore_ascii_case("git") && git_name(word).is_none() {
+        return false;
+    }
+    // Git's global options, with the value of one that takes it.
+    const VALUED: &[&str] = &[
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    ];
+    let mut index = at + 1;
+    while index < words.len() {
+        work::step();
+        let word = &words[index];
+        if word == "--" {
+            index += 1;
+            break;
+        }
+        if word.starts_with('-') && word != "-" {
+            index += 1;
+            if VALUED.contains(&word.as_str()) && !word.contains('=') {
+                index += 1;
+            }
+            continue;
+        }
+        break;
+    }
+    matches!(
+        (
+            words.get(index).map(String::as_str),
+            words.get(index + 1).map(String::as_str)
+        ),
+        (Some("submodule"), Some("foreach")) | (Some("bisect"), Some("run"))
+    )
+}
+
 /// D153: whether a git command (`git`, `git.exe`, after any wrapper) gives a
 /// `-c` or `--config-env` setting as text holding a git name
 /// (`git -c 'user.name=a git.exe b' -c core.pager=sh log`). The word lexer
