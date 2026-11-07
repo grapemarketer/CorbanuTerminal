@@ -332,6 +332,100 @@ fn link_above_carve_out_finds_links_below_the_root() {
     );
 }
 
+/// #1686: a configured read-only path that doesn't exist yet is created
+/// before the command starts and protected like one that exists, whether it
+/// comes as an extra deny-write path (as `command/exec` passes it) or only
+/// in the profile (as the shell tool and unified exec do): the command can't
+/// write in it, nor move it or the folder above it away and recreate it.
+/// Before, a path that came only in the profile was dropped while missing.
+#[test]
+fn legacy_missing_read_only_path_is_created_and_protected() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [true, false]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            let read_only = workspace.join("a\\ro");
+            missing_read_only_path_outcome(&workspace, &read_only, as_deny_write_path)
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [true, false].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            true,
+            false,
+            false,
+            Some("after\r\n".to_string())
+        ))
+    );
+}
+
+/// Runs the #1686 script with `read_only` configured read-only (and, with
+/// `as_deny_write_path`, also passed as an extra deny-write path).
+fn missing_read_only_path_outcome(
+    workspace: &Path,
+    read_only: &Path,
+    as_deny_write_path: bool,
+) -> (bool, Result<i32, String>, bool, bool, bool, Option<String>) {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(workspace),
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(read_only),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+        vec![absolute(read_only)]
+    } else {
+        Vec::new()
+    };
+    let started = run_script(
+        &profile,
+        workspace,
+        &carve_outs,
+        HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
+        concat!(
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "rmdir \"%W%\\a\\ro\"\r\n",
+            "ren \"%W%\\a\" a-moved\r\n",
+            "mkdir \"%W%\\a\\ro\"\r\n",
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "echo after> \"%W%\\a\\other.txt\"\r\n",
+        ),
+    );
+
+    (
+        as_deny_write_path,
+        started,
+        read_only.is_dir(),
+        read_only.join("config.toml").exists(),
+        workspace.join("a-moved").exists(),
+        fs::read_to_string(workspace.join("a\\other.txt")).ok(),
+    )
+}
+
 /// #1682: a writable root's top-level `.codex` or `.agents` that is a
 /// junction stops the command. Before, its protections landed on the
 /// junction's target, so the command could remove the junction and make a
@@ -362,11 +456,38 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
                     "echo planted> \"%L%\\config.toml\"\r\n",
                 ),
             );
-            // A root without its own write capability (as the user
-            // profile folder is) can't lose the link, so it doesn't count.
+            // A root without its own write capability can't lose the
+            // link, so it doesn't count: the user profile folder, whose
+            // children each get one instead (here its `child` and the link
+            // itself). With its own capability it counts.
+            fs::create_dir_all(workspace.join("child")).expect("create child");
             let canonical = dunce::canonicalize(&workspace).expect("canonical workspace");
-            let without_capability =
-                crate::spawn_prep::refuse_linked_project_metadata(&[canonical], &[]).is_ok();
+            let codex_home = sandbox_home("d1682-profile");
+            let capabilities = |roots: Vec<PathBuf>| {
+                crate::spawn_prep::root_capability_sids(codex_home.path(), &canonical, roots)
+                    .expect("capability SIDs")
+            };
+            let profile_children = capabilities(crate::setup::expand_user_profile_root_for(
+                vec![canonical.clone()],
+                &canonical,
+            ));
+            let own = capabilities(vec![canonical.clone()]);
+            let refused = |capabilities: &[crate::spawn_prep::RootCapabilitySid]| {
+                crate::spawn_prep::refuse_linked_project_metadata(
+                    std::slice::from_ref(&canonical),
+                    capabilities,
+                )
+                .is_err_and(|err| format!("{err:#}").contains("#1682"))
+            };
+            let without_capability = (
+                profile_children
+                    .iter()
+                    .any(|sid| sid.root == canonical.join("child"))
+                    && profile_children.iter().all(|sid| sid.root != canonical),
+                refused(&profile_children),
+                refused(&[]),
+                refused(&own),
+            );
             (
                 name,
                 without_capability,
@@ -382,6 +503,12 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
 
     assert_eq!(
         results,
-        [".codex", ".agents"].map(|name| (name, true, true, true, Some("original".to_string())))
+        [".codex", ".agents"].map(|name| (
+            name,
+            (true, false, false, true),
+            true,
+            true,
+            Some("original".to_string())
+        ))
     );
 }

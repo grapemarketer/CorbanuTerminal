@@ -28,7 +28,7 @@ The machine source of truth is the front matter in each lifecycle directory.
 | Slot | Initiative | Priority | Deadline | Owner |
 | ---: | --- | --- | --- | --- |
 | 1 of 3 | [P1 security hardening](active/p1-security-hardening.md): deferred features plus P0's carried-forward milestones, 3 lanes; activated 2026-10-08 after [P0 security](completed/main-2026-10-08-p0-security-levels.md) closed | P1 | TBD | Jim Ricketts; Codex security coordinator integrates |
-| 2 of 3 | Free since 2026-10-20: [Accounting follow-ups after PF-60](completed/main-2026-10-20-portfolio-agent-cost-accounting-followups.md) completed without a release after its follow-up live run; Travis assigns the slot | — | — | Travis |
+| 2 of 3 | [Upstream Codex sync to rust-v0.167.0](active/upstream-sync-rust-v0.167.0.md): one two-parent merge of upstream `rust-v0.167.0`, 7 sprints (PF-85); activated 2026-11-07 (D304 on #1532) after the [accounting follow-ups plan](completed/main-2026-10-20-portfolio-agent-cost-accounting-followups.md) freed the slot on 2026-10-20 | P1 | TBD | Travis accountable; upstream-sync integrator |
 | 3 of 3 | [Task Node integration](active/initiative-delivery-control.md) | P1 | TBD | Codex Task Node lane; Travis accepts |
 
 Run `python3 docs/plans/check.py` to validate lifecycle placement, required active
