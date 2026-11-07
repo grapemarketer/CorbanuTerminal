@@ -937,10 +937,22 @@ impl Classifier {
                 }
                 continue;
             }
-            // #1704: `eval` and `trap` run their text as shell.
-            let evaluates = command_at
-                .as_ref()
-                .is_some_and(|(_, name)| matches!(name.as_str(), "eval" | "trap"));
+            // #1704: `eval` and `trap` run their text as shell, also behind
+            // zsh's modifiers (`noglob eval '…'`).
+            let mut evaluates = false;
+            let mut program = command_at.clone();
+            while let Some((at, name)) = program {
+                work::step();
+                if matches!(name.as_str(), "eval" | "trap") {
+                    evaluates = true;
+                    break;
+                }
+                if !unknown_folder::MODIFIERS.contains(&name.as_str()) {
+                    break;
+                }
+                program = indirect::command_word(&texts[at + 1..])
+                    .map(|(next, name)| (at + 1 + next, name));
+            }
             // Also redirection files, comments and other text the shell
             // does not pass on as words.
             let quoted = command
@@ -983,7 +995,10 @@ impl Classifier {
                     // command lines do not count: a decoy (`echo 'sed p'`)
                     // must not make up for a command this reading missed.
                     let counts = (found.sed_commands, found.shell_commands);
-                    let evaluated = std::mem::replace(&mut found.evaluated, evaluates);
+                    // Only its words; not its input, files or comments.
+                    let words = command.words.as_ptr_range();
+                    let own = words.contains(&std::ptr::from_ref(word));
+                    let evaluated = std::mem::replace(&mut found.evaluated, evaluates && own);
                     self.walk(&reading.commands, &mut inner, level + 1, found);
                     found.evaluated = evaluated;
                     found.unreadable |= inner.unfollowed;

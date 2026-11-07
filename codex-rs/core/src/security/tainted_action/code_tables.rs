@@ -140,8 +140,11 @@ pub(super) enum Seen {
     /// Any number of words: an unquoted expansion, which may split (`$o`,
     /// `$(cat f)`), one of several words (`"$@"`), a brace expansion, or
     /// an unquoted pattern that may match a file named like an option or
-    /// a table (`?A`, not `:completion:*`).
+    /// a table (`?A`, `"$o"*`).
     Many,
+    /// Any number of words, none an option or a table's name: a pattern
+    /// that cannot match one (`*.png`, `:completion:*`).
+    Pattern,
 }
 
 impl Seen {
@@ -157,10 +160,16 @@ impl Seen {
             work::step();
             word.text.contains(form)
         });
-        if word.splits || word.brace_expansion || several || (word.globs && may_match(&word.text)) {
+        if word.splits
+            || word.brace_expansion
+            || several
+            || (word.globs && (word.dynamic || may_match(&word.text)))
+        {
             Seen::Many
         } else if word.dynamic {
             Seen::One
+        } else if word.globs {
+            Seen::Pattern
         } else {
             Seen::Known
         }
@@ -174,7 +183,7 @@ impl Seen {
 /// are options, specs or names) and `zstyle` are judged in [`hides_name`].
 const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("set", "A", "o", Operands::None),
-    ("print", "v", "ufCxX", Operands::None),
+    ("print", "v", "fuCxX", Operands::None),
     ("printf", "v", "", Operands::None),
     ("stat", "AH", "fF", Operands::None),
     ("zstat", "AH", "fF", Operands::None),
@@ -266,7 +275,9 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
             let mut later = vec![false; args.len() + 1];
             for at in (0..args.len()).rev() {
                 work::step();
-                later[at] = later[at + 1] || seen_at(at) != Seen::Known || names_table(&args[at]);
+                later[at] = later[at + 1]
+                    || matches!(seen_at(at), Seen::One | Seen::Many)
+                    || names_table(&args[at]);
             }
             later
         });
@@ -281,7 +292,7 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         Seen::Many => true,
         Seen::One if takes_names => at + 1 < args.len(),
         Seen::One => names_later(at),
-        Seen::Known => false,
+        Seen::Pattern | Seen::Known => false,
     };
     match name {
         "zparseopts" => return (0..args.len()).any(hidden),
@@ -354,7 +365,11 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
             return true;
         } else {
             let index = operand.unwrap_or(0);
-            if (named(index) && hidden(at)) || (leading && before_name(index) && many(at)) {
+            // Several words before a name move a later word into it: one
+            // the classifier cannot see, or a table's (`zgetattr *.png
+            // "$n"`).
+            let moves = many(at) || (seen_at(at) == Seen::Pattern && names_later(at));
+            if (named(index) && hidden(at)) || (leading && before_name(index) && moves) {
                 return true;
             }
             operand = Some(index + 1);
