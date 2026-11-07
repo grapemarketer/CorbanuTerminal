@@ -122,3 +122,52 @@ fn sec_win_1780_legacy_read_only_path_stays_read_only_through_links() {
         );
     }
 }
+
+/// As with matching spellings (#1542), a junction inside the writable root
+/// on the way to the read-only path stops the command (it could replace the
+/// junction and recreate the path behind it), whichever of the two is spelled
+/// through the junction to the working folder.
+#[test]
+fn sec_win_1780_legacy_link_inside_the_root_above_a_read_only_path_stops_the_command() {
+    let _guard = legacy_process_test_guard();
+    for (cwd_via_link, docs_via_link) in [(true, false), (false, true)] {
+        let test_root = user_owned_test_root();
+        let base = dunce::canonicalize(test_root.path()).expect("canonical test root");
+        let real = base.join("real");
+        fs::create_dir_all(real.join("target").join("docs")).expect("create docs");
+        let linked = base.join("linked");
+        assert!(make_link("/J", &linked, &real), "mklink /J linked");
+        assert!(
+            make_link("/J", &real.join("hop"), &real.join("target")),
+            "mklink /J hop"
+        );
+        let cwd = if cwd_via_link { &linked } else { &real };
+        let docs = (if docs_via_link { &linked } else { &real })
+            .join("hop")
+            .join("docs");
+        let probe = real.join("target").join("docs").join("probe.txt");
+        let started = super::carve_out_link::run_script(
+            &profile_with_read_only(&docs),
+            cwd,
+            &[],
+            HashMap::new(),
+            &format!("echo x> \"{}\"\r\n", probe.display()),
+        );
+        println!(
+            "sec-win-1780 legacy: link inside the root, cwd via link={cwd_via_link}: {started:?}"
+        );
+        assert_eq!(
+            (
+                started
+                    .as_ref()
+                    .err()
+                    .is_some_and(|err| err.contains("is a link")),
+                probe.exists(),
+            ),
+            (true, false),
+            "cwd via link={cwd_via_link}: {started:?}"
+        );
+        let _ = fs::remove_dir(real.join("hop"));
+        let _ = fs::remove_dir(&linked);
+    }
+}

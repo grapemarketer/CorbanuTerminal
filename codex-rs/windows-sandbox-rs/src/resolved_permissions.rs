@@ -264,12 +264,15 @@ fn strictly_inside(path: &Path, root: &Path) -> bool {
             .is_some_and(|(path, root)| below(&path, &root))
 }
 
-/// #1780: the real paths of the explicit read-only (and deny) `paths` that
-/// lie below writable `root` only with links followed, which `listed` (the
-/// root's read-only paths, matched by spelling) misses: a root reached
-/// through a junction with a path given by its real location, or the
-/// reverse. The root's write access lands on its real location, so these
-/// must be denied there too. Paths `listed` already covers are left out.
+/// #1780: the explicit read-only (and deny) `paths` that lie below writable
+/// `root` only with links followed, which `listed` (the root's read-only
+/// paths, matched by spelling) misses: a root reached through a junction
+/// with a path given by its real location, or the reverse. The root's write
+/// access lands on its real location, so these must be denied there too.
+/// They are kept as configured, as `listed` keeps its paths: the backends
+/// resolve them where it matters, and D293 (#1542, #1667) must still see a
+/// replaceable link on the way. Paths `listed` already covers (by real path)
+/// are left out.
 fn inside_only_by_real_path(paths: &[PathBuf], root: &Path, listed: &[PathBuf]) -> Vec<PathBuf> {
     let Ok(real_root) = dunce::canonicalize(root) else {
         return Vec::new();
@@ -279,13 +282,13 @@ fn inside_only_by_real_path(paths: &[PathBuf], root: &Path, listed: &[PathBuf]) 
         .filter_map(|path| canonicalize_allowing_missing(path))
         .collect();
     let mut missed = Vec::new();
-    for real in paths
-        .iter()
-        .filter_map(|path| canonicalize_allowing_missing(path))
-    {
+    for path in paths {
+        let Some(real) = canonicalize_allowing_missing(path) else {
+            continue;
+        };
         if real != real_root && real.starts_with(&real_root) && !covered.contains(&real) {
-            covered.push(real.clone());
-            missed.push(real);
+            covered.push(real);
+            missed.push(path.clone());
         }
     }
     missed
@@ -534,6 +537,14 @@ mod tests {
                 .collect();
             real_subpaths.sort();
             assert_eq!(real_subpaths, expected, "cwd {}: {roots:?}", cwd.display());
+            // As configured, so D293 still sees a link on the way.
+            for configured in [real.join("docs"), linked.join("notes")] {
+                assert!(
+                    roots[0].read_only_subpaths.contains(&configured),
+                    "cwd {}: {roots:?}",
+                    cwd.display()
+                );
+            }
         }
     }
 

@@ -876,9 +876,10 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
 /// through a junction and the other by its real path, with nothing passed
 /// beyond the profile (Core's resolvers pass no deny path for these). With
 /// both spelled by the real path, the command writes its workspace and not
-/// `docs`. Through a junction the command may not start at all here (the
-/// sandbox account can't pass the user-owned test root at the link), which
-/// is fine; it just mustn't write `docs`.
+/// `docs`, also with `docs` spelled through the junction. With the cwd
+/// spelled through it the command may not start at all here (the sandbox
+/// account can't pass the user-owned test root at the link), which is fine;
+/// it just mustn't write `docs`.
 #[test]
 fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only() {
     let Some(codex_home) = elevated_home("sec-1780") else {
@@ -968,10 +969,11 @@ fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only()
     record_setup(codex_home.path());
     let _ = fs::remove_dir(&linked);
 
-    let docs_written: Vec<bool> = outcomes.iter().map(|outcome| outcome.1).collect();
+    // The cwd by its real path starts either way; through the junction, only
+    // `docs` staying unwritten is required.
     pretty_assertions::assert_eq!(
-        (outcomes[0], docs_written),
-        ((Some(0), false, true), vec![false; 3]),
+        (outcomes[0], outcomes[1].1, outcomes[2]),
+        ((Some(0), false, true), false, (Some(0), false, true)),
         "{}",
         sandbox_log(codex_home.path())
     );
