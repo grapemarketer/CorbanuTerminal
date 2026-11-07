@@ -255,7 +255,7 @@ pub(super) fn inspection_only_prefix(prefix: &[String]) -> bool {
             continue;
         }
         // Operand boundaries are the same as the unchanged shared resolver.
-        let (value_options, mut operands) = super::indirect::WRAPPERS
+        let (value_options, operands) = super::indirect::WRAPPERS
             .iter()
             .find(|(wrapper, _, _)| *wrapper == name)
             .map_or((&[][..], 0), |(_, options, operands)| (*options, *operands));
@@ -274,10 +274,7 @@ pub(super) fn inspection_only_prefix(prefix: &[String]) -> bool {
                 if option == "--" {
                     options = false;
                 }
-                if name == "taskset" && matches!(option.as_str(), "-c" | "--cpu-list") {
-                    operands = 0;
-                }
-                at += 1 + usize::from(value_options.contains(&option.as_str()));
+                at += super::indirect::option_words(&name, option, value_options);
             } else if option.contains('=') {
                 at += 1;
             } else {
