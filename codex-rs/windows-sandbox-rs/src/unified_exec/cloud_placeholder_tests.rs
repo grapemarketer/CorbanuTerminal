@@ -5,6 +5,7 @@
 use super::carve_out_link::run_script;
 use super::*;
 use crate::winutil::to_wide;
+use pretty_assertions::assert_eq;
 use std::ffi::c_void;
 use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
 use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
