@@ -369,11 +369,12 @@ pub(super) fn sudo_close_from(words: &[String], redefined: bool) -> Vec<usize> {
     closes
 }
 
-/// Whether a command with these words runs the scripts it is given in a
-/// folder other than the line's: a wrapper's folder option in any
+/// Where a command with these words starts to run the scripts it is given
+/// in a folder other than the line's: a wrapper's folder option in any
 /// spelling, `find -execdir`, `chroot` or a systemd `WorkingDirectory=`.
 /// `Some`: the position of the first of `texts` that makes it so; it holds
-/// for the texts before a position after it, and only those.
+/// for the texts before a position after it, and only those. `None`: none
+/// does.
 /// `redefined`: see [`sudo_close_from`].
 pub(super) fn elsewhere_at(texts: &[String], redefined: bool) -> Option<usize> {
     let mut tmux = Tmux::default();

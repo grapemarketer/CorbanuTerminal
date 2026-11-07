@@ -248,6 +248,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - **Only stricter:** the remote side can only report a refusal; nothing it
   sends can allow a request. Remote environments running an older version
   don't send these reports, and behave as before.
+- **Hidden characters can't disguise a remote site's name** (#722): bidi
+  controls and zero-width characters are removed from the site named in a
+  remote refusal, and a remote request whose site name contains them is
+  refused without asking.
 
 ## Chat Completions and Anthropic: earlier MCP calls keep their own name
 
@@ -257,6 +261,8 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   it out) used to replay under its bare name, such as `shell`, which a
   built-in tool can share. It now replays under the MCP tool's flat name
   (`mcp__server__tool`), or a hashed form if another tool has that name.
+  MCP servers configured without the `mcp__` prefix get the same treatment
+  (`server__tool`); only built-in tool namespaces keep the bare name.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 

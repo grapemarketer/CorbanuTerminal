@@ -752,19 +752,21 @@ fn issue_434_only_secrets_are_protected_while_stored() {
             provider: None,
             notes: None,
             revocation_notes: None,
+            // The output gate is process-global: words a sibling test reveals
+            // (`pf28-seed`) stay protected, so this phrase must not share them.
             secret:
-                "i434 legal winner thank year wave sausage worth useful legal winner thank yellow"
+                "i434 letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
                     .to_string(),
         })
         .expect("seed");
     let scrub = |text: &str| output_gate::scrub_if_armed(OutputSink::ToolResult, text);
     assert_eq!(scrub("ls /tmp/issue434-claude-config-folder"), None);
     assert!(scrub("key issue434-account-key-0001").is_some_and(|text| !text.contains("0001")));
-    assert_eq!(scrub("words: wave sausage worth useful"), None);
+    assert_eq!(scrub("words: cage absurd amount doctor"), None);
     assert_eq!(
         vault.protect_stored_values().expect("read"),
         Vec::<String>::new()
     );
     assert_eq!(scrub("ls /tmp/issue434-claude-config-folder"), None);
-    assert_eq!(scrub("words: wave sausage worth useful"), None);
+    assert_eq!(scrub("words: cage absurd amount doctor"), None);
 }

@@ -556,6 +556,18 @@ impl ChatWidget {
         for path in &paths {
             lines.push(line![format!("  {}", path.display()).cyan()]);
         }
+        // D283: a recorded folder that isn't `.codex`/`.agents` is one the
+        // sandbox couldn't list when a command ended.
+        let unlisted = paths.iter().any(|path| {
+            !path.file_name().is_some_and(|name| {
+                name.eq_ignore_ascii_case(".codex") || name.eq_ignore_ascii_case(".agents")
+            })
+        });
+        if unlisted {
+            lines.push(line![
+                "A folder other than .codex or .agents couldn't be listed when a command ended, so nothing below it is loaded; make it readable and check it first."
+            ]);
+        }
         lines.push(line!["Check their contents before you load them.".bold()]);
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));

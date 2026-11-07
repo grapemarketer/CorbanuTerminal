@@ -391,6 +391,19 @@ impl Classifier {
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
             let command_at = indirect::command_word(&texts);
+            // #1620: zsh expands `=mytool` in any word, so a writer's operand
+            // names the installed program too (`tee -a =mytool`, `cp x
+            // =mytool`). And the text `eval`, `trap` and `alias` run is a
+            // command line read at this level: its redirection targets and
+            // writers' operands count (`eval "echo x >> =mytool"`). The same
+            // gate as above.
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && (writes_zsh_program(&command.words, command_at.as_ref())
+                    || code_writes_zsh_program(&texts, command_at.as_ref()))
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a command word spelled as a pattern (`c? ~`, `[c]d ~`,
             // `{c,}d ~`) may be `cd`, `eval` or `source`; a `cd` behind
             // zsh's precommand modifiers (`noglob cd ~`) is not followed.
@@ -551,15 +564,24 @@ impl Classifier {
             // exec -w ~ c git log --output=f`, `env -iC ~ git config -f f`):
             // read from the first git, when it is after the folder option
             // (git's own `-C` is followed by `judge_outputs`).
+            // #1606: the first git after it, so an option value spelled
+            // `git` before it (`env -u git -iC ~ git log`) hides none; but
+            // not where the command is git and the option its own.
             if let Some(from) = elsewhere_from
-                && let Some(at) = (0..texts.len()).find(|at| {
+                && !own_git_folder(&texts, from)
+                && let Some(at) = (from + 1..texts.len()).find(|at| {
                     work::step();
                     let program = name(&texts[*at]);
-                    program == "git" || git_helpers::git_name(&program).is_some()
+                    program == "git"
+                        || git_helpers::git_name(&program).is_some()
+                        || indirect::equals_git(&texts[*at])
                 })
-                && at > from
                 && outputs::output_files(
-                    &name(&texts[at]),
+                    &if indirect::equals_git(&texts[at]) {
+                        "git".to_string()
+                    } else {
+                        name(&texts[at])
+                    },
                     &texts[at + 1..],
                     /*unchecked*/ false,
                 )
@@ -1990,6 +2012,111 @@ fn skip_subscript(text: &str) -> &str {
     text.strip_prefix('[')
         .and_then(|inner| inner.split_once(']'))
         .map_or(text, |(_, rest)| rest)
+}
+
+/// #1606: whether the folder option at `from` is git's own: the command
+/// is git, with nothing before it, and only its global options (and their
+/// values) come between them (`git -c k=v -C ~ log`). Not a git after a
+/// wrapper or a subcommand (`=git submodule foreach env -iC ~ git log`),
+/// and not one a wrapper's option value spells (`sudo --user git -D ~`).
+fn own_git_folder(texts: &[String], from: usize) -> bool {
+    const VALUED: &[&str] = &[
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    ];
+    // As written: `=git` is not read so here (as on main), so a later git
+    // is still judged (`=git -C ~/r submodule foreach git log …`).
+    let Some(first) = texts.first() else {
+        return false;
+    };
+    let program = name(first);
+    if !(program == "git" || git_helpers::git_name(first) == Some(None))
+        || !texts.get(from).is_some_and(|word| word.starts_with("-C"))
+    {
+        return false;
+    }
+    let mut value_next = false;
+    texts.get(1..from).unwrap_or_default().iter().all(|word| {
+        work::step();
+        let option = std::mem::take(&mut value_next) || word.starts_with('-');
+        value_next = VALUED.contains(&word.as_str());
+        option
+    })
+}
+
+/// #1620: whether a writer's operand is a word zsh reads as the installed
+/// program it names (`tee -a =mytool`, `cp x ="mytool"`, `curl -o
+/// =mytool`, `cp x ""=mytool`, `cp x {,}=mytool`: any `=` in a word with
+/// a brace group may start one of its words), after zsh's precommand
+/// modifiers (`noglob tee =mytool`). An option's quoted value (`curl
+/// --proto '=https'`) is not expanded.
+fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
+    let Some((mut index, mut program)) = command_at.cloned() else {
+        return false;
+    };
+    while unknown_folder::MODIFIERS.contains(&program.as_str()) {
+        work::step();
+        index += 1;
+        let Some(word) = words.get(index) else {
+            return false;
+        };
+        program = name(&word.text);
+    }
+    WRITERS.contains(&program.as_str())
+        && words
+            .get(index + 1..)
+            .unwrap_or_default()
+            .iter()
+            .any(|word| {
+                work::step();
+                (word.equals_first && outputs::zsh_program_path(&word.text))
+                    || (word.brace_expansion && word.text.contains('='))
+            })
+}
+
+/// #1620: whether the command line `eval` (its words joined), `trap` or
+/// `alias` (each value) runs writes such a program: a redirection target or
+/// a writer's operand (`eval "echo x >> =mytool"`, `alias x='tee =mytool'`).
+/// Read with its quotes, so `eval "awk 'NR>=10' f"` writes nothing.
+fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)>) -> bool {
+    let Some((index, name)) = command_at else {
+        return false;
+    };
+    let args = &texts[index + 1..];
+    let lines: Vec<&str> = match name.as_str() {
+        "eval" => {
+            let args = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+            return writes_in(&args.join(" "));
+        }
+        "trap" => args.iter().map(String::as_str).collect(),
+        "alias" => args
+            .iter()
+            .map(|arg| arg.split_once('=').map_or(arg.as_str(), |(_, value)| value))
+            .collect(),
+        _ => return false,
+    };
+    lines.into_iter().any(|line| {
+        work::step();
+        writes_in(line)
+    })
+}
+
+/// #1620: see [`code_writes_zsh_program`].
+fn writes_in(line: &str) -> bool {
+    quoted::commands(line).commands.iter().any(|command| {
+        work::step();
+        let texts: Vec<String> = command.words.iter().map(|word| word.text.clone()).collect();
+        command.writes_to.iter().any(|word| {
+            work::step();
+            outputs::zsh_program_path(&word.text)
+        }) || writes_zsh_program(&command.words, indirect::command_word(&texts).as_ref())
+    })
 }
 
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).

@@ -28,6 +28,7 @@ use super::SessionState;
 use super::disconnected_message;
 use super::fail_all_in_flight_work;
 use super::handle_server_notification;
+use super::is_invisible_host_char;
 use super::is_transport_closed_error;
 use crate::client_transport::ExecServerReconnectStrategy;
 use crate::process::ExecProcessEvent;
@@ -637,10 +638,13 @@ impl ExecServerClient {
                         let request = params.request;
                         let process_id_valid = !process_id.is_empty()
                             && process_id.len() <= MAX_NETWORK_POLICY_PROCESS_ID_BYTES;
+                        // The host is shown in the approval prompt, so a host
+                        // with invisible characters is refused, not asked.
                         let host_valid = !request.host.is_empty()
                             && request.host.len() <= MAX_NETWORK_POLICY_HOST_BYTES
                             && !request.host.chars().any(char::is_control)
-                            && !request.host.chars().any(char::is_whitespace);
+                            && !request.host.chars().any(char::is_whitespace)
+                            && !request.host.chars().any(is_invisible_host_char);
                         let session = (process_id_valid && host_valid)
                             .then(|| inner.get_session(&process_id))
                             .flatten();

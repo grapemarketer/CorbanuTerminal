@@ -1531,6 +1531,7 @@ impl Inner {
 /// A denial the executor reported, as this machine's proxy would record it.
 /// Its strings are untrusted: anything malformed is replaced by a neutral
 /// value, never dropped, because a denial can only end a command as failed.
+/// Invisible characters are stripped from the host before it is checked.
 fn executor_network_denial(params: NetworkDeniedNotification) -> BlockedRequest {
     let NetworkDeniedNotification {
         process_id: _,
@@ -1539,6 +1540,13 @@ fn executor_network_denial(params: NetworkDeniedNotification) -> BlockedRequest 
         port,
         reason,
     } = params;
+    let host = if host.chars().any(is_invisible_host_char) {
+        host.chars()
+            .filter(|c| !is_invisible_host_char(*c))
+            .collect()
+    } else {
+        host
+    };
     let host = if host.len() <= MAX_NETWORK_POLICY_HOST_BYTES
         && !host.chars().any(|c| c.is_control() || c.is_whitespace())
     {
@@ -1574,6 +1582,31 @@ fn executor_network_denial(params: NetworkDeniedNotification) -> BlockedRequest 
         source: Some("executor".to_string()),
         port,
     })
+}
+
+/// Bidi controls and zero-width or blank format characters: invisible on
+/// screen, but able to reorder or disguise an executor-supplied host shown in
+/// a refusal message or an approval prompt (#722). No hostname contains them.
+fn is_invisible_host_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
 fn disconnected_message(reason: Option<&str>) -> String {

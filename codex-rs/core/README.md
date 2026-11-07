@@ -217,10 +217,44 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user. Not covered:
-`.codex`/`.agents` folders below the top of a writable root (between the
-project root and the working directory), which commands can create or change
-whether or not they exist. The
+folder while a session runs is reported, including the user.
+
+`.codex`/`.agents` deeper in a writable root (Core loads them from every
+folder between the project root and its working directory) are covered too
+(#1541, D283). When a session starts, it lists every one below the top of
+its writable roots (except those that come only from `%TEMP%`/`%TMP%`:
+every program creates folders there, so each project folder made there
+while any legacy command ran would count as planted, and the temp folder
+isn't treated as a project location; a workspace or configured root stays
+watched even if the temp folder resolves to it), with its file identity; it doesn't look inside `.git`
+folders, inside those it finds, or behind links (about 30 ms on a
+100,000-file workspace). Names are compared the way NTFS compares them, so
+a name such as `.agentſ` counts (and is never trusted). Each one it finds
+gets the top-level ones' protection: an explicit Medium label, the
+capability-SID write deny and the tracked Everyone delete-child denies. It
+and every folder between it and the root also get D263's denies, so a
+command can't move or rename them (nor swap one for a link while Core reads
+it). The host then checks the folder is still the one it found before it
+writes the rest. If any of that fails, the command doesn't start. When the
+session ends (or, for one that crashed, at the next sweep), every such entry
+that wasn't in its list as the same file is recorded as possibly planted,
+like the top-level ones. That is a new one, or one replaced, even if the
+user had confirmed it before. So is every folder the walk couldn't list:
+everything below it counts as planted until confirmed. While the session
+runs, Core treats such an entry as planted right away, even before it
+exists, and checks again right before loading each folder. Confirming is
+refused. Costs and limits:
+- A nested link named `.codex` or `.agents` is never protected (its target
+  is the sandbox's choice). It counts as planted after every session in its
+  root until confirmed again, which is noisy for repositories that link
+  `.agents`.
+- Commands can't rename, move or delete nested `.codex`/`.agents` folders or
+  the folders above them (a `git checkout` or `npm ci` that does is refused
+  there).
+- A command doesn't start if those denies can't be written.
+- Sessions started by builds before D283 aren't watched for nested folders.
+
+The
 Everyone deny entries are visible in the folder's security settings while a
 session needs them. Each one a session adds is recorded first, in
 `delete-child-denies.json` next to the integrity-label records (#1506 item 1,
@@ -229,8 +263,27 @@ writable root holds its folder and the folder isn't labelled Low (a Low
 label means a sandbox, perhaps another Windows account's, whose records
 these aren't, may be using it); a session that crashed has its entries
 removed by the next sweep (a later legacy command, or the next TUI or
-app-server start). A deny that D263 needs above an explicit nested read-only
-path must be in place, or the command doesn't start. An entry that was already there and isn't recorded (one
+app-server start). Accepted gap (#1542 item 5, D293): the records and their
+lock are per Windows account, so in the milliseconds between one account's
+sweep finding a folder not Low and removing the deny, another account's
+session could label the folder Low and start a command that relies on that
+deny. A deny that D263 needs above an explicit nested read-only
+path must be in place, or the command doesn't start. So must there be no
+link (junction, symbolic link or mount point) above such a path that a
+command could replace, that is, one whose folder lies inside a writable
+root, whether in the path as configured or on the way to a link's target
+(#1542 item 1, D293). D263's denies land on the link's target, so the link
+itself could be removed and the read-only path recreated behind it.
+Configure the path through the link's target instead. The check runs again
+after the folders' own `DELETE` denies are written (their parents'
+delete-child denies follow just after), which narrows the window for a link
+a running command swaps in meanwhile. A root spelled through a link from
+outside the writable roots is fine. Other reparse points, such as OneDrive
+placeholders, aren't links and don't stop the command; as before, D263
+doesn't put its denies on them, so they get no protection against being
+moved. A read-only path spelled
+through a writable root's link, and so listed against the root's resolved
+path, gets the same protection (#1542 item 2). An entry that was already there and isn't recorded (one
 the user made, or one left by a version before this change) is never
 removed. Without usable records the entries are added untracked and stay, as
 before. Unsandboxed deletes normally keep working because they use each
@@ -246,7 +299,10 @@ back), then run `icacls <dir> /remove:d *<sid>` on each folder between the
 writable root and the read-only path, for each SID listed in `cap_sid` under
 `CODEX_HOME` (a JSON file). That also removes the sandbox's other deny
 entries for that SID on the folder, which the next legacy command that needs
-them adds back.
+them adds back. The same goes for the `DELETE` denies D283 adds on nested
+`.codex`/`.agents` folders and the folders above them: they stay after the
+nested folder is gone (remove that folder first, or the next legacy command
+adds them back).
 
 New `[permissions]` / split filesystem policies remain supported on Windows
 only when they can be enforced directly by the selected Windows backend or

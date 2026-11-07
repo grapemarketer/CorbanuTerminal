@@ -1061,8 +1061,12 @@ impl Classifier {
             // #1515: `=git` too, where the git option scans stop.
             let equals_git = indirect::equals_git(&lower[index]);
             // #1528: a dashed helper by its Windows path (`git-grep.exe`)
-            // names its subcommand.
-            let helper = git_helpers::git_name(&lower[index]).flatten();
+            // names its subcommand. #1635: read from its command name, so
+            // `@git-grep.exe` and `git-grep.cmd` name `grep` too (and as
+            // written, as before, where that names none: `git-.cmd`).
+            let helper = git_helpers::git_name(name)
+                .flatten()
+                .or_else(|| git_helpers::git_name(&lower[index]).flatten());
             let named = CLI_NAMES.contains(&name)
                 || name == "git"
                 || equals_git

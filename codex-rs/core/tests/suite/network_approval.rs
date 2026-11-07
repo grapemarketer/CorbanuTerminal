@@ -1727,17 +1727,13 @@ async fn assert_remote_own_denial_fails_command(
     test: &TestCodex,
     server: &wiremock::MockServer,
     call_id: &str,
+    args: Value,
     expected_detail: &str,
 ) -> Result<()> {
     let remote = test.executor_environment().selection().clone();
     assert_eq!(remote.environment_id, REMOTE_ENVIRONMENT_ID);
-    let responses = mount_exec_network_turn(
-        server,
-        &format!("resp-{call_id}"),
-        call_id,
-        network_fetch_args(REMOTE_ENVIRONMENT_ID),
-    )
-    .await?;
+    let responses =
+        mount_exec_network_turn(server, &format!("resp-{call_id}"), call_id, args).await?;
     submit_managed_network_turn(
         test,
         "fetch from the remote environment",
@@ -1781,12 +1777,14 @@ async fn remote_blocked_site_ends_command_as_failed() -> Result<()> {
         "full",
         /*managed_requirements*/ true,
         &format!("\n[permissions.workspace.network.domains]\n\"{NETWORK_TEST_HOST}\" = \"deny\"\n"),
+        /*unmanaged_allowed_domains*/ &[],
     )
     .await?;
     assert_remote_own_denial_fails_command(
         &test,
         &server,
         "exec-remote-blocked-site",
+        network_fetch_args(REMOTE_ENVIRONMENT_ID),
         "domain is explicitly denied by policy and cannot be approved from this prompt",
     )
     .await
@@ -1804,13 +1802,56 @@ async fn remote_miss_without_managed_rules_ends_command_as_failed() -> Result<()
     skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
-    let test =
-        network_unified_exec_test(&server, "full", /*managed_requirements*/ false, "").await?;
+    let test = network_unified_exec_test(
+        &server,
+        "full",
+        /*managed_requirements*/ false,
+        "",
+        /*unmanaged_allowed_domains*/ &[],
+    )
+    .await?;
     assert_remote_own_denial_fails_command(
         &test,
         &server,
         "exec-remote-unmanaged-miss",
+        network_fetch_args(REMOTE_ENVIRONMENT_ID),
         "domain is not on the allowlist for the current sandbox mode",
+    )
+    .await
+}
+
+/// #722 (D278): a request method remote "limited" mode blocks (plain-HTTP
+/// POST to an allowed site) is refused by the remote proxy itself and ends
+/// the command as failed. Without managed rules the launch needs no MITM, so
+/// it isn't refused up front as in the managed limited-mode test above.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_limited_mode_method_block_ends_command_as_failed() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = network_unified_exec_test(
+        &server,
+        "limited",
+        /*managed_requirements*/ false,
+        "",
+        /*unmanaged_allowed_domains*/ &[NETWORK_TEST_HOST],
+    )
+    .await?;
+    let command = format!(
+        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open(urllib.request.Request('http://{NETWORK_TEST_HOST}', data=b'x'), timeout=2).read().decode(errors='replace'))\""
+    );
+    let mut args = network_exec_args_for(REMOTE_ENVIRONMENT_ID, &command);
+    args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
+    assert_remote_own_denial_fails_command(
+        &test,
+        &server,
+        "exec-remote-limited-method",
+        args,
+        "request method is blocked by the current network mode",
     )
     .await
 }
@@ -1823,15 +1864,24 @@ async fn managed_network_unified_exec_test_in_mode(
     server: &wiremock::MockServer,
     mode: &str,
 ) -> Result<TestCodex> {
-    network_unified_exec_test(server, mode, /*managed_requirements*/ true, "").await
+    network_unified_exec_test(
+        server,
+        mode,
+        /*managed_requirements*/ true,
+        "",
+        /*unmanaged_allowed_domains*/ &[],
+    )
+    .await
 }
 
-/// `extra_network_toml` is appended to the profile's network table.
+/// `extra_network_toml` is appended to the profile's network table;
+/// `unmanaged_allowed_domains` go to the proxy built without managed rules.
 async fn network_unified_exec_test(
     server: &wiremock::MockServer,
     mode: &str,
     managed_requirements: bool,
     extra_network_toml: &str,
+    unmanaged_allowed_domains: &[&str],
 ) -> Result<TestCodex> {
     let home = Arc::new(TempDir::new()?);
     fs::write(
@@ -1862,7 +1912,7 @@ allow_local_binding = true
     // proxy off, so build the profile's proxy as a user config would.
     let unmanaged_network = (!managed_requirements)
         .then(|| {
-            let proxy = codex_network_proxy::NetworkProxyConfig {
+            let mut proxy = codex_network_proxy::NetworkProxyConfig {
                 enabled: true,
                 mode: match mode {
                     "full" => codex_network_proxy::NetworkMode::Full,
@@ -1871,6 +1921,14 @@ allow_local_binding = true
                 allow_local_binding: true,
                 ..Default::default()
             };
+            if !unmanaged_allowed_domains.is_empty() {
+                proxy.set_allowed_domains(
+                    unmanaged_allowed_domains
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                );
+            }
             codex_core::config::NetworkProxySpec::from_config_and_constraints(
                 proxy,
                 /*requirements*/ None,
