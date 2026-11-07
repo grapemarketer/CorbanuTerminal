@@ -30,6 +30,7 @@ use std::path::Path;
 
 mod aliases;
 mod arithmetic;
+mod braces;
 mod certain_cd;
 mod code_variables;
 mod git_config;

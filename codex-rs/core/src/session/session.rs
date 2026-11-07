@@ -59,6 +59,10 @@ pub(crate) struct Session {
     /// This is seeded from persisted rollout items on resume so a crash between rollout flush
     /// and mailbox acknowledgement cannot apply the same message to local history twice.
     pub(crate) applied_agent_message_ids: Mutex<HashSet<String>>,
+    /// #1545: names this session, as opposed to the thread, which a reload or a resume in the
+    /// same process gives a new session. A mailbox delivery attempt records the incarnation of
+    /// the recipient session it was reserved for.
+    pub(crate) mailbox_incarnation: String,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
@@ -1391,6 +1395,7 @@ impl Session {
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
                 applied_agent_message_ids: Mutex::new(applied_agent_message_ids),
+                mailbox_incarnation: uuid::Uuid::now_v7().to_string(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 git_enrichment_policy,

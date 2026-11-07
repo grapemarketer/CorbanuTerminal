@@ -19,6 +19,7 @@ use super::grammar;
 use super::quoted;
 use super::shadow;
 use super::shadow::Comparison;
+use super::work;
 use codex_shell_command::bash::PlainWord;
 
 /// Longer scripts are not parsed (they keep the checks).
@@ -143,6 +144,8 @@ pub(super) fn windows_reads_follow(command: &[String]) -> bool {
 }
 
 fn follows(command: &[String], depth: usize) -> bool {
+    // #1112: each recursive reading counts, besides its loops.
+    work::step();
     let [shell, flag, script, ..] = command else {
         return false;
     };

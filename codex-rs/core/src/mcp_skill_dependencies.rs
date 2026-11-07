@@ -8,6 +8,8 @@ use codex_config::McpServerTransportConfig;
 use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
 use codex_login::default_client::originator;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -112,12 +114,21 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
     let mut updated = false;
     let mut added = Vec::new();
-    for (name, config) in missing {
+    for (name, server_config) in missing {
         if servers.contains_key(&name) {
             continue;
         }
-        servers.insert(name.clone(), config.clone());
-        added.push((name, config));
+        if config.non_prefixed_mcp_server_name_clash(&name).is_some() {
+            let message = format!(
+                "Skipped installing the skill's MCP server `{name}`: without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`) it would take a built-in tool namespace. To install it, turn that feature off or limit it with `features.non_prefixed_mcp_tool_names.server_names`."
+            );
+            warn!("{message}");
+            sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+            continue;
+        }
+        servers.insert(name.clone(), server_config.clone());
+        added.push((name, server_config));
         updated = true;
     }
 

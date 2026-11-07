@@ -17,6 +17,7 @@ use codex_config::ConfigLayerMetadata;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ShellEnvironmentPolicyFilterRepresentation;
 use codex_config::config_toml::ConfigToml;
@@ -26,6 +27,7 @@ use codex_config::validate_shell_environment_policy_filter_config;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::non_prefixed_mcp_server_name_clashes_in_config_toml;
 use codex_core::config::validate_feature_requirements_for_config_toml;
 use codex_core::path_utils;
 use codex_core::path_utils::SymlinkWritePaths;
@@ -420,6 +422,12 @@ impl ConfigManager {
                 format!("Invalid configuration: {err}"),
             )
         })?;
+        reject_new_non_prefixed_mcp_server_name_clash(
+            &layers.effective_config(),
+            &effective,
+            layers.requirements(),
+            self.codex_home(),
+        )?;
 
         if !config_edits.is_empty() {
             ConfigEditsBuilder::for_config_path(provided_path.as_path())
@@ -503,6 +511,35 @@ async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManage
         .await
         .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
         .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
+}
+
+/// Rejects a write that would make the next config load fail with the #1655
+/// MCP name check. A clash the config already had is left to the loader, so
+/// unrelated writes (or ones that fix it) still go through.
+fn reject_new_non_prefixed_mcp_server_name_clash(
+    current: &TomlValue,
+    updated: &TomlValue,
+    requirements: &ConfigRequirements,
+    codex_home: &Path,
+) -> Result<(), ConfigManagerError> {
+    let clashes = |config: &TomlValue| {
+        deserialize_config_toml_with_base(config.clone(), codex_home).and_then(|config| {
+            non_prefixed_mcp_server_name_clashes_in_config_toml(&config, requirements)
+        })
+    };
+    // Other validation errors are reported by the checks above.
+    let updated = clashes(updated).unwrap_or_default();
+    if updated.is_empty() {
+        return Ok(());
+    }
+    let current = clashes(current).unwrap_or_default();
+    match updated.into_iter().find(|clash| !current.contains(clash)) {
+        Some(message) => Err(ConfigManagerError::write(
+            ConfigWriteErrorCode::ConfigValidationError,
+            format!("Invalid configuration: {message}"),
+        )),
+        None => Ok(()),
+    }
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {

@@ -11606,3 +11606,170 @@ fn issue1620_code_text_checks_are_linear() {
         let _ = kind(&["zsh", "-lc", &format!("eval {}", "x ".repeat(2000 * scale))]);
     });
 }
+
+/// #1636: options a brace group or an empty expansion makes are judged in
+/// git's command as the shell cuts it, with no quote on the line: the word
+/// lexer cuts the command first or does not expand the group.
+#[test]
+fn issue1636_brace_made_git_options_ask_without_quotes() {
+    use ProtectedActionKind::UnseenCode;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // An operator joined to the group.
+            "git clone ./r d {-q,--upload-pack=./x}|cat",
+            "git clone ./r d {-q,--upload-pack=./x}&&echo ok",
+            "git clone ./r d {-q,--upload-pack=./x};x",
+            "git clone ./r d {-q,-u./x}|cat",
+            "git fetch origin {-q,--upload-pack=./x}|cat",
+            "git clone r d {-q,--config=core.sshCommand=./x}|cat",
+            // Cuts at `}`, `{`, `&>`, `<&`, `>|`, `${…}` and `$IFS`.
+            "git clone -b x,} r {--upload-pack=./x,} d",
+            "git clone -b }x r {--upload-pack=./x,} d",
+            "git clone -b {} r {--upload-pack=./x,} d",
+            "git clone -b x,{ r {--upload-pack=./x,} d",
+            "git clone -b {a,}} r {--upload-pack=./x,} d",
+            "git clone -b {,}} r {--upload-pack=./x,} d",
+            "git clone -b {{,} r {--upload-pack=./x,} d",
+            "git clone -b ${N:-x;y} r {--upload-pack=./x,} d",
+            "git clone -b ${N:- } r {--upload-pack=./x,} d",
+            "git clone -b x${IFS}} r {--upload-pack=./x,} d",
+            "git clone -b x$IFS{ r {--upload-pack=./x,} d",
+            "git clone r <&0 {--upload-pack=./x,} d",
+            "git clone r >|log {--upload-pack=./x,} d",
+            // Ranges, a group after one that does not expand, `$((…))`.
+            "git clone --{u..u}pload-pack=./x r d",
+            "git clone ${N}{--upload-pack=./x,} r d",
+            "git clone -b $((1)) r {--upload-pack=./x,} d",
+            // A brace-made command word.
+            "true;{git,clone} ./r d --upload-pack=./x",
+            "true;{gi,x}t clone ./r d --upload-pack=./x",
+            // Substitution openers in a comment.
+            "echo a # x`y\ngit clone -b `echo main` r {--upload-pack=./x,} d",
+            // An empty expansion before an option.
+            "git clone ${N}--upload-pack=./x r d",
+            "git clone $N--upload-pack=./x r d",
+            "git clone $(true)--upload-pack=./x r d",
+            // Nested and inside a function.
+            "f() { git clone r d {-q,--upload-pack=./x}|cat; }; f",
+            "sh -c \"git clone r d {-q,--upload-pack=./x}|cat\"",
+            // Review 1: bash drops braces around `..` with a nested comma
+            // group; words past the 64-word bound; `${N:-…}` defaults and
+            // zsh's forms of an empty expansion.
+            "git clone -b }x r {--upload-pack=../x{,}} d",
+            "git clone -b }x r {-u../x{,}} d",
+            "g{i..i}t ls-remote --upload-pack=./x ./r {1..65}",
+            "git ls-remote ./r {1..65}{-q,--upload-pack=./x}",
+            "git clone ${N:---upload-pack=./x} r d",
+            "git clone ${N---upload-pack=./x} r d",
+            "git clone ${N:+--upload-pack=./x} r d",
+            "git clone ${N+--upload-pack=./x} r d",
+            "git clone ${N:=--upload-pack=./x} r d",
+            "git clone ${N:-{-q,--upload-pack=./x}} r d",
+            "git clone $=N--upload-pack=./x r d",
+            "git clone $^N--upload-pack=./x r d",
+            "git clone $~N--upload-pack=./x r d",
+            "git clone $N[1]--upload-pack=./x r d",
+            "git clone $N:t--upload-pack=./x r d",
+            // Review 2: bash 3.2's closing `}`, zsh's nested expansions.
+            "git clone {-b},-u./x} ./r d",
+            "git clone ./r d {-b},--upload-pack=./x}",
+            "git clone -{},u./x} ./r d",
+            "git clone {-u}u,}u ./r d",
+            "git clone ${${N}:---upload-pack=./x} ./r d",
+            "git clone ${${N:-}:--u./x} ./r d",
+            "git clone ${(e)${N}:--u./x} ./r d",
+        ] {
+            assert_eq!(line(script), Some(UnseenCode), "{shell} {script:?}");
+        }
+        // Review 2: git's name past the 64-word bound.
+        for last in ["g{i..i}t", "{g,x}{i,x}{t,x}"] {
+            let script = format!("env {{{}{last}}} clone -u./x ./r d", "-i,".repeat(64));
+            assert_eq!(line(&script), Some(UnseenCode), "{shell} {script:?}");
+        }
+        // Review 3: an empty alternative before an option, past each bound.
+        for script in [
+            "git ls-remote ./r {{1..64},{,}--upload-pack=./x}".to_string(),
+            format!(
+                "git ls-remote ./r {{{},{{,}}--upload-pack=./x}}",
+                "{u..u}".repeat(256)
+            ),
+            format!(
+                "git ls-remote ./r {{{{a}},{{,}}--upload-pack=./x}}{}",
+                "$N".repeat(2100)
+            ),
+        ] {
+            assert_eq!(line(&script), Some(UnseenCode), "{shell} {script:?}");
+        }
+        // Ordinary lines stay as they were.
+        for script in [
+            "git add src/{a,b}.rs | cat",
+            "git add src/{a,b}.rs && git commit -m msg",
+            "git diff stash@{0}..stash@{1} | head",
+            "git log --oneline -{1..3} | cat",
+            "git show HEAD@{1} > /tmp/x",
+            "git checkout {main,dev} 2>&1",
+            "git rm -r --cached {a,b}/ ; git status",
+            "for f in {1..3}; do git log -$f; done",
+            "git add src/{a..c}.rs",
+            "git clone {c}{--upload-pack=./x,} r d",
+            "git log -n ${N}5 | cat",
+            "git log $RANGE --stat",
+            "git add tests/case{1..80}.json",
+            "git add {1..100}.txt",
+            "git rm -q out{000..199}.log",
+            "git log $$-x | cat",
+            "echo {1..100} | git hash-object --stdin",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1636: reading git's words as the shell makes them stays linear.
+#[test]
+fn issue1636_shell_made_words_are_linear() {
+    for (label, unit) in [
+        ("range chains", "git clone r --{u..u}{u..u}{u..u}{u..u}x "),
+        ("brace words", "git add {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}x "),
+        ("nested groups", "git add {a,{b,{c,{d,e}}}} "),
+        ("defaults", "git log ${N:-${N:-${N:---x}}} "),
+        ("zsh forms", "git log $=N[1]:t:h--x "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let _ = script(&unit.repeat(100 * scale));
+        });
+    }
+    // Review 2: many words past the made-word bound after many before git.
+    work::assert_linear("words past the bound", |scale| {
+        let words = 600 * scale;
+        let _ = script(&format!(
+            "echo {}git {}",
+            "a ".repeat(words),
+            "x{1,2} ".repeat(words)
+        ));
+    });
+    work::assert_linear("one long word", |scale| {
+        let _ = script(&format!("git clone --{}", "{u..u}".repeat(100 * scale)));
+    });
+}
+
+/// #1636: non-ASCII text in the expansions it reads (review 3's corpus run).
+#[test]
+fn issue1636_non_ascii_expansions_read() {
+    for script in [
+        "git log ${${é}:-x}",
+        "git log ${${N:-é}:-é} ${é}",
+        "git clone ${N:-{é,ü}} r d",
+        "git add {é..ü} {é,}ü",
+        "echo ${${é",
+    ] {
+        for shell in ["bash", "zsh"] {
+            let _ = kind(&[shell, "-lc", script]);
+        }
+    }
+    assert_eq!(
+        script("git clone ${${é}:---upload-pack=./x} r d"),
+        Some(ProtectedActionKind::UnseenCode)
+    );
+}

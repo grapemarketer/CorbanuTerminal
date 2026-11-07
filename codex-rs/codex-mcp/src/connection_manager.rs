@@ -193,6 +193,7 @@ pub(crate) struct McpConnectionSet {
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     prefix_mcp_tool_names: bool,
     non_prefixed_mcp_tool_servers: Vec<String>,
+    multi_agent_v2_tool_namespace: Option<String>,
     elicitation_requests: ElicitationRequestManager,
 }
 
@@ -230,6 +231,7 @@ impl McpConnectionSet {
         let codex_home = config.codex_home.clone();
         let prefix_mcp_tool_names = config.prefix_mcp_tool_names;
         let non_prefixed_mcp_tool_servers = config.non_prefixed_mcp_tool_servers.clone();
+        let multi_agent_v2_tool_namespace = config.multi_agent_v2_tool_namespace.clone();
         let protocol_mode = config.protocol_mode;
         let client_elicitation_capability = config.client_elicitation_capability.clone();
         let tool_plugin_provenance = crate::mcp::tool_plugin_provenance(&config);
@@ -554,6 +556,7 @@ impl McpConnectionSet {
             tool_plugin_provenance,
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers,
+            multi_agent_v2_tool_namespace,
             elicitation_requests: elicitation_requests.clone(),
         };
         let summary_publication_gate = publication_gate;
@@ -615,6 +618,7 @@ impl McpConnectionSet {
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             prefix_mcp_tool_names,
             non_prefixed_mcp_tool_servers: Vec::new(),
+            multi_agent_v2_tool_namespace: None,
             elicitation_requests: ElicitationRequestManager::new(
                 AskForApproval::Never,
                 PermissionProfile::default(),

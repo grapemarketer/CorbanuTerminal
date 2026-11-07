@@ -125,8 +125,11 @@ env:
     nested_metadata::legacy_temp_root_is_not_watched_for_nested_metadata
     nested_metadata::legacy_workspace_stays_watched_when_temp_resolves_to_it
     carve_out_link::legacy_link_above_read_only_path_stops_the_command
+    carve_out_link::legacy_read_only_path_that_is_a_link_stops_the_command
     carve_out_link::legacy_read_only_path_through_a_linked_root_keeps_its_ancestors
     carve_out_link::link_above_carve_out_finds_links_below_the_root
+    cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
+    cloud_placeholder::legacy_cloud_placeholder_root_gets_its_label_back
 
 jobs:
   probes:

@@ -1214,7 +1214,7 @@ impl Arithmetic {
                 } else if region.starts_with("${!") {
                     !index_listing(region) && unsafe_in(&unquoted(region))
                 } else if region.starts_with("${(") {
-                    flags_unsafe(region, &unsafe_in)
+                    flags_unsafe(region, &|name: &str| !safe.contains(name))
                 } else {
                     unsafe_in(&unquoted(region))
                 }
@@ -2092,8 +2092,11 @@ fn index_listing(region: &str) -> bool {
 }
 
 /// Whether zsh flags (`${(l:n:)x}`, `${(r:$n:)x}`, `${(I:n:)x}`) evaluate a
-/// value that is not a known number, or `(P)`/`(e)` reads one again.
-fn flags_unsafe(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bool {
+/// value that is not a known number, or `(P)`/`(e)` reads one again. Text
+/// is unsafe when, without its command substitutions, it names a variable
+/// for which `unsafe_name` holds.
+fn flags_unsafe(region: &str, unsafe_name: &impl Fn(&str) -> bool) -> bool {
+    let unsafe_in = |text: &str| names(&without_substitutions(text)).any(unsafe_name);
     let body = &region[3..];
     let Some(close) = body.find(')') else {
         return unsafe_in(&unquoted(region));
@@ -2116,21 +2119,106 @@ fn flags_unsafe(region: &str, unsafe_in: &impl Fn(&str) -> bool) -> bool {
         .map(|(at, _)| at)
         .collect();
     let unquoted_at = |at| at - quotes.partition_point(|&quote| quote < at);
-    flags.char_indices().any(|(at, flag)| {
+    // #1111: arguments with distinct non-ASCII delimiters can overlap, so
+    // judging each one would rescan the text once per argument. Such an
+    // argument starts and ends at a non-ASCII character, where no name or
+    // substitution starts or ends, so it reads exactly the names that
+    // reading from its start to the end of the flags finds before its end.
+    // Arguments with the same delimiter do not overlap, so the up to 66
+    // ASCII delimiters' arguments are judged one by one.
+    let mut first_unsafe = None;
+    flag_arguments(flags).into_iter().any(|(delimiter, range)| {
         work::step();
-        if !matches!(flag, 'l' | 'r' | 'I') {
-            return false;
+        let (start, end) = (unquoted_at(range.start), unquoted_at(range.end));
+        if delimiter.is_ascii() {
+            unsafe_in(&unquoted_flags[start..end])
+        } else {
+            first_unsafe.get_or_insert_with(|| first_unsafe_names(&unquoted_flags, unsafe_name))
+                [start]
+                < end
         }
-        let rest = &flags[at + flag.len_utf8()..];
-        let Some(delimiter) = rest.chars().next().filter(|ch| !ch.is_ascii_alphanumeric()) else {
-            return false;
-        };
-        let start = at + flag.len_utf8() + delimiter.len_utf8();
-        let end = flags[start..]
-            .find(delimiter)
-            .map_or(flags.len(), |end| start + end);
-        unsafe_in(&unquoted_flags[unquoted_at(start)..unquoted_at(end)])
     })
+}
+
+/// Each `l`/`r`/`I` flag's delimiter and its argument's range in `flags`,
+/// in order: up to the delimiter's next occurrence, or the end when it does
+/// not close. Linear: one backward pass notes each character's next
+/// occurrence.
+fn flag_arguments(flags: &str) -> Vec<(char, Range<usize>)> {
+    let mut arguments = Vec::new();
+    let mut next: HashMap<char, usize> = HashMap::new();
+    // The character after the current one, its offset and its next
+    // occurrence after that.
+    let mut following: Option<(char, usize, Option<usize>)> = None;
+    for (at, ch) in flags.char_indices().rev() {
+        work::step();
+        if let Some((delimiter, delimiter_at, close)) = following
+            && matches!(ch, 'l' | 'r' | 'I')
+            && !delimiter.is_ascii_alphanumeric()
+        {
+            let start = delimiter_at + delimiter.len_utf8();
+            arguments.push((delimiter, start..close.unwrap_or(flags.len())));
+        }
+        following = Some((ch, at, next.insert(ch, at)));
+    }
+    arguments.reverse();
+    arguments
+}
+
+/// For each offset of `text`, the offset of the first name for which
+/// `unsafe_name` holds that `names(&without_substitutions(&text[at..]))`
+/// reads, or `usize::MAX`. Command substitutions are skipped as
+/// `without_substitutions` skips them; reading jumps over each one, so
+/// readings from different offsets share the rest. That equals reading
+/// `text[at..end]` (first offset `< end`) when the bytes before `at` and
+/// at `end` are non-ASCII (or `end` is the end of `text`): such a byte is
+/// neither a name character nor `$`, `{`, `#`, a backtick or a bracket, so
+/// no name, substitution or its context crosses either bound.
+fn first_unsafe_names(text: &str, unsafe_name: &impl Fn(&str) -> bool) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut unsafe_at = vec![false; bytes.len()];
+    // Where a name starts, its context (the bytes before it) is the same
+    // in every reading that reaches it.
+    for name in names(text) {
+        work::step();
+        if unsafe_name(name) {
+            unsafe_at[name.as_ptr() as usize - text.as_ptr() as usize] = true;
+        }
+    }
+    let mut first = vec![usize::MAX; bytes.len() + 1];
+    let mut next_backtick = None;
+    // Unmatched `)` to the right, nearest last, and the `)` matching a `(`
+    // just after the current byte.
+    let mut closes = Vec::new();
+    let mut close_after = None;
+    for at in (0..bytes.len()).rev() {
+        work::step();
+        let close_here = match bytes[at] {
+            b'(' => closes.pop(),
+            b')' => {
+                closes.push(at);
+                None
+            }
+            _ => None,
+        };
+        first[at] = if unsafe_at[at] {
+            at
+        } else if bytes[at] == b'`' {
+            next_backtick.map_or(usize::MAX, |close: usize| first[close + 1])
+        } else if bytes[at] == b'$'
+            && bytes.get(at + 1) == Some(&b'(')
+            && bytes.get(at + 2) != Some(&b'(')
+        {
+            close_after.map_or(usize::MAX, |close: usize| first[close + 1])
+        } else {
+            first[at + 1]
+        };
+        if bytes[at] == b'`' {
+            next_backtick = Some(at);
+        }
+        close_after = close_here;
+    }
+    first
 }
 
 /// A word without `printf` conversions (`%5.2f`, `%%`) and backslash

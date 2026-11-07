@@ -761,7 +761,9 @@ fn load_planted(registry: &Path) -> Result<PlantedMetadata> {
 
 /// #1506 item 1 (D261): removes each recorded deny that lies in no live
 /// session's root. One that can't be removed stays recorded for a later
-/// sweep; a path that is gone, or is a link now, is dropped untouched.
+/// sweep; a path that is gone, or is a link now, is dropped untouched. Other
+/// reparse points, such as cloud placeholders, are the folder itself
+/// (#1668).
 fn remove_unneeded_denies(registry: &Path, live: &BTreeSet<PathBuf>, log_dir: Option<&Path>) {
     let mut denies = match load_denies(registry) {
         Ok(denies) => denies,
@@ -784,9 +786,7 @@ fn remove_unneeded_denies(registry: &Path, live: &BTreeSet<PathBuf>, log_dir: Op
         }
         match std::fs::symlink_metadata(&deny.path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
-            Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-                return false;
-            }
+            Ok(meta) if meta.file_type().is_symlink() => return false,
             _ => {}
         }
         // Low: a Low-integrity sandbox may be using the folder right now, a
@@ -843,8 +843,9 @@ fn path_is_within(path: &str, root: &str) -> bool {
 /// #1506 item 1 (D261): adds each Everyone `FILE_DELETE_CHILD` deny in
 /// `denies` that isn't there yet, recording it first, so a sweep removes it
 /// once it lies in no live session's root, even after a crash. Links are
-/// never followed. Without usable records the denies are added untracked,
-/// as before, so protection never depends on the records.
+/// never followed; other reparse points, such as cloud placeholders, count
+/// as plain folders (#1668). Without usable records the denies are added
+/// untracked, as before, so protection never depends on the records.
 ///
 /// With `required`, every deny must be in place afterwards (as an explicit
 /// entry) or this fails, so the command doesn't start without it (D263's
@@ -857,9 +858,8 @@ pub(crate) fn add_tracked_delete_child_denies(
 ) -> Result<()> {
     let mut usable = Vec::new();
     for deny in denies {
-        let is_plain_dir = std::fs::symlink_metadata(&deny.path).is_ok_and(|meta| {
-            meta.is_dir() && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-        });
+        // `is_dir` is false for links.
+        let is_plain_dir = std::fs::symlink_metadata(&deny.path).is_ok_and(|meta| meta.is_dir());
         match is_plain_dir
             .then(|| dunce::canonicalize(&deny.path).ok())
             .flatten()
@@ -955,7 +955,9 @@ fn restore(root: &Path, original: &[LabelAce]) -> Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err).with_context(|| format!("inspect {}", root.display())),
         // A link now stands where the root was: never relabel what it points at.
-        Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => Ok(()),
+        // Other reparse points, such as cloud placeholders, are the folder
+        // itself (#1668).
+        Ok(meta) if meta.file_type().is_symlink() => Ok(()),
         // SAFETY: relabels an existing folder or file that is not a link.
         Ok(_) => unsafe { set_explicit_labels(root, original) },
     }

@@ -156,6 +156,9 @@ pub struct McpConfig {
     pub prefix_mcp_tool_names: bool,
     /// MCP servers whose model-visible tool namespaces omit the `mcp__` prefix.
     pub non_prefixed_mcp_tool_servers: Vec<String>,
+    /// The configured multi-agent V2 tool namespace, which MCP servers
+    /// exposed without the `mcp__` prefix must not take.
+    pub multi_agent_v2_tool_namespace: Option<String>,
     /// Protocol compatibility policy captured when this MCP configuration is created.
     pub protocol_mode: McpProtocolMode,
     /// Client-side elicitation capabilities advertised during MCP initialization.

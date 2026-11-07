@@ -144,6 +144,12 @@ token counts are shown: no prices and no cost records.
   counts again, its spawned agents' included once the TUI reattaches them.
   Memory extraction outside a turn shows with the next count.
 
+`corbanu exec --json` reports usage differently. Its `turn.completed` usage
+adds the descendants it observed, and is `null`, for example when any of them
+copied the parent's history. Default MultiAgentV2 spawns do (`fork_turns: "all"`), so
+default multi-agent runs report `usage: null` (#1601; see [exec.md](exec.md)).
+The Account usage line still counts each spawned agent toward its own account.
+
 Developer-accounting builds also have `/cost`, which shows the same requests by
 provider, account and model for one UTC day. For a session that stays within
 one day, its token counts per account match these, except for background

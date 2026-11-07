@@ -2986,3 +2986,7 @@ mod nested_metadata;
 /// D293 (#1542 items 1 and 2): links above explicit read-only paths.
 #[path = "carve_out_link_tests.rs"]
 mod carve_out_link;
+
+/// #1668: cloud-file placeholder folders at or above read-only paths.
+#[path = "cloud_placeholder_tests.rs"]
+mod cloud_placeholder;
