@@ -151,10 +151,7 @@ impl App {
     pub(super) fn open_provider_manager(&mut self, _app_server: &AppServerSession) {
         sync_provider_manager_model_policy(&self.model_catalog, &self.config);
         check_named_bedrock_account(&self.model_catalog, &self.config, &self.app_event_tx);
-        crate::provider_named_accounts::check_named_account_providers(
-            &self.model_catalog,
-            &self.config,
-        );
+        self.check_named_accounts();
         let generation = self.next_provider_management_generation();
         self.provider_management_host = None;
         let config = self.config.clone();

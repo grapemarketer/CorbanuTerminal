@@ -5,6 +5,7 @@ use crate::history_cell::plain_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
+use crate::provider_named_accounts::NamedSignInState;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
@@ -201,6 +202,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         "<none>".to_string(),
         refreshing_rate_limits,
         /*account_usage*/ None,
+        /*named_sign_in*/ None,
     )
     .0
 }
@@ -225,6 +227,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     agents_summary: String,
     refreshing_rate_limits: bool,
     account_usage: Option<StatusAccountUsage>,
+    named_sign_in: Option<NamedSignInState>,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let (card, handle) = StatusHistoryCell::new(
@@ -246,6 +249,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         agents_summary,
         refreshing_rate_limits,
         account_usage,
+        named_sign_in,
     );
 
     (
@@ -275,6 +279,7 @@ impl StatusHistoryCell {
         agents_summary: String,
         refreshing_rate_limits: bool,
         account_usage: Option<StatusAccountUsage>,
+        named_sign_in: Option<NamedSignInState>,
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
         let permission_profile = config.permissions.effective_permission_profile();
@@ -344,18 +349,16 @@ impl StatusHistoryCell {
                 .is_some_and(StatusAccountUsage::provider_has_named_account);
         // PF-84-S06: a named sign-in account describes itself; D171 (#1286):
         // one removed or signed out while the session ran is not presented
-        // as the session's account.
+        // as the session's account. #1251: from the answer the background
+        // check cached (`None` while unknown), never the vault.
         let named_sign_in = codex_model_provider::named_sign_in_account(&config.model_provider)
-            .map(|account| {
-                let summary = codex_login::named_account_summary(&config.codex_home, &account);
-                (account, summary)
-            });
+            .map(|account| (account, named_sign_in));
         // With a remote app server the account lives on the remote host, so
         // this home's vault does not tell.
         let session_account_gone = remote_connection.is_none()
             && named_sign_in
                 .as_ref()
-                .is_some_and(|(_, summary)| matches!(summary, Ok(None)));
+                .is_some_and(|(_, state)| state == &Some(NamedSignInState::NoSignIn));
         let model_provider = format_model_provider(
             config,
             runtime_model_provider_base_url,
@@ -761,30 +764,30 @@ fn status_approval_label(
 fn status_account_value(
     config: &Config,
     account_display: Option<&StatusAccountDisplay>,
-    named_sign_in: Option<(
-        codex_login::NamedChatgptAccount,
-        std::io::Result<Option<codex_login::NamedSignInSummary>>,
-    )>,
+    named_sign_in: Option<(codex_login::NamedChatgptAccount, Option<NamedSignInState>)>,
     remote_connection: Option<&RemoteConnectionStatus>,
 ) -> Option<String> {
     let provider = &config.model_provider;
     // PF-84-S06: a named sign-in account describes itself, never the default
     // login (kind, email hint and plan only).
-    if let Some((account, summary)) = named_sign_in {
-        return Some(match summary {
-            Ok(Some(summary)) => format!(
+    if let Some((account, state)) = named_sign_in {
+        return Some(match state {
+            Some(NamedSignInState::SignedIn(summary)) => format!(
                 "{} (account {})",
                 crate::provider_named_accounts::describe_sign_in(&summary),
                 account.name
             ),
             // D171 (#1286): removed or signed out, also while the session ran.
             // Short, as the line is cut at the card's width.
-            Ok(None) if remote_connection.is_none() => format!(
+            Some(NamedSignInState::NoSignIn) if remote_connection.is_none() => format!(
                 "account {name} has no sign-in: `corbanu login --account {name}` or `/providers`",
                 name = account.name
             ),
-            Ok(None) => format!("account {} is not signed in", account.name),
-            Err(_) => format!("account {} is not signed in", account.name),
+            Some(NamedSignInState::NoSignIn | NamedSignInState::Unreadable) => {
+                format!("account {} is not signed in", account.name)
+            }
+            // #1251: not known yet; the background check fills it in.
+            None => format!("account {}", account.name),
         });
     }
     if provider.auth.is_some() {

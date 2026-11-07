@@ -210,11 +210,30 @@ impl App {
             &self.app_event_tx,
         );
         // D86/#1193: and whether the provider has a named account (`/status`).
+        self.check_named_accounts();
+        self.schedule_provider_manager_refresh();
+    }
+
+    /// D86/#1193/#1251: refreshes, off the UI thread, what `/status` reads:
+    /// which providers have named accounts and the named sign-in summary of
+    /// this config's account and, when it differs, the session's (a resumed
+    /// thread or a changed default can leave the two apart).
+    pub(super) fn check_named_accounts(&self) {
         crate::provider_named_accounts::check_named_account_providers(
             &self.model_catalog,
             &self.config,
         );
-        self.schedule_provider_manager_refresh();
+        let session = self.chat_widget.config_ref();
+        let session_account = codex_model_provider::named_sign_in_account(&session.model_provider);
+        if session_account.is_some()
+            && session_account
+                != codex_model_provider::named_sign_in_account(&self.config.model_provider)
+        {
+            crate::provider_named_accounts::check_named_account_providers(
+                &self.model_catalog,
+                session,
+            );
+        }
     }
 
     /// PF-84-S06: signs a named account in by device code. The code and URL
