@@ -237,10 +237,13 @@ root, whether in the path as configured or on the way to a link's target
 (#1542 item 1, D293). D263's denies land on the link's target, so the link
 itself could be removed and the read-only path recreated behind it.
 Configure the path through the link's target instead. The check runs again
-once the denies are in place, so a link a running command swaps in
-meanwhile is caught too; a root spelled through a link from outside the
-writable roots is fine. Other reparse points, such as OneDrive placeholders,
-don't count. A read-only path spelled
+after the folders' own `DELETE` denies are written (their parents'
+delete-child denies follow just after), which narrows the window for a link
+a running command swaps in meanwhile. A root spelled through a link from
+outside the writable roots is fine. Other reparse points, such as OneDrive
+placeholders, aren't links and don't stop the command; as before, D263
+doesn't put its denies on them, so they get no protection against being
+moved. A read-only path spelled
 through a writable root's link, and so listed against the root's resolved
 path, gets the same protection (#1542 item 2). An entry that was already there and isn't recorded (one
 the user made, or one left by a version before this change) is never
