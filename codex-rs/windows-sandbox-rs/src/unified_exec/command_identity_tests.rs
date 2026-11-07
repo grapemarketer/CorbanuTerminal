@@ -537,7 +537,7 @@ fn legacy_command_keeps_write_access_to_its_own_processes() {
 }
 
 /// Git for Windows, if installed (it is on CI), under `ProgramFiles`.
-fn git_for_windows(relative: &str) -> Option<PathBuf> {
+pub(super) fn git_for_windows(relative: &str) -> Option<PathBuf> {
     let path = PathBuf::from(std::env::var_os("ProgramFiles")?)
         .join("Git")
         .join(relative);
