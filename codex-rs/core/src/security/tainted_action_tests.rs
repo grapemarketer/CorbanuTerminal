@@ -11924,6 +11924,14 @@ fn issue1685_review2_forms_ask() {
             "eval 'export F=~/.zshrc'; cp a \"$F\"",
             "trap \"git config --comment 'x --get ' core.pager sh\" EXIT",
             "trap -- \"cp a '$HOME/.zshrc'\" EXIT",
+            // Review 3: a variable with a value keeps it (trap text runs
+            // later), and other ways to fill zsh's `functions`.
+            "trap 'HOME=/x' EXIT; grep -r token \"$HOME\"",
+            "if false; then eval HOME=/x; fi; grep -r t \"$HOME\"",
+            "printf -v 'functions[f]' %s 'tee -a ~/.zshrc'; f",
+            ": ${functions[f]::='tee -a ~/.zshrc'}; f",
+            "set -A functions f 'tee -a ~/.zshrc'; f",
+            "typeset -n r=functions",
         ] {
             assert!(line(script).is_some(), "{shell} {script:?}");
         }
@@ -11932,6 +11940,9 @@ fn issue1685_review2_forms_ask() {
             "eval \"x=1\"",
             "tmp=$(mktemp); trap 'rm -f \"$tmp\"' EXIT; echo x > \"$tmp\"",
             "aliases[ll]='ls -l'",
+            "ls -A functions",
+            "grep -rn functions src",
+            "jq '.functions[0]' f.json",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }

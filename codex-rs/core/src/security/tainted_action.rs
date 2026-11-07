@@ -2459,7 +2459,9 @@ impl Classifier {
         } = carried_command(words, modified.as_ref().or(command.as_ref()));
         // #1685: a variable that text sets has a value this reading does
         // not follow (`eval 'F=~/.zshrc'; tee -a "$F"`): unseen, as for
-        // output it cannot see.
+        // output it cannot see. One with a value already keeps it, since
+        // `trap` text runs later (`trap 'HOME=/x' EXIT; grep -r t "$HOME"`),
+        // and the line asks.
         let declares = carried.as_ref().is_some_and(|(_, name)| {
             matches!(
                 name.as_str(),
@@ -2477,7 +2479,15 @@ impl Classifier {
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
             {
-                variables.insert(name.to_string(), shell::UNSEEN_OUTPUT.to_string());
+                match variables.get(name) {
+                    None => {
+                        variables.insert(name.to_string(), shell::UNSEEN_OUTPUT.to_string());
+                    }
+                    Some(value) if !value.contains(shell::UNSEEN_OUTPUT) => {
+                        self.note(ProtectedActionKind::UnseenCode);
+                    }
+                    Some(_) => {}
+                }
             }
         }
         // #1685: a folder change in that text is not followed (`trap` runs

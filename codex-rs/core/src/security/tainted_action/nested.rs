@@ -608,10 +608,18 @@ impl Classifier {
             let mut tables = 0;
             // An array form (`aliases+=(x '…')`) is not read: it fails
             // closed.
+            let array_setter = indirect::command_word(&texts)
+                .is_some_and(|(_, name)| matches!(name.as_str(), "set" | "read"));
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
-                found.unreadable |= array;
+                found.unreadable |= array
+                    || sets_functions_otherwise(
+                        text,
+                        at.checked_sub(1)
+                            .map(|at| &texts[at])
+                            .filter(|_| array_setter),
+                    );
                 for value in values {
                     work::step();
                     tables += 1;
@@ -2227,6 +2235,35 @@ fn code_table_values(text: &str) -> (Vec<&str>, bool) {
         })
         .collect();
     (values, false)
+}
+
+/// #1685: whether a word may set zsh's `functions` table other than by an
+/// assignment to an entry ([`code_table_values`]): a subscript named
+/// elsewhere (`printf -v 'functions[f]' …`, `${functions[f]::=…}`, `read
+/// 'functions[f]'`), a reference (`typeset -n r=functions`) or the table
+/// after an array option (`set -A functions f …`). `previous`: the word
+/// before it, in a `set` or `read` command. (Alias tables: `aliases.rs`.)
+fn sets_functions_otherwise(text: &str, previous: Option<&String>) -> bool {
+    const TABLE: &str = "functions";
+    if text == TABLE {
+        return previous.is_some_and(|word| {
+            word.strip_prefix('-')
+                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('A'))
+        });
+    }
+    text.match_indices(TABLE).any(|(at, _)| {
+        work::step();
+        let rest = &text[at + TABLE.len()..];
+        let before = text[..at].chars().next_back();
+        let option = text.starts_with('-') && before == Some('v');
+        if !option && !matches!(before, None | Some('{' | '$' | '!' | '#' | '=' | ')')) {
+            return false;
+        }
+        if at == 0 && !code_table_values(text).0.is_empty() {
+            return false;
+        }
+        rest.starts_with('[') || (before == Some('=') && rest.is_empty())
+    })
 }
 
 /// #1620: see [`code_writes_zsh_program`].
