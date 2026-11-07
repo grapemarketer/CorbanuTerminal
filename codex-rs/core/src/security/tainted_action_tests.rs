@@ -11254,3 +11254,100 @@ fn issue1635_alias_prefixes_old_builtins_and_windows_helpers_ask() {
     }
     assert_eq!(wrong, Vec::<String>::new());
 }
+
+/// #1607: zsh reads `>!` as `>|` (also `>>!`, `&>!`, `&>>!`, `>&!`, `>>&!`
+/// and with a descriptor, `2>!`): `echo x >! ~/.zshrc` writes `~/.zshrc`.
+/// bash and dash write a file `!` and pass the next word on, so both
+/// readings count: the `!` file, and zsh's file judged as written only
+/// (bash's words are left as they were). The `|` forms (`>>|`, `&>|`, `&>>|`, `>&|`, `>>&|`)
+/// already asked; they stay so.
+#[test]
+fn issue1607_zsh_clobber_redirections_write() {
+    use ProtectedActionKind::Credentials;
+    use ProtectedActionKind::Persistence;
+    use ProtectedActionKind::UnseenCode;
+    for shell in ["zsh", "bash"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for op in [
+            ">!", ">>!", "&>!", "&>>!", ">&!", ">>&!", "2>!", "2>>!", "1>>!", ">>|", "&>|", "&>>|",
+            ">&|", ">>&|", "2>>|",
+        ] {
+            for target in [" ~/.zshrc", "~/.zshrc", " =mytool", " \"$HOME/.zshrc\""] {
+                let script = format!("echo x {op}{target}");
+                assert_eq!(line(&script), Some(Persistence), "{shell} {script:?}");
+            }
+        }
+        for script in [
+            "make >! log; echo x >>! ~/.zshenv",
+            "sh -c \"echo x >! ~/.zshrc\"",
+            "f() { echo x >>! ~/.zshrc; }; f",
+            "(echo x &>! ~/.zshrc)",
+            "echo $(echo x >! ~/.zshrc)",
+            "cd ~ && echo x >! .zshrc",
+            "cd ~ && echo x >>!.zshenv",
+            "echo x >! ~/.zshrc 2>&1",
+            "echo x >! $(echo ~/.zshrc)",
+            "echo x >!$(echo ~/.zshrc)",
+            "echo x >>! `echo ~/.zshrc`",
+            "echo x >! ~/$(echo .zshrc)",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        // The line's variables count in zsh's file as in any other
+        // (review round 2): it asks as `>` does (`>|` is no measure: the
+        // word reading splits it as a pipe, so its file is also a program).
+        for op in [">!", ">>!", "&>!", "2>!"] {
+            for template in [
+                "f=~/.zshrc; echo x OP $f",
+                "f=~/.zshrc; echo x OP\"$f\"",
+                "f=~/.zshrc; echo x OP \"$f\"",
+                "f=$(cat notes); echo x OP \"$f\"",
+                "P=..; cd /home/fixture/w && echo x OP $P/.zshrc",
+                "P=../../../../..; cd /home/fixture/w; for i in 1 2 3 4; do cd d; echo x OP $P/.zshrc; done",
+            ] {
+                let script = template.replace("OP", op);
+                let plain = template.replace("OP", &op.replace('!', ""));
+                let expected = line(&plain);
+                assert!(expected.is_some(), "{shell} {plain:?}");
+                assert_eq!(line(&script), expected, "{shell} {script:?}");
+            }
+        }
+        // bash's words stay as they were: git runs with the option the
+        // `>!` precedes, `~` is still what grep reads (not a `-C` value),
+        // `read` still sets the variable it names.
+        assert!(line("git >! -c core.pager=sh log").is_some(), "{shell}");
+        for (script, expected) in [
+            ("grep -r token >!-C ~", Credentials),
+            ("touch PAGER; read >! PAGE[R] <<< id; git log", UnseenCode),
+            ("read >! \"$n\" <<< x", UnseenCode),
+            ("declare >(:>!) \"$n=x\"", UnseenCode),
+        ] {
+            assert_eq!(line(script), Some(expected), "{shell} {script:?}");
+        }
+        // Ordinary redirections and pipes, a `!` elsewhere, and a quoted
+        // `!` (zsh writes a file `!`), stay as they were.
+        for script in [
+            "echo x >! out.txt",
+            "echo x >>!out.txt",
+            "make 2>! err.log",
+            "make >>! build.log 2>&1",
+            "echo x &>! out.txt",
+            "echo x >&! out.txt",
+            "echo x >>&! out.txt",
+            "echo x >>| out.txt",
+            "echo x &>| out.txt",
+            "echo x > out.txt",
+            "echo x >> log",
+            "echo x >| out.txt",
+            "ls | grep x",
+            "echo hi! > out.txt",
+            "echo x > out!",
+            "[ a != b ] && echo x > out.txt",
+            "if ! grep -q x f; then echo y >> log; fi",
+            "echo x >\\! ~/.zshrc",
+            "echo x >'!' ~/.zshrc",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}

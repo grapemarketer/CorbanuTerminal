@@ -1755,6 +1755,233 @@ fn legacy_command_cannot_break_away_from_its_job() {
     );
 }
 
+/// D256 (#1507): an elevated-backend command can't start a child outside
+/// its job either, with or without ConPTY. With breakaway allowed, such a
+/// child outlived cancellation and timeouts (the runner ends the job, not
+/// the process tree). Elevated: the sandbox's setup needs it.
+#[test]
+fn sec_win_1507_elevated_command_cannot_break_away_from_its_job() {
+    // Bazel gives unit tests no staged sandbox helpers (#691).
+    if option_env!("BAZEL_PACKAGE").is_some() {
+        return;
+    }
+    if !crate::setup::is_elevated().expect("elevation") {
+        // The elevated Windows gates set this, so a skip there fails.
+        assert!(
+            std::env::var_os("CODEX_SEC_WIN_341_REQUIRE").is_none(),
+            "sec-win-1507 needs an elevated run"
+        );
+        eprintln!("sec-win-1507: the sandbox's setup needs an elevated run; skipped");
+        return;
+    }
+    crate::window_station::tests::stage_sandbox_helpers();
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    let cwd = std::env::current_dir().expect("cwd");
+    let mut results = Vec::new();
+    for tty in [false, true] {
+        let codex_home = sandbox_home("elevated-breakaway");
+        let env_map = HashMap::from([
+            (BREAKAWAY_PROBE_ENV.to_string(), "1".to_string()),
+            (
+                "SystemRoot".to_string(),
+                std::env::var("SystemRoot").expect("SystemRoot"),
+            ),
+        ]);
+        let (stdout, exit_code) = runtime.block_on(async {
+            let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &PermissionProfile::read_only(),
+                workspace_roots_for(cwd.as_path()).as_slice(),
+                codex_home.path(),
+                vec![
+                    std::env::current_exe()
+                        .expect("test exe")
+                        .display()
+                        .to_string(),
+                    "--exact".to_string(),
+                    BREAKAWAY_PROBE_TEST.to_string(),
+                    "--nocapture".to_string(),
+                    "--test-threads=1".to_string(),
+                ],
+                cwd.as_path(),
+                env_map,
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(60_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                tty,
+                // A ConPTY whose input closes ends its console's processes.
+                /*stdin_open*/
+                tty,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            .expect("spawn elevated breakaway probe");
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 90))
+                .await
+        });
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        // Under ConPTY the line carries terminal escapes.
+        let result = stdout.lines().find_map(|line| {
+            line.find(BREAKAWAY_PROBE_RESULT).map(|start| {
+                line[start + BREAKAWAY_PROBE_RESULT.len()..]
+                    .chars()
+                    .take_while(|c| !c.is_control())
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            })
+        });
+        eprintln!("sec-win-1507: tty {tty}: exit {exit_code}, {result:?}");
+        results.push((tty, exit_code, result, stdout));
+    }
+    // 5 is ERROR_ACCESS_DENIED: the job refuses the breakaway.
+    let refused = |tty| (tty, 0, Some("control=true/0 breakaway=false/5".to_string()));
+    assert_eq!(
+        results
+            .iter()
+            .map(|(tty, code, result, _)| (*tty, *code, result.clone()))
+            .collect::<Vec<_>>(),
+        vec![refused(false), refused(true)],
+        "{results:?}"
+    );
+}
+
+/// D256 (#1507): common tools still work in an elevated-backend command
+/// whose job refuses breakaway: a cmd pipeline, Windows PowerShell calling a
+/// native program (with and without ConPTY), and `git init` and `git status`.
+#[test]
+fn sec_win_1507_elevated_tools_work_without_breakaway() {
+    if option_env!("BAZEL_PACKAGE").is_some() {
+        return;
+    }
+    if !crate::setup::is_elevated().expect("elevation") {
+        // The elevated Windows gates set this, so a skip there fails.
+        assert!(
+            std::env::var_os("CODEX_SEC_WIN_341_REQUIRE").is_none(),
+            "sec-win-1507 needs an elevated run"
+        );
+        eprintln!("sec-win-1507: the sandbox's setup needs an elevated run; skipped");
+        return;
+    }
+    let Some(git) = command_identity::git_for_windows("cmd\\git.exe") else {
+        return;
+    };
+    crate::window_station::tests::stage_sandbox_helpers();
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe")
+        .display()
+        .to_string();
+    let git = git.display().to_string();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    // (name, argv, expected output, ConPTY)
+    let cases: Vec<(&str, Vec<String>, &[&str], bool)> = vec![
+        (
+            "cmd pipeline",
+            vec![
+                cmd.clone(),
+                "/d".to_string(),
+                "/c".to_string(),
+                "echo d256-pipe| findstr d256 2>&1".to_string(),
+            ],
+            &["d256-pipe"],
+            false,
+        ),
+        (
+            "powershell",
+            vec![
+                powershell.clone(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "$x = & cmd /c echo d256-ps; $x | Select-String d256 | ForEach-Object { $_.Line }; \
+                 Get-ChildItem | Out-Null; 'd256-ps-done'"
+                    .to_string(),
+            ],
+            &["d256-ps", "d256-ps-done"],
+            false,
+        ),
+        (
+            "powershell (ConPTY)",
+            vec![
+                powershell,
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "& cmd /c echo d256-tty; 'd256-tty-done'".to_string(),
+            ],
+            &["d256-tty", "d256-tty-done"],
+            true,
+        ),
+        (
+            "git init",
+            vec![git, "init".to_string(), "-q".to_string()],
+            &[],
+            false,
+        ),
+        (
+            // `.git` is read-only to sandboxed commands, so no commit.
+            "git status",
+            vec![
+                cmd,
+                "/d".to_string(),
+                "/c".to_string(),
+                // Git for Windows' `cmd` folder is on PATH (CI, and its
+                // installer's default).
+                "(echo d256> d256.txt && git status --porcelain) 2>&1".to_string(),
+            ],
+            &["?? d256.txt"],
+            false,
+        ),
+    ];
+    // One home, as in a real session: each new one runs the sandbox's setup.
+    let codex_home = sandbox_home("elevated-tools");
+    let mut failures = Vec::new();
+    for (name, argv, expected, tty) in cases {
+        let (stdout, exit_code) = runtime.block_on(async {
+            let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &PermissionProfile::workspace_write(),
+                workspace_roots_for(root.path()).as_slice(),
+                codex_home.path(),
+                argv,
+                root.path(),
+                // Core passes its environment on; PowerShell needs it.
+                std::env::vars().collect(),
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(60_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                tty,
+                /*stdin_open*/ tty,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "spawn elevated tool {name}: {err:#}\n{}",
+                    sandbox_log(codex_home.path())
+                )
+            });
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(/*secs*/ 90))
+                .await
+        });
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        println!("\nd256 tool {name}: exit={exit_code} stdout={stdout:?}");
+        if exit_code != 0 || !expected.iter().all(|part| stdout.contains(part)) {
+            failures.push(format!("{name}: exit={exit_code} stdout={stdout:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 const CRASH_ROOTS_ENV: &str = "CODEX_158_CRASH_ROOTS";
 const CRASH_CHILD_TEST: &str = "unified_exec::tests::legacy_integrity_crash_child_entry";
 const CRASH_CHILD_READY: &str = "integrity-crash-child: leased";

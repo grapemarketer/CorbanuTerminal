@@ -47,6 +47,8 @@ use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::MAX_NETWORK_POLICY_PROCESS_ID_BYTES;
+use crate::protocol::NETWORK_DENIED_METHOD;
+use crate::protocol::NetworkDeniedNotification;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
@@ -67,6 +69,8 @@ use crate::rpc::invalid_request;
 use crate::rpc_server_requests::RpcServerRequestSender;
 use crate::telemetry::ExecServerTelemetry;
 use crate::telemetry::ProcessMetricGuard;
+use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::BlockedRequestObserver;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 // Each process/read chunk needs four JSON values. Keep retained replay below the
@@ -294,11 +298,18 @@ impl LocalProcess {
                     process_shutdown.clone(),
                 )
             });
+        // #722 (D278): report the proxy's own denials when the client asks.
+        let network_denial_reporter = params
+            .network_proxy
+            .as_ref()
+            .is_some_and(|launch| launch.report_denials)
+            .then(|| network_denial_reporter(process_id.clone(), Arc::downgrade(&self.inner)));
         let prepared = prepare_exec_request(
             &params,
             child_env(&params),
             self.runtime_paths.as_ref(),
             network_policy_decider,
+            network_denial_reporter,
         )
         .await?;
         if prepared.command.is_empty() {
@@ -1050,6 +1061,43 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
     }
 }
 
+/// Sends `network/denied` for each request this process's proxy denied on
+/// its own (#722, D278). Denials the client's decider made are not sent: the
+/// client already knows them.
+fn network_denial_reporter(
+    process_id: ProcessId,
+    inner: std::sync::Weak<Inner>,
+) -> Arc<dyn BlockedRequestObserver> {
+    Arc::new(move |blocked: BlockedRequest| {
+        let process_id = process_id.clone();
+        let inner = inner.clone();
+        async move {
+            if blocked.decision.as_deref() != Some("deny")
+                || blocked.source.as_deref() == Some("decider")
+            {
+                return;
+            }
+            let Some(notifications) = inner
+                .upgrade()
+                .and_then(|inner| notification_sender(&inner))
+            else {
+                return;
+            };
+            let notification = NetworkDeniedNotification {
+                process_id,
+                protocol: blocked.protocol,
+                host: blocked.host,
+                port: blocked.port,
+                reason: blocked.reason,
+            };
+            // Awaited, so it is queued ahead of the process's exit.
+            let _ = notifications
+                .notify(NETWORK_DENIED_METHOD, &notification)
+                .await;
+        }
+    })
+}
+
 fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
     inner
         .notifications
@@ -1136,6 +1184,62 @@ mod tests {
             metrics,
             exporter,
         )
+    }
+
+    /// #722 (D278): the reporter sends the proxy's own denials and nothing
+    /// the client decided or only asked about.
+    #[tokio::test]
+    async fn network_denial_reporter_sends_only_own_denials() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        let backend = LocalProcess::with_runtime_paths(
+            RpcNotificationSender::new(outgoing_tx),
+            ExecServerTelemetry::default(),
+            /*runtime_paths*/ None,
+        );
+        let reporter =
+            network_denial_reporter(ProcessId::from("proc-1"), Arc::downgrade(&backend.inner));
+        let blocked = |decision: &str, source: &str| {
+            BlockedRequest::new(codex_network_proxy::BlockedRequestArgs {
+                host: format!("{source}.example"),
+                reason: "denied".to_string(),
+                client: None,
+                method: None,
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some(decision.to_string()),
+                source: Some(source.to_string()),
+                port: Some(80),
+            })
+        };
+        reporter
+            .on_blocked_request(blocked("deny", "decider"))
+            .await;
+        reporter
+            .on_blocked_request(blocked("ask", "baseline_policy"))
+            .await;
+        reporter
+            .on_blocked_request(blocked("deny", "baseline_policy"))
+            .await;
+
+        let Some(RpcServerOutboundMessage::Notification(notification)) = outgoing_rx.recv().await
+        else {
+            panic!("expected a denial notification");
+        };
+        assert_eq!(notification.method, NETWORK_DENIED_METHOD);
+        assert_eq!(
+            serde_json::from_value::<NetworkDeniedNotification>(
+                notification.params.expect("params")
+            )
+            .expect("denial notification"),
+            NetworkDeniedNotification {
+                process_id: ProcessId::from("proc-1"),
+                protocol: "http".to_string(),
+                host: "baseline_policy.example".to_string(),
+                port: Some(80),
+                reason: "denied".to_string(),
+            }
+        );
+        assert!(outgoing_rx.try_recv().is_err(), "only one denial is sent");
     }
 
     fn assert_finished_process_result(

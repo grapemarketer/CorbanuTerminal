@@ -81,6 +81,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   as editing a later message already did: `/cost` lists it as "Reopen
   warm-up", Corbanu says once it has been sent, and `skip_reopen_warmup = true`
   skips it (#1038).
+- **Realtime-only threads can skip the warm-up.** `skip_startup_warmup = true`
+  (in `config.toml`, with `-c`, or in `thread/start`'s `config`) sends no
+  startup warm-up, new or reopened. App-server clients that start a thread
+  only for `thread/realtime/start` should set it: the warm-up on the default
+  model could cost several times the realtime session (#1045).
 - **Realtime sessions show their tokens.** A realtime WebSocket session now
   records the input, cached-input, output and total tokens OpenAI reports at
   the end of each response, and `/cost` shows them. Its cost stays unknown
@@ -231,6 +236,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   remain compatible" note no longer covers this ID. The other retained IDs
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
+
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.
 
 ## Chat Completions and Anthropic: earlier MCP calls keep their own name
 

@@ -388,3 +388,131 @@ async fn status_refreshes_the_cached_named_account_answer_in_the_background() {
     }
     assert!(render_status(&mut chat, &mut rx).contains("· account default"));
 }
+
+/// #1251: an OpenAI session on the named ChatGPT account `work`, whose
+/// vault sign-in is on the `plus` plan.
+fn named_sign_in_session(chat: &mut ChatWidget) -> codex_login::NamedChatgptAccount {
+    app_test_support::write_named_chatgpt_auth(
+        chat.config.codex_home.as_path(),
+        "openai",
+        "work",
+        app_test_support::ChatGptAuthFixture::new("work-access-not-a-secret")
+            .account_id("acct-work")
+            .plan_type("plus"),
+    )
+    .expect("named sign-in");
+    chat.config.model_provider_id = "openai".to_string();
+    chat.config.model_provider =
+        codex_model_provider_info::ModelProviderInfo::create_openai_provider(
+            /*base_url*/ None,
+        );
+    chat.config.model_provider.account = Some(codex_model_provider_info::NamedProviderAccount {
+        provider_id: "openai".to_string(),
+        name: "work".to_string(),
+    });
+    chat.config
+        .features
+        .enable(codex_features::Feature::NamedAccounts)
+        .expect("enable named accounts");
+    codex_login::NamedChatgptAccount {
+        provider_id: "openai".to_string(),
+        name: "work".to_string(),
+    }
+}
+
+/// #1251: `/status` describes a named sign-in account from the summary the
+/// background check cached, never from the vault: each step below renders
+/// something the vault (a `plus` sign-in) would not give. Until the summary
+/// is known the account is named alone.
+#[tokio::test]
+async fn status_reads_the_cached_named_sign_in_summary_not_the_vault() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let account = named_sign_in_session(&mut chat);
+    // Each `/status` also starts a background check; answers set here are
+    // numbered above those, so the checks don't change what is rendered.
+    const MANUAL: u64 = 1 << 40;
+
+    // Not known yet: the account alone.
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(rendered.contains("account work"), "{rendered}");
+    assert!(!rendered.contains("ChatGPT sign-in"), "{rendered}");
+    assert!(!rendered.contains("no sign-in"), "{rendered}");
+
+    // Known: signed out (D171), although the vault holds a sign-in.
+    chat.model_catalog.set_named_sign_in(
+        /*generation*/ MANUAL + 1,
+        account.clone(),
+        crate::provider_named_accounts::NamedSignInState::NoSignIn,
+    );
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(
+        rendered.contains("account work has no sign-in"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("account unavailable"), "{rendered}");
+
+    // The vault could not be read.
+    chat.model_catalog.set_named_sign_in(
+        /*generation*/ MANUAL + 2,
+        account.clone(),
+        crate::provider_named_accounts::NamedSignInState::Unreadable,
+    );
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(
+        rendered.contains("account work is not signed in"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("account unavailable"), "{rendered}");
+
+    // Known: a `pro` sign-in. An older check answering late changes nothing.
+    chat.model_catalog.set_named_sign_in(
+        /*generation*/ MANUAL + 4,
+        account.clone(),
+        crate::provider_named_accounts::NamedSignInState::SignedIn(
+            codex_login::NamedSignInSummary {
+                kind: "ChatGPT sign-in",
+                email_hint: None,
+                plan: Some("pro".to_string()),
+            },
+        ),
+    );
+    chat.model_catalog.set_named_sign_in(
+        /*generation*/ MANUAL + 3,
+        account,
+        crate::provider_named_accounts::NamedSignInState::NoSignIn,
+    );
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(
+        rendered.contains("ChatGPT sign-in · pro (account work)"),
+        "{rendered}"
+    );
+    assert!(!rendered.to_lowercase().contains("plus"), "{rendered}");
+
+    // Another account's answer does not describe this one.
+    let mut other = chat.config.model_provider.clone();
+    other.account = Some(codex_model_provider_info::NamedProviderAccount {
+        provider_id: "openai".to_string(),
+        name: "home".to_string(),
+    });
+    chat.config.model_provider = other;
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(rendered.contains("account home"), "{rendered}");
+    assert!(!rendered.contains("ChatGPT sign-in"), "{rendered}");
+}
+
+/// #1251: each `/status` refreshes the cached summary off the UI thread, so
+/// a sign-in made by another process shows on the next one.
+#[tokio::test]
+async fn status_named_sign_in_summary_is_filled_in_the_background() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let account = named_sign_in_session(&mut chat);
+    let _ = render_status(&mut chat, &mut rx);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while chat.model_catalog.named_sign_in(&account).is_none() {
+        assert!(std::time::Instant::now() < deadline, "no background check");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let rendered = render_status(&mut chat, &mut rx);
+    assert!(rendered.contains("ChatGPT sign-in"), "{rendered}");
+    assert!(rendered.contains("(account work)"), "{rendered}");
+}
