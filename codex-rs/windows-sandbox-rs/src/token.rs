@@ -18,11 +18,11 @@ use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
-use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::CreateRestrictedToken;
 use windows_sys::Win32::Security::CreateWellKnownSid;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
@@ -36,6 +36,7 @@ use windows_sys::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_SESSIONID;
 use windows_sys::Win32::Security::TOKEN_ASSIGN_PRIMARY;
 use windows_sys::Win32::Security::TOKEN_DUPLICATE;
+use windows_sys::Win32::Security::TOKEN_GROUPS;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Security::TOKEN_USER;
@@ -57,6 +58,7 @@ const WIN_WORLD_SID: i32 = 1;
 const WIN_LOCAL_SYSTEM_SID: i32 = 22;
 const WIN_CREATOR_OWNER_RIGHTS_SID: i32 = 71;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
+const SE_GROUP_ENABLED: u32 = 0x0000_0004;
 
 #[repr(C)]
 struct TokenDefaultDaclInfo {
@@ -156,21 +158,48 @@ unsafe fn set_object_dacl(handle: HANDLE, grants: &[(*mut c_void, u32)]) -> Resu
 /// sandbox accounts).
 const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 
-/// The sandbox users' group SID if this process is in it (the elevated
-/// runner is, unless its setup predates the group).
-fn current_sandbox_users_group() -> Result<Option<Vec<u8>>> {
+/// Whether `token` holds `sid` as an enabled group. Needs `TOKEN_QUERY`
+/// only (unlike `CheckTokenMembership`, which duplicates the token: the
+/// hardened runner can't open its own token for that).
+unsafe fn token_has_enabled_group(token: HANDLE, sid: *mut c_void) -> Result<bool> {
+    let mut needed: u32 = 0;
+    GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenGroups) failed: {}",
+            GetLastError()
+        ));
+    }
+    let mut buffer = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+    if GetTokenInformation(
+        token,
+        TokenGroups,
+        buffer.as_mut_ptr().cast(),
+        needed,
+        &mut needed,
+    ) == 0
+    {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenGroups) failed: {}",
+            GetLastError()
+        ));
+    }
+    let groups = &*(buffer.as_ptr() as *const TOKEN_GROUPS);
+    let entries = std::slice::from_raw_parts(groups.Groups.as_ptr(), groups.GroupCount as usize);
+    Ok(entries
+        .iter()
+        .any(|entry| entry.Attributes & SE_GROUP_ENABLED != 0 && EqualSid(entry.Sid, sid) != 0))
+}
+
+/// The sandbox users' group SID if `token` (the elevated runner's, opened
+/// with `TOKEN_QUERY`) is in it: it is, unless its setup predates the group.
+unsafe fn sandbox_users_group_of(token: HANDLE) -> Result<Option<Vec<u8>>> {
     // A setup older than the group never created it.
     let Ok(mut group) = crate::winutil::resolve_sid(SANDBOX_USERS_GROUP) else {
         return Ok(None);
     };
-    let mut member = 0;
-    // SAFETY: the SID buffer outlives the call; 0 checks this process's token.
-    if unsafe { CheckTokenMembership(0, group.as_mut_ptr() as *mut c_void, &mut member) } == 0 {
-        return Err(anyhow!("CheckTokenMembership failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    Ok((member != 0).then_some(group))
+    let member = token_has_enabled_group(token, group.as_mut_ptr() as *mut c_void)?;
+    Ok(member.then_some(group))
 }
 
 /// D324 (#1648): gives objects the elevated runner creates from now on
@@ -183,29 +212,36 @@ fn current_sandbox_users_group() -> Result<Option<Vec<u8>>> {
 /// access through the sandbox account. Returns false, changing nothing, if
 /// this process isn't in the group (a setup older than the group).
 pub fn restrict_current_default_dacl() -> Result<bool> {
-    let Some(mut group) = current_sandbox_users_group()? else {
-        return Ok(false);
-    };
     // SAFETY: the SID buffers outlive every call; the token handle is
     // closed below.
     unsafe {
-        let psid_group = group.as_mut_ptr() as *mut c_void;
-        let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
-        let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
         let mut token: HANDLE = 0;
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, &mut token) == 0 {
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+            &mut token,
+        ) == 0
+        {
             return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
         }
-        let result = set_default_dacl_grants(
-            token,
-            &[
-                (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
-                (psid_group, GENERIC_ALL),
-                (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
-            ],
-        );
+        let result = (|| -> Result<bool> {
+            let Some(mut group) = sandbox_users_group_of(token)? else {
+                return Ok(false);
+            };
+            let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+            let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
+            set_default_dacl_grants(
+                token,
+                &[
+                    (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+                    (group.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+                    (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
+                ],
+            )?;
+            Ok(true)
+        })();
         CloseHandle(token);
-        result.map(|()| true)
+        result
     }
 }
 
@@ -646,7 +682,7 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
-    let Some(mut group) = current_sandbox_users_group()? else {
+    let Some(mut group) = sandbox_users_group_of(base_token)? else {
         return create_token(
             base_token,
             psid_capabilities,
