@@ -88,7 +88,6 @@ use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessW;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
-use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
@@ -908,9 +907,10 @@ fn create_process_with_logon_here(
             /*dwlogonflags*/ 0,
             application.as_ptr(),
             command_line.as_mut_ptr(),
-            // D324 (#1721): no console, so no console host, which the runner
-            // would start with the logon's default DACL before it runs.
-            DETACHED_PROCESS
+            // The service refuses `DETACHED_PROCESS` (87), so the runner
+            // starts with a console, and its host, which the runner leaves
+            // first thing (D324, #1721).
+            CREATE_NO_WINDOW
                 | CREATE_UNICODE_ENVIRONMENT
                 | if suspended { CREATE_SUSPENDED } else { 0 },
             ptr::null::<c_void>(),

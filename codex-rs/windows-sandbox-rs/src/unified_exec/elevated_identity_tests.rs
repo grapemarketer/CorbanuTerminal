@@ -631,7 +631,17 @@ fn sec_win_1648_measure_runner_startup_race() {
     });
     record_setup(codex_home.path());
     let line = expect_line(&line, codex_home.path());
-    println!("\nd324 race: exit={exit_code} {line:?}");
+    let log = sandbox_log(codex_home.path());
+    println!(
+        "\nd324 race: exit={exit_code} {line:?} core_restricted_default_dacl={}",
+        !log.contains("runner default DACL left to the runner")
+    );
+    if let Some(note) = log
+        .lines()
+        .find(|line| line.contains("runner default DACL left to the runner"))
+    {
+        println!("d324 race: {note}");
+    }
     assert!(line.starts_with("race seen="), "{line}");
 }
 

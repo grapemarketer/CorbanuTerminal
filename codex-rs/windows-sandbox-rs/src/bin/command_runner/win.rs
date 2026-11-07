@@ -256,9 +256,10 @@ fn harden_runner() -> Result<OwnedWinHandle> {
     // A console's host is a process the runner starts with its unrestricted
     // token and, before this, the logon's default DACL, which gives the
     // sandbox account full access: a command could start a child under it.
-    // Core starts the runner without a console (`DETACHED_PROCESS`), and its
-    // commands get their own or a ConPTY; if one was attached anyway, the
-    // runner leaves it, and its host exits.
+    // The runner needs no console (its commands get their own or a ConPTY),
+    // so it leaves the one Core starts it with, and its host exits. Where
+    // Core could restrict the runner's default DACL before it ran, the host
+    // started with that one (#1721).
     // SAFETY: no arguments; a failure means there was no console.
     unsafe { FreeConsole() };
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
