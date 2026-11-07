@@ -1972,6 +1972,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serialized_tool_text_held_back_json_then_prose_stays_a_message() {
+        // #1654: the answer opens with a JSON value naming "function_call" and goes on
+        // in prose, streamed in two chunks.
+        let json = r#"{"function_call": "auto"}"#;
+        let prose = " The legacy `function_call` parameter let a caller control whether the model called a function.";
+        let first = content_event("chatcmpl-json-then-prose", json);
+        let second = content_event("chatcmpl-json-then-prose", prose);
+
+        let events =
+            collect_events(&[first.as_slice(), second.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(
+            &events,
+            &format!("{json}{prose}"),
+            "chatcmpl-json-then-prose",
+        );
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_call_shaped_json_then_prose_stays_a_message() {
+        // #1654: a call-shaped example line followed by a prose line is an answer, not a call.
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"date\"}","call_id":"call_1"}"#,
+            "\nThat is how a Responses function call item looks.",
+        );
+        let event = content_event("chatcmpl-call-then-prose", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-call-then-prose");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_call_with_trailing_whitespace_is_a_call() {
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_ws"}"#,
+            "\n\n",
+        );
+        let event = content_event("chatcmpl-call-ws", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, .. }))
+                if call_id == "call_ws"
+        );
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn errors_on_serialized_function_call_text_followed_by_more_json() {
+        let content = concat!(
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_a"}"#,
+            "\n",
+            r#"{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"call_b"}"#,
+        );
+        let event = content_event("chatcmpl-two-calls", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_matches!(
+            &events[0],
+            Err(ApiError::Stream(message))
+                if message.contains("malformed function-call JSON as assistant text")
+                    && message.contains("call_b")
+        );
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
     async fn errors_on_malformed_serialized_function_call_text() {
         let content = r#"{"type":"function_call","name":"exec_command","arguments":"{"cmd":"date"}","call_id":"chatcmpl-tool-bad"}"#;
         let event = content_event("chatcmpl-malformed", content);
