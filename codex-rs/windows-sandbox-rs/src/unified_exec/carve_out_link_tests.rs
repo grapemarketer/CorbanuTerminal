@@ -164,7 +164,7 @@ fn legacy_read_only_path_through_a_linked_root_keeps_its_ancestors() {
 
     assert_eq!(
         (
-            started.clone(),
+            started,
             fs::read_to_string(&kept).ok(),
             fs::read_to_string(workspace.join("a\\other.txt")).ok(),
             ["a-renamed", "a-moved"]
