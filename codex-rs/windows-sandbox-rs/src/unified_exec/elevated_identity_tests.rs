@@ -190,6 +190,13 @@ fn missing_parts(line: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a `peer_parent` report is about a command runner (its file name
+/// carries the version).
+fn is_runner(line: &str) -> bool {
+    line.to_lowercase()
+        .starts_with("parent=codex-command-runner")
+}
+
 /// A folder outside every writable root that Authenticated Users may
 /// change, as on a secondary drive's root by default: the sandbox account's
 /// unrestricted token may write there, its commands' restricted tokens may
@@ -278,10 +285,38 @@ fn sec_win_1648_elevated_command_cannot_write_to_another_commands_runner() {
     println!("\nd324 runner peer: exit={exit_code} {line:?}");
     let missing = missing_parts(&line);
     assert!(
-        line.to_lowercase()
-            .starts_with("parent=codex-command-runner.exe ")
-            && missing.is_empty(),
+        is_runner(&line) && missing.is_empty(),
         "another elevated command's runner is open to writes: {line}\nmissing={missing:?}"
+    );
+}
+
+/// D324: nor its own runner: a child started under it would leave the
+/// command's job and restricted token.
+#[test]
+fn sec_win_1648_elevated_command_cannot_write_to_its_own_runner() {
+    let Some(codex_home) = elevated_home("d324-own-runner") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let (stdout, exit_code) = runtime.block_on(run_elevated(
+        root.path(),
+        codex_home.path(),
+        probe_argv(PROBE_ENTRY),
+        &[
+            (PROBE_ENV, "peer_parent".to_string()),
+            (TARGET_ENV, "self".to_string()),
+        ],
+        /*tty*/ false,
+    ));
+    record_setup(codex_home.path());
+    let line = expect_line(&stdout, codex_home.path());
+    println!("\nd324 own runner peer: exit={exit_code} {line:?}");
+    let missing = missing_parts(&line);
+    assert!(
+        is_runner(&line) && missing.is_empty(),
+        "an elevated command's own runner is open to writes: {line}\nmissing={missing:?}"
     );
 }
 

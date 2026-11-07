@@ -41,6 +41,7 @@ use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
+use codex_windows_sandbox::restrict_current_token_access;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::token_mode_for_permission_profile;
@@ -235,7 +236,27 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
-fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
+/// D324 (#1648): keeps this runner's commands, and every other elevated
+/// command, from writing to it. They all run as the sandbox account this
+/// runner runs as, which is a restricting SID of their tokens, and this
+/// process, its threads and its token gave that account full access: a
+/// command could start a child under the runner, with its unrestricted
+/// token, or write the runner's memory, threads or token. Afterwards the
+/// account may only query and wait for them, and objects the runner creates
+/// without explicit security (its later threads included) get the same.
+/// Returns the token the command's token is made from, opened first because
+/// the runner can't open its own token for that afterwards.
+fn harden_runner() -> Result<OwnedWinHandle> {
+    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
+    codex_process_hardening::protect_new_objects_by_default()
+        .context("protect the runner's new objects")?;
+    codex_process_hardening::restrict_current_process_access()
+        .context("restrict access to the runner's process and threads")?;
+    restrict_current_token_access().context("restrict access to the runner's token")?;
+    Ok(base)
+}
+
+fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
     let token_mode = token_mode_for_permission_profile(
@@ -270,7 +291,6 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         .iter()
         .map(LocalSid::as_ptr)
         .collect();
-    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
     let h_token = OwnedWinHandle::new(unsafe {
         match token_mode {
             WindowsSandboxTokenMode::ReadOnlyCapability => {
@@ -602,7 +622,7 @@ pub fn main() -> Result<()> {
         }
     };
 
-    let ipc_spawn = match spawn_ipc_process(&req) {
+    let ipc_spawn = match harden_runner().and_then(|base| spawn_ipc_process(&req, &base)) {
         Ok(value) => value,
         Err(err) => {
             let _ = send_error(

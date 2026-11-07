@@ -12,16 +12,20 @@ use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AdjustTokenPrivileges;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
+use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::CreateRestrictedToken;
 use windows_sys::Win32::Security::CreateWellKnownSid;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::GetTokenInformation;
 use windows_sys::Win32::Security::LookupPrivilegeValueW;
+use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::SetTokenInformation;
 
 use windows_sys::Win32::Security::ACL;
@@ -37,7 +41,10 @@ use windows_sys::Win32::Security::TOKEN_USER;
 use windows_sys::Win32::Security::TokenDefaultDacl;
 use windows_sys::Win32::Security::TokenGroups;
 use windows_sys::Win32::Security::TokenUser;
+use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
@@ -47,6 +54,7 @@ const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const WIN_LOCAL_SYSTEM_SID: i32 = 22;
+const WIN_CREATOR_OWNER_RIGHTS_SID: i32 = 71;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
 
 #[repr(C)]
@@ -61,11 +69,8 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
     set_default_dacl_grants(h_token, &grants)
 }
 
-/// Sets the token's default DACL to exactly `grants` (SID, access mask).
-unsafe fn set_default_dacl_grants(h_token: HANDLE, grants: &[(*mut c_void, u32)]) -> Result<()> {
-    if grants.is_empty() {
-        return Ok(());
-    }
+/// An ACL of exactly `grants` (SID, access mask); free it with `LocalFree`.
+unsafe fn acl_from_grants(grants: &[(*mut c_void, u32)]) -> Result<*mut ACL> {
     let entries: Vec<EXPLICIT_ACCESS_W> = grants
         .iter()
         .map(|(sid, access)| EXPLICIT_ACCESS_W {
@@ -91,6 +96,15 @@ unsafe fn set_default_dacl_grants(h_token: HANDLE, grants: &[(*mut c_void, u32)]
     if res != ERROR_SUCCESS {
         return Err(anyhow!("SetEntriesInAclW failed: {res}"));
     }
+    Ok(p_new_dacl)
+}
+
+/// Sets the token's default DACL to exactly `grants` (SID, access mask).
+unsafe fn set_default_dacl_grants(h_token: HANDLE, grants: &[(*mut c_void, u32)]) -> Result<()> {
+    if grants.is_empty() {
+        return Ok(());
+    }
+    let p_new_dacl = acl_from_grants(grants)?;
     let mut info = TokenDefaultDaclInfo {
         default_dacl: p_new_dacl,
     };
@@ -113,6 +127,66 @@ unsafe fn set_default_dacl_grants(h_token: HANDLE, grants: &[(*mut c_void, u32)]
         LocalFree(p_new_dacl as HLOCAL);
     }
     Ok(())
+}
+
+/// Replaces kernel object `handle`'s DACL with exactly `grants`, protected
+/// from inheritance. `handle` needs `WRITE_DAC`.
+unsafe fn set_object_dacl(handle: HANDLE, grants: &[(*mut c_void, u32)]) -> Result<()> {
+    let dacl = acl_from_grants(grants)?;
+    let res = SetSecurityInfo(
+        handle,
+        SE_KERNEL_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        dacl,
+        std::ptr::null(),
+    );
+    if !dacl.is_null() {
+        LocalFree(dacl as HLOCAL);
+    }
+    if res != ERROR_SUCCESS {
+        return Err(anyhow!("SetSecurityInfo(DACL) failed: {res}"));
+    }
+    Ok(())
+}
+
+/// D324 (#1648): limits the elevated runner's own token to `TOKEN_QUERY` for
+/// its user, the sandbox account its commands share. Its token DACL gave
+/// that account full access, and the account is a restricting SID of every
+/// elevated command's token, so any elevated command could adjust a
+/// runner's token (its default DACL, groups and privileges). Open what the
+/// runner needs from its token first ([`get_current_token_for_restriction`]):
+/// afterwards it can't either.
+pub fn restrict_current_token_access() -> Result<()> {
+    // SAFETY: the pseudo-handle is valid; the token handle and SID buffers
+    // live until the end of this block.
+    unsafe {
+        let mut token: HANDLE = 0;
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | READ_CONTROL | WRITE_DAC,
+            &mut token,
+        ) == 0
+        {
+            return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
+        }
+        let result = (|| {
+            let mut user = get_user_sid_bytes(token)?;
+            let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+            let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
+            set_object_dacl(
+                token,
+                &[
+                    (user.as_mut_ptr() as *mut c_void, TOKEN_QUERY),
+                    (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+                    (owner_rights.as_mut_ptr() as *mut c_void, READ_CONTROL),
+                ],
+            )
+        })();
+        CloseHandle(token);
+        result
+    }
 }
 
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
@@ -407,7 +481,12 @@ pub(crate) unsafe fn create_legacy_token_with_caps_from(
     psid_capabilities: &[*mut c_void],
     psid_command: *mut c_void,
 ) -> Result<HANDLE> {
-    create_token(base_token, psid_capabilities, &[], Some(psid_command))
+    create_token(
+        base_token,
+        psid_capabilities,
+        &[],
+        DefaultDacl::Legacy { psid_command },
+    )
 }
 
 /// Create a restricted token that includes all provided capability SIDs, the token user SID, and
@@ -461,6 +540,18 @@ pub unsafe fn create_readonly_token_with_caps_and_user_from(
     )
 }
 
+/// D324 (#1648): an elevated command's token. Every elevated command runs as
+/// the same sandbox account (per network mode), which is also a restricting
+/// SID of its token, so its default DACL grants full access only to SYSTEM
+/// and the logon SID of this command's runner: each runner is a logon of its
+/// own (`CreateProcessWithLogonW`), so that SID identifies this command, as
+/// D259's command SID does a legacy one. The sandbox account, Everyone and
+/// the capability SIDs get read and execute, and so does `OWNER RIGHTS`: the
+/// sandbox account owns every elevated command's objects, and an owner is
+/// otherwise always allowed `WRITE_DAC`. Before D324 the logon SID,
+/// Everyone and the capability SIDs, restricting SIDs of every elevated
+/// token, had `GENERIC_ALL`, so any elevated command could open another's
+/// processes for every write right.
 unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
@@ -471,7 +562,12 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
-    create_token_with_caps_from(base_token, psid_capabilities, &extra_restricting_sids)
+    create_token(
+        base_token,
+        psid_capabilities,
+        &extra_restricting_sids,
+        DefaultDacl::Elevated { psid_user },
+    )
 }
 
 unsafe fn create_token_with_caps_from(
@@ -483,15 +579,28 @@ unsafe fn create_token_with_caps_from(
         base_token,
         psid_capabilities,
         extra_restricting_sids,
-        /*command_identity*/ None,
+        DefaultDacl::Shared,
     )
+}
+
+/// Which default DACL [`create_token`] gives the new token.
+#[derive(Clone, Copy)]
+enum DefaultDacl {
+    /// `GENERIC_ALL` to the logon SID, Everyone and the capability SIDs (the
+    /// pre-D259 DACL, kept for tests).
+    Shared,
+    /// D259: a legacy command's, with its command SID (also added as a
+    /// restricting SID).
+    Legacy { psid_command: *mut c_void },
+    /// D324: an elevated command's; `psid_user` is the sandbox account.
+    Elevated { psid_user: *mut c_void },
 }
 
 unsafe fn create_token(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
     extra_restricting_sids: &[*mut c_void],
-    command_identity: Option<*mut c_void>,
+    default_dacl: DefaultDacl,
 ) -> Result<HANDLE> {
     if psid_capabilities.is_empty() {
         return Err(anyhow!("no capability SIDs provided"));
@@ -502,7 +611,9 @@ unsafe fn create_token(
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
 
     let mut extra_restricting_sids = extra_restricting_sids.to_vec();
-    extra_restricting_sids.extend(command_identity);
+    if let DefaultDacl::Legacy { psid_command } = default_dacl {
+        extra_restricting_sids.push(psid_command);
+    }
 
     // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
@@ -547,24 +658,32 @@ unsafe fn create_token(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    let dacl = if let Some(psid_command) = command_identity {
-        set_legacy_default_dacl(
+    // Additional restricting SIDs are identity markers, not capabilities. Deliberately
+    // exclude them from the default DACL so possessing a route identity cannot grant
+    // object access.
+    let dacl = match default_dacl {
+        DefaultDacl::Legacy { psid_command } => set_legacy_default_dacl(
             new_token,
             base_token,
             psid_command,
             psid_logon,
             psid_everyone,
             psid_capabilities,
-        )
-    } else {
-        // Additional restricting SIDs are identity markers, not capabilities. Deliberately
-        // exclude them from the default DACL so possessing a route identity cannot grant
-        // object access.
-        let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-        dacl_sids.push(psid_logon);
-        dacl_sids.push(psid_everyone);
-        dacl_sids.extend_from_slice(psid_capabilities);
-        set_default_dacl(new_token, &dacl_sids)
+        ),
+        DefaultDacl::Elevated { psid_user } => set_elevated_default_dacl(
+            new_token,
+            psid_user,
+            psid_logon,
+            psid_everyone,
+            psid_capabilities,
+        ),
+        DefaultDacl::Shared => {
+            let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
+            dacl_sids.push(psid_logon);
+            dacl_sids.push(psid_everyone);
+            dacl_sids.extend_from_slice(psid_capabilities);
+            set_default_dacl(new_token, &dacl_sids)
+        }
     };
     if let Err(err) = dacl {
         CloseHandle(new_token);
@@ -601,6 +720,35 @@ unsafe fn set_legacy_default_dacl(
     ];
     grants.extend(psid_capabilities.iter().map(|sid| (*sid, read_execute)));
     set_default_dacl_grants(token, &grants)
+}
+
+/// D324: sets an elevated command's default DACL (see
+/// [`create_token_with_caps_user_and_additional_restrictions_from`]) on
+/// `token`.
+unsafe fn set_elevated_default_dacl(
+    token: HANDLE,
+    psid_user: *mut c_void,
+    psid_logon: *mut c_void,
+    psid_everyone: *mut c_void,
+    psid_capabilities: &[*mut c_void],
+) -> Result<()> {
+    let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
+    let mut owner_rights = well_known_sid(WIN_CREATOR_OWNER_RIGHTS_SID)?;
+    let read_execute = GENERIC_READ | GENERIC_EXECUTE;
+    let mut grants = vec![
+        (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
+        (psid_logon, GENERIC_ALL),
+        (owner_rights.as_mut_ptr() as *mut c_void, read_execute),
+        (psid_user, read_execute),
+        (psid_everyone, read_execute),
+    ];
+    grants.extend(psid_capabilities.iter().map(|sid| (*sid, read_execute)));
+    set_default_dacl_grants(token, &grants)?;
+    // The token object itself gets the same: whoever creates a token gives
+    // it the creator's default DACL, and the runner's (see
+    // `codex_process_hardening::protect_new_objects_by_default`) would leave
+    // this command unable to adjust its own token (MSYS2 does).
+    set_object_dacl(token, &grants)
 }
 
 #[cfg(test)]
