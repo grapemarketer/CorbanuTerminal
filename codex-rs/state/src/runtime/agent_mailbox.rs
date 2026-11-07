@@ -191,6 +191,35 @@ WHERE message_id = ? AND phase = ?
         Ok(rows_affected == 1)
     }
 
+    /// Mark a reserved attempt `Submitted` before its hand-off (#1058).
+    ///
+    /// The write succeeds only while the row is still `Submitting` under `attempt_id` (#1545). An
+    /// attempt whose reservation another owner replaced loses the write and must not hand the
+    /// message over, so the stored attempt always names the attempt that delivers it.
+    pub async fn confirm_agent_message_submission(
+        &self,
+        message_id: &str,
+        attempt_id: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<bool> {
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE agent_mailbox_messages
+SET phase = ?, updated_at_ms = ?
+WHERE message_id = ? AND phase = ? AND attempt_id = ?
+            "#,
+        )
+        .bind(AgentMailboxPhase::Submitted.as_str())
+        .bind(now_ms)
+        .bind(message_id)
+        .bind(AgentMailboxPhase::Submitting.as_str())
+        .bind(attempt_id)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+        Ok(rows_affected == 1)
+    }
+
     pub async fn list_recoverable_agent_messages(
         &self,
         recipient_thread_id: ThreadId,

@@ -129,6 +129,73 @@ async fn mailbox_records_a_new_attempt_without_changing_logical_identity() {
 }
 
 #[tokio::test]
+async fn mailbox_confirms_only_the_attempt_that_holds_the_reservation() {
+    let runtime = StateRuntime::init_for_testing(
+        test_support::unique_temp_dir(),
+        "test-provider".to_string(),
+    )
+    .await
+    .expect("state runtime");
+    let recipient = ThreadId::new();
+    let message = communication("message-1");
+    runtime
+        .admit_agent_message(recipient, &message, /*now_ms*/ 1_000)
+        .await
+        .expect("admission");
+    assert!(
+        runtime
+            .transition_agent_message(
+                "message-1",
+                AgentMailboxPhase::Admitted,
+                AgentMailboxPhase::Ready,
+                /*now_ms*/ 1_001,
+            )
+            .await
+            .expect("ready")
+    );
+    assert!(
+        runtime
+            .begin_agent_message_submission(
+                "message-1",
+                AgentMailboxPhase::Ready,
+                "attempt-2",
+                /*now_ms*/ 1_002,
+            )
+            .await
+            .expect("begin attempt")
+    );
+
+    assert!(
+        !runtime
+            .confirm_agent_message_submission("message-1", "attempt-1", /*now_ms*/ 1_003)
+            .await
+            .expect("confirm a replaced attempt"),
+        "an attempt that no longer holds the reservation does not confirm it"
+    );
+    assert!(
+        runtime
+            .confirm_agent_message_submission("message-1", "attempt-2", /*now_ms*/ 1_004)
+            .await
+            .expect("confirm the holding attempt")
+    );
+    assert!(
+        !runtime
+            .confirm_agent_message_submission("message-1", "attempt-2", /*now_ms*/ 1_005)
+            .await
+            .expect("confirm twice"),
+        "a Submitted row is not confirmed again"
+    );
+    let message = runtime
+        .get_agent_message("message-1")
+        .await
+        .expect("lookup")
+        .expect("row");
+    assert_eq!(message.phase, AgentMailboxPhase::Submitted);
+    assert_eq!(message.attempt_id.as_deref(), Some("attempt-2"));
+    assert_eq!(message.updated_at_ms, 1_004);
+}
+
+#[tokio::test]
 async fn completed_mailbox_message_is_terminal_but_remains_auditable() {
     let runtime = StateRuntime::init_for_testing(
         test_support::unique_temp_dir(),
