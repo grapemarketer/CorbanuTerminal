@@ -59,15 +59,14 @@ TIER0 = re.compile(r"(^|/)(Cargo\.toml|Cargo\.lock|MODULE\.bazel(\.lock)?|BUILD\
 def slice_of(p):
     if p.startswith((".github/workflows/", ".github/actions/", ".github/scripts/")):
         return "S0 manifests/locks/CI"
-    if (
-        p.startswith((".github/", "scripts/", "tools/", ".codex/", ".devcontainer/", "codex-cli/", "docs/", "sdk/"))
-        or ("/" not in p and not TIER0.search(p))
-    ):
-        return "S1d tooling/repo"
+    # Every Cargo/Bazel manifest and lockfile is Tier 0, including those under tools/ or sdk/.
     if TIER0.search(p) or p.startswith(("codex-rs/.cargo/", "codex-rs/.config/", "patches/")) or p in (
         "codex-rs/deny.toml", "codex-rs/.gitignore",
     ):
         return "S0 manifests/locks/CI"
+    if p.startswith((".github/", "scripts/", "tools/", ".codex/", ".devcontainer/", "codex-cli/", "docs/", "sdk/")) \
+            or "/" not in p:
+        return "S1d tooling/repo"
     q = p.removeprefix("codex-rs/")
     top = q.split("/")[0]
     if top in SEC_CRATES or SEC_CORE.match(q):

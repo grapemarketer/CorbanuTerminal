@@ -6,7 +6,9 @@ Program: [upstreamSyncPlan.md](../upstreamSyncPlan.md) (#1532). Sprint S0: #1627
 ## S0 status (2026-11-06)
 
 Preparation is done. The skeleton merge commit waits for Travis's choice of target tag (`rust-v0.165.0` under D274
-or `rust-v0.167.0` as recommended); after that it is one command (`skeleton_merge.sh`, see the scripts README).
+or `rust-v0.167.0` as recommended); after that it is one command (`skeleton_merge.sh`, see the scripts README). For
+`rust-v0.167.0` the Tier 0 resolutions are prepared and the command was rehearsed end to end; for `rust-v0.165.0`
+they still have to be prepared the same way (about half a day).
 
 | S0 item | State |
 |---|---|
@@ -20,6 +22,8 @@ or `rust-v0.167.0` as recommended); after that it is one command (`skeleton_merg
 | Sync branch `sync/upstream-<tag>` | ruleset for `sync/**` prepared; branch is cut when the tag is chosen (its name contains the tag) |
 | CI mode, package-scoped CI, sync-branch CODEOWNERS | `ci_mode.py` and `ci_mode/sync-package-ci.yml`, applied by the skeleton command; CODEOWNERS needs the security owner's GitHub handle |
 | Governed records (active plan, sprint records) | wait for the active-plan slot (decision 2 on #1532) |
+| Tier 0 resolutions (manifests, lockfiles, CI files) | `rust-v0.167.0`: prepared against `main` `15ab4699`, decisions below; `rust-v0.165.0`: not yet |
+| Skeleton rehearsal (`rust-v0.167.0`, local branch on glitch, not pushed) | passed: parents `15ab4699` + `086ccc83`; 757 files committed with markers; `cargo metadata --locked`, cargo-deny (merged lock, our policy) and `bazel mod deps` pass; CI-mode and CODEOWNERS commits apply |
 | Skeleton two-parent merge commit | waits for the tag decision |
 
 ## Ledger previews (`main` `23be0b3883b1`)
@@ -47,3 +51,34 @@ shards, 0 failed; core security tests 1,613 on Linux and 1,678 on macOS), `tmux 
 `corbanu-terminal-ci`. Path-filtered lanes that didn't run here (`windows-security-probes`,
 `credential-boundary-canary`, `orchestrate-tui-matrix`, security contracts) are dispatched on the cut SHA before the
 skeleton; the last `windows-security-probes` run on `main` (`d874e0e1`) passed 395 tests.
+
+## Tier 0 resolution decisions (`rust-v0.167.0`, prepared 2026-11-06)
+
+The skeleton keeps `main`'s behaviour wherever a manifest choice could change it; upstream's version is taken where
+the change is mechanical. Each choice is a ledger row the owning slice can revisit.
+
+- **CI files** (`.github/workflows`, `actions`, `scripts` with conflicts): our whole file, plus our
+  `r2-release.yml` so `rust-release.yml` still matches it. Upstream's CI changes (voice SDK jobs, BuildBuddy, custom
+  runners, nightly 2026-08-20, dylint 6.1.0) are ported by the integrator in S4 where the merged code needs them.
+  `tools/argument-comment-lint/Cargo.{toml,lock}` stay ours for the same reason.
+- **Workspace:** union of members and dependencies; version stays `0.1.48`, Rust 1.99.1. `mcp-server` and
+  `shell-escalation` leave the workspace, following upstream's removal (D275): upstream deleted their sources, so
+  only our modified files remain, as ledger rows for S4e and S3b. `codex-core` drops the `codex-write-config-schema`
+  binary (upstream moved it to `codex-config-schema`) and keeps the `developer-accounting` feature.
+- **Kept ours (owner decides in its slice):** `age` 0.11 (vault file format; S1b/S1c), `ctor` 1.x, the `hyper =1.8.1`
+  pin, and `zip` with our reduced decoder set (#968); upstream adds `aes-crypto`, `lzma`, `xz` and `zstd`, which
+  is a security-owner call in S1c. `zstd` stays 0.14.3.
+- **Taken from upstream:** `v8 =152.2.0` with the fork patch, `deno_core_icudata` 0.78, `windows-sys` 0.61 from the
+  workspace (union of features) in `core`, `uds`, `network-proxy`, `mxc-sdk`, `syntect`/`two-face` features,
+  `crossterm` revision.
+- **Bazel:** `rules_rs` stays 0.0.102 with our rules_rust patch set and toolchain versions; upstream's new modules
+  (`rules_foreign_cc`, `rules_python`, voice toolchains) and `MSVC_RUSTC_FLAGS` are added.
+- **cargo-deny:** advisory ignores are exactly `main`'s; two (RUSTSEC-2024-0320, RUSTSEC-2026-0173) were dropped by
+  the clean merge and are restored, and upstream's zstd/libz-sys ignores aren't needed with the merged lock.
+- **Lockfiles:** regenerated from `main`'s, then raised to the tag's newer patch versions (`lock_max.py`: 17 crates,
+  including `quinn-proto` 0.11.18 and `webpki-root-certs` 1.0.10, which clear RUSTSEC-2026-0185/-0338/-0339/-0340/-0342
+  and -0383 that the new `h3-quinn` dependency would otherwise bring in).
+
+The prepared files live outside the repository (`.codex-work/sync-s0/tier0-rust-v0.167.0/` on the Mac and the same
+directory on glitch). Run the skeleton on glitch: the Mac couldn't fetch the `rusty_v8` fork's submodules from
+chromium.googlesource.com (SG1), so the Mac fetches glitch's bundle and pushes.

@@ -894,8 +894,8 @@ scripts/codex_package/test_layout.py	content	UU	other	S1d tooling/repo	1	unassig
 scripts/codex_package/v8.py	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		1	5	false	false	false	false	
 scripts/install/install.sh	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		4	22	false	false	false	false	
 scripts/install/test_install_sh.py	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		4	57	false	false	false	false	
-tools/argument-comment-lint/Cargo.lock	content	UU	schemas/locks	S1d tooling/repo	1	unassigned	yes	open		19	66	false	false	false	false	
-tools/argument-comment-lint/Cargo.toml	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		2	7	false	false	false	false	
+tools/argument-comment-lint/Cargo.lock	content	UU	schemas/locks	S0 manifests/locks/CI	0	integrator	no	open		19	66	false	false	false	false	
+tools/argument-comment-lint/Cargo.toml	content	UU	other	S0 manifests/locks/CI	0	integrator	no	open		2	7	false	false	false	false	
 tools/argument-comment-lint/README.md	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		5	15	false	false	false	false	
 tools/argument-comment-lint/argument-comment-lint	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		16	40	false	false	false	false	
 tools/argument-comment-lint/rust-toolchain	content	UU	other	S1d tooling/repo	1	unassigned	yes	open		1	2	false	false	false	false	

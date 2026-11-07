@@ -8,7 +8,9 @@ re-run at S5. Commands are in `scripts/upstream_sync/README.md`.
 ## Result
 
 No blocker for either tag. The merge can satisfy our cargo-deny policy once the S0 manifest resolution makes these
-changes (each listed in the ledger's Tier 0 rows):
+changes (each listed in the ledger's Tier 0 rows). For `rust-v0.167.0` this is already checked: the rehearsed
+skeleton's merged `Cargo.lock` passes cargo-deny with the merged `deny.toml` (our policy plus item 1 and 2), see
+[README](README.md#tier-0-resolution-decisions-rust-v01670-prepared-2026-11-06).
 
 1. `deny.toml` `allow-git` adds upstream's four new git sources (0.165.0 needs the first three):
    `hyperium/h3`, `microsoft/mxc`, `modelcontextprotocol/rust-sdk` and, at 0.167.0 only, `seanh-oai/rusty_v8`.
@@ -17,7 +19,9 @@ changes (each listed in the ledger's Tier 0 rows):
    new crates are listed in its own copy).
 3. The merged `Cargo.lock` must keep `main`'s newer `zstd` 0.14.3 / `zstd-safe` 8.2.0 / `zstd-sys` 2.1.2 line
    (upstream still has 0.13.3 / 7.2.4 / 2.0.16, flagged by RUSTSEC-2026-0391, -0398, -0403 and -0410) and must take
-   `libz-sys` >= 1.1.31 (RUSTSEC-2026-0418, build script prints the environment). `libz-sys` is new: upstream's
+   `libz-sys` >= 1.1.31 (RUSTSEC-2026-0418, build script prints the environment). The rehearsed lock has
+   `libz-sys` 1.1.31 and, for the crates that still need the 0.13 line, `zstd` 0.13.4 / `zstd-safe` 7.4.0, which
+   aren't affected. `libz-sys` is new: upstream's
    `codex-http-client` now depends on `curl` with `static-curl` (added in #55994), which pulls `curl-sys` and
    `libz-sys`.
 4. Keep the `RUSTSEC-2026-0441` (`pin-utils`, unmaintained) ignore `main` already has. Upstream's own policy fails on
@@ -84,8 +88,8 @@ is 0.0.102 on `main` and 0.0.96 upstream (keep ours); `bazel_dep v8` is replaced
   return to `denoland/rusty_v8` once #2091 ships.
 - Cost: a crates.io package excludes git submodules, but a git dependency doesn't. With the patch, `cargo metadata`
   on a fresh `CARGO_HOME` clones the fork and its submodules (V8, ICU, highway, FP16 and others from
-  chromium.googlesource.com), several GB; on the Mac it was still fetching after 20 minutes, with transient
-  `early EOF` retries. Every CI runner without a warm cargo git cache pays this, and so does every contributor.
+  chromium.googlesource.com), several GB. On the Mac the ICU fetch kept failing (`early EOF`) and was stopped
+  after 35 minutes; glitch fetched everything in a few minutes. Every CI runner without a warm cargo git cache pays this, and so does every contributor.
 - `rust-v0.165.0` uses crates.io `v8 = "=152.2.0"` without the patch.
 
 ## V8 artifacts (`rusty-v8-v152.2.0`)

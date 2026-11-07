@@ -12,7 +12,8 @@ plus `git`, `gh`, `cargo`, `bazel` and `actionlint` where noted. Nothing here pu
 | `slices.py <conflicts.json>` | The authoritative path → slice classifier (plan §5). |
 | `ledger.py <worktree> <tag> <out.tsv>` | The ledger: one row per conflicted path, per clean-merging upstream change on a security path, per colliding upstream migration. |
 | `footprint.py` | Rebuilds `security_paths.txt` (named paths, then the fork-patch footprint) and `security_footprint_prs.tsv` from merged security PRs (needs `gh`). |
-| `tier0.py prep/save/apply/check` | Prepares and checks the Tier 0 resolutions (manifests, lockfiles, CI files) the skeleton commit needs. |
+| `tier0.py prep/save/extra/apply/check` | Prepares and checks the Tier 0 resolutions (manifests, lockfiles, CI files) the skeleton commit needs. |
+| `lock_max.py <codex-rs> <tag>` | After cargo regenerates the merged `Cargo.lock` from `main`'s, raises crates to the tag's newer patch versions. |
 | `skeleton_merge.sh <tag> --resolutions DIR [--security-owner @h] [--push]` | The S0 skeleton merge as one command (below). |
 | `ci_mode.py apply/revert/check`, `ci_mode.py codeowners apply/revert` | Sync-branch CI mode and CODEOWNERS block; `ci_mode/sync-package-ci.yml` is the package-scoped workflow it adds. |
 | `baseline.py <sha> [--out f.md]` | CI baseline for one `main` commit: every lane's job conclusions and test counts. |
@@ -40,10 +41,15 @@ scripts/upstream_sync/skeleton_merge.sh rust-v0.167.0 --resolutions ~/sync-tier0
   --security-owner @<handle> --push
 ```
 
-The script refuses to use a prepared file if either side changed since it was prepared (lockfiles excepted: they are
-regenerated), so a `main` move between preparation and the merge shows up as a named list of files to redo. It
-regenerates `Cargo.lock` with `cargo metadata` and `MODULE.bazel.lock` with `bazel mod deps --lockfile_mode=update`
-(`SKIP_BAZEL_LOCK=1` to skip), checks that no Tier 0 path is unmerged or has markers and that every workflow and
+At `rust-v0.167.0` cargo has to clone the `rusty_v8` fork with its submodules, which the Mac couldn't do (SG1). Run
+the command on glitch with `--bundle FILE` instead of `--push` (and `UPSTREAM_SYNC_REPO=$PWD` when the scripts are
+outside the checkout), then on the Mac `git fetch FILE HEAD:refs/heads/sync-skeleton/<tag>` and push that branch.
+`--rehearse` runs the whole thing on a local branch without the origin checks.
+
+The script refuses to use a prepared file if either side changed since it was prepared, so a `main` move between
+preparation and the merge shows up as a named list of files to redo. Lockfiles are never copied: it starts from
+`main`'s, regenerates `Cargo.lock` with `cargo metadata` plus `lock_max.py` (checked with `--locked`) and
+`MODULE.bazel.lock` with `bazel mod deps --lockfile_mode=update` (`SKIP_BAZEL_LOCK=1` to skip), checks that no Tier 0 path is unmerged or has markers and that every workflow and
 action parses (`actionlint` when installed), writes `docs/management/upstreamSync/ledger-<tag>.tsv`, commits every
 other conflicted path with its markers as the two-parent merge, verifies the parents, then adds the CI-mode commit
 and (with `--security-owner`) the CODEOWNERS commit. `--push` pushes to `sync-skeleton/<tag>` and prints the PR
