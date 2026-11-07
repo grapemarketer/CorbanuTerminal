@@ -42,7 +42,8 @@ fn icacls(path: &Path, args: &[&str]) -> String {
 }
 
 /// A fresh folder under the shared root that any account may write to,
-/// labelled Low, holding a file any account may modify.
+/// labelled Low, holding a file any account may modify. The user's own SID
+/// is a restricting SID of neither backend's token.
 fn shared_target() -> TempDir {
     let root = std::env::var_os(SHARED_ROOT_ENV)
         .map(PathBuf::from)
@@ -56,9 +57,18 @@ fn shared_target() -> TempDir {
         .prefix("sec-win-1770-")
         .tempdir_in(&root)
         .expect("create the shared target");
+    // The user owns the folder, so it may change its DACL, but a normal
+    // session may lack `WRITE_OWNER`, which the Low label needs, on a folder
+    // in `D:\tmp` (#1689): Full control for the user grants it.
+    let user = format!("*{}:(OI)(CI)F", current_user_sid());
     icacls(
         target.path(),
-        &["/grant", "*S-1-5-32-545:(OI)(CI)M", "*S-1-5-11:(OI)(CI)M"],
+        &[
+            "/grant",
+            "*S-1-5-32-545:(OI)(CI)M",
+            "*S-1-5-11:(OI)(CI)M",
+            user.as_str(),
+        ],
     );
     icacls(target.path(), &["/setintegritylevel", "(OI)(CI)L"]);
     fs::write(target.path().join(EXISTING), BEFORE).expect("write the existing file");
