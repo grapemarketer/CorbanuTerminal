@@ -530,7 +530,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
             // writable root), and never through a link the sandbox may have
             // planted: the host must not relabel a folder it picked.
             if p.exists()
-                && !crate::workspace_acl::is_reparse_point(p)
+                && !crate::workspace_acl::is_link(p)
                 && dunce::canonicalize(p)
                     .is_ok_and(|canonical| strictly_inside_a_root(&canonical, &canonical_allow))
             {
