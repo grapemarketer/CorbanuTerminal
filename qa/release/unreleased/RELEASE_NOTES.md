@@ -410,9 +410,10 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   When the window is exceeded, `Context` shows the full window and
   `Thread total` stays the provider-reported usage, computed from the
   provider's counters, which the fill now keeps (#1583; #1586, thanks to
-  @sendoeth). After compaction,
-  `Context` shows the new, smaller estimate rather than a full window, and
-  `/new` starts the new thread without the previous thread's total.
+  @sendoeth). This also holds when the bridge first sees a thread at a fill
+  of an already-full window, such as a resume after a bridge restart (#1638).
+  After compaction, `Context` shows core's token estimate, and `/new` starts
+  the new thread without the previous thread's total.
 
 ## Usage totals survive a full context window
 
