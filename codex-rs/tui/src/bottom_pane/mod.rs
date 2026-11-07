@@ -1255,6 +1255,11 @@ impl BottomPane {
         self.composer.set_queue_submissions(queue_submissions);
     }
 
+    /// Whether submissions are queued until the session is configured.
+    pub(crate) fn queues_submissions(&self) -> bool {
+        self.composer.queues_submissions()
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {

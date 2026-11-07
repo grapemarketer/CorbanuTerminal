@@ -27,9 +27,9 @@ in Corbanu Terminal sessions and their child agents:
   Moderate: tool, MCP, web, agent and memory output reaches the model labelled
     untrusted; after it, protected actions (the vault, credentials, security
     settings, disclosure, value transfer, code you have not seen, MCP calls that
-    change or send data, starting an agent, tools Corbanu has not classified)
-    need your fresh approval, and cached, remembered or automatic approvals
-    don't count; with approvals off they are refused
+    change or send data, starting or restarting an agent, tools Corbanu has not
+    classified) need your fresh approval, and cached, remembered or automatic
+    approvals don't count; with approvals off they are refused
 • Secrets
   Moderate: only allowlisted environment variables reach agent commands, and the
     vault store, sign-in files, config and CLI tokens (such as ~/.aws/

@@ -87,6 +87,9 @@ pub(crate) enum ProtectedActionKind {
     UnclassifiedTool,
     /// Starting a new agent (D320, #1653).
     AgentLaunch,
+    /// Restarting a finished agent: resuming it or waking it with a
+    /// follow-up task (D334, #1702).
+    AgentRestart,
     /// Writing a file that runs code or sets policy later, outside the
     /// sandbox: shell start-up files, login items, git hooks (PF-23-S02).
     Persistence,
@@ -118,6 +121,7 @@ impl ProtectedActionKind {
             Self::ValueTransfer => "a value transfer",
             Self::UnclassifiedTool => "a tool the security level has not classified",
             Self::AgentLaunch => "a request to start a new agent",
+            Self::AgentRestart => "a request to restart a finished agent",
             Self::Persistence => {
                 "changing a file that runs code later (shell start-up, login items, git hooks)"
             }
@@ -692,15 +696,16 @@ fn path_text(path: &PathUri) -> String {
 fn rank(kind: ProtectedActionKind) -> u8 {
     match kind {
         ProtectedActionKind::UnclassifiedTool => 0,
-        ProtectedActionKind::AgentLaunch => 1,
-        ProtectedActionKind::UnseenCode => 2,
-        ProtectedActionKind::UnconfinedProcess => 3,
-        ProtectedActionKind::Disclosure => 4,
-        ProtectedActionKind::Persistence => 5,
-        ProtectedActionKind::SecurityPolicy => 6,
-        ProtectedActionKind::Credentials => 7,
-        ProtectedActionKind::ValueTransfer => 8,
-        ProtectedActionKind::Vault => 9,
+        ProtectedActionKind::AgentRestart => 1,
+        ProtectedActionKind::AgentLaunch => 2,
+        ProtectedActionKind::UnseenCode => 3,
+        ProtectedActionKind::UnconfinedProcess => 4,
+        ProtectedActionKind::Disclosure => 5,
+        ProtectedActionKind::Persistence => 6,
+        ProtectedActionKind::SecurityPolicy => 7,
+        ProtectedActionKind::Credentials => 8,
+        ProtectedActionKind::ValueTransfer => 9,
+        ProtectedActionKind::Vault => 10,
     }
 }
 

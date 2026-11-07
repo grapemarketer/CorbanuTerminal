@@ -138,6 +138,12 @@ impl ChatWidget {
         if self.input_queue.suppress_queue_autosend {
             return false;
         }
+        // D376 (#1748): input queued during startup waits for the session,
+        // even when closing a popup (such as the slash-command popup) would
+        // otherwise send it.
+        if self.bottom_pane.queues_submissions() {
+            return false;
+        }
         if self.blocks_direct_input {
             return false;
         }

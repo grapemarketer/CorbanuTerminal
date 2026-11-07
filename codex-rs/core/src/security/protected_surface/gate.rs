@@ -13,6 +13,8 @@ use crate::security::tainted_action::ProtectedActionKind;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
@@ -230,18 +232,27 @@ pub(crate) async fn ask_human_answer(
 }
 
 /// PF-23-S01 dispatch-boundary check: an unclassified route, starting an
-/// agent (D320), or a policy request an automatic reviewer would answer,
-/// needs the human after untrusted content.
+/// agent (D320) or restarting a finished one (D334), or a policy request an
+/// automatic reviewer would answer, needs the human after untrusted content.
 pub(crate) async fn check_dispatch(
     invocation: &ToolInvocation,
     origin: ToolOrigin,
 ) -> Result<(), String> {
-    let (route, kind) = match coverage(origin, &invocation.tool_name) {
+    let coverage = coverage(origin, &invocation.tool_name);
+    // Looking the target up is only worth it once the checks apply.
+    let restarts = coverage == Coverage::AgentFollowup
+        && is_tainted(&invocation.session)
+        && !followup_target_is_running(invocation).await;
+    let (route, kind) = match coverage {
         Coverage::Unclassified => (
             Route::UnclassifiedTool,
             ProtectedActionKind::UnclassifiedTool,
         ),
         Coverage::AgentLaunch => (Route::AgentLaunch, ProtectedActionKind::AgentLaunch),
+        Coverage::AgentRestart => (Route::AgentLaunch, ProtectedActionKind::AgentRestart),
+        Coverage::AgentFollowup if restarts => {
+            (Route::AgentLaunch, ProtectedActionKind::AgentRestart)
+        }
         Coverage::PolicyRequest
             if invocation.tool_name.name != "request_permissions"
                 || crate::guardian::routes_approval_to_guardian(&invocation.turn) =>
@@ -253,6 +264,7 @@ pub(crate) async fn check_dispatch(
         | Coverage::OwnCheck
         | Coverage::NestedCallsOnly
         | Coverage::ChildAgent
+        | Coverage::AgentFollowup
         | Coverage::NoProtectedEffect => return Ok(()),
     };
     let admission = admit(
@@ -277,6 +289,48 @@ pub(crate) async fn check_dispatch(
     )
     .await;
     check.resolve(&invocation.session, approved)
+}
+
+fn is_tainted(session: &Session) -> bool {
+    session
+        .services
+        .model_client()
+        .post_taint_state()
+        .is_some_and(|state| state.taint_generation > 0)
+}
+
+/// D334 (#1702): a follow-up task to an agent with a turn running joins its
+/// work; to any other agent it starts a new turn, so it asks like a restart.
+/// `PendingInit` is not running: a finished agent reloaded without a turn
+/// (by `send_message`, say) reads `PendingInit` too (#1768 review). A target
+/// that cannot be read or found counts as not running. This reads the target
+/// before `PreToolUse` hooks, which the operator configures, could rewrite it.
+async fn followup_target_is_running(invocation: &ToolInvocation) -> bool {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
+        return false;
+    };
+    let Some(target) = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|arguments| arguments.get("target")?.as_str().map(str::to_string))
+    else {
+        return false;
+    };
+    let Ok(thread_id) = crate::agent::agent_resolver::resolve_agent_target(
+        &invocation.session,
+        &invocation.turn,
+        &target,
+    )
+    .await
+    else {
+        return false;
+    };
+    invocation
+        .session
+        .services
+        .agent_control
+        .get_status(thread_id)
+        .await
+        == AgentStatus::Running
 }
 
 /// One line per post-taint decision (PF-26 counts these); never arguments.
