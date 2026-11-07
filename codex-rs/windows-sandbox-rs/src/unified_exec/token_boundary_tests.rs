@@ -139,6 +139,15 @@ fn assert_refused(
          stdout={stdout:?}",
         target.display()
     );
+    // Refused for lack of access, not for a wrong path: cmd reports each.
+    let denied = stdout.matches("Access is denied.").count();
+    assert_eq!(
+        denied,
+        3,
+        "the {backend} command's writes in {} failed, but not all for lack of access: \
+         stdout={stdout:?}",
+        target.display()
+    );
     println!(
         "sec-win-1770 {backend}: creating a file, creating a folder and appending were refused in {}",
         target.display()
