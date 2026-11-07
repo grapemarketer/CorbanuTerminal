@@ -80,6 +80,9 @@ jobs:
   # running. On PRs that touch sdk/typescript/**, codex-rs/exec/** or this
   # workflow, build the CLI with Cargo and run them. A skipped job leaves the
   # `sdk` call successful, so it blocks `CI required` only when it runs.
+  # D314 (#1605): also on PRs that change only the SDK's lockfiles, the root
+  # pnpm-lock.yaml or codex-rs/Cargo.lock (other lockfiles do not count).
+  # .github/scripts/test_sdk_path_filter.py runs this step's script.
   typescript-sdk-changed:
     name: Detect TypeScript SDK changes
     if: ${{ github.event_name == 'pull_request' }}
@@ -105,6 +108,7 @@ jobs:
           run=false
           while IFS= read -r f; do
             [[ $f == sdk/typescript/* || $f == codex-rs/exec/* || $f == .github/workflows/sdk.yml ]] && run=true
+            [[ $f == pnpm-lock.yaml || $f == codex-rs/Cargo.lock ]] && run=true
           done <<< "$files"
           echo "TypeScript SDK tests: $run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
