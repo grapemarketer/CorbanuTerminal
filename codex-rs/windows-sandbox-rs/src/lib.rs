@@ -382,6 +382,8 @@ pub use token::create_workspace_write_token_with_caps_and_user_from;
 #[cfg(target_os = "windows")]
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
+pub use token::get_current_token_for_elevated_restriction;
+#[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use token::restrict_current_token_access;

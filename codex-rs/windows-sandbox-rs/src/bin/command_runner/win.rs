@@ -36,7 +36,7 @@ use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
-use codex_windows_sandbox::get_current_token_for_restriction;
+use codex_windows_sandbox::get_current_token_for_elevated_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
@@ -247,7 +247,7 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// Returns the token the command's token is made from, opened first because
 /// the runner can't open its own token for that afterwards.
 fn harden_runner() -> Result<OwnedWinHandle> {
-    let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
+    let base = OwnedWinHandle::new(unsafe { get_current_token_for_elevated_restriction()? });
     codex_process_hardening::protect_new_objects_by_default()
         .context("protect the runner's new objects")?;
     codex_process_hardening::restrict_current_process_access()

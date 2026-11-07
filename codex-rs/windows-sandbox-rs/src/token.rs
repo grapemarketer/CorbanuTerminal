@@ -251,12 +251,27 @@ impl Drop for LocalSid {
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
+    open_current_token_for_restriction(/*extra_access*/ 0)
+}
+
+/// [`get_current_token_for_restriction`] for the elevated runner, with
+/// `WRITE_DAC`: a token `CreateRestrictedToken` makes from the handle has
+/// the handle's access, and D324 replaces the made token's own DACL.
+///
+/// # Safety
+/// Caller must close the returned handle.
+pub unsafe fn get_current_token_for_elevated_restriction() -> Result<HANDLE> {
+    open_current_token_for_restriction(READ_CONTROL | WRITE_DAC)
+}
+
+unsafe fn open_current_token_for_restriction(extra_access: u32) -> Result<HANDLE> {
     let desired = TOKEN_DUPLICATE
         | TOKEN_QUERY
         | TOKEN_ASSIGN_PRIMARY
         | TOKEN_ADJUST_DEFAULT
         | TOKEN_ADJUST_SESSIONID
-        | TOKEN_ADJUST_PRIVILEGES;
+        | TOKEN_ADJUST_PRIVILEGES
+        | extra_access;
     let mut h: HANDLE = 0;
     #[link(name = "advapi32")]
     unsafe extern "system" {
