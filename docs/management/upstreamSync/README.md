@@ -14,11 +14,11 @@ skeleton merge is up as #1690 into it.
 | Sync branch | `sync/upstream-rust-v0.167.0` at `781b935ff783`; ruleset `upstream-sync branches (sync/**)`: no deletion, no force-push, changes by PR (merge commits), 0 approvals, no code-owner requirement |
 | Tier 0 resolutions | re-prepared against `781b935f` (5 workflow files changed on `main` since `15ab4699`; each keeps ours as before); D317 and D316 applied |
 | Skeleton commit | `1d2e8ca07d`, parents `781b935f` + `086ccc83` (verified by the script), run on glitch and pushed from the Mac as a bundle; 771 files committed with markers |
-| Ledger | `ledger-rust-v0.167.0.tsv` on the sync branch: 1,571 rows; 915 conflicted paths exactly once (content 813, modify/delete 63, file-location 32, add/add 7), 53 Tier 0 rows resolved, 561 `security-review`, 78 `ci-review`, 16 `migration` |
+| Ledger | `ledger-rust-v0.167.0.tsv` on the sync branch: 1,570 data rows; 915 conflicted paths exactly once (content 813, modify/delete 63, file-location 32, add/add 7), 561 `security-review`, 78 `ci-review`, 16 `migration`; 53 rows resolved in the skeleton (52 Tier 0 plus the `r2-release.yml` `ci-review` row) |
 | `cargo metadata --locked`, `bazel mod deps`, workflows parse | pass (glitch); actionlint on the Mac adds only two shellcheck infos in `sync-package-ci.yml` |
 | SG1 | cargo-deny on the skeleton tree: advisories, bans, licenses, sources ok. Package diff vs `main`: 1,153 → 1,153 third-party crates (44 added, 44 removed, 83 changed); new git sources `CorbanuCore/rusty_v8`, `hyperium/h3`, `microsoft/mxc`; no personal fork |
 | `rusty_v8` (D317) | [`CorbanuCore/rusty_v8`](rusty_v8-provenance.md) at `350c5a85`, refs protected; archive SHA-256 unchanged |
-| `codex-voice-host` (D316) | `voice-host` in the workspace `exclude` list; no lane builds it |
+| `codex-voice-host` (D316) | `voice-host` in the Cargo workspace `exclude` list, so no Cargo lane builds it. `codex-rs/voice-host/BUILD.bazel` still defines the Bazel target; the Bazel lane is skipped by the CI mode, and the integrator excludes the target before that lane returns (S4) |
 | CI mode and CODEOWNERS | applied by the skeleton command (commits `0def6a25`, `0ae27125`); CODEOWNERS is request-only until D318 |
 | Governed records (D304) | [active plan, slot 2](../../plans/active/upstream-sync-rust-v0.167.0.md); sprints PF-85-S00..S06 |
 
@@ -30,7 +30,7 @@ S4); `corbanu-terminal-ci` and the `v8-canary` builds (crates with markers). Ups
 `python-sdk-cli-release.yml` (`workflow_run` on `rust-release`) and `python-sdk-release.yml` (`python-v*` tags)
 are inert until they reach `main`; S4 decides whether we keep them.
 
-## Ledger previews (`main` `23be0b3883b1`)
+## Ledger previews (`main` `23be0b3883b1`; superseded by the skeleton ledger)
 
 [ledger-preview-rust-v0.167.0.tsv](ledger-preview-rust-v0.167.0.tsv) and
 [ledger-preview-rust-v0.165.0.tsv](ledger-preview-rust-v0.165.0.tsv): every conflicted path exactly once, plus the
@@ -53,9 +53,12 @@ previews use zdiff3 (the skeleton's style) and run about 10% above the plan's de
 
 All lanes that ran on this commit passed (CodeQL was cancelled; it runs on `main` and nightly, not as a gate): `blocking-ci`, `postmerge-ci` (Linux full suite 20,373 tests in 4
 shards, 0 failed; core security tests 1,613 on Linux and 1,678 on macOS), `tmux smoke` (84 tests),
-`corbanu-terminal-ci`. Path-filtered lanes that didn't run here (`windows-security-probes`,
-`credential-boundary-canary`, `orchestrate-tui-matrix`, security contracts) are dispatched on the cut SHA before the
-skeleton; the last `windows-security-probes` run on `main` (`d874e0e1`) passed 395 tests.
+`corbanu-terminal-ci`. The last `windows-security-probes` run on `main` (`d874e0e1`) passed 395 tests.
+
+Baseline on the cut SHA `781b935f` (pending, recorded on #1627): `main`'s push lanes for that commit, plus
+`windows-security-probes`, `credential-boundary-canary` and both security contracts dispatched on
+`sync/upstream-rust-v0.167.0` while it still pointed at `781b935f`. `orchestrate-tui-matrix` has no manual trigger;
+its last `main` run stands in.
 
 ## Tier 0 resolution decisions (`rust-v0.167.0`, prepared 2026-11-06)
 

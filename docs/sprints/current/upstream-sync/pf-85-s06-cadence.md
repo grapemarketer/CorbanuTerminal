@@ -31,7 +31,7 @@ updated: 2026-11-07
 ## Code boundaries
 
 - Write scope: `scripts/upstream_sync/`, a cadence workflow, maintainers' docs.
-- Branch target: `sync/upstream-rust-v0.167.0` (PRs only).
+- Branch target: `main` (after the final merge).
 
 ## Preconditions
 

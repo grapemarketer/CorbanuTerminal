@@ -7,8 +7,8 @@ plan_feature: "PF-85"
 execution_order: 1
 owner: "Upstream-sync integrator (maintainer)"
 parallel_lane: "upstream-sync"
-write_scope: "codex-rs/Cargo.toml, codex-rs/Cargo.lock, codex-rs/deny.toml, MODULE.bazel, MODULE.bazel.lock, .github/workflows/sync-package-ci.yml, .github/CODEOWNERS, docs/management/upstreamSync/ledger-rust-v0.167.0.tsv"
-integration_gate: "Lands only on sync/upstream-rust-v0.167.0 by PR (ruleset); reaches main only through the PF-85-S05 final PR with SG1-SG3. Lockfile and manifest edits are the merged tree's, not main's."
+write_scope: "codex-rs/Cargo.toml, codex-rs/Cargo.lock, codex-rs/deny.toml, MODULE.bazel, MODULE.bazel.lock, .github/workflows/, .github/actions/, .github/scripts/, .github/CODEOWNERS, docs/management/upstreamSync/, scripts/upstream_sync/"
+integration_gate: "Merged-tree work (skeleton, Tier 0, CI mode, ledger) lands only on sync/upstream-rust-v0.167.0 by PR (ruleset) and reaches main only through the PF-85-S05 final PR with SG1-SG3. Governed records, docs/management/upstreamSync/ and scripts/upstream_sync/ also land on main through reviewed docs/scripts PRs."
 worktree: "/Volumes/CorbanuDrive/Corbanu/worktrees/sync-upstream-rust-v0.167.0"
 branch: "sync/upstream-rust-v0.167.0"
 base_commit: "781b935ff783178f146d02815f8fc01332ae21a4"
@@ -33,7 +33,7 @@ updated: 2026-11-07
 
 ## Code boundaries
 
-- Write scope: Every Cargo/Bazel manifest and lockfile, `.github/{workflows,actions,scripts}`, `docs/management/upstreamSync/`, `scripts/upstream_sync/`.
+- Write scope: the front-matter `write_scope`, plus, on the sync branch only, the per-crate `Cargo.toml` and `BUILD.bazel` files of ledger slice S0.
 - Branch target: `sync/upstream-rust-v0.167.0` (PRs only).
 
 ## Preconditions
@@ -49,19 +49,20 @@ updated: 2026-11-07
 - [x] Sync branch `sync/upstream-rust-v0.167.0` cut from `main` `781b935f` (ruleset `upstream-sync branches (sync/**)`).
 - [x] Tier 0 re-prepared against `781b935f` (5 workflow files changed since `15ab4699`; all keep ours).
 - [x] CorbanuCore/rusty_v8 pins `350c5a85` (D317); `voice-host` excluded from the workspace (D316).
-- [x] Skeleton run on glitch: parents verified, ledger written, `cargo metadata --locked`, `bazel mod deps`, cargo-deny pass.
+- [x] Skeleton run on glitch and opened as #1690 (evidence in its description; logs `~/corbanu-rtx/sync-s0b/` on glitch).
+- [x] Code-blind functional design: N/A, S00 changes no user-visible behaviour (no runnable build until S04).
 
 ## Remaining
 
 - [ ] Merge the skeleton PR into the sync branch; confirm the CI mode loads on the sync branch.
 - [ ] Baseline lanes on the cut SHA; S1 kick-off checklist on #1628.
-- [ ] Code-blind functional design frozen before test-result disclosure, or non-user-facing N/A reason recorded.
 
 ## Verification
 
-- [ ] `git rev-list --parents -n1` of the skeleton shows `781b935f 086ccc83`.
-- [ ] `cargo metadata --locked` and `cargo deny --locked check` on the skeleton tree (glitch).
-- [ ] TUI applicability: none (no runnable build until S4).
+- [x] Skeleton parents: `git rev-list --parents -n1 1d2e8ca07d` shows `781b935f 086ccc83` (#1690).
+- [x] `cargo metadata --locked` and `cargo deny --locked check` pass on the skeleton tree (glitch, #1690).
+- [ ] CI mode loads on the sync branch after the merge (workflow runs start; skipped jobs skip).
+- [x] TUI applicability: none (no runnable build until S04).
 
 ## Exit evidence
 

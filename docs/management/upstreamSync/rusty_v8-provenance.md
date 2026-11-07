@@ -24,4 +24,5 @@ tree (advisories, bans, licenses, sources).
 
 When denoland/rusty_v8#2091 is released, switch the patch back to the release (or drop it if upstream Codex does)
 in a cadence sync. To re-verify: `git fetch https://github.com/CorbanuCore/rusty_v8.git corbanu-v152.2.0-cppgc-align`
-and compare `rev-parse` of the commit and its tree with the values above.
+then `git rev-parse FETCH_HEAD^{commit} FETCH_HEAD^{tree}` (the tag is annotated) and compare with the values above
+and with the `rev` in upstream's `codex-rs/Cargo.toml` at `086ccc83`.

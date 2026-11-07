@@ -31,7 +31,7 @@ updated: 2026-11-07
 ## Code boundaries
 
 - Write scope: Whole workspace (integrator).
-- Branch target: `sync/upstream-rust-v0.167.0` (PRs only).
+- Branch target: the sync branch, then the final PR `sync/upstream-rust-v0.167.0` → `main`.
 
 ## Preconditions
 
@@ -47,7 +47,7 @@ updated: 2026-11-07
 ## Remaining
 
 - [ ] Main merge #3; revert the CODEOWNERS block; full run; SG1 re-run; SG3.
-- [ ] Final review (up to 8 rounds, D307); merge; 48-hour freeze (D306) and canary.
+- [ ] Final review (up to 8 rounds, D307); merge; 48-hour merge hold on `main` (D306) and canary.
 - [ ] Code-blind functional design frozen before test-result disclosure, or non-user-facing N/A reason recorded.
 
 ## Verification

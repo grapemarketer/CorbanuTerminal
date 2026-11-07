@@ -119,12 +119,12 @@ different contents under numbers we already use (e.g. upstream `0047_rollout_mig
 
 ### Target recommendation (decided: D303, `rust-v0.167.0`)
 
-Recommend switching the fixed target to **`rust-v0.167.0`**. It costs +21 conflicted files (+2.4%), +144 hunks (+4.9%)
+Travis chose **`rust-v0.167.0`** (D303) on this analysis. It costs +21 conflicted files (+2.4%), +144 hunks (+4.9%)
 and +8.3k conflict lines (+6.5%), with no extra sandbox or Windows-sandbox conflicts, and it compiles on our toolchain.
-Staying on 0.165.0 means the first D276 cadence sync starts 387 commits behind, with 0.166.0 and 0.167.0 already out,
+Staying on 0.165.0 would have meant the first cadence sync starts 387 commits behind, with 0.166.0 and 0.167.0 already out,
 and the security port gets redone against #57438/#58045 a month later. Costs of 0.167.0: the `rusty_v8` git source
-(SG1) and 40 more clean-merging security-path files to review. Whichever tag is chosen is fixed by SHA at the skeleton
-commit; newer releases wait for the cadence.
+(SG1, D317) and 40 more clean-merging security-path files to review. The tag is fixed by SHA at the skeleton commit;
+newer releases wait for the cadence.
 
 ## 3. Principles
 
@@ -254,7 +254,7 @@ reels, code-blind functional runs).
 | S3 Security port | W2–W4 | S3a (merged with S1/S2), S3b port | security owner + 1 worker | S3b "needs security sign-off" PR with parity matrix green; SG2 |
 | S4 Tier 3: TUI, app-server, exec, CLI | W3–W4 | S4a–S4e | 5 workers + QA | workspace compiles everywhere; true-TUI QA and demo reels done |
 | S5 Qualification and merge | W4–W5 | whole workspace | integrator + QA + security owner | all lanes green; qualification record; SG3; merged to `main`; canary passed |
-| S6 Cadence | after merge | D276 routine | integrator | first cadence trial measured; routine documented |
+| S6 Cadence | after merge | D305 routine | integrator | first cadence trial measured; routine documented |
 
 ### S0 Setup and skeleton (can start now)
 
@@ -262,12 +262,9 @@ reels, code-blind functional runs).
   to `scripts/upstream_sync/`; record the baseline on the `main` SHA the skeleton is cut from (test lists and pass
   status per CI lane, so "no regression" is measurable); build the acceptance list (§9) and the fork-patch footprint
   (retain/adapt/remove per `upstream-integration.md`); verify the `rusty-v8-v152.2.0` archives on macOS, Linux and
-  Windows and wire them through `.github/actions/setup-rusty-v8`; decide how GStreamer 1.28 is provided for
-  `codex-voice-host` on each runner (install, or follow upstream's CI); create and protect the sync branch; skeleton
+  Windows and wire them through `.github/actions/setup-rusty-v8`; keep `codex-voice-host` out of our lanes (D316); create and protect the sync branch; skeleton
   commit; ledger; CI mode change; sync-branch CODEOWNERS.
-- **Entry:** program owner named. The preparation work (records drafted, scripts, baseline, archive and GStreamer
-  checks) needs no new decision. The skeleton commit is the first implementation step, so it waits for the active-plan
-  slot (§7) and uses D274's `rust-v0.165.0` unless Travis has picked 0.167.0 by then.
+- **Entry:** program owner named; active-plan slot 2 (D304); target `rust-v0.167.0` (D303). Met 2026-11-07.
 - **Exit:** skeleton commit with two parents (`main`, pinned tag SHA, verified); ledger covers every conflicted path
   exactly once plus security-review and migration rows; `cargo metadata` succeeds; workflow files parse; SG1 recorded.
 - **Security gate SG1 (supply chain):** compare third-party packages before and after across `Cargo.lock`,
@@ -279,9 +276,16 @@ reels, code-blind functional runs).
 
 - **Kept-ours manifest choices (D319):** the security owner decides `age` 0.11 (vault file format) and our reduced
   `zip` decoder set (#968) against upstream's versions. Hard requirement: existing vault files and archives keep
-  working. Compatibility test before either changes: vault files and archives written by the last released Corbanu
-  build (checked-in fixtures, generated once with that release and a disposable home) open and decrypt with the
-  synced build, and vault files the synced build writes still open in that release, or the format stays unchanged.
+  working, so the S1 owner adds checked-in fixtures that must pass on the synced build whatever is decided:
+  - vault files of every kind (`local.age`, `codex_auth.age`, `mcp_oauth.age`) at scrypt work factor 16 (what
+    current builds write), 20 (the decrypt limit; older builds calibrated up to it and files are re-encrypted only
+    after a successful open) and one value in between, each made with a known fixture passphrase through a
+    throwaway keyring or fallback store (no native Keychain; test-isolation rules apply);
+  - one zip archive per compression method we accept today (stored, deflate, deflate64, bzip2) and one with a
+    method we reject; these stand in for the untrusted skill and plugin bundles `zip` reads;
+  - vault files written by the synced build open in the last released build (rollback).
+  All must open with the synced build. The accepted decoder set may grow only with the security owner's approval and
+  must not shrink.
 - **Scope:** S1a protocol (regenerate app-server schemas with `just write-app-server-schema`); S1b config/providers/
   auth (regenerate `models.json`, re-apply the Corbanu catalog, keep the OpenAI-style route default, vault-backed login,
   Corbanu home); S1c other crates (follow upstream's `core-skills` split; **renumber upstream migrations 0047–0062
@@ -377,7 +381,7 @@ reels, code-blind functional runs).
   first and S5 tests opening the upgraded DB with the previous release. `main` holds merges during the 48-hour canary
   (except fixes for the sync) so a revert stays clean. `pre-upstream-sync-<tag>` marks the last pre-sync `main`.
 
-### S6 Cadence (D276)
+### S6 Cadence (D305)
 
 - **Scope:** a monthly job (and on demand) that trial-merges the newest stable upstream tag into `main`, posts the
   conflict table and the security-path change count on a cadence issue, and opens the next sync when due. A sync under
@@ -390,7 +394,8 @@ reels, code-blind functional runs).
 - This is a product initiative under `AGENTS.md` (it touches authorization and sandbox boundaries, persistent state
   and several worktrees). S0 creates the active plan `docs/plans/active/upstream-sync-<tag>.md` from
   `PLAN_TEMPLATE.md`, citing the product-spec principle and row 11 above, and one sprint record per sprint under
-  `docs/sprints/current/upstream-sync/`. It needs an active-plan slot: slot 2 is free and Travis assigns it.
+  `docs/sprints/current/upstream-sync/`. It holds active-plan slot 2 (D304):
+  [`upstream-sync-rust-v0.167.0.md`](../plans/active/upstream-sync-rust-v0.167.0.md), sprints PF-85-S00..S06.
 - The upgrade record follows `upstream-integration.md` (required upstream-touch record and qualification).
 - Status goes on #1532 weekly; each sprint has its own tracking issue.
 
@@ -424,7 +429,7 @@ credential brokers · browser isolation · branding, `corbanu` binary names, Cor
 | Migration numbers collide silently | renumbering task in S1c, upgrade test from the latest release, DB backup before canary |
 | 136 snapshots hide regressions | owner reads every snapshot diff; no blanket accept |
 | Upstream features overlap ours (agent roles, message board, mxc/Windows sandbox service, user verification, workload identity, command checkpoints) | compile in at upstream defaults; ours stay authoritative for `/spawn` and security levels; anything that changes Permissive goes to SG2 |
-| V8 152.2.0 artifacts, the `rusty_v8` git source, GStreamer for `voice-host` | verified per OS in S0; SG1 |
+| V8 152.2.0 artifacts, the `rusty_v8` git source, GStreamer for `voice-host` | verified per OS in S0; SG1; `rusty_v8` from CorbanuCore (D317); `voice-host` out of our lanes (D316) |
 | New compiler warnings under `-D warnings` on 1.99.1 | 10 instances found on glitch; fixed by the owning slices |
 | Windows PC offline (down since 10-27 per the handoff; owner action D212) | native Windows CI is the required lane; Windows PC sessions scheduled with Travis for S3b and S5 |
 | Review budget (5 rounds per PR) on S3b and the final PR | ask in advance for a higher budget for those two PRs |
