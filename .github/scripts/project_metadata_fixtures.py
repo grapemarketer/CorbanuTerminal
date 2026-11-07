@@ -28,10 +28,17 @@ def nested_project_metadata(paths: list[str]) -> list[str]:
     found = []
     for path in paths:
         parts = PurePosixPath(path).parts
-        # Any kind of entry counts; names match up to case (`.Codex`).
-        if any(part.lower() in METADATA_NAMES for part in parts[1:]):
+        # Any kind of entry counts.
+        if any(is_metadata_name(part) for part in parts[1:]):
             found.append(path)
     return found
+
+
+def is_metadata_name(name: str) -> bool:
+    """Whether `name` is `.codex`/`.agents` as D283 compares names: each
+    character upper-cased the way NTFS does (`.Codex` and `.agentſ` count)."""
+    folded = "".join(c.upper() if len(c.upper()) == 1 else c for c in name)
+    return folded in (metadata.upper() for metadata in METADATA_NAMES)
 
 
 def tracked_paths(repo: Path) -> list[str]:

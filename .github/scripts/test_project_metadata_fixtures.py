@@ -27,8 +27,10 @@ class ProjectMetadataFixturesTest(unittest.TestCase):
             "qa/run/workspace/.codex/config.toml",
             "qa/run/workspace/.AGENTS/notes.md",
             "src/.codex",
+            "a/.agent\u017f/x",
             "qa/run/workspace/dot-codex/config.toml",
             "docs/.codexrc",
+            "logs/.codex-tui.log",
         ]
         self.assertEqual(
             fixtures.nested_project_metadata(paths),
@@ -36,6 +38,7 @@ class ProjectMetadataFixturesTest(unittest.TestCase):
                 "qa/run/workspace/.codex/config.toml",
                 "qa/run/workspace/.AGENTS/notes.md",
                 "src/.codex",
+                "a/.agent\u017f/x",
             ],
         )
 
