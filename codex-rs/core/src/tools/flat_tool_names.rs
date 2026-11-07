@@ -31,7 +31,24 @@ const HASH_SUFFIX_HEX_LEN: usize = 12;
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct FlatToolNames {
     by_flat_name: HashMap<String, ToolName>,
+    /// The configured multi-agent V2 namespace (`collaboration` by default),
+    /// whose tools these wires offer under their bare names.
+    multi_agent_v2_namespace: Option<String>,
 }
+
+/// Namespaces of built-in tools. Only these keep the bare-name fallback when
+/// earlier calls are replayed on wires without namespaces: any other namespace
+/// may be an MCP server's, including one configured without the `mcp__`
+/// prefix, whose bare tool name a built-in can share (#688).
+const BUILTIN_TOOL_NAMESPACES: &[&str] = &[
+    crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE,
+    "collaboration",
+    "clock",
+    "image_gen",
+    "memories",
+    "skills",
+    "web",
+];
 
 impl FlatToolNames {
     /// Returns the namespaced tool a flat name stands for.
@@ -49,6 +66,19 @@ impl FlatToolNames {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.by_flat_name.is_empty()
+    }
+
+    pub(crate) fn with_multi_agent_v2_namespace(mut self, namespace: Option<String>) -> Self {
+        self.multi_agent_v2_namespace = namespace;
+        self
+    }
+
+    /// Whether `namespace` belongs to built-in tools, so an earlier call this
+    /// request does not offer may replay under its bare name.
+    pub(crate) fn is_builtin_namespace(&self, namespace: &str) -> bool {
+        !namespace.starts_with("mcp__")
+            && (BUILTIN_TOOL_NAMESPACES.contains(&namespace)
+                || self.multi_agent_v2_namespace.as_deref() == Some(namespace))
     }
 }
 
@@ -102,6 +132,25 @@ pub(crate) fn flat_tool_name_for(tool_name: &ToolName) -> String {
         preferred
     } else {
         hashed_flat_name(&preferred, &tool_identity(tool_name), /*attempt*/ 0)
+    }
+}
+
+/// A flat name for replaying a call of a namespaced tool this request does not
+/// offer: its preferred name when that is portable and no offered tool has it,
+/// otherwise the hashed form, so the call never reads as an offered tool's.
+pub(crate) fn unoffered_flat_tool_name(tool_name: &ToolName, offered: &HashSet<&str>) -> String {
+    let preferred = preferred_flat_tool_name(tool_name);
+    if is_portable_tool_name(&preferred) && !offered.contains(preferred.as_str()) {
+        return preferred;
+    }
+    let identity = tool_identity(tool_name);
+    let mut attempt = 0_u32;
+    loop {
+        let candidate = hashed_flat_name(&preferred, &identity, attempt);
+        if !offered.contains(candidate.as_str()) {
+            return candidate;
+        }
+        attempt = attempt.saturating_add(1);
     }
 }
 
@@ -169,7 +218,13 @@ pub(crate) fn flatten_namespaced_tools(
             tool
         })
         .collect();
-    (renamed, FlatToolNames { by_flat_name })
+    (
+        renamed,
+        FlatToolNames {
+            by_flat_name,
+            multi_agent_v2_namespace: None,
+        },
+    )
 }
 
 fn tool_identity(tool_name: &ToolName) -> String {

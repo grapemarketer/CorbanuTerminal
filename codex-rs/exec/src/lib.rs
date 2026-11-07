@@ -9,6 +9,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
+mod json_usage;
 mod panic_watch;
 
 pub use cli::Cli;
@@ -142,6 +143,7 @@ pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -1126,6 +1128,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         let mut interrupt_channel_open = true;
         let mut interrupted = false;
         let primary_thread_id_for_requests = primary_thread_id.to_string();
+        let mut usage_threads = HashSet::new();
         loop {
             let server_event = tokio::select! {
                 () = panic_stall.stalled() => {
@@ -1240,9 +1243,20 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                                 break;
                             }
                         }
+                    } else if json_mode {
+                        json_usage::observe_subagent(
+                            &notification,
+                            &primary_thread_id_for_requests,
+                            &mut usage_threads,
+                            &client,
+                            &mut request_ids,
+                            event_processor.as_mut(),
+                        )
+                        .await;
                     }
                 }
                 InProcessServerEvent::Lagged { skipped } => {
+                    event_processor.invalidate_usage();
                     let message = lagged_event_warning_message(skipped);
                     warn!("{message}");
                     event_processor.process_warning(message);

@@ -1723,3 +1723,87 @@ fn broken_mcp_transport_toml() -> &'static str {
     r#"command = "/bin/sh"
 args = ["-c", "exit 1"]"#
 }
+
+/// #1045 (D76 option a): a client that starts a thread only for realtime sets
+/// `skip_startup_warmup` in `thread/start`'s config, and the thread sends no
+/// paid `generate=false` warm-up. The first model request is the turn itself.
+#[tokio::test]
+async fn thread_start_with_skip_startup_warmup_sends_no_warmup() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    // Websocket turns through an app-server subprocess can be slow under Bazel.
+    const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    use core_test_support::responses;
+
+    // Two response sets, so a warm-up (the bug) cannot stall the turn.
+    let websocket_server = responses::start_websocket_server(vec![vec![
+        vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ],
+        vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_assistant_message("msg-2", "Done"),
+            responses::ev_completed("resp-2"),
+        ],
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    app_test_support::MockResponsesConfig::new(
+        &websocket_server.uri().replacen("ws://", "http://", 1),
+    )
+    .with_provider_config("supports_websockets = true")
+    .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+
+    let thread_req = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            config: Some(std::collections::HashMap::from([(
+                "skip_startup_warmup".to_string(),
+                json!(true),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(READ_TIMEOUT, mcp.read_response(thread_req)).await??;
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests: Vec<Value> = websocket_server
+        .connections()
+        .into_iter()
+        .flatten()
+        .map(|request| request.body_json())
+        .collect();
+    let warmups = requests
+        .iter()
+        .filter(|request| request["generate"].as_bool() == Some(false))
+        .count();
+    assert_eq!((requests.len(), warmups), (1, 0), "{requests:#?}");
+    assert_eq!(requests[0]["type"].as_str(), Some("response.create"));
+
+    websocket_server.shutdown().await;
+    Ok(())
+}

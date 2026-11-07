@@ -75,6 +75,11 @@ enum Screen {
     Done(Outcome),
 }
 
+/// #1094: why "restart now" is not offered after a revocation in a remote or
+/// daemon window. Restarting this terminal doesn't restart those sessions, so
+/// it can't confirm the change holds there.
+pub(crate) const REVOCATION_REMOTE_RESTART_REFUSED: &str = "Restart now is not offered: this window's sessions run in an app server outside this Corbanu Terminal.";
+
 /// Where a commit goes: the session's Corbanu home, its configured level
 /// and thread (as for `LevelBasis::read`).
 #[derive(Clone, Debug)]
@@ -82,6 +87,8 @@ pub(crate) struct RevocationTarget {
     pub(crate) codex_home: PathBuf,
     pub(crate) configured: SecurityLevel,
     pub(crate) thread: Option<codex_protocol::ThreadId>,
+    /// False when the session runs on a remote app server or the local daemon.
+    pub(crate) sessions_in_this_process: bool,
 }
 
 pub(crate) struct RevocationView {
@@ -320,9 +327,16 @@ impl RevocationView {
                                     _ => {}
                                 }
                             }
-                            let message = outcome_line(revocation, &report);
+                            let message = outcome_line(revocation, &report).map(|message| {
+                                if !target.sessions_in_this_process && report.not_saved.is_none() {
+                                    format!("{message} {REVOCATION_REMOTE_RESTART_REFUSED}")
+                                } else {
+                                    message
+                                }
+                            });
                             Outcome {
-                                restartable: message.is_ok()
+                                restartable: target.sessions_in_this_process
+                                    && message.is_ok()
                                     && report.not_saved.is_none()
                                     && super::restart::restart_blocker().is_none(),
                                 message,

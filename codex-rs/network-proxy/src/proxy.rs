@@ -852,7 +852,24 @@ impl NetworkProxy {
             environment_id,
             execution_id,
             policy_decision_timeout_ms: None,
+            report_denials: false,
         })
+    }
+
+    /// Records a request the executor's own proxy denied (#722, D278) for this
+    /// execution, as this proxy's own blocks are, so its observer ends the
+    /// command as failed. It can only add a denial.
+    pub fn remote_denial_recorder(&self) -> Option<Arc<dyn BlockedRequestObserver>> {
+        let scope = self.execution_scope.as_ref()?;
+        let state = Arc::new(self.state.for_execution_token(&scope.attribution_token)?);
+        Some(Arc::new(move |blocked: crate::BlockedRequest| {
+            let state = Arc::clone(&state);
+            async move {
+                if let Err(err) = state.record_blocked(blocked).await {
+                    warn!("failed to record remote network denial: {err}");
+                }
+            }
+        }))
     }
 
     /// Returns the policy decider with trusted execution attribution restored.
@@ -1728,6 +1745,66 @@ mod tests {
                 Some("baseline_policy"),
                 Some("execution-1"),
             )
+        );
+        Ok(())
+    }
+
+    /// #722 (D278): a denial the executor reports is recorded for this
+    /// execution, so its observer can end the command as failed.
+    #[tokio::test]
+    async fn remote_denial_recorder_records_for_its_execution() -> Result<()> {
+        let blocked = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&blocked);
+        let proxy = NetworkProxy::builder()
+            .state(Arc::new(network_proxy_state_for_policy(
+                NetworkProxyConfig::default(),
+            )))
+            .blocked_request_observer(move |request: crate::BlockedRequest| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    observed
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(request);
+                }
+            })
+            .managed_by_codex(/*managed_by_codex*/ false)
+            .build()
+            .await?;
+        assert!(
+            proxy.remote_denial_recorder().is_none(),
+            "only an execution-scoped proxy can attribute a remote denial"
+        );
+        let scoped = proxy.for_execution("remote", "execution-1", "token-1".to_string())?;
+        let recorder = scoped
+            .remote_denial_recorder()
+            .expect("execution-scoped proxy should expose its denial recorder");
+
+        recorder
+            .on_blocked_request(crate::BlockedRequest::new(crate::BlockedRequestArgs {
+                host: "denied.example".to_string(),
+                reason: crate::reasons::REASON_DENIED.to_string(),
+                client: None,
+                method: None,
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some("deny".to_string()),
+                source: Some("executor".to_string()),
+                port: Some(80),
+            }))
+            .await;
+        let blocked = blocked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(
+            (
+                blocked[0].host.as_str(),
+                blocked[0].decision.as_deref(),
+                blocked[0].execution_id.as_deref(),
+            ),
+            ("denied.example", Some("deny"), Some("execution-1"))
         );
         Ok(())
     }

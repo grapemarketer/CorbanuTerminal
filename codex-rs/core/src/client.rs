@@ -5156,7 +5156,11 @@ fn chat_replay_function_arguments(arguments: String) -> String {
 /// history) replays under the flat name this request offers for that exact
 /// tool (`flat_tool_names`, the request's own mapping), such as an MCP tool's
 /// `mcp__server__tool`, or the offered `*_v1` alias for a V1 agent tool;
-/// otherwise under its bare name, as before. A tool whose
+/// otherwise under its bare name, as before, except that a tool outside the
+/// built-in namespaces (an MCP tool, with or without the `mcp__` prefix) this
+/// request does not offer (server removed, tool dropped by the tool limit)
+/// replays under a flat name no offered tool has: MCP tools are never offered
+/// under their bare name here, which a built-in may share. A tool whose
 /// preferred flat name a plain tool already takes is offered under a hashed
 /// name, so its earlier calls never appear as calls of the plain tool (#688).
 fn flatten_namespaced_history(
@@ -5203,9 +5207,21 @@ fn flatten_namespaced_history(
                     _ => return None,
                 };
                 offered.contains(alias).then_some(alias)
+            })
+            .map(str::to_string)
+            .or_else(|| {
+                tool_name
+                    .namespace
+                    .as_deref()
+                    .is_some_and(|namespace| !flat_tool_names.is_builtin_namespace(namespace))
+                    .then(|| {
+                        crate::tools::flat_tool_names::unoffered_flat_tool_name(
+                            &tool_name, &offered,
+                        )
+                    })
             });
         if let Some(flat) = flat {
-            *name = flat.to_string();
+            *name = flat;
         }
     }
 }

@@ -80,6 +80,15 @@ pub(crate) struct ModelCatalog {
     named_account_providers: RwLock<(u64, Option<std::collections::BTreeSet<String>>)>,
     /// Numbers the background checks that compute it.
     named_account_check: std::sync::atomic::AtomicU64,
+    /// #1251: per named sign-in account, the newest background answer to
+    /// "what is this account signed in with", with the number of the check
+    /// that produced it. `/status` reads this instead of the vault.
+    named_sign_ins: RwLock<
+        std::collections::BTreeMap<
+            codex_login::NamedChatgptAccount,
+            (u64, crate::provider_named_accounts::NamedSignInState),
+        >,
+    >,
 }
 
 impl ModelCatalog {
@@ -93,6 +102,7 @@ impl ModelCatalog {
             session_recovery_only: AtomicBool::new(false),
             named_account_providers: RwLock::new((0, None)),
             named_account_check: std::sync::atomic::AtomicU64::new(0),
+            named_sign_ins: RwLock::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -270,6 +280,39 @@ impl ModelCatalog {
             .1
             .as_ref()
             .map(|providers| providers.contains(provider_id))
+    }
+
+    /// #1251: records check `generation`'s answer for `account` unless a
+    /// newer check has answered for it already.
+    pub(crate) fn set_named_sign_in(
+        &self,
+        generation: u64,
+        account: codex_login::NamedChatgptAccount,
+        state: crate::provider_named_accounts::NamedSignInState,
+    ) {
+        let mut cached = self
+            .named_sign_ins
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cached
+            .get(&account)
+            .is_none_or(|(newest, _)| generation > *newest)
+        {
+            cached.insert(account, (generation, state));
+        }
+    }
+
+    /// #1251: what `account` is signed in with, from the cached answer;
+    /// `None` while unknown. Never reads the vault.
+    pub(crate) fn named_sign_in(
+        &self,
+        account: &codex_login::NamedChatgptAccount,
+    ) -> Option<crate::provider_named_accounts::NamedSignInState> {
+        self.named_sign_ins
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(account)
+            .map(|(_, state)| state.clone())
     }
 
     /// Starts a new provider-models check and returns its number.

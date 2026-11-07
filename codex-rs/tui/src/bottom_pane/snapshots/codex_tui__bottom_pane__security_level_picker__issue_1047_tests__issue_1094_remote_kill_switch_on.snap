@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/security_level_picker_issue_1047_tests.rs
+expression: done
+---
+Grants and kill switch
+Core's level: Permissive · Kill switch: on
+
+Kill switch on for the next start. Saved: it holds after a restart. Other Corbanu
+Terminals running on this home take it within about a second. Level: Permissive. Restart
+now is not offered: this window's sessions run in an app server outside this Corbanu
+Terminal.
+
+enter or esc back

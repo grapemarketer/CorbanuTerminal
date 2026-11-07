@@ -69,8 +69,9 @@ pub(super) enum Runs {
 }
 
 /// #1449: commands with options whose value is a command they run (`su -c
-/// CMD`, `su -s SHELL`, `rsync -e CMD`, `rg --pre CMD`, `tar -I CMD`, `tar
-/// --to-command=CMD`, `sort --compress-program=CMD`): their names, then
+/// CMD`, `su -s SHELL`, `rsync -e CMD`, `rg --pre CMD`, `rg --hostname-bin
+/// CMD` (#1573), `tar -I CMD`, `tar --to-command=CMD`, `sort
+/// --compress-program=CMD`): their names, then
 /// each option, the shortest prefix of it the program takes (a long one;
 /// getopt takes any unique one) and how it runs the value. A short option
 /// may be in a group (`su -lc`, `rsync -ave`), its value the rest of the
@@ -100,7 +101,13 @@ const OPERAND_RUNNERS: &[(&[&str], RunnerOptions)] = &[
         &["rsync"],
         &[("-e", 2, Runs::Program), ("--rsh", 5, Runs::Program)],
     ),
-    (&["rg"], &[("--pre", 5, Runs::Program)]),
+    (
+        &["rg"],
+        &[
+            ("--pre", 5, Runs::Program),
+            ("--hostname-bin", 14, Runs::Program),
+        ],
+    ),
     (
         &["sort", "gsort"],
         &[("--compress-program", 4, Runs::Filter)],
@@ -633,6 +640,11 @@ fn length(raw: &str) -> bool {
 /// option (`--upload`, `--templ`, `--op`).
 /// `subcommand`: a dashed helper's (`git-clone`). Read once per command,
 /// from its first git word to its end.
+/// #1528: a subcommand git does not know may be an alias from existing
+/// config (`git g -Osh x` with `alias.g=grep`) or a typo `help.autocorrect`
+/// runs (`git gerp -Osh x`), so it may be `grep`, `clone`, `init` or `push`:
+/// its `-O`, `-u`, `-c`, `--open-files-in-pager`, `--exec`, `--template` and
+/// `--config` ask too (the long ones as in #1597).
 pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> bool {
     // A later dashed helper (`git-clone`) names its subcommand too.
     let has = |word: &str| {
@@ -642,6 +654,11 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
                 arg == word || git_helpers::git_name(arg).flatten().as_deref() == Some(word)
             })
     };
+    // A dashed helper's words start with its own options, not a subcommand;
+    // a later `git` in them starts one (`git-bisect run git g -Osh x`).
+    // Its `-c` asks only after it: before it, `-c k=v` is git's own.
+    let unknown_at = unknown_git_subcommand(args, /*scanning*/ subcommand.is_none());
+    let unknown = unknown_at.is_some();
     let clone = has("clone");
     let creates = clone || has("init");
     let exec = has("push") || has("archive") || has("send-pack") || has("fetch-pack");
@@ -650,22 +667,207 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
         let name = word.split_once('=').map_or(word, |(name, _)| name);
         name.len() >= shortest && option.starts_with(name)
     };
-    args.iter().any(|word| {
+    args.iter().enumerate().any(|(at, word)| {
         work::step();
         if word.starts_with("--") {
             long(word, "--upload-pack", "--up".len())
                 || long(word, "--receive-pack", "--rec".len())
-                || (exec && long(word, "--exec", "--ex".len()))
-                || (creates && long(word, "--template", "--te".len()))
-                || (clone && long(word, "--config", "--con".len()))
-                || (grep && long(word, "--open-files-in-pager", "--op".len()))
+                || ((exec || unknown) && long(word, "--exec", "--ex".len()))
+                || ((creates || unknown) && long(word, "--template", "--te".len()))
+                || ((clone || unknown) && long(word, "--config", "--con".len()))
+                || ((grep || unknown) && long(word, "--open-files-in-pager", "--op".len()))
         } else {
             // A group of short options (`-qc k=v`, `-u./x`, `-nOsh`).
             word.strip_prefix('-').is_some_and(|cluster| {
-                (clone && cluster.contains(['c', 'u'])) || (grep && cluster.contains('O'))
+                (clone && cluster.contains(['c', 'u']))
+                    || (grep && cluster.contains('O'))
+                    || (unknown && cluster.contains(['O', 'u']))
+                    || (unknown_at.is_some_and(|unknown| at > unknown) && cluster.contains('c'))
             })
         }
     })
+}
+
+/// #1528: git's built-in commands (`git --list-cmds=builtins`; list from
+/// #1597). An alias cannot hide one of them, and autocorrect runs only what
+/// matches none. Optional porcelain (`gui`, `send-email`, `subtree`…) is
+/// left out: where it is not installed, an alias of that name runs.
+/// #1635: so are built-ins newer than git 2.34 (`hook` 2.36,
+/// `fsmonitor--daemon` 2.36, `diagnose` 2.38, `replay` 2.44, `refs` 2.46,
+/// `backfill` 2.49, `diff-pairs` 2.50), and `whatchanged` and
+/// `pack-redundant`, which builds with breaking changes leave out: on a git
+/// without them, an alias of that name runs (`alias.refs=clone`).
+const GIT_COMMANDS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archive",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout--worker",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "credential-cache",
+    "credential-cache--daemon",
+    "credential-store",
+    "describe",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "difftool",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "fetch-pack",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "fsck-objects",
+    "gc",
+    "get-tar-commit-id",
+    "grep",
+    "hash-object",
+    "help",
+    "index-pack",
+    "init",
+    "init-db",
+    "interpret-trailers",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-ours",
+    "merge-recursive",
+    "merge-recursive-ours",
+    "merge-recursive-theirs",
+    "merge-subtree",
+    "merge-tree",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "pack-refs",
+    "patch-id",
+    "pickaxe",
+    "prune",
+    "prune-packed",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "receive-pack",
+    "reflog",
+    "remote",
+    "remote-ext",
+    "remote-fd",
+    "repack",
+    "replace",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "send-pack",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-index",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule",
+    "submodule--helper",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-file",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "update-server-info",
+    "upload-archive",
+    "upload-archive--writer",
+    "upload-pack",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "worktree",
+    "write-tree",
+];
+
+/// #1528: where a subcommand in git's words after `git` (`args`) is not
+/// one of git's own commands. Global options and their values are skipped
+/// (`-C x`, `-c k=v`); a later git word (`git.exe`, `=git`) starts another.
+fn unknown_git_subcommand(args: &[String], mut scanning: bool) -> Option<usize> {
+    let mut value_next = false;
+    for (at, word) in args.iter().enumerate() {
+        work::step();
+        if basename(word).eq_ignore_ascii_case("git")
+            || indirect::equals_git(word)
+            || git_helpers::git_name(word) == Some(None)
+        {
+            scanning = true;
+            value_next = false;
+            continue;
+        }
+        if !scanning {
+            continue;
+        }
+        if std::mem::replace(&mut value_next, false) {
+            continue;
+        }
+        if word.starts_with('-') {
+            value_next = super::code_variables::GIT_VALUE_OPTIONS.contains(&word.as_str())
+                || matches!(word.as_str(), "-c" | "--config-env");
+            continue;
+        }
+        if !GIT_COMMANDS.contains(&word.as_str()) {
+            return Some(at);
+        }
+        scanning = false;
+    }
+    None
 }
 
 /// #1064: the names a nameref declaration makes (`declare -n r=v`, `local
