@@ -38,6 +38,7 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
@@ -75,6 +76,7 @@ on:
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
       - "codex-rs/sandboxing/src/lib.rs"
@@ -170,6 +172,14 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
           grep -q "test result: ok. 3 passed" d283-1541.log
           rm d283-1541.log
+      - name: Configured read-only paths the legacy backend makes (#1686)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones --nocapture --test-threads=1 2>&1 | tee d1686.log
+          grep -q "test result: ok. 1 passed" d1686.log
+          rm d1686.log
       - name: D261 denies without the tree walk match it (D285, #1542 item 6)
         if: ${{ !cancelled() }}
         shell: bash
