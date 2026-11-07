@@ -11763,6 +11763,44 @@ fn issue1606_git_value_before_a_wrapper_folder_option_asks() {
     }
 }
 
+/// #1661: a wrapper's git outputs: the inner git of `git submodule
+/// foreach` and `git bisect run` runs in a folder this reading does not
+/// follow (each submodule's, or the folder bisect runs in), so its
+/// relative outputs are judged as being in an unknown folder. Only adds
+/// prompts: the outer git's own outputs are still judged against its
+/// folder.
+#[test]
+fn issue1661_wrapped_git_output_paths_ask() {
+    use ProtectedActionKind::Persistence;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            "git -C ~/r submodule foreach git log --output=../../.zshenv",
+            "git submodule foreach git log --output=../../.zshenv",
+            "git bisect run git log --output=../../.zshenv",
+            "git -C ~/r bisect run git log --output=../../.zshenv",
+            "git -C ~/r submodule foreach git config -f ../../.zshenv core.pager sh",
+            "git bisect run git config -f ../../.zshenv core.pager sh",
+            // Any relative output under one: the folder is unknown.
+            "git -C ~/r submodule foreach git log --output=out.txt",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        for script in [
+            // No output option: nothing to judge.
+            "git submodule foreach git log --oneline",
+            "git bisect run git log --oneline",
+            "git -C ~/r submodule foreach git status",
+            // The outer git's own outputs, judged against its folder.
+            "git -C /tmp log --output=out.txt",
+            "git -C ~/r log --output=out.txt",
+            "git -C ~/r log --output=../../.zshenv",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
 /// #1620: zsh expands `=mytool` in any word, so a writer's operand writes
 /// the installed program, and so does the text `eval`, `trap` and `alias`
 /// run. Only adds prompts: bash writes a file `=mytool` (stricter than
