@@ -177,6 +177,7 @@ mod tests {
         ("tainted_action.rs", include_str!("../tainted_action.rs")),
         ("aliases.rs", include_str!("aliases.rs")),
         ("arithmetic.rs", include_str!("arithmetic.rs")),
+        ("braces.rs", include_str!("braces.rs")),
         ("certain_cd.rs", include_str!("certain_cd.rs")),
         ("grammar.rs", include_str!("grammar.rs")),
         ("git_config.rs", include_str!("git_config.rs")),
