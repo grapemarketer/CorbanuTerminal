@@ -1072,6 +1072,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
         create_test_tool("web", "search"),
         create_test_tool("image.gen", "draw"),
         create_test_tool("team", "spawn"),
+        create_test_tool("python", "run"),
         create_test_tool("history", "search"),
     ];
 
@@ -1083,6 +1084,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
                 "web".to_string(),
                 "image.gen".to_string(),
                 "team".to_string(),
+                "python".to_string(),
                 "history".to_string(),
             ],
         ),
@@ -1100,6 +1102,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
                 ToolName::namespaced("mcp__web", "search"),
                 ToolName::namespaced("mcp__image_gen", "draw"),
                 ToolName::namespaced("mcp__team", "spawn"),
+                ToolName::namespaced("mcp__python", "run"),
                 ToolName::namespaced("history", "search"),
             ])
         );

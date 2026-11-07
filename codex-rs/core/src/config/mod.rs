@@ -2584,7 +2584,8 @@ impl NonPrefixedMcpServerNameClash {
     // A config that lists a clashing name in `server_names` doesn't load, so
     // the clashes below, found on a loaded config, are never listed ones.
 
-    /// The `corbanu mcp add` wording: the server isn't configured yet.
+    /// The `corbanu mcp add` wording: the name is being added, not renamed
+    /// (a disabled server with that name may already exist).
     pub fn mcp_add_message(&self) -> String {
         let reason = self.reason();
         let suggested = self.suggested_name();

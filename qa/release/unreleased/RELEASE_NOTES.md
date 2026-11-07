@@ -281,8 +281,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   the names `features.multi_agent_v2.tool_namespace` already can't use.
   App-server config writes and MCP imports from other agents apply it too.
   `corbanu mcp add` now suggests another name to add (#1679) instead of
-  `corbanu mcp remove` for a server that isn't configured, and the warning for
-  a skipped skill dependency names the namespace it would take.
+  `corbanu mcp remove` for a server that isn't configured. The warning for a
+  skipped skill dependency now says which kind of reserved namespace it would
+  take and no longer suggests "limiting" `server_names`.
 
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
