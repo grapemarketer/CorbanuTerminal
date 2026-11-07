@@ -10,13 +10,19 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyConfig;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::Message;
 
+use super::super::ExecServerError;
 use super::super::LazyRemoteExecServerClient;
 use super::super::NetworkPolicyDecisionController;
 use super::accept_websocket;
@@ -213,6 +219,21 @@ async fn policy_requests_use_process_decider_and_cancel_on_unregister() {
                     reason: "not_allowed".to_string(),
                 },
             ),
+            // #722: a host the prompt would show disguised is refused.
+            (
+                4,
+                "allowed\u{200b}.example",
+                ExecServerNetworkPolicyDecision::Deny {
+                    reason: "not_allowed".to_string(),
+                },
+            ),
+            (
+                5,
+                "elpmaxe.\u{202e}allowed",
+                ExecServerNetworkPolicyDecision::Deny {
+                    reason: "not_allowed".to_string(),
+                },
+            ),
         ] {
             write_jsonrpc_websocket(
                 &mut websocket,
@@ -381,7 +402,16 @@ async fn executor_denials_reach_the_process_observer() {
         for message in [
             denied_notification(ProcessId::from("other-process"), "other.example", "denied"),
             denied_notification(server_process_id.clone(), "blocked.example", "denied"),
-            denied_notification(server_process_id, "bad host\u{1b}[2J", "bad reason!"),
+            denied_notification(
+                server_process_id.clone(),
+                "bad host\u{1b}[2J",
+                "bad reason!",
+            ),
+            denied_notification(
+                server_process_id,
+                "\u{202e}blocked\u{200b}.exa\u{2066}mple\u{feff}",
+                "denied",
+            ),
         ] {
             write_jsonrpc_websocket(&mut websocket, message).await;
         }
@@ -414,7 +444,7 @@ async fn executor_denials_reach_the_process_observer() {
     ready_tx.send(()).expect("server should be waiting");
 
     let mut denials = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..3 {
         let blocked = timeout(Duration::from_secs(5), denied_rx.recv())
             .await
             .expect("denial should arrive")
@@ -436,10 +466,168 @@ async fn executor_denials_reach_the_process_observer() {
                 Some("deny".to_string()),
                 Some(80),
             ),
+            // #722: bidi and zero-width characters are stripped.
+            (
+                "blocked.example".to_string(),
+                "denied".to_string(),
+                Some("deny".to_string()),
+                Some(80),
+            ),
         ]
     );
     assert!(denied_rx.try_recv().is_err(), "other processes are ignored");
     session.unregister().await;
     drop(client);
     server.abort();
+}
+
+/// #722 (D278): a launch asking for denial reports must come with an
+/// observer, and an observer with a launch that asks for them; anything else
+/// is refused before a process is started.
+#[tokio::test]
+async fn denial_reports_must_match_the_observer() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let (done_tx, done_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut websocket = accept_websocket(&listener).await;
+        complete_websocket_initialize(&mut websocket, "mismatch", Default::default()).await;
+        done_rx.await.expect("client should finish");
+        assert!(
+            timeout(Duration::from_millis(200), websocket.next())
+                .await
+                .is_err(),
+            "no process start should be sent"
+        );
+    });
+
+    let client = LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(websocket_url, Duration::from_secs(1)),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .get()
+    .await
+    .expect("client should connect");
+    let process_id = ProcessId::from("mismatch-process");
+    let observer: Arc<dyn codex_network_proxy::BlockedRequestObserver> =
+        Arc::new(|_blocked: codex_network_proxy::BlockedRequest| async {});
+    for (report_denials, observer) in [(true, None), (false, Some(observer))] {
+        let mut launch = RemoteNetworkProxyLaunchConfig::new(
+            RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
+                .expect("default remote config"),
+        );
+        launch.report_denials = report_denials;
+        let params = ExecParams {
+            process_id: process_id.clone(),
+            argv: vec!["true".to_string()],
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
+            env_policy: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: Some(launch),
+        };
+        let Err(ExecServerError::Protocol(message)) = client
+            .start_process(params, /*network_policy_decider*/ None, observer)
+            .await
+        else {
+            panic!("a mismatched launch should be refused (report_denials={report_denials})");
+        };
+        assert_eq!(
+            message,
+            "network denial reports must match the configured observer"
+        );
+        assert!(client.inner.get_session(&process_id).is_none());
+    }
+    done_tx.send(()).expect("server should be waiting");
+    timeout(Duration::from_secs(2), server)
+        .await
+        .expect("server should finish")
+        .expect("server task should finish");
+}
+
+/// #722 (D278): a `network/denied` notification that isn't valid JSON for
+/// the protocol (a port above 65535) is a protocol error: nothing is
+/// recorded and the connection is dropped, like any malformed notification.
+#[tokio::test]
+async fn malformed_denial_drops_the_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let process_id = ProcessId::from("malformed-process");
+    let server_process_id = process_id.clone();
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut websocket = accept_websocket(&listener).await;
+        complete_websocket_initialize(&mut websocket, "malformed", Default::default()).await;
+        ready_rx.await.expect("process should be registered");
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Notification(codex_exec_server_protocol::JSONRPCNotification {
+                method: crate::protocol::NETWORK_DENIED_METHOD.to_string(),
+                params: Some(serde_json::json!({
+                    "processId": server_process_id,
+                    "protocol": "http",
+                    "host": "blocked.example",
+                    "port": 70000,
+                    "reason": "denied",
+                })),
+            }),
+        )
+        .await;
+        loop {
+            match timeout(Duration::from_secs(5), websocket.next())
+                .await
+                .expect("the client should drop the connection")
+            {
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Text(text))) => panic!("unexpected message: {text}"),
+                Some(Ok(Message::Binary(_))) => panic!("unexpected binary message"),
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Ok(Message::Frame(_))) => {}
+            }
+        }
+    });
+
+    let client = LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(websocket_url, Duration::from_secs(1)),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+    .get()
+    .await
+    .expect("client should connect");
+    let session = client
+        .register_session(&process_id)
+        .await
+        .expect("session should register");
+    let (denied_tx, mut denied_rx) = mpsc::unbounded_channel();
+    let observer: Arc<dyn codex_network_proxy::BlockedRequestObserver> =
+        Arc::new(move |blocked: codex_network_proxy::BlockedRequest| {
+            let denied_tx = denied_tx.clone();
+            async move {
+                let _ = denied_tx.send(blocked);
+            }
+        });
+    session.state.network_denial_observer.store(Some(Arc::new(
+        super::super::NetworkDenialObserver(observer),
+    )));
+    ready_tx.send(()).expect("server should be waiting");
+
+    timeout(Duration::from_secs(6), server)
+        .await
+        .expect("server should see the connection close")
+        .expect("server task should finish");
+    assert!(
+        denied_rx.try_recv().is_err(),
+        "a malformed denial is not recorded"
+    );
+    session.unregister().await;
 }
