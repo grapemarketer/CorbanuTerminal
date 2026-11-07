@@ -12384,6 +12384,105 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
     }
 }
 
+/// #1704, round 8 of #1698's review: a word the classifier cannot see
+/// where a writer reads its options may be an option taking a name (`o=-A;
+/// set $o commands ls ./x` defines `ls`), or split into several words
+/// (`set $(cat f)`); so may one before a name (`zstyle -a $(cat f)`). The
+/// classifier cannot tell a quoted word from one that splits, so either
+/// asks. `zselect` and `zsystem flock` read options after operands. Only
+/// adds prompts.
+#[test]
+fn issue1704_hidden_words_where_writers_read_options_ask() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // Round 8.
+            "o=$(cat f); set $o commands ls ./x; ls",
+            "o=$(cat f); zstyle $o :x y functions; f",
+            "set $(cat f); ls",
+            "zstyle -a $(cat f); f",
+            // The class: an option, an option's value, a pattern.
+            "set -$o commands ls ./x",
+            "set -e \"$o\" commands ls ./x",
+            "set -o $(cat f)",
+            "set ?A commands ls ./x",
+            "set *~a/b",
+            "zstyle -$o :x y functions",
+            "zstyle -s \"$c\" y n",
+            "printf $o 'BASH_CMDS[ls]' ./x",
+            "printf \"$fmt\" x",
+            "print $o 'functions[f]' 'tee -a ~/.zshrc'",
+            "print -r $(cat f)",
+            "zstat $o functions x",
+            "zstat -A info \"$f\"",
+            "stat -f %m $(cat f)",
+            "zformat $o $n x",
+            "pcre_match $o $n x",
+            "compadd -X $(cat f) x",
+            "sysread -i $fd line",
+            // Before a name a split may move.
+            "getopts $(cat f)",
+            "zlistattr $(cat f)",
+            "zlistattr \"$f\" attrs",
+            "zgetattr x $(cat f)",
+            "zgetattr \"$f\" \"$attr\" value",
+            "zregexparse $(cat f)",
+            // Options after operands (round 8).
+            "zselect -t 0 -r 0 -A $n",
+            "zsystem flock -t 0 -f $n file",
+            "zselect 0 -A $n",
+            "zselect -r 0 -a$n",
+            "zsystem flock -f $n x",
+            "zsystem flock -t 1 -f \"$(cat n)\" x",
+            // Behind wrappers, `eval`.
+            "builtin set $o commands ls ./x",
+            "eval 'set $o commands ls ./x'",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "set -- $(cat f)",
+            "set -euo pipefail",
+            "set x $y",
+            "printf '%s\\n' \"$x\"",
+            "printf -- \"$x\"",
+            "print -r -- $x",
+            "stat -c %s \"$f\"",
+            "stat -f %m ~/x",
+            "set -e */x",
+            "zstat -A info x \"$f\"",
+            "zstyle ':completion:*' menu select",
+            "zstyle -s ':completion:*' menu style",
+            "zstyle :x y \"$v\"",
+            "wait $pid",
+            "wait -n $!",
+            "zselect -t 10 -r $fd",
+            "zsystem flock -t 1 \"$f\"",
+            "getopts ab: opt",
+            // Text read loosely: an awk program joined with `-F'\\t'`.
+            "gh pr checks 1 | awk -F'\\t' '{print $2}' | sort",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1704: reading a writer's options stays linear in its words.
+#[test]
+fn issue1704_option_checks_are_linear() {
+    work::assert_linear("many options", |scale| {
+        let line = format!("set {}x $y", "-e -o pipefail ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("options among operands", |scale| {
+        let line = format!("zselect {}", "0 -t 1 ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("many zstyles", |scale| {
+        let _ = kind(&["zsh", "-lc", &"zstyle -a :x y z; ".repeat(200 * scale)]);
+    });
+}
+
 /// #1704: a command writing variables named by its operands (zparseopts,
 /// zstyle, zsh modules, `read`, `set -A`, declarations, `printf -v`) asks
 /// when a word names a table of code run by name (zsh's `functions`, alias
@@ -12500,9 +12599,9 @@ fn issue1704_code_table_writers_fail_closed() {
             "zparseopts -D -E -a opts -- h=help -verbose=verbose",
             "zstyle ':x' y \"$v\"",
             "zstyle -s ':completion:*' menu style",
-            "zstat -A info \"$f\"",
-            "zlistattr \"$f\" attrs",
-            "zgetattr \"$f\" \"$attr\" value",
+            "zstat -A info -- \"$f\"",
+            "zlistattr f attrs",
+            "zgetattr f user.y value",
             "stat -c %A \"$f\"",
             "wait $pid",
         ] {

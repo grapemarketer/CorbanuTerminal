@@ -611,7 +611,8 @@ impl Classifier {
             // command writing a table by name (`zparseopts -a functions`,
             // `set -A aliases …`), nor any other write to one: they fail
             // closed (#1704).
-            found.unreadable |= code_tables::writes_table(&texts, &texts);
+            found.unreadable |=
+                code_tables::writes_table(&texts, &texts, self.not_shell == 0 && self.rebuilt == 0);
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);

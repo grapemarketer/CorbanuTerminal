@@ -102,15 +102,19 @@ fn skipped_words(name: &str, words: &[String]) -> Option<usize> {
 /// name ([`hides_name`]; `raw` are the words as written, aligned with
 /// `words`), past assignments, wrappers, `eval`/`trap` text and zsh's
 /// modifiers. Over-matches only (a word naming a table that is not the
-/// name written still asks).
-pub(super) fn writes_table(words: &[String], raw: &[String]) -> bool {
+/// name written still asks). Hidden words where a writer reads its
+/// options, or before a name ([`Reading`]), count only in `strict` text:
+/// read as shell, not loosely (literals joined, as from `awk -F'\t'
+/// '{print $2}'`, or text that may not be shell), as for #937's
+/// arithmetic.
+pub(super) fn writes_table(words: &[String], raw: &[String], strict: bool) -> bool {
     let mut from = 0;
     while let Some((at, name)) = indirect::command_word(&words[from..]) {
         work::step();
         let at = from + at;
         let args = &words[at + 1..];
         if writer_names_table(&name, args)
-            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default())
+            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), strict)
         {
             return true;
         }
@@ -127,11 +131,13 @@ pub(super) fn writes_table(words: &[String], raw: &[String]) -> bool {
 
 /// Where a writer not judged by `code_variables` takes the names it writes:
 /// its option letters whose value is a name, those taking another value,
-/// and which operands (counted from 0, past its options) are names.
-/// `zparseopts` (all its words are options, specs or names) and `zstyle`
-/// are judged in [`hides_name`].
+/// and which operands (counted from 0, past its options) are names
+/// ([`reading`] says where it reads options). `zparseopts` (all its words
+/// are options, specs or names) and `zstyle` are judged in [`hides_name`].
 const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("set", "A", "o", Operands::None),
+    ("print", "v", "ufCxX", Operands::None),
+    ("printf", "v", "", Operands::None),
     ("stat", "AH", "fF", Operands::None),
     ("zstat", "AH", "fF", Operands::None),
     ("wait", "p", "", Operands::None),
@@ -142,6 +148,7 @@ const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("zselect", "aA", "t", Operands::None),
     ("strftime", "s", "", Operands::None),
     ("zsystem", "f", "ti", Operands::None),
+    ("getopts", "", "", Operands::At(&[1])),
     ("getln", "", "", Operands::From(0)),
     ("ztie", "", "df", Operands::From(0)),
     ("sysread", "c", "iost", Operands::From(0)),
@@ -160,30 +167,80 @@ enum Operands {
     At(&'static [usize]),
 }
 
+/// How a writer reads its options, and which words the classifier cannot
+/// see fail closed there (#1704, round 8 of #1698's review). The classifier
+/// does not know whether such a word was quoted, so it may split into
+/// several words (`set $(cat f)`, or a parameter in bash or under zsh's
+/// `shwordsplit`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// Options come before the first operand. Any such word among them may
+    /// be an option taking a name (`o=-A; set $o commands ls ./x`) or
+    /// several words; one among the operands before the last name may move
+    /// a later word into a name's place (`zlistattr $(cat f)`).
+    Leading,
+    /// Options come among the operands too (`zselect 0 -A NAME`, `zsystem
+    /// flock -f NAME file`). Only a hidden name fails closed: these write
+    /// descriptor numbers.
+    Anywhere,
+    /// Options come before the first operand, and only a hidden name fails
+    /// closed: `wait -p` writes a job's number (`wait $pid` stays quiet).
+    Names,
+}
+
+fn reading(writer: &str) -> Reading {
+    match writer {
+        "zselect" | "zsystem" => Reading::Anywhere,
+        "wait" => Reading::Names,
+        _ => Reading::Leading,
+    }
+}
+
 /// Whether the command `name` with `args` (and `raw`, as written) takes a
 /// name it writes from a word the classifier cannot see: an expansion, a
 /// command's output, or a word the shell may glob or brace-expand into a
-/// table's name (`touch functions; zparseopts -a function[s]`). Its other
-/// words (`set -- "$@"`, `zstyle ':x' y "$v"`) are not names.
-fn hides_name(name: &str, args: &[String], raw: &[String]) -> bool {
+/// table's name (`touch functions; zparseopts -a function[s]`); or has
+/// such a word where it reads options, or before a name it may move
+/// (see [`Reading`]). Its other words (`set -- "$@"`, `zstyle ':x' y
+/// "$v"`, `wait $pid`) are not names.
+fn hides_name(name: &str, args: &[String], raw: &[String], strict: bool) -> bool {
     let hidden = |at: usize| {
         [args.get(at), raw.get(at)]
             .into_iter()
             .flatten()
             .any(|word| {
                 work::step();
-                word.contains(['$', '`', '*', '?', '[', '{', '^', '~', '#', '(', '<'])
+                word.contains(['$', '`'])
+                    || word.contains(GLOB)
                     || word.contains(shell::UNSEEN_OUTPUT)
             })
     };
+    // Where a name is not taken, a word that may become any other or
+    // several ([`may_become`]).
+    let unseen = |at: usize| {
+        strict
+            && [args.get(at), raw.get(at)]
+                .into_iter()
+                .flatten()
+                .any(|word| {
+                    work::step();
+                    may_become(word)
+                })
+    };
     match name {
         "zparseopts" => return (0..args.len()).any(hidden),
-        // `zstyle -s|-b|-a ctx style NAME`, `zstyle -g NAME`.
+        // `zstyle -s|-b|-a ctx style NAME`, `zstyle -g NAME`; a hidden
+        // first word may be such an option (`zstyle $o :x y functions`),
+        // and a hidden context or style may be several words, the name
+        // among them (`zstyle -a $(cat f)`).
         "zstyle" => {
+            if unseen(0) {
+                return true;
+            }
             let Some(option) = args.first().filter(|arg| arg.starts_with('-')) else {
                 return false;
             };
-            return (option.contains(['s', 'b', 'a']) && hidden(3))
+            return (option.contains(['s', 'b', 'a']) && (hidden(3) || (1..3).any(unseen)))
                 || (option.contains('g') && hidden(1));
         }
         _ => {}
@@ -193,43 +250,93 @@ fn hides_name(name: &str, args: &[String], raw: &[String]) -> bool {
     else {
         return false;
     };
+    let reading = reading(name);
+    let leading = reading == Reading::Leading;
     let named = |operand: usize| match operands {
         Operands::None => false,
         Operands::From(first) => operand >= first,
         Operands::At(list) => list.contains(&operand),
     };
-    // Past the options (`--` or the first operand ends them).
+    // A split operand before the last name moves a later word into it.
+    let before_name = |operand: usize| match operands {
+        Operands::None => false,
+        Operands::From(first) => operand < first,
+        Operands::At(list) => list.iter().any(|name| operand < *name),
+    };
+    // Past the options: `--` ends them, and so does the first operand
+    // where options lead.
     let mut operand = None;
+    let mut ended = false;
     let mut at = 0;
     while at < args.len() {
         work::step();
         let arg = &args[at];
-        match operand {
-            None if arg == "--" => operand = Some(0),
-            None if arg.len() > 1 && arg.starts_with(['-', '+']) => {
-                if let Some((flag_at, flag)) = arg[1..]
-                    .char_indices()
-                    .find(|(_, flag)| names.contains(*flag) || values.contains(*flag))
-                {
-                    let attached = 1 + flag_at + flag.len_utf8() < arg.len();
-                    let value = if attached { at } else { at + 1 };
-                    if names.contains(flag) && hidden(value) {
-                        return true;
-                    }
-                    at = value;
-                }
+        let options = !ended && (operand.is_none() || reading == Reading::Anywhere);
+        if options && arg == "--" {
+            ended = true;
+            operand = Some(operand.unwrap_or(0));
+        } else if options && arg.len() > 1 && arg.starts_with(['-', '+']) {
+            // Where options lead, a hidden option (`-$o`) may be any.
+            if leading && unseen(at) {
+                return true;
             }
-            _ => {
-                let index = operand.unwrap_or(0);
-                if named(index) && hidden(at) {
+            if let Some((flag_at, flag)) = arg[1..]
+                .char_indices()
+                .find(|(_, flag)| names.contains(*flag) || values.contains(*flag))
+            {
+                let attached = 1 + flag_at + flag.len_utf8() < arg.len();
+                let value = if attached { at } else { at + 1 };
+                // A hidden name, or where options lead a hidden value,
+                // which may be several words (`set -o $(cat f)`).
+                if (names.contains(flag) && hidden(value)) || (leading && unseen(value)) {
                     return true;
                 }
-                operand = Some(index + 1);
+                at = value;
             }
+        } else if options && leading && unseen(at) {
+            // Where options lead, a hidden word before them ends may be
+            // one, or several (`set $o commands ls ./x`, `set $(cat f)`).
+            return true;
+        } else {
+            let index = operand.unwrap_or(0);
+            if (named(index) && hidden(at)) || (leading && before_name(index) && unseen(at)) {
+                return true;
+            }
+            operand = Some(index + 1);
         }
         at += 1;
     }
     false
+}
+
+/// Characters by which the shell may glob a word (zsh's extended forms
+/// too) or that a brace expansion left.
+const GLOB: [char; 9] = ['*', '?', '[', '{', '^', '~', '#', '(', '<'];
+
+/// Whether a word may become any word, or several: an expansion or a
+/// command's output, whose value the classifier cannot see and which may
+/// split (it does not know whether the word was quoted), or a pattern
+/// that may match a file named like an option or a table (`?A`, `*`,
+/// `function[s]`). A pattern matching only paths (`~/x`, `*/x`; not past
+/// zsh's `~` exclusion or in a group: `*~a/b`) or names with another start
+/// (`:completion:*`) cannot.
+fn may_become(word: &str) -> bool {
+    if word.contains(['$', '`']) || word.contains(shell::UNSEEN_OUTPUT) {
+        return true;
+    }
+    let Some(glob) = word.find(GLOB) else {
+        return false;
+    };
+    let paths = word.contains('/')
+        && !word
+            .get(1..)
+            .is_some_and(|rest| rest.contains(['~', '(', '|']));
+    let prefix = &word[..glob];
+    !paths
+        && ["-", "+"].iter().chain(TABLES).any(|start| {
+            work::step();
+            start.starts_with(prefix)
+        })
 }
 
 /// Whether the command `name` with `args` writes a variable named by a
