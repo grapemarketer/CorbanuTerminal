@@ -62,6 +62,7 @@ mod approved_command_ends;
 mod audio_truncation;
 mod auto_review;
 mod catalog_permission_messages;
+mod chat_serialized_tool_text;
 mod chat_tool_limit;
 mod cli_stream;
 mod client;

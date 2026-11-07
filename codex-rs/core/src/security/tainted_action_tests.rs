@@ -7173,9 +7173,10 @@ fn issue_1516_git_grep_open_files_in_pager_asks() {
 
 /// #1528: a dashed helper named by its Windows path (`git-grep.exe`) is read
 /// with its subcommand there, and a subcommand git does not know (an alias
-/// from existing config, a typo `help.autocorrect` runs) asks on `-O`, `-u`
-/// and `--open-files-in-pager`, as `grep` or `clone` would. Only adds
-/// prompts: git's own commands read as before.
+/// from existing config, a typo `help.autocorrect` runs) asks on `-O`, `-u`,
+/// `-c` after it, `--open-files-in-pager`, `--exec`, `--template` and
+/// `--config`, as `grep`, `clone`, `init` or `push` would. Only adds
+/// prompts: git's own commands read as before. More cases: #1635's test.
 #[test]
 fn issue_1528_dashed_helpers_and_unknown_subcommands_ask() {
     use ProtectedActionKind::UnseenCode;
@@ -11160,6 +11161,98 @@ fn issue_1309_follow_up_checks_are_linear() {
             let _ = script(&line);
         });
     }
+}
+
+/// #1635: follow-ups from #1528's review. Long options by prefix after an
+/// alias; aliases with built-in names older gits lack; and in the Windows
+/// reading, aliases' `--exec`, `--template` and `-qc`, and dashed helpers
+/// named as `@git-grep.exe` or `git-grep.cmd`. Only adds prompts.
+#[test]
+fn issue1635_alias_prefixes_old_builtins_and_windows_helpers_ask() {
+    use ProtectedActionKind::UnseenCode;
+    let mut wrong = Vec::new();
+    for command in [
+        // Prefixes of the long options, after an alias.
+        "git cl --te=./t u",
+        "git cl --templ ./t u",
+        "git cl --con=core.hooksPath=./h u",
+        "git cl --conf core.fsmonitor=./x u",
+        "git p --ex=./x u",
+        "git p --exe ./x u",
+        // Built-ins newer than git 2.34, or left out with breaking changes,
+        // may be aliases there.
+        "git refs -u ./x u",
+        "git hook -Osh x",
+        "git diagnose -u ./x u",
+        "git replay --template=./t u",
+        "git backfill -u ./x u",
+        "git diff-pairs -Osh x",
+        "git fsmonitor--daemon -Osh x",
+        "git whatchanged -Osh x",
+        "git pack-redundant -u ./x u",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(command.to_string());
+        }
+        if kind(&["/bin/zsh", "-lc", command]) != Some(UnseenCode) {
+            wrong.push(format!("zsh: {command}"));
+        }
+    }
+    for line in [
+        "git p --exec=./x u",
+        "git p --ex=./x u",
+        "git cl --template=./t u",
+        "git cl --te=./t u",
+        "git cl --config=core.hooksPath=./h u",
+        "git cl -qc core.fsmonitor=./x u",
+        r"C:\Git\cmd\git.exe cl -qc core.fsmonitor=./x u",
+        "git refs -u ./x u",
+        "@git-grep.exe -Osh x",
+        "git-grep.cmd -Osh x",
+        "git-clone.cmd -u ./x u",
+        r"@C:\Git\mingw64\libexec\git-core\git-grep.exe -Osh x",
+    ] {
+        if cmd(line) != Some(UnseenCode) {
+            wrong.push(format!("cmd: {line}"));
+        }
+        if powershell(line) != Some(UnseenCode) {
+            wrong.push(format!("powershell: {line}"));
+        }
+    }
+    // As before: a word that names no helper by its command name.
+    if cmd("git-.cmd ^--upload-pack=x") != Some(UnseenCode) {
+        wrong.push("cmd: git-.cmd ^--upload-pack=x".to_string());
+    }
+    // git's own commands, and older built-ins, read as before.
+    for command in [
+        "git status -uno",
+        "git add -u",
+        "git log --template x",
+        "git commit -c HEAD",
+        "git branch -u origin/main",
+        "git worktree add ../w",
+        "git switch -c topic",
+        "git restore -s HEAD x",
+        "git maintenance run",
+        "git sparse-checkout set a",
+        "git refs list",
+        "git hook run pre-commit",
+    ] {
+        if script(command).is_some() {
+            wrong.push(format!("quiet: {command}"));
+        }
+    }
+    for line in [
+        "git status -uno",
+        "git-status.cmd -uno",
+        "@git-status.exe -uno",
+        "git log -Oorder.txt",
+    ] {
+        if cmd(line).is_some() || powershell(line).is_some() {
+            wrong.push(format!("quiet windows: {line}"));
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
 }
 
 /// #1607: zsh reads `>!` as `>|` (also `>>!`, `&>!`, `&>>!`, `>&!`, `>>&!`
