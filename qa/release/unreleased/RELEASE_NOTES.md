@@ -540,6 +540,15 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   placeholder folders (OneDrive) at or above a read-only path, or as one, now
   get the same denies as plain folders, and a writable root that is a
   placeholder gets its label back (#1671, #1668).
+- **Non-admin sandbox: a configured read-only path that doesn't exist is
+  created and protected** (#1687, #1686, #1705; D333, D342), as the default
+  sandbox already did. Before the command starts, it's made as an empty
+  folder, so a command can't create it and fill it. A path meant to be a
+  file (`.env`, say) therefore becomes an empty folder, and a read-only
+  `.git\hooks` in a folder with no `.git` creates a protected `.git` with
+  only an empty `hooks` folder, which git doesn't treat as a repository. To
+  keep a file there, create it before you start a session. See "Read-only
+  paths that don't exist yet" in `docs/sandbox.md`.
 - **Non-admin sandbox commands start faster in large workspaces** (#1612,
   D285). Their delete protections are now written without rewriting the
   permissions of every file below (each is still checked, and anything

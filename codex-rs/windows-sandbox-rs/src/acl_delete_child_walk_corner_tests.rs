@@ -10,8 +10,8 @@
 //!   or for a link (its folder guard) between the write and the check,
 //!   which must check nothing.
 //!
-//! A root that is a link is not here: Windows' walks write the link itself,
-//! while ours follow it (#1722; production callers never pass one).
+//! - a root that is itself a link (D352, #1722): Windows' walks write the
+//!   link itself, so ours refuse it and fall back to Windows' walk.
 
 use super::*;
 use crate::acl::walk::Handle;
@@ -422,4 +422,181 @@ fn d311_root_swapped_before_the_check_is_not_checked() {
     );
     assert_eq!(full_snapshot(&other), swapped_in, "nothing was written");
     assert_eq!(full_snapshot(&moved), written_tree, "nothing was written");
+}
+
+/// D352 (#1722): makes `root` a link (`mklink` with `args`) to the workspace
+/// built there, moved beside it. False if this account may not create it.
+fn link_root(args: &'static [&'static str]) -> impl Fn(&Path, &Path) -> bool {
+    move |root: &Path, side: &Path| {
+        let workspace = side.join("workspace");
+        rename(root, &workspace);
+        mklink(args, root, &workspace)
+    }
+}
+
+const LINK_ROOTS: [(&str, &[&str]); 2] = [
+    ("K1-junction-root", &["/J"]),
+    ("K2-dir-symlink-root", &["/D"]),
+];
+
+/// D352 (#1722): D261's denies on a root that is a link are refused by our
+/// write and made by #1549's calls, which write the link itself; every
+/// object then matches Windows' walk (on main the workspace it points at got
+/// an extra deny). Folders below reached through the link are not roots
+/// that are links: ours writes those directly.
+#[test]
+fn d311_link_roots_match_the_tree_walk() {
+    let mut failed = Vec::new();
+    for (name, args) in LINK_ROOTS {
+        let base = tempfile::tempdir().expect("base dir");
+        let Some(outcome) = equality_case_in(base.path(), name, &link_root(args)) else {
+            continue;
+        };
+        // The root's own steps (first and last) fall back; the others don't.
+        let direct = &outcome.written[1..SESSION_B.len() - 1];
+        if !outcome.differing.is_empty()
+            || outcome.written[0] == Written::Direct
+            || outcome.written[SESSION_B.len() - 1] == Written::Direct
+            || direct.iter().any(|how| *how != Written::Direct)
+        {
+            failed.push(format!(
+                "{name}: written={:?} {:?}",
+                outcome.written, outcome.differing
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "differing cases: {failed:#?}");
+}
+
+/// D352 (#1722): the same for the label walk: labelling a root that is a
+/// link falls back to Windows' walk, which labels the link itself, and every
+/// object matches it.
+#[test]
+fn d311_label_walk_link_roots_match_windows_walk() {
+    let mut failed = Vec::new();
+    for (name, args) in LINK_ROOTS {
+        let base = tempfile::tempdir().expect("base dir");
+        let Some(outcome) = command_case_in(base.path(), name, &link_root(args), None) else {
+            continue;
+        };
+        if !outcome.differing.is_empty() || outcome.label_fallbacks == 0 {
+            failed.push(format!(
+                "{name}: fallbacks={} {:?}",
+                outcome.label_fallbacks, outcome.differing
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "differing cases: {failed:#?}");
+}
+
+/// D352 (#1722): both walks refuse a root that is a link (a junction, a
+/// folder or a file symbolic link) before writing anything: the root opener
+/// refuses it, labelling it falls back to Windows' walk and D261's deny goes
+/// to #1549's call, both of which write the link itself, never the
+/// workspace it points at.
+#[test]
+fn d311_walks_refuse_a_link_root_before_writing() {
+    let base = tempfile::tempdir().expect("base dir");
+    let verbatim = std::fs::canonicalize(base.path())
+        .expect("canonical base")
+        .join("t");
+    let plain = dunce::simplified(&verbatim).to_path_buf();
+    let workspace = plain.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    build_tree_b(&workspace);
+    let file = workspace.join("a.txt");
+    let untouched = full_snapshot(&verbatim.join("workspace"));
+    let sid = LocalSid::from_string(EVERYONE).expect("Everyone");
+    let mut tried = 0;
+    for (name, args, target) in [
+        ("junction", &["/J"][..], &workspace),
+        ("dir-symlink", &["/D"][..], &workspace),
+        ("file-symlink", &[][..], &file),
+    ] {
+        let link = plain.join(name);
+        if !mklink(args, &link, target) {
+            continue;
+        }
+        tried += 1;
+        // SAFETY: an existing path.
+        let opened = unsafe { Handle::open_root(&link, READ_CONTROL) };
+        let err = opened.err().unwrap_or_else(|| panic!("{name}: opened"));
+        assert!(err.to_string().contains("is a link"), "{name}: {err:#}");
+        let fallbacks = LABEL_FALLBACKS.with(std::cell::Cell::get);
+        // SAFETY: an existing path.
+        let labelled = unsafe { crate::integrity::label_writable_root_low(&link) };
+        assert!(labelled.expect("label"), "{name}: labelled");
+        assert_eq!(
+            LABEL_FALLBACKS.with(std::cell::Cell::get),
+            fallbacks + 1,
+            "{name}: our label walk declined"
+        );
+        if target.is_dir() {
+            // SAFETY: a valid SID; `link` exists.
+            let how = unsafe { set_delete_child_deny(&link, sid.as_ptr(), false, true) };
+            assert_eq!(how.expect("deny"), Written::Walked, "{name}");
+        }
+        assert_eq!(
+            full_snapshot(&verbatim.join("workspace")),
+            untouched,
+            "{name}: nothing written to what the link points at"
+        );
+    }
+    assert!(tried >= 1, "a junction needs no privilege");
+}
+
+/// D352 (#1722): a root swapped for a link to another folder between the
+/// open root's check and its open is refused by its file-ID check, so D261's
+/// deny goes to #1549's call, which writes the link itself, and nothing is
+/// written to the folder it points at.
+#[test]
+fn d311_root_swapped_for_a_link_while_opened_is_refused() {
+    use crate::acl::walk::BETWEEN_ROOT_OPENS;
+    let base = tempfile::tempdir().expect("base dir");
+    let verbatim = std::fs::canonicalize(base.path())
+        .expect("canonical base")
+        .join("t");
+    let plain = dunce::simplified(&verbatim).to_path_buf();
+    let (root, moved, other) = (
+        plain.join("root"),
+        plain.join("root-moved"),
+        plain.join("other"),
+    );
+    workspace_missing_copies(&root);
+    workspace_missing_copies(&other);
+    let untouched = full_snapshot(&verbatim.join("other"));
+    // Moves the root away and puts a junction to `other` in its place.
+    let swap = || -> Box<dyn FnMut(&Path)> {
+        let (moved, other) = (moved.clone(), other.clone());
+        Box::new(move |path: &Path| {
+            rename(path, &moved);
+            assert!(
+                mklink(&["/J"], path, &other),
+                "a junction needs no privilege"
+            );
+        })
+    };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = Some(swap()));
+    // SAFETY: an existing folder.
+    let opened = unsafe { Handle::open_root(&root, READ_CONTROL) };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = None);
+    let err = opened.err().expect("a swapped root is refused");
+    assert!(
+        err.to_string().contains("changed while being opened"),
+        "{err:#}"
+    );
+    // Again through D261's write, with the root put back first.
+    std::fs::remove_dir(&root).expect("remove the junction");
+    rename(&moved, &root);
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = Some(swap()));
+    let sid = LocalSid::from_string(EVERYONE).expect("Everyone");
+    // SAFETY: a valid SID; `root` exists.
+    let how = unsafe { set_delete_child_deny(&root, sid.as_ptr(), false, true) };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = None);
+    assert_eq!(how.expect("deny"), Written::Walked);
+    assert_eq!(
+        full_snapshot(&verbatim.join("other")),
+        untouched,
+        "nothing written to the folder the link points at"
+    );
 }

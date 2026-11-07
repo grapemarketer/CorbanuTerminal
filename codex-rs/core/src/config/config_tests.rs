@@ -635,6 +635,16 @@ async fn non_prefixed_mcp_server_name_clash_messages_fit_each_entry_point() -> s
         team.skill_dependency_message(),
         "Skipped installing the skill's MCP server `team`: without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), it would take the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`). To install it, list only other servers in `features.non_prefixed_mcp_tool_names.server_names`, or change `features.multi_agent_v2.tool_namespace`, or turn `features.non_prefixed_mcp_tool_names` off."
     );
+    // #1681: an external-agent import skipped the server, so there is
+    // nothing to `corbanu mcp remove`.
+    assert_eq!(
+        web.import_message(),
+        "MCP server `web` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `web` is a built-in tool namespace. It was not imported. Rename it in the other agent's config, or add it here under another name, such as `corbanu mcp add web_mcp ...`."
+    );
+    assert_eq!(
+        team.import_message(),
+        "MCP server `team` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `team` is the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`). It was not imported. Rename it in the other agent's config, or add it here under another name, such as `corbanu mcp add team_mcp ...`."
+    );
     // Config load keeps its wording.
     assert!(
         web.to_string().ends_with(

@@ -134,9 +134,9 @@ pub(super) unsafe fn set_delete_child_deny(
 ) -> Result<Written> {
     let kind = DenyAceKind::DeleteChild { inherit_to_subdirs };
     let is_entry = |ace: *const c_void| is_exact_delete_child_deny(ace, psid, inherit_to_subdirs);
-    // Follows a link at `path` itself, as `SetNamedSecurityInfoW` does;
-    // callers never pass one.
-    let opened = Handle::open_with(path, READ_CONTROL | WRITE_DAC, FILE_FLAG_BACKUP_SEMANTICS)
+    // A `path` that is itself a link is refused (D352, #1722) and goes to
+    // the #1549 calls, which write the link itself, not what it points at.
+    let opened = Handle::open_root(path, READ_CONTROL | WRITE_DAC)
         .and_then(|handle| Descriptor::read(handle.0).map(|current| (handle, current)));
     let Ok((handle, current)) = opened else {
         // Nothing written yet: the #1549 calls as they were.

@@ -313,7 +313,7 @@ impl ExternalAgentConfigService {
                                 config.as_ref().and_then(|config| {
                                     config
                                         .non_prefixed_mcp_server_name_clash(name)
-                                        .map(|clash| clash.to_string())
+                                        .map(|clash| clash.import_message())
                                 })
                             })?;
                         emit_migration_metric(

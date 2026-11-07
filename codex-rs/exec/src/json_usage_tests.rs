@@ -33,12 +33,13 @@ fn descendants_use_cumulative_deltas_without_inherited_or_duplicate_usage() {
     // Reports can arrive before ancestry, or interleave with unrelated threads.
     for notification in [
         report("root", /*total*/ 100, /*last*/ 100),
-        report("child", /*total*/ 200, /*last*/ 40),
+        // #1637 item 3: fresh descendants (first report total == last).
+        report("child", /*total*/ 40, /*last*/ 40),
         report("unrelated", /*total*/ 1000, /*last*/ 1000),
         report("root", /*total*/ 300, /*last*/ 200),
-        report("grandchild", /*total*/ 80, /*last*/ 40),
-        report("child", /*total*/ 400, /*last*/ 200),
-        report("child", /*total*/ 400, /*last*/ 200),
+        report("grandchild", /*total*/ 40, /*last*/ 40),
+        report("child", /*total*/ 240, /*last*/ 200),
+        report("child", /*total*/ 240, /*last*/ 200),
     ] {
         usage.observe(&notification);
     }
@@ -162,4 +163,74 @@ fn child_counter_below_baseline_makes_usage_unknown() {
         usage.observe(&lower);
         assert_eq!(usage.for_thread("root"), None);
     }
+}
+
+/// #1637 item 3: a resumed (non-fork) descendant's first report can carry in
+/// usage from its earlier history, which cannot be told apart from seeded
+/// state. A descendant whose first report has total != last is unknown,
+/// for any one of the exported counters, at any depth.
+#[test]
+fn resumed_descendant_first_report_with_carried_in_usage_is_unknown() {
+    let mut usage = JsonUsage::default();
+    usage.register_thread("child", "root");
+    usage.observe(&report("root", /*total*/ 100, /*last*/ 100));
+    usage.observe(&report("child", /*total*/ 200, /*last*/ 40));
+    usage.observe(&report("child", /*total*/ 400, /*last*/ 200));
+    assert_eq!(usage.for_thread("root"), None);
+
+    let counters: [fn(&mut TokenUsageBreakdown) -> &mut i64; 5] = [
+        |usage| &mut usage.input_tokens,
+        |usage| &mut usage.cached_input_tokens,
+        |usage| &mut usage.cache_write_input_tokens,
+        |usage| &mut usage.output_tokens,
+        |usage| &mut usage.reasoning_output_tokens,
+    ];
+    for counter in counters {
+        let mut usage = JsonUsage::default();
+        usage.register_thread("child", "root");
+        usage.register_thread("grandchild", "child");
+        usage.observe(&report("root", /*total*/ 100, /*last*/ 100));
+        usage.observe(&report("child", /*total*/ 40, /*last*/ 40));
+        let mut first = report("grandchild", /*total*/ 40, /*last*/ 40);
+        let ServerNotification::ThreadTokenUsageUpdated(update) = &mut first else {
+            unreachable!()
+        };
+        *counter(&mut update.token_usage.total) += 1;
+        usage.observe(&first);
+        assert_eq!(usage.for_thread("root"), None);
+        // Nor is the child's, which includes the grandchild.
+        assert_eq!(usage.for_thread("child"), None);
+    }
+}
+
+/// #1637 item 3 controls: a fresh descendant still counts in full, a root
+/// whose first report has total != last (a resumed root) still counts its
+/// own total, and a later report of a fresh descendant may differ.
+#[test]
+fn fresh_descendants_and_resumed_roots_keep_known_usage() {
+    let mut usage = JsonUsage::default();
+    usage.register_thread("child", "root");
+    usage.observe(&report("root", /*total*/ 300, /*last*/ 100));
+    usage.observe(&report("child", /*total*/ 40, /*last*/ 40));
+    usage.observe(&report("child", /*total*/ 100, /*last*/ 60));
+    assert_eq!(
+        usage.for_thread("root"),
+        Some(Usage {
+            input_tokens: 400,
+            cached_input_tokens: 40,
+            cache_write_input_tokens: 20,
+            output_tokens: 200,
+            reasoning_output_tokens: 100,
+        })
+    );
+    assert_eq!(
+        usage.for_thread("child"),
+        Some(Usage {
+            input_tokens: 100,
+            cached_input_tokens: 10,
+            cache_write_input_tokens: 5,
+            output_tokens: 50,
+            reasoning_output_tokens: 25,
+        })
+    );
 }
