@@ -1060,12 +1060,13 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
 /// Only a JSON object whose top-level `type` is a tool-call type, followed by nothing but
 /// whitespace, is a serialized call. Other text that merely names "function_call" (a JSON
 /// answer about function calling, or one that opens with such JSON and goes on in prose)
-/// stays an ordinary message, and so does text already streamed that is not JSON.
+/// stays an ordinary message, and so does any text already streamed: the user has seen
+/// it as a message (#1608).
 fn parse_serialized_function_call_text(
     text: &str,
     held_back: bool,
 ) -> Result<Option<ResponseItem>, String> {
-    if !looks_like_serialized_tool_call(text) {
+    if !held_back || !looks_like_serialized_tool_call(text) {
         return Ok(None);
     }
 
@@ -1075,7 +1076,6 @@ fn parse_serialized_function_call_text(
     let value = match values.next() {
         Some(Ok(value)) => value,
         None => return Ok(None),
-        Some(Err(_)) if !held_back => return Ok(None),
         Some(Err(err)) => {
             return Err(format!(
                 "chat completions stream emitted malformed function-call JSON as assistant \
@@ -1095,7 +1095,7 @@ fn parse_serialized_function_call_text(
     if !rest.is_empty() {
         // Prose after the call is an answer that opens with a call example. More JSON
         // after it (a second call, a stray brace) is a broken call, as before.
-        if !held_back || !rest.starts_with(['{', '}', '[', ']', ',']) {
+        if !rest.starts_with(['{', '}', '[', ']', ',']) {
             return Ok(None);
         }
         return Err(format!(
@@ -1974,6 +1974,22 @@ mod tests {
         let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
 
         assert_single_text_message(&events, content, "chatcmpl-json-and-prose");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_streamed_valid_tool_call_stays_a_message() {
+        // The first 96 characters hold no tool-call marker, so the text streams to the
+        // user, and the whole text is still a complete serialized call (#1608). What the
+        // user has seen stays the message, and no tool call is emitted.
+        let content = format!(
+            r#"{{"arguments":"{{\"cmd\":\"echo {}\"}}","name":"exec_command","call_id":"chatcmpl-tool-streamed","type":"function_call"}}"#,
+            "a".repeat(SERIALIZED_TOOL_TEXT_PROBE_CHARS)
+        );
+        let event = content_event("chatcmpl-streamed-call", &content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, &content, "chatcmpl-streamed-call");
     }
 
     #[tokio::test]
