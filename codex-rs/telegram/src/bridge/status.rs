@@ -94,9 +94,10 @@ impl StatusTokenUsage {
         // it added (the window minus the previous total, 0 when the window was already
         // full). A recompute leaves the total untouched and puts its estimate in `last`,
         // so the two only look alike without the previous update (for example a resume
-        // replay after a bridge restart). A recompute never estimates 0, so a zero `last`
-        // is still a fill; otherwise `last` is shown, which is also what core measures
-        // occupancy from (and the whole window for a fill on a thread that had no total yet).
+        // replay after a bridge restart). A recompute estimates 0 only for empty
+        // instructions and history, so a zero `last` is still taken as a fill; otherwise
+        // `last` is shown, which is also what core measures occupancy from (and the whole
+        // window for a fill on a thread that had no total yet).
         let filled = counters_are_zero(&update.last)
             && Some(update.total.total_tokens) == update.model_context_window
             && match previous.as_ref() {
