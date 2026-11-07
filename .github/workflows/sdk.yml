@@ -81,6 +81,9 @@ jobs:
   # workflow or a lockfile the SDK build uses (pnpm-lock.yaml, codex-rs/Cargo.lock;
   # D314), build the CLI with Cargo and run them. A skipped job leaves the
   # `sdk` call successful, so it blocks `CI required` only when it runs.
+  # D336: also the root package.json, pnpm-workspace.yaml and .npmrc (root
+  # only; nested look-alikes do not count), which only nightly caught.
+  # .github/scripts/test_sdk_path_filter.py runs this step's script.
   typescript-sdk-changed:
     name: Detect TypeScript SDK changes
     if: ${{ github.event_name == 'pull_request' }}
@@ -107,6 +110,8 @@ jobs:
           while IFS= read -r f; do
             case $f in
               sdk/typescript/* | codex-rs/exec/* | .github/workflows/sdk.yml | pnpm-lock.yaml | codex-rs/Cargo.lock) run=true ;;
+              # D336: root workspace files the SDK build reads.
+              package.json | pnpm-workspace.yaml | .npmrc) run=true ;;
             esac
           done <<< "$files"
           echo "TypeScript SDK tests: $run"
