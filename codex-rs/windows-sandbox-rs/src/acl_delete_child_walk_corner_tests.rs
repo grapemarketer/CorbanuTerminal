@@ -544,3 +544,59 @@ fn d311_walks_refuse_a_link_root_before_writing() {
     }
     assert!(tried >= 1, "a junction needs no privilege");
 }
+
+/// D352 (#1722): a root swapped for a link to another folder between the
+/// open root's check and its open is refused by its file-ID check, so D261's
+/// deny goes to #1549's call, which writes the link itself, and nothing is
+/// written to the folder it points at.
+#[test]
+fn d311_root_swapped_for_a_link_while_opened_is_refused() {
+    use crate::acl::walk::BETWEEN_ROOT_OPENS;
+    let base = tempfile::tempdir().expect("base dir");
+    let verbatim = std::fs::canonicalize(base.path())
+        .expect("canonical base")
+        .join("t");
+    let plain = dunce::simplified(&verbatim).to_path_buf();
+    let (root, moved, other) = (
+        plain.join("root"),
+        plain.join("root-moved"),
+        plain.join("other"),
+    );
+    workspace_missing_copies(&root);
+    workspace_missing_copies(&other);
+    let untouched = full_snapshot(&verbatim.join("other"));
+    // Moves the root away and puts a junction to `other` in its place.
+    let swap = || -> Box<dyn FnMut(&Path)> {
+        let (moved, other) = (moved.clone(), other.clone());
+        Box::new(move |path: &Path| {
+            rename(path, &moved);
+            assert!(
+                mklink(&["/J"], path, &other),
+                "a junction needs no privilege"
+            );
+        })
+    };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = Some(swap()));
+    // SAFETY: an existing folder.
+    let opened = unsafe { Handle::open_root(&root, READ_CONTROL) };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = None);
+    let err = opened.err().expect("a swapped root is refused");
+    assert!(
+        err.to_string().contains("changed while being opened"),
+        "{err:#}"
+    );
+    // Again through D261's write, with the root put back first.
+    std::fs::remove_dir(&root).expect("remove the junction");
+    rename(&moved, &root);
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = Some(swap()));
+    let sid = LocalSid::from_string(EVERYONE).expect("Everyone");
+    // SAFETY: a valid SID; `root` exists.
+    let how = unsafe { set_delete_child_deny(&root, sid.as_ptr(), false, true) };
+    BETWEEN_ROOT_OPENS.with(|hook| *hook.borrow_mut() = None);
+    assert_eq!(how.expect("deny"), Written::Walked);
+    assert_eq!(
+        full_snapshot(&verbatim.join("other")),
+        untouched,
+        "nothing written to the folder the link points at"
+    );
+}

@@ -92,10 +92,10 @@ const SACL_BITS: u16 = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_PRES
 /// Sets the label SACL `sacl` (`path`'s explicit label entries) on `path`
 /// and recomputes the label of every object below it, as
 /// `SetNamedSecurityInfoW(path, LABEL_SECURITY_INFORMATION, sacl)` does.
-/// Refuses a `path` that is itself a link (D352, #1722), before writing
-/// anything: that call labels the link itself, not what it points at. On
-/// that or any other error, part of the tree may be written; the caller then
-/// makes that call.
+/// Refuses a `path` that is itself a link (D352, #1722) before writing
+/// anything, as that call labels the link itself, not what it points at. On
+/// any other error, part of the tree may be written. Either way the caller
+/// then makes that call.
 ///
 /// # Safety
 /// `sacl` must be a valid ACL; calls Win32 security APIs on `path`.

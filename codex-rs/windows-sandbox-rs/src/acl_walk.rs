@@ -211,16 +211,23 @@ impl Handle {
         Ok(Self(handle))
     }
 
-    /// Opens the root of a walk with `access`, following links as before,
-    /// but refuses (D352, #1722) a root that is itself a link: Windows' walk
-    /// writes such a link itself, not what it points at, so the caller falls
-    /// back to that walk. The handle must be the object checked to be no
-    /// link, so a link swapped in meanwhile is refused too.
+    /// Opens the root of a walk with `access`, following links above it
+    /// (and other reparse points) as before, but refuses (D352, #1722) a
+    /// root that is itself a link: Windows' walk writes such a link itself,
+    /// not what it points at, so the caller falls back to that walk. The
+    /// handle must be the object checked to be no link, so a link swapped in
+    /// meanwhile is refused too.
     pub(crate) unsafe fn open_root(path: &Path, access: u32) -> Result<Self> {
         let itself = Self::open(path, FILE_READ_ATTRIBUTES)?;
         if itself.kind()?.kind() == Kind::Link {
             bail!("{} is a link", path.display());
         }
+        #[cfg(test)]
+        BETWEEN_ROOT_OPENS.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(path);
+            }
+        });
         let root = Self::open_with(path, access, FILE_FLAG_BACKUP_SEMANTICS)?;
         if root.identity()? != itself.identity()? {
             bail!("{} changed while being opened", path.display());
@@ -264,6 +271,16 @@ impl Drop for Handle {
             CloseHandle(self.0);
         }
     }
+}
+
+/// Run by [`Handle::open_root`] between its two opens (a swap there).
+#[cfg(test)]
+pub(crate) type RootOpenHook = Option<Box<dyn FnMut(&Path)>>;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BETWEEN_ROOT_OPENS: std::cell::RefCell<RootOpenHook> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// A subfolder (not a link) a walk found and still has to walk, not held open (a
