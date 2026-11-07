@@ -222,8 +222,13 @@ folder while a session runs is reported, including the user. A top-level
 mount point), or can't be inspected, stops the command: its protections
 would land on the link's target, and a command could replace the link with
 a writable folder that D262 doesn't report, since something was there when
-the session started (#1682). Replace the link with a folder. Other reparse
-points, such as cloud placeholders, aren't links (#1668).
+the session started (#1682). Replace the link with a folder. This applies
+to the roots D283 watches (not those that come only from `%TEMP%`/`%TMP%`)
+that hold their own write capability; the user profile folder doesn't
+(only its children do), so a linked `~\.codex` there doesn't stop the
+command. Other reparse points, such as cloud placeholders, aren't links
+(#1668). A top-level `.git` link isn't refused: `.git` may be missing and
+then created by a command anyway, and some tools (Google's `repo`) link it.
 
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too

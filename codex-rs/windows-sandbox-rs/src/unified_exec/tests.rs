@@ -721,9 +721,9 @@ struct LegacyDeleteOutcome {
     /// The workspace's own label is back and no longer recorded.
     workspace_label_restored: bool,
     /// A Low-labelled folder outside the roots that a planted `.git`
-    /// junction in `TEMP` points at keeps its label: the host relabels only
-    /// inside writable roots. (A top-level `.codex`/`.agents` junction stops
-    /// the command, #1682.)
+    /// junction in a second workspace root points at keeps its label: the
+    /// host relabels only inside writable roots, never through a link. (A
+    /// top-level `.codex`/`.agents` junction stops the command, #1682.)
     low_can_write_junction_target: bool,
 }
 
@@ -828,7 +828,14 @@ fn run_legacy_delete_fixture(
         let temp_root = test_root.path().join("temp");
         let tmp_root = test_root.path().join("tmp");
         let outside_root = test_root.path().join("outside");
-        for directory in [&workspace, &temp_root, &tmp_root, &outside_root] {
+        let second_root = test_root.path().join("second");
+        for directory in [
+            &workspace,
+            &temp_root,
+            &tmp_root,
+            &outside_root,
+            &second_root,
+        ] {
             fs::create_dir_all(directory).expect("create legacy delete test directory");
         }
         let protected_git_dir = workspace.join(".git");
@@ -860,7 +867,7 @@ fn run_legacy_delete_fixture(
         }
         let output = std::process::Command::new(system32_exe("cmd.exe"))
             .args(["/d", "/c", "mklink", "/J"])
-            .arg(temp_root.join(".git"))
+            .arg(second_root.join(".git"))
             .arg(&junction_target)
             .output()
             .expect("run mklink");
@@ -971,7 +978,8 @@ fn run_legacy_delete_fixture(
 
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            workspace_roots_for(workspace.as_path()).as_slice(),
+            &[workspace.as_path(), second_root.as_path()]
+                .map(|root| AbsolutePathBuf::from_absolute_path(root).expect("absolute root")),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),

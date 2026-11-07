@@ -362,8 +362,14 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
                     "echo planted> \"%L%\\config.toml\"\r\n",
                 ),
             );
+            // A root without its own write capability (as the user
+            // profile folder is) can't lose the link, so it doesn't count.
+            let canonical = dunce::canonicalize(&workspace).expect("canonical workspace");
+            let without_capability =
+                crate::spawn_prep::refuse_linked_project_metadata(&[canonical], &[]).is_ok();
             (
                 name,
+                without_capability,
                 started
                     .as_ref()
                     .err()
@@ -376,6 +382,6 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
 
     assert_eq!(
         results,
-        [".codex", ".agents"].map(|name| (name, true, true, Some("original".to_string())))
+        [".codex", ".agents"].map(|name| (name, true, true, true, Some("original".to_string())))
     );
 }
