@@ -1261,6 +1261,10 @@ pub struct Config {
     /// (#403). A new conversation still does.
     pub skip_reopen_warmup: bool,
 
+    /// When `true`, no conversation sends the startup warm-up request, new or
+    /// reopened (#1045).
+    pub skip_startup_warmup: bool,
+
     /// #1038: this new conversation continues a saved one whose first
     /// message the person edited. Its warm-up is a reopen warm-up (#403),
     /// as when a later message is edited. Set per thread, never from TOML;
@@ -4741,9 +4745,13 @@ impl Config {
         // the provider does, and the pair correction above acts on exactly that.
         // Only "nothing was stated at all" should stop forcing.
         let provider_selection_was_stated = model_provider_was_explicit || provider_was_corrected;
+        // #1563: the Corbanu Plan route shares Ambient's normalization, but it
+        // is set up through its wallet row, not a pasted key, so forcing the
+        // API-key prompt for it left onboarding with no way to set it up.
         let forced_login_method = cfg.forced_login_method.or_else(|| {
             (provider_selection_was_stated
-                && (ambient_provider_selected
+                && ((ambient_provider_selected
+                    && model_provider_id != PFTERMINAL_PLAN_PROVIDER_ID)
                     || kimi_code_provider_selected
                     || anthropic_provider_selected
                     || meta_provider_selected
@@ -5188,6 +5196,7 @@ impl Config {
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
             skip_reopen_warmup: cfg.skip_reopen_warmup.unwrap_or(false),
+            skip_startup_warmup: cfg.skip_startup_warmup.unwrap_or(false),
             reopened_by_prompt_edit,
             active_project,
             notices,

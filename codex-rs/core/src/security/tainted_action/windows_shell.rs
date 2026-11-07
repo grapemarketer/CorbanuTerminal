@@ -22,6 +22,7 @@ use super::ProtectedActionKind;
 use super::RECURSIVE_READERS;
 use super::WRITERS;
 use super::code_variables;
+use super::git_helpers;
 use super::has_flag;
 use super::indirect;
 use super::paths::glob_any;
@@ -1059,9 +1060,17 @@ impl Classifier {
             // only this reading sees (`C:\Tools\corbanu.exe vault list`).
             // #1515: `=git` too, where the git option scans stop.
             let equals_git = indirect::equals_git(&lower[index]);
+            // #1528: a dashed helper by its Windows path (`git-grep.exe`)
+            // names its subcommand. #1635: read from its command name, so
+            // `@git-grep.exe` and `git-grep.cmd` name `grep` too (and as
+            // written, as before, where that names none: `git-.cmd`).
+            let helper = git_helpers::git_name(name)
+                .flatten()
+                .or_else(|| git_helpers::git_name(&lower[index]).flatten());
             let named = CLI_NAMES.contains(&name)
                 || name == "git"
                 || equals_git
+                || helper.is_some()
                 || matches!(name, "crontab" | "launchctl" | "systemctl")
                 || CREDENTIAL_COMMANDS
                     .iter()
@@ -1082,13 +1091,17 @@ impl Classifier {
                     self.note(ProtectedActionKind::Persistence);
                 }
                 // #1516: and programs git runs (`grep -O`, `--upload-pack`),
-                // read once per command, as the POSIX pass reads them.
-                if (name == "git" || equals_git)
-                    && (code_variables::git_runs_code_after_git(
+                // read once per command, as the POSIX pass reads them. A
+                // dashed helper takes no git options (#1528).
+                let git = name == "git" || equals_git;
+                if (git
+                    && code_variables::git_runs_code_after_git(
                         &words[index + 1..],
                         &words[index + 1..],
-                    ) || (!std::mem::replace(&mut git_programs_read, true)
-                        && rerun::git_runs_program(&words[index + 1..], /*subcommand*/ None)))
+                    ))
+                    || ((git || helper.is_some())
+                        && !std::mem::replace(&mut git_programs_read, true)
+                        && rerun::git_runs_program(&words[index + 1..], helper.as_deref()))
                 {
                     self.note(ProtectedActionKind::UnseenCode);
                 }

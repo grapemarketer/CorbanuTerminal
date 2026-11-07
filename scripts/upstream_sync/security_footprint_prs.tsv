@@ -1,0 +1,372 @@
+number	branch	title
+58	fix/vault-key-source-recovery	P0: preserve credential vault keys across updates
+117	feat/p0-security-levels	feat(security): land policy foundation and credential capability
+122	release/corbanu-0.1.43	Release Corbanu Terminal 0.1.43: configured-credential replacement
+142	codex/security-probe-lf-checkout	fix(ci): preserve security probe identity across CRLF checkouts
+149	codex/secret-broker-fixture-crate	secret-broker: move synthetic fixture into its own test crate (no crate features)
+163	codex/sandbox-158-20261005	windows-sandbox: close legacy FILE_DELETE_CHILD escape for protected paths; env-independent #158 tests
+165	codex/legacy-sandbox-warning-20261005	windows-sandbox: warn users who run the legacy non-admin backend (#158)
+167	codex/fix-legacy-warn-clippy-20261005	tui: fix Bazel clippy on the legacy-sandbox warning
+173	codex/sec-plan-rewrite-20261006	Security plan: close PF-83-S01, short P0 plan, P1 hardening split, 3-lane rule
+178	feat/pf-30-s01-source-envelope	security: PF-30-S01 labelled untrusted context behind source_envelopes
+180	feat/pf27-s04-broker-20261006	PF-27-S04: isolated credential broker process (flagged)
+183	sec-179-env-logging	Stop logging exec environment values (#179)
+184	ui-corbanu-approval-strings	Say Corbanu in approval history and Full Access text
+186	codex/pf-24-s03-security-picker	PF-24-S03: flagged /security picker with Aggressive from existing controls
+187	codex/tui-approval-fixes-20261006	tui: typed text never answers an approval prompt (security, #174)
+190	feat/pf-30-s02-persistent-taint	PF-30-S02: persist message origins across resume, compaction and memory (source_envelopes)
+191	feat/pf27-s02-secretless-20261006	PF-27-S02: secretless agent launch and broker containment (flagged); close PF-27-S04
+193	sec-tui-persistent-arrows-20261006	tui: persistent approval options are chosen only with the arrow keys (#174 follow-up)
+194	docs/pf30-s02-merge-record	docs(pf30): record PF-30-S02 slice 1 merge
+195	codex/pf-24-s03-archive	docs(pf24): archive PF-24-S03 after PR #186
+198	feat/pf-30-s02-slice2	PF-30-S02 slice 2: signed origins, agent lineage, MCP hint; archive PF-30-S02
+199	sec-picker-execpolicy-20261006	Aggressive launch check loads the full exec policy (PF-24 follow-up)
+200	sec-security-desc-20261006	/security description matches the picker when the flag is on (PF-24 follow-up)
+201	sec-trace-key-20261006	Redact provider credentials from logs (#196)
+202	sec-picker-followups-20261006	Aggressive review shows your current setting for each row (PF-24 follow-up, B-06)
+203	sec-rules-fatal-20261006	Aggressive: rules parse errors stop new threads (#197)
+204	feat/pf-30-s03-post-taint	PF-30-S03 slice 1: fresh human approval for protected actions after untrusted content
+205	sec-header-redact-20261006	Redact response-header values in logs
+206	sec-url-err-redact-20261006	Redact provider URL credentials in user-visible errors
+207	sec-log-scrub-20261006	Scrub credentials older builds left in the logs DB and log files
+208	feat/pf28-s01-secret-gate-20261006	PF-28-S01: central secret and protected-output gate (behind secret_output_gate)
+209	sec-vault-prefix-20261006	Aggressive: the vault rule also refuses wrapped commands
+210	feat/pf-33-s01-url-dns-redirect	PF-33-S01: URL, DNS and redirect destination policy (behind url_destination_policy)
+212	feat/pf-30-s03-finish	PF-30-S03 slice 2: post-taint approvals bound to policy, indirect routes, sprint closed
+213	docs/pf-33-s01-merged	docs: record PF-33-S01 merge (#210)
+214	docs/sec-decisions-20261006	docs(security): PF-27-S02 decisions; archive PF-27-S02, PF-28-S01, PF-33-S01; PF-27-S06 to P1
+215	pf-33-s02-20261006	PF-33-S02: connection pinning and alternate-egress denial (behind url_destination_policy)
+216	feat/pf28-s02-reflected-scrub-20261006	PF-28-S02: reflected-secret response scrubbing and credential binding (behind secret_output_gate)
+217	docs/pf-33-s02-merged	docs: PF-33-S02 merged (#215)
+219	sec-nested-launch-20261006	Nested agent launches under Aggressive: refuse or pass with Aggressive enforced
+220	sec-external-panes-20261006	Refuse Claude panes under protected security levels (full fix: #218)
+221	docs/pf28-s02-merged	docs: record PF-28-S02 merge (#216)
+223	feat/pf-23-s01-moderate-ingress	PF-23-S01 slice 1: post-taint checks for MCP, write_stdin, code mode, outbound and value transfer
+224	fix/pf33-url-policy-profile-20261006	Keep url_destination_policy when the permission profile changes
+225	feat/pf33-broker-pinning-20261006	PF-28-S02: pin brokered credential requests to the guard's checked answers
+226	sec-tui5-nested-bins	Nested-launch check in the standalone binaries
+228	pf-29-s01-20261006	PF-29-S01: protected-mode inventory and activation preflight (behind protected_mode_preflight)
+229	feat/pf27-s05-model-auth-broker-20261006	PF-27-S05 slice 1: Core's model-provider API keys held by the isolated broker
+230	sec-tui5-218-contained-panes	Contained Claude panes: secretless launch, bridge and sandbox (#218, part 1)
+231	sec-tui5-registry-ro	Aggressive: keep the Aggressive-homes registry read-only for agent commands
+232	sec-tui5-218-approvals	Contained Claude panes: tool approvals through Corbanu, allowed under Aggressive (#218, part 2)
+233	feat/pf-23-s01-slice2-3	PF-23-S01 slices 2-3: labelled stage-one memory under Moderate; post-taint OS read denials
+235	pf-29-s02-20261006	PF-29-S02: human-reviewed credential migration and recovery (behind protected_mode_preflight)
+236	docs/pf-29-s02-merged	docs: PF-29-S02 merged (#235)
+237	feat/pf27-s05-broker-finish-20261006	PF-27-S05: finish model-client auth in the broker (flagged)
+241	docs/pf24-aggressive-decision-a	docs: record Aggressive sandbox design decision A (PF-24)
+242	feat/pf-13-s07-qualification-20261007	PF-13-S07: integrated credential boundary qualification
+243	feat/pf-23-s02	PF-23-S02: Aggressive deny and grant enforcement
+244	fix/pf-13-s07-issue-239-files-read	Security: Moderate applies protected-path rules from the start (#239)
+246	feat/pf-23-s03-recovery	PF-23-S03 (1/4): recover the durable security state at every start
+247	feat/pf-23-s03-transition	PF-23-S03 (2/4): confirmed transitions with a merged, locked durable save
+248	feat/pf-23-s03-fanout	PF-23-S03 (3/4): revocation fan-out: broker trigger, run end, approval caches, other sessions
+249	feat/pf-23-s03-memory	PF-23-S03 (4/4): a past session's level is a floor for its memory; sprint record and gate
+250	sec/pf23s02-linux	PF-23-S02 follow-ups: Linux full-access fix and test, submodule and hooksPath protection
+251	docs/pf-23-s03-merged	PF-23-S03: record the merged PRs (docs)
+253	feat/pf-24-s02-security-confirm	PF-24-S02: /security confirm, cancel and downgrade
+255	sec/pf13s07-saved-levels-20261007	PF-13-S07: saved-level route matrix (issue #239 follow-up)
+256	qual/pf-23-s03-videos	PF-23-S03: GLM 5.2 demo videos and gate completion
+257	qual/pf-23-s03-archive	PF-23-S03: archive
+258	docs/pf-24-s02-glm-gate	docs(security): PF-24-S02 GLM 5.2 pass and archive
+259	pf-41-s01-inspector	PF-41-S01: effective security inspector and degradation state
+260	feat/pf-25-s01-grant-tui	PF-25-S01: temporary grant TUI
+261	feat/pf-25-s02-revocation-tui	PF-25-S02: revocation and kill-switch TUI
+262	docs/tasknode-p0-security-map-20261007	docs: Task Node map and evidence records for P0 security levels
+264	docs/tasknode-p0-security-map-pf25s02-20261008	docs: Task Node map adds PF-25-S02 (P0SEC-TN-09); clean PR links in evidence records
+267	sec/pf-27-s06-s1-process-access	PF-27-S06 slice 1: Windows process access hardening and measured probes
+269	sec/pf-27-s06-s2-pipe-transport	PF-27-S06 slice 2a: Windows named-pipe broker transport
+270	sec/pf-27-s06-s2b-broker-on-windows	PF-27-S06 slice 2b: isolated credential broker on Windows
+272	sec/pf-27-s06-s3-launch-contract	PF-27-S06 slice 3: secretless launch contract on Windows (elevated sandbox)
+274	docs/p0-security-reel-20261008	docs(demos): P0 security-levels demo reel index
+277	sec/pf-27-s06-docs	PF-27-S06: record and evidence (Windows broker and secretless launch)
+279	plan-swap-p0-p1-20261008	docs(plans): close P0 security levels; activate P1 security hardening
+280	sec/pf-27-s07-plan	PF-27-S07 record; PF-27-S08/S09 drafts in the P1 plan
+281	sec/pf-27-s07-s1-codex-home	PF-27-S07 slice 1: remove the CODEX_HOME deny when secretless_agent_launch is off
+282	sec/pf-27-s07-s2-new-threads	PF-27-S07 slice 2a: Core and broker threads protected from creation
+284	sec/pf-27-s07-s2b-protected-spawn	PF-27-S07 slice 2b: Core starts the broker never openable
+293	docs/pf-27-s06-windows-gate	PF-27-S06: real-Windows gate run (failed: two defects), videos
+296	sec/pf-27-s07-evidence	PF-27-S07: evidence and record
+298	sec/pf-27-s06-d2-vault-deny	PF-27-S06 #294: apply the launch contract's deny entries as Windows ACLs on the tool path (vault readable under workspace-write)
+302	sec/pf-27-s06-d1-normal-session	PF-27-S06 #295: start the elevated sandbox's runner from a hardened Core (normal-session agent commands); CI medium-integrity probes
+309	ci/credential-canary-proxy-flake	Fix flaky credential canary proxy-injection-boundary probe (SIGSEGV env race) + failure diagnostics
+312	docs/pf-27-s06-windows-gate-rerun	PF-27-S06: real-Windows gate rerun passes (normal session), videos
+316	qa/pf-27-s07-win-gate	PF-27-S07: real-Windows gate run (pass) and videos
+327	sec-win6-320	Windows: keep spawn_protected's stdout pipe out of other children (#320)
+329	docs/p1-sec-archive-s06-s07	docs(security): archive PF-27-S06 and PF-27-S07 (accepted with known limits)
+331	fix/300-unelevated-deny-read-fail-closed	Windows: refuse deny-read profiles on the unelevated sandbox's tool path, with an actionable message (#300)
+333	sec/pf-27-s08-broker-token	PF-27-S08 slice 1: Windows broker under its own restricted token
+338	work/pf60-s05-s2-declared-basis	accounting: billing basis declared per route and credential (PF-60-S05 slice 2)
+343	fix/341-ssh-window-station	Windows sandbox: run commands over SSH (non-interactive window station) (#341)
+354	sec-win9-345	Windows sandbox over SSH: grant the runner's logon, for the runner's lifetime; commands keep only what they need (#345)
+356	sec-win9-323	Windows: no deny-read entry is removed while another session relies on it (#323)
+360	docs/pf-27-s08-decision-c	docs(security): PF-27-S08 key-path decision (c), ready for Travis's acceptance
+362	qa/pf60-s05-rerun-20261009	PF-60-S05: acceptance re-run with real Kimi Code, Claude plan and OpenAI API-key credentials
+363	sec/pf-27-s09-model-auth	PF-27-S09 slice 1: Windows broker side of model-client auth
+364	pf-27-s08-archive	docs(security): archive PF-27-S08 (accepted with known limits)
+379	sec/pf-27-s09-core	PF-27-S09 slice 2: Core's Windows model requests through the broker
+384	sec/acc9-pf27s09-acceptance	PF-27-S09 independent acceptance: ACCEPT WITH LIMITS
+387	fix/380-trace-header-leak	Keep credential headers out of every log sink under any RUST_LOG (#380)
+392	pf-27-s09-archive	docs(security): archive PF-27-S09 (accepted with known limits)
+395	docs/acc389-console-credential-manager	docs: PF-27-S09 console Credential Manager acceptance
+399	sec/issue-390-pipe-squat-v2	fix(security): refuse squatters on the Windows broker's named pipes (#390)
+410	fix/398-sandbox-cmdlog-redact	Redact credentials in sandbox command logs (#398)
+413	sec-391-aggr-broker-default	#391: broker_model_auth on by default under Aggressive
+432	fix/pf-84-d3-displayed-aggressive	PF-84 #428: D3 approval also applies when the TUI shows Aggressive
+448	fix/438-preflight-credential-store-mode	Aggressive preflight: credential store modes are not secrets (#438)
+451	fix/437-inspector-denials-rows	Inspector: declined approvals, honest launch claim, rows after a turn; first Troll spawn (#437, #435)
+453	fix/agg-443-immediate-protections	#443: Aggressive's vault refusal holds from confirmation; screen 07 names what applies now and at restart
+454	fix/agg-434-vault-gate	#434: vault values are removed from output after restart and when added mid-session
+457	fix/438-review-exact-setting	Preflight: exempt only top-level credential-store settings with their choices (#438 follow-up)
+458	fix/agg-440-441-env-nested	#441, #440: nested agent launches refused before the approval prompt; the review says the environment is allowlisted
+459	fix/agg-443-denied-at-start-shown	#443 follow-up: show a command the sandbox stopped as it started
+463	fix/444-python-shim-seatbelt	Seatbelt: resolve per-user temp folders with network off (python3 shim noise, #444 AGG-36) — needs security sign-off
+471	ci/pf30-s03-aggressive-vault	CI: tests expect Aggressive's outright vault refusal (#443) and the OPENAI_API_KEY notice (#394)
+486	fix/pf84-vault-salt-474	fix(vault): reading an account fingerprint never writes the vault (#474)
+491	fix/473-bwrap-missing-protected	Linux sandbox: run when a denied path is missing below a read-only or shared missing folder (#473)
+496	fix/493-bwrap-dev-null	linux-sandbox: keep /dev usable under a full-write profile with denials (#493)
+499	fix-488-seatbelt-nested-link	#488: denials hold through nested-link workspaces (Seatbelt + bwrap) — needs security sign-off
+508	fix-498-bwrap-full-fs-dev	linux-sandbox: keep /dev/null usable on the no-denial full-write bwrap path (#498)
+511	fix-503-bwrap-symlink-root	linux-sandbox: order and compare writable roots by their canonical path (#503)
+516	fix-504-20261011	Credential broker: revoke on every exit; test the exit window (#504)
+517	fix-512-upload-denials	Security: Apps upload reads honour denials spelled through a link; run core security tests on macOS (#512)
+526	fix-245-20261011	Security: additional permissions never reopen a protected path (#245)
+527	fix-192-20261011	tui: a number key only highlights an MCP approval option (#192)
+531	sec-links-a-core-20261011	Security: read-only entries and Apps upload reads hold through links (#518, #519)
+532	sec-links-b-bwrap-20261011	Linux sandbox: denials hold through read-only links (#501, #502)
+533	sec-links-c-seatbelt-20261011	macOS Seatbelt: a writable link cannot reopen another root's read-only path (#529) — needs security sign-off
+537	fix-513-20261011	Security: additional writes never reopen a write protection (#513); grant filter follow-ups (#524)
+556	fix-553-codemode-taint	#553: PF-23/PF-25 security integration tests in PR CI; code-mode taint test says when the host is missing
+558	fix-513-moderate-540	Security: under Moderate only a person's fresh approval opens a persistence file (#513); runtime entries stay read-only under the #239 lift (#540)
+569	fix/pf84-throttle-fingerprint	fix(throttle): key named accounts by credential fingerprint; throttle compaction, completion check and memory extraction (#509)
+575	fix-563-bwrap-missing	Linux sandbox: refuse a command clearly when no bubblewrap is found (#563)
+577	fix/548-aws-log-redact	Keep credential helper output out of every log sink (#548)
+579	fix-562-missing-runtime	Security (Linux): a protected command cannot create a missing Corbanu-home runtime entry (#562)
+591	sec-roots-535-536-20261012	Sandbox: a writable link into another root's read-only path is not a grant (#535)
+592	fix-587-home-rename	Security (Linux): a protected command cannot move the Corbanu home or a protected folder aside (#587)
+596	fix-583-home-uncreatable	Security: a protected command cannot create a missing Corbanu-home entry (#583)
+597	sec-roots-536-20261012	Sandbox: a link cannot move a writable root, at every level (#536)
+599	fix-582-stale-placeholders	Linux sandbox: remove placeholders left by a killed run (#582)
+600	fix-581-bundled-bwrap-apparmor	Linux sandbox: run the bundled bubblewrap through aa-exec where AppArmor restricts user namespaces (#581)
+601	agg-win-envwatch-442	#442: Windows stops a sandboxed command when a .env-pattern file appears during it
+608	fix/586-db-init-lock-protected	Security: deny pfterminal_db_init.lock before it exists (#586)
+617	fix-594-598-home-rename-links	Security: keep the Corbanu home and the folders above it in place, through a link and for approved commands (#594, #598)
+627	fix-603-home-names	Security: protect the names Corbanu reads later for a command working in the home (#603)
+629	pf-23-s01-test-env-robustness	Make pf_23_s01 taint test robust to missing bubblewrap and small test…
+634	fix/main-ci3-20261013	Fix main postmerge CI: Windows clippy (ledger tests, unmovable_paths), landlock scratch dir in archive shards, fake bwrap --bind-fd, remote-control mock
+637	agg-fix1-620-622	Aggressive: no Grant once where it cannot apply (python home listing, ~/.zshrc); sandbox denials reach the inspector (#620, #621, #622)
+639	fix-624-panes-picker-approval	TUI: approvals never open over the /panes picker (or any view you opened) (#624)
+640	fix-625-model-save-broker-key	Providers: a key the credential broker holds still configures its provider (#625)
+643	fix-619-tmp-alias-home	Security: keep Corbanu-home entries read-only below a /tmp or /var root on macOS (#619)
+645	fix-611-sqlite-home-denied	Security: deny the databases and init lock in a separate database folder (#611)
+647	fix/main-ci3c-20261013	Fix main postmerge after #639/#601: session-lifecycle test follows #624; Windows clippy in credential watch
+648	fix-605-minimal-tmp-metadata	Security: keep .git, .codex and .agents read-only below /tmp with :minimal reads on macOS (#605)
+655	agg-polish-641	Wallet: account calls use the Corbanu API key the credential broker holds (#641)
+661	agg-dec3-626-623	Aggressive: suspend approvals remembered under a less strict level (#626); refuse links into .codex/.agents (#623)
+662	agg-polish-505	Aggressive: approval for every command from the next turn after confirmation (#505)
+666	sec-follow2-649	Security: keep denied paths below /tmp unreadable with :minimal reads (#649)
+667	sec-follow2-650	Security: keep other worktrees' git folders read-only (#650)
+669	fix/pf84-654-aggressive-accounting	Developer accounting: record requests the credential broker serves under Aggressive (#654)
+671	sec-follow2-652b	Security: write checks fail closed for a folder named twice and follow nested-link roots (#652)
+672	sec-follow2-651	Security: database folder follow-ups — escaped globs, launch contract and preflight, backups (#651)
+685	fix/665-model-route-auth	/model: list a Z.AI connection only when its own credential is there (#665)
+690	ci-health/bwrap-mask-fds	Linux sandbox: give every masked file its own /dev/null descriptor (#636)
+693	ci-health/placeholder-hold-673	Linux sandbox: hold another run's placeholder as soon as it is found (#673)
+695	ci-health/arglint-followup	nightly-ci round 2: lint follow-up, runner disk, Bazel landlock scratch, log-capture tests (#636)
+697	sbx-left-603	Security: refuse a worktrees link swapped in after the carve-out check; no nested link in kept folders (#603)
+699	sbx-left-606	Security: approvals agree with the sandbox on protected names in any case (macOS) and on #535-excluded links (#606)
+702	sbx-left-607	Linux sandbox: hold placeholder folders, PID namespaces, no link-following or late-file removal in the placeholder registry (#607)
+705	fix/158-legacy-delete-boundary	windows-sandbox: keep legacy deletes inside writable roots; label roots Low only while sessions use them (#158)
+712	fix/709-apply-patch-approval-env	test(core): #709 is a fixture bug, not an approval leak — pin per-environment apply_patch approvals
+714	misc3-651-db-folder-missing	Security: protect a separate database folder missing at launch (#651 item 7)
+720	pf84-close-s06-accept	docs(PF-84): accept S06 slice B (limited testing) and archive S06
+726	pf84-588-fork-account	PF-84 (#588): a fork of an earlier turn runs on the source conversation's current account
+728	agg-small-626-zsh-fork-note	#626: name suspended remembered approvals in zsh-fork prompts under Aggressive
+742	fix/673-placeholder-race	linux-sandbox: hold the placeholder registry lock from argument building to registration (#673, #615)
+746	docs/aggressive-reel-20261013	docs(demos): Aggressive security level demo reel index
+764	mod/747-moderate-sandbox	Moderate keeps every command in the sandbox (#747, D3); broker on by default under Moderate (D2)
+769	fix/691-windows-aggressive-needs-sandbox	tui: require the Windows sandbox before Aggressive can be chosen in /security (#691)
+770	kc-758/aggressive-keychain-deny	Aggressive: always deny the macOS keychain services in the sandbox (#758)
+781	mod/750-moderate-picker	Moderate can be chosen in /security (#750); the inspector matches what Moderate enforces (#749)
+797	agg-fix5/787-approval-keys	TUI: keys typed before an approval was shown never answer it (#787)
+799	agg-fix5/792-vault-row	Inspector before the restart: Vault, Sandbox and Network rows say what Core's Aggressive enforces (#792)
+808	ss3/758doc	docs: Aggressive keeps network access to an enforced managed proxy (#758 follow-up)
+809	ss3/743b	tui: on Linux, start a contained Claude pane with its own TMPDIR inside the sandbox (#743 follow-up b)
+810	ss3/744log	core: log which check refused a command at the Aggressive link check (#744)
+811	ss3/783	tui: on Windows, require the default Windows sandbox before Moderate can be chosen in /security (#783)
+813	perm-739/permissive-no-escalation	Permissive under protected launch offers no run outside the sandbox (#739, option B)
+823	ci-cache/core-security-once	ci: save the macOS core-security cache once per main push (#636)
+850	fix/project-security-startup-20261015	Refuse incomplete project Permissive security tables at startup
+851	fix/preapproval-refusal-diagnostics-20261015	Distinguish policy refusals from declined command approvals
+869	fix/moderate-838-runtime-files	Moderate: keep Corbanu's security state and keys denied after a fresh approval (#838)
+876	sec-826-userns	Linux: deny new user namespaces to agent commands under Moderate and Aggressive (#826)
+879	fix/855-vault-add-error-value	vault: a failed /vault add stores nothing, names the cause, and never stores error text (#855)
+886	fix/855-provider-key-no-plaintext-on-lock-failure	login: no plaintext provider-key copy when the vault lock can't be opened (#855) — needs security sign-off
+899	sec/885-classifier-20261016	Post-taint classifier: fail closed on sed e, nested shell scripts and sed-written scripts (#885)
+906	ci-902-macos-core-tests	Core test harness gives security path lookups a test bound (#902)
+915	ci-macsec-902-914	macOS core security CI runs the #902 suites; #914 short-wait bound against the main pool's busy timeout
+922	fix/dec-845	config: name the project file when an unversioned [security] table stops startup (#845, D1)
+923	ci/linux-sec-902	CI: Linux core security PR job also runs the #902 Aggressive/Moderate suites
+925	sec-891-userns	Linux user namespaces: contained Claude panes get the block (#891); name the rule where a command hits it (#826 follow-up)
+948	fix/939-ignored-project-security-attribution	fix(tui): attribute ignored project security in inspector (#939)
+949	fix/941-approvals-off-refusal-attribution	fix(core): name the security level in approvals-off refusals (#941)
+953	fix/bwrap-probe-retry-etxtbsy-635	sandboxing: retry the bwrap probe on ETXTBSY (#635)
+960	fix-vault-corrupt-flake	vault: make corrupt_encrypted_state_fails_closed deterministic (#349)
+962	fix/942-moderate-session-approval	fix(core): offer no lasting MCP approval that a fresh post-taint approval overrides (#942)
+975	sec-891-userns-once	Linux user namespaces under Moderate: allow them for one approved command, with a warning (D27 (a), #891)
+980	sec-935-sandbox-lifecycle	linux-sandbox: a supervisor stops the whole sandbox when the helper, its parent or bubblewrap dies (#935)
+986	sec-937-arith-taint	Post-taint classifier: arithmetic on variables filled from command output or read is UnseenCode (#937)
+996	sec-945-host-epoch	core: approvals answered after a security transition are for a stale prompt (#945, D37 A)
+999	fix/agg-978-20261019	Aggressive confirmed without a live policy: this process's other sessions take approval for every command (#978)
+1014	sec-1006-nonbwrap-supervisor	linux-sandbox: commands run without bubblewrap cannot outlive the helper either (#1006)
+1017	fix3/974-key-memory	credential broker (Windows): sweep each heap's whole memory for stale key copies (#974)
+1019	sec-1001/stale-approvals	core: approvals answered after a security transition are asked again (#1001 D50: commands, patches)
+1021	sec-1001/mcp-stale	core: MCP approvals answered after a security transition are asked again; unoffered lasting answers allow once (#1001 D50, #1011)
+1024	sec-d48-known-tools	D48 (c): after untrusted content, user namespaces only for a known tool's approved command (#891)
+1025	fix/sec-348-placeholder-record	linux-sandbox: remove a killed run's placeholders from a record kept in the Corbanu home (#348)
+1026	sec-1001/grants-expire	core: permission grants end at a security transition (#1001 D51)
+1033	sec-1001/aggressive-network-rules	core: under Aggressive, network allow rules saved outside it are suspended (#1001 D52)
+1042	sec-1001/aggressive-mcp-approve	core: under Aggressive, MCP "always approve" saved outside it is suspended (#1001 D52)
+1044	fix4-security-1015	/security: a window whose session has not started takes Aggressive's Core level and approvals; #1015 display edge cases
+1050	fix/sec-348-followup	linux-sandbox: #348 follow-up: review minors (pending uses, folder override, fresh mount check)
+1053	sec-1001/stale-grant-permissions	core: a stale run carrying permissions is refused, not decided again (#1001 D51 follow-up)
+1060	sec-1020-nesting-depth	Classifier shell reader: nesting-depth limit for substitutions (#1020)
+1061	sec-1012-prompt-expansion	Classifier: treat bash ${v@P} like eval after untrusted content (#1012)
+1062	fix/sec-745-bwrap-placeholders	linux-sandbox: hold another run's placeholder folder instead of filling it (#745); keep replaced placeholders (#607)
+1067	fix/689-spawn-connection-credential	PF-84 (#689): refuse a model-started spawn on a connection with no credential of its own
+1071	sec-1057/grant-read-marker	fix(core): #1057 check for a security transition from when a tool's handler read its grants
+1072	sec-1028-qualifier-code	Classifier: zsh e/+ glob qualifiers are UnseenCode after untrusted content (#1028)
+1075	sec-1057/mcp-session-only-note	fix(core): say when "always allow" for an MCP server lasts only the session under Aggressive
+1079	fix/issue1056-uses-filter-20261020	test(linux-sandbox): cover Uses path boundaries
+1081	pf84-ga-plan	docs(PF-84): flag-removal prerequisite status; #426 end-to-end re-verification test
+1091	small-fix6/1077-cli-token-prompt	Moderate: the approval note names the kept file and says it's a CLI token (#1077)
+1092	tui-fix1/not-started-wording	/security: Moderate before the window's session starts; remote app server windows (#1047)
+1100	codex/issue1056-sweep-budget-20261020	fix(linux-sandbox): cap successful placeholder removals per sweep
+1106	flake-1102-work-counter	Classifier linearity tests: count work at two input sizes instead of a wall-clock budget (#1102)
+1109	sec-1065-value-cap	Classifier: cap substituted variable bytes; past the cap the line asks (#1065)
+1114	sec-1084-glob-subst	Classifier: zsh glob substitution asks after untrusted content (#1084)
+1116	fix/issue1056-mount-view-dedup-20261020	fix(linux-sandbox): preserve distinct process-root mount views
+1119	sec-1098/realistic-cwd	core tests: #1098 security tests run in the session's own workspace root (test-only)
+1124	sf7-1074	PF-84: refuse resuming an agent on a connection without its own credential (#1074)
+1126	sf7-1009	/cost: move the range view into tokens/range.rs and name its day states (#1009)
+1127	sf7-1016	Native collaboration: bind encrypted payloads to the account as well as the provider (#1016)
+1135	sf8-1107	Protected launch: keep the home's db-backups, accounting-pending and gpu-controller.lock unreadable (#1107)
+1136	sf8-gcloud	Approval prompt: call %APPDATA%\gcloud the Google Cloud CLI's folder, not a CLI token file
+1137	sf8-1125	tmux tests: hash candidate binaries with the system tool, not unoptimized sha2 (#1125)
+1140	pf84-1129	PF-84: restore a reloaded agent's recorded account, or refuse it (#1129)
+1151	sf9-d76	docs: realtime-only threads should pass model on thread/start (#1045)
+1153	sf9-d87	git postcheck: ignore creation times on overlay file systems (#943 follow-up 19)
+1154	sf9-t1138	tests: in-crate test configs are built for a temporary folder (#1138)
+1156	sf9-t1134	network_approval tests: hold the ambiguous test's turn until it is interrupted (#1134)
+1158	sec-1141-git-output-env	Ask before git output-file writes and git code settings after untrusted content (#1141, #1142)
+1160	sec-1057b-ext-grants	core: rebuild or refuse extension calls built before a security transition (#1057, D71 A)
+1163	pf84-1144	PF-84: name refused borrowed/V1-descendant accounts; refuse encrypted spawns before asking (#1144)
+1171	mod-fix1/d94	Moderate: name the level when the sandbox stops a write into the project's .git (#1139, D94)
+1172	sec-zsh1-shell-gate	Classifier: zsh-only checks ask only where zsh may run (D85)
+1183	sec-932-grammar-harness	Classifier #932 phase 1: tree-sitter-bash reading + differential harness (test-only)
+1192	pf84-d86-status-account	PF-84 D86: /status names the account only when the provider has a named account
+1195	sec-932-grammar-shadow	Classifier #932 phase 2: compare the grammar's reading of every command line (log only)
+1197	sec-932-grammar-authority	Classifier #932 phase 3: zsh-only checks skip zsh lines of grammar-proven data (held for coordinator)
+1204	docs/moderate-reel-20261021	qa/demos: Moderate security level reel
+1207	sf10-cla	Contributions are plain Apache-2.0; remove the inherited CLA workflow (D117)
+1209	sf10-pluginfetch1202	Curated plugin sync: git dies with the TUI (#1202)
+1211	sf10-grant1182	Aggressive: don't offer Grant once for curl, command -v; show the reason for a write outside after cd (#1182)
+1215	refactor/issue1011-shared-mcp-context-20261021	refactor(core): share post-taint MCP call context
+1220	sec-1176	Agents' tasks to panes the person opened go through the untrusted mailbox (#1176, D106) [needs security sign-off]
+1221	test/issue1011-mcp-approval-coverage-20261021	test(core): cover repeated MCP approval decisions
+1223	sf11-1212	Aggressive: #1182 cd-following note — quoted separators, cd +N, link caveat (#1212)
+1228	sf11-safety-flake	tui test: deflake safety_retry_preserves_a_committed_steer (goal continuation race, #349)
+1230	sec-1159-git-helpers	Classifier: git helpers and git.exe judged as git; more git path writes (#1159)
+1235	win-691/security-fixtures	test(core): run the PF-29 preflight tests on Windows (#691)
+1237	win-691/tui-host-executable	test(tui): run the exec-policy vault check on Windows (#691)
+1238	sbx-1056-seen-after-read	linux-sandbox: count a mount namespace as seen only after its view is read (#1056)
+1247	sec-1244-linear-test	test(core): split the #1141/#1142 linearity test per unit and line (#1244)
+1249	sec-1240-win-paths	security: judge Windows path spellings in the post-taint classifier (#1240)
+1250	pf84-1193	tui: /status reads a cached named-account answer, never the vault (#1193, D124/D125)
+1254	sec-d153-git-quoted	security: git names in quoted text no longer end the git checks (D153, #1159)
+1262	sec-1255-git-name-failclosed	security: git config editor asks after untrusted content; pin git look-alike words (#1255)
+1273	sec-1268-xargs-git	security: judge git given words from a launcher's input (#1268, #1269)
+1274	ci-lin2/d153-linear	security: fix d153 linearity test timeout on main (glob fast path, smaller input)
+1279	sec-1275-linear	security: judge repeated command words in one pass; faster glob reject (#1275)
+1294	sec-1283-quoted-git-config	security: judge git config on the words the shell passes on (#1283); more launcher spellings (#1276)
+1295	win-691b-run	tests (#691): run 7 sandbox-gated security tests on Windows
+1297	docs/classifier-reel-20261022	docs: classifier demo reel (asking after untrusted content)
+1302	sec-1261-win-reads	security (#1261): Windows first judgment reads scripts through plain local paths; homes by Windows segments
+1304	win-1296	security: explain Aggressive's denied reads in PowerShell and cmd on Windows (#1296)
+1308	sec-1261-win-persistence	security (#1261 follow-up, D168): Windows persistence (scheduled tasks, Run keys, Startup folder, PowerShell profiles) asks
+1310	sec-1309-unknown-folder	security (#1309): more ways a nested script's folder becomes unknown ask on relative writes
+1315	sec/988-trap-param-ops	security (#988, #989): trap actions count like eval; misread parameter expansions in the command word ask
+1317	pf84-1311	PF-84 D171 follow-ups (#1311): removal never undone by a concurrent save; no websocket reuse across sign-ins; vault read off the seen lock; revocation 401 names the recovery
+1321	sec-1309b-maybe-cd	security (#1309): a nested script after a cd that may not happen is judged in every folder the line may be in
+1328	misc-fu-734	windows-sandbox (#734): warn once when a writable root can't be labelled for the legacy sandbox
+1330	fix/websocket-api-auth-identity-1326	fix(core): refresh API-only websocket identity after credential rotation
+1332	sec-1064	security (#1064, #1159): more ways a value runs, code variables, output files and git programs ask after untrusted content
+1333	pf84-1324-catalog-once	plugins (#1324): fetch the remote plugin catalog once per TUI start
+1339	sec-1309c	security (#1309): the line's own relative writes after a cd that may not happen are judged in every folder it may be in
+1354	sec-1302r-path-programs	security (#1261 follow-up): a program named by a path is the file that runs; pushd -n and wrapper folders ask
+1356	sec-1064b	security (#1064): code-loading variables set to risky values ask; uncertain subscripts ask only before an operator
+1366	codex/issue1349-quoted-search-separators	fix(core): preserve quoted search separator provenance
+1399	fix/count-reverse-search-work	test(core): count reverse-search work in classifier linearity checks
+1404	sec-d194-certain-cd	security (#1309, D194): commands after cd x && … / cd x || exit run where the cd went
+1406	sec-d191-mktemp	security (D191): a plain mktemp path written or removed by a trap no longer asks (D191, owner-approved relaxation)
+1408	deny-1401/crypto-bigint-exception	deny: RUSTSEC-2026-0387 exception (crypto-bigint 0.5 via aws-config/p256) — needs owner approval (D198)
+1415	sec-d195-git-unknown-folder	security (#1309, D195): git writing the working tree in an unknown folder asks
+1417	ci/1367-macos-crash-reports	ci(core-security): upload macOS crash reports when the job fails (#1367)
+1418	sec-fu-1405	security (#1405): mapfile -C callbacks and shell start-up files are judged
+1421	sec-fu-1403	security (#1403): a builtin named by a path asks; ./cd is not followed as a folder change
+1423	flake-1416/windows-cim-warmup	test(security): warm the Windows boot query before the live platform self-test (#1416)
+1427	rel-fix/802-preflight-startup-drift	/security: Corbanu's own start-up writes are not preflight drift (#802)
+1430	ci/skip-npm-staging-1420	ci: skip artifact staging on PRs that don't touch packaging (#1420) — needs owner approval
+1433	sec-fu2-1409	security (#1409): pin zsh >>| and >>& in D194's scan; COMPOUND stays (reachable)
+1434	ci/1367-find-or-true	ci(core-security): don't fail the crash-report step when a DiagnosticReports folder is missing (#1367)
+1437	sec-fu2-1410	security (#1410): a cd to a folder the classifier can't see makes relative writes and git working-tree writes ask
+1440	sec-1428/sqlite-sidecars	/security: count a database's -wal/-shm/-journal files like the database (#1428)
+1443	sec-fu3-1422	security (#1422): mapfile spellings, aliases and compgen -C are judged; CD and env cd are not followed
+1444	sec-1428/finish-994	fix(arg0): release owned file locks when guards drop (finishes #994 by @citadelculture)
+1445	sec-1428/finish-995	fix(cli): release Claude refresh locks with their owner (finishes #995 by @citadelculture)
+1446	sec-fu3-1436	security (#1436): nested cd $X/.., cd searches, loop passes and scripts in unseen folders ask
+1451	sec-1441	security preflight: isolate a dangling symlink's would-be target; count Windows hard links (#1441)
+1459	sec-fu4-runners	security (#1449, #1064, #1159): option-value runners, alias definitions past builtin or a split assignment, gcc -MF / rustc --out-dir files ask
+1460	sec-stricter-807	Security: contained panes and the keychain rule follow the stricter saved/live level (#807)
+1463	win-691c	tests (#691): run 58 more classifier tests on Windows; the 8 that still differ name #1461/#1462
+1464	sec-stricter-675	Security: keep other linked worktrees' own .git files read-only (#675)
+1469	sec-1461-windows-cd-var	security (#1461): under Windows path rules a cd to a variable's folder makes it unknown
+1471	sec-linux-594	security (#594, D225): warn under Moderate and refuse Aggressive when the Corbanu home is reached through a writable link (Linux)
+1481	sec-d217-sudo-close-from	security (#1403): sudo's -C N closes file descriptors and names no folder — needs security sign-off (D217, owner-approved)
+1494	sec-left-1468	Security: #1468 follow-ups (live level for panes and /permissions, /status keychain mirror, submodule worktrees' .git files)
+1496	sec-left-1480	Search patterns: #1480 follow-ups to #1364 (assignment-shaped program words, quoted assignments, linear prefix walk)
+1497	sec-left-943	Security: report a held empty .git swapped again (#943 r8 N1), state-file audit
+1499	sec-722-cap	fix(linux-sandbox): stop a placeholder sweep when the mount table is unreadable (#1056)
+1500	ci/rust-ci-full-ripgrep	ci: provide packaged ripgrep to Linux sandbox tests (fix postmerge red from #1376)
+1501	sec-1472-home-ancestor-rename	security (#1472): regression test — a Corbanu home below the working folder cannot be moved aside (Linux)
+1502	sec-943b-leftovers	security (#943): keep a reported .git swap's hold in the session's last look
+1503	sec-943b-notes	security (#943): D48 held-back note names only namespaces; #513/Aggressive/D48 tests
+1505	win-733	windows-sandbox: legacy commands can't break away from their job (#733)
+1510	sec-943c-leftovers	#943: test the swapped-set cap, name the .git finding when an approved extra write is refused
+1512	sec-932h-d156	security (D156, #932): git's option checks read quoted values whole, so a value split at ; | & no longer hides a setting
+1513	sec-932h-measure	test (#932): measuring harness — the real classifier over a local corpus; which rule asked, which widening (W1-W4) would remove the prompt
+1517	sec-1276	security (#1276): a launcher's input as the program, interpreter code or whole lines asks; unseen git config words ask
+1519	win-1507	windows-sandbox: test other launch routes out of a legacy session (#1507), document #1506 gaps
+1521	sec-1159-eqgit	security (#1159): zsh =git that the command reading does not take for git asks
+1523	sec-1309-folders	security (#1309): login and elsewhere wrappers, more folder options, pattern command words, modifiers and builtin loaders make a script's folder unknown
+1525	sec-1516	security (#1515): brackets that cut a git command ask; conservative arithmetic rule
+1526	win-1519fu	windows-sandbox: #1507 launch-path tests — error codes, reliable cleanup, no outer-job false pass
+1527	sec-1516-grep	security (#1516, #1515): git grep's pager asks; =git ends git's option scan
+1529	sec-1276b	security (#1276): launcher follow-ups — eval/trap text, env -u…S, parallel -kI, xargs re-read, rush -Q, wrapper --
+1530	sec-1276b-folders	security (#1159, #1309): =word command words, outputs after noglob, run0 -D, keep options, tmux -c, extendedglob words
+1533	win-1506b-d264	Windows sandbox: make the non-admin warning accurate after #705 (D264, #1506 item 5)
+1535	win-1506b-d263	Windows sandbox: deny moving folders above explicit nested read-only paths (D263, #1506 item 3)
+1538	sec-722b-hooks	hooks: a PreToolUse hook that can't start blocks the action on remote work (#722, D245)
+1546	sec-722b-net	remote network: decide remote allowlist misses on this machine, same prompts and failure reporting as locally (#722, D246)
+1549	win-1506b-d261	Windows sandbox: track and remove the Everyone delete-child denies (D261, #1506 item 1)
+1550	win-1506b-d262	Windows sandbox: don't load .codex/.agents planted during a non-admin session until confirmed (D262, #1506 item 2)
+1551	sec-943d	git check: report an unremembered empty entry once; no repeated report after a stale finish (#943 r8 N2, item 14; D250)
+1562	win-1507b-d259	Windows legacy sandbox: per-command identity in the default DACL (D259, #1507)
+1564	win-1507b-1542	Windows sandbox: fail when D263's capability-SID DELETE deny can't be written; document removing it (#1542 items 3, 4)
+1565	win-1507b-d285	Windows sandbox: ignored probes measuring the per-command ACL cost on a large workspace (D285)
+1599	fix/1309-unknown-folder	security (#1309): line writes in an unknown folder ask
+1600	fix/1573-rg-hostname-bin	security (#1573): rg --hostname-bin runs a program
+1602	fix/issue1573-zsh-equals-redirect	security (#1573): zsh =cmd redirection targets name a program on PATH
+1612	perf-d261	Windows legacy sandbox: write D261's delete-child denies without the tree walk (D285)
+1613	flake/protected-state-reopen	protected-state tests: wait out a sibling fork's copy of the lock before reopening (#1448)
+1622	win-1610-diag	test(process-hardening): explain an unexpected PF-27-S08 file probe result (#1610)

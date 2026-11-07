@@ -62,6 +62,12 @@ const MAX_COLLECTED: usize = 4096;
 /// the pipeline writes a file the classifier cannot name.
 const MAX_PIPELINE_STAGES: usize = 64;
 
+/// Targets retained for one collected `sed`. Each target costs a vector slot
+/// plus its known name, and every collected `Sed` clones the list. Keeping
+/// both bounded makes those copies constant-size.
+const MAX_SAVED_TARGETS: usize = 64;
+const MAX_SAVED_TARGET_BYTES: usize = 4 * 1024;
+
 /// Pipeline stages that save their input to the files they are given.
 const PIPE_WRITERS: &[&str] = &["tee", "dd", "sponge", "cp", "install"];
 
@@ -110,6 +116,10 @@ struct Found {
     deferred: bool,
     /// #1309: scripts collected before the last folder change.
     before_change: usize,
+    /// #1309: output files named relative to the folder found so far, and
+    /// how many were found before the last folder change.
+    relative_outputs: usize,
+    outputs_before_change: usize,
 }
 
 /// One reading of a sed invocation and where it runs.
@@ -274,6 +284,11 @@ impl Classifier {
             self.note(kind);
         }
         self.written.extend(found.written.iter().cloned());
+        // #1309: so may an output file named relative to the folder
+        // (`f() { git log --output=.zshenv; }; cd ~; f`, `trap '…' EXIT`).
+        if found.deferred && found.outputs_before_change > 0 {
+            self.note(ProtectedActionKind::Persistence);
+        }
         // #1309: a script collected before a later folder change, in text
         // that may run it later (`f() { sh -c '...'; }; cd ~; f`), may run
         // in that folder.
@@ -356,10 +371,38 @@ impl Classifier {
                     || !command.input.is_empty()
                     || !command.other_text.is_empty(),
             );
+            // #1573 (1): zsh writes a redirection to `=mytool` (also
+            // `="mytool"`) into the program `mytool` on `PATH`, which runs
+            // later. Only at this reading's own level: quoted words read
+            // again as code (`level` > 0) would turn the `>=` of `awk
+            // 'NR>=10'` into one; nested shells' scripts get a level 0 of
+            // their own. Not in other languages' files (`if n>=2:`).
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && command.writes_to.iter().any(|word| {
+                    work::step();
+                    outputs::zsh_program_path(&word.text)
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a later iteration of a loop starts where the one
             // before it left.
             found.deferred |= unknown_folder::starts_loop(&texts);
             let command_at = indirect::command_word(&texts);
+            // #1620: zsh expands `=mytool` in any word, so a writer's operand
+            // names the installed program too (`tee -a =mytool`, `cp x
+            // =mytool`). And the text `eval`, `trap` and `alias` run is a
+            // command line read at this level: its redirection targets and
+            // writers' operands count (`eval "echo x >> =mytool"`). The same
+            // gate as above.
+            if level == 0
+                && (self.not_shell == 0 || self.rebuilt > 0)
+                && (writes_zsh_program(&command.words, command_at.as_ref())
+                    || code_writes_zsh_program(&texts, command_at.as_ref()))
+            {
+                note_git(found, ProtectedActionKind::Persistence);
+            }
             // #1309: a command word spelled as a pattern (`c? ~`, `[c]d ~`,
             // `{c,}d ~`) may be `cd`, `eval` or `source`; a `cd` behind
             // zsh's precommand modifiers (`noglob cd ~`) is not followed.
@@ -371,6 +414,7 @@ impl Classifier {
             {
                 folders.unchecked = true;
                 found.before_change = found.scripts.len();
+                found.outputs_before_change = found.relative_outputs;
             }
             // A substitution's `cd` does not move this line.
             if !command.substituted
@@ -427,6 +471,7 @@ impl Classifier {
             folders.unchecked |= searched || carried || odd || (changes && found.deferred);
             if searched || carried || changes {
                 found.before_change = found.scripts.len();
+                found.outputs_before_change = found.relative_outputs;
             }
             let first = texts.first().map(|word| name(word));
             let compound = first
@@ -451,6 +496,11 @@ impl Classifier {
             found.unreadable |= git_helpers::setting_holds_git_name(&command.words);
             loops.read(&texts);
             self.judge_git(&texts, &command.words, &loops, found);
+            // #1515: one this reading cut at a bracket the shell reads as
+            // text (`git -C { config core.pager sh`) may go on past it.
+            if command.cut && cut_matters(&command.words) {
+                note_git(found, ProtectedActionKind::UnseenCode);
+            }
             // #1268: where a launcher's input reaches the words, and the
             // scripts of shells it puts input into, wherever the command
             // word is read to be (`xargs --replace sh -c '... {}'`).
@@ -475,7 +525,8 @@ impl Classifier {
             // (after `cd "$d"`, or a wrapper's: `env -C "$d" sh -c`).
             // #1309: in any of a wrapper's spellings (`env -C"$d"`, `sudo
             // -D`, `nsenter --wd=`, `find -execdir`).
-            let elsewhere = unknown_folder::runs_elsewhere(&texts, self.sudo_unsure());
+            let elsewhere_from = unknown_folder::elsewhere_at(&texts, self.sudo_unsure());
+            let elsewhere = elsewhere_from.is_some();
             let unknown = folders.unchecked || elsewhere;
             for (word, script) in replaced_shell_scripts(&texts, &launches, &mut found.unreadable) {
                 work::step();
@@ -507,6 +558,39 @@ impl Classifier {
                         /*unknown*/ true,
                     );
                 }
+            }
+            // #1309: so may the git it runs, and its output files (`docker
+            // exec -w ~ c git log --output=f`, `env -iC ~ git config -f f`):
+            // read from the first git, when it is after the folder option
+            // (git's own `-C` is followed by `judge_outputs`).
+            // #1606: the first git after it, so an option value spelled
+            // `git` before it (`env -u git -iC ~ git log`) hides none; but
+            // not where the command is git and the option its own.
+            if let Some(from) = elsewhere_from
+                && !own_git_folder(&texts, from)
+                && let Some(at) = (from + 1..texts.len()).find(|at| {
+                    work::step();
+                    let program = name(&texts[*at]);
+                    program == "git"
+                        || git_helpers::git_name(&program).is_some()
+                        || indirect::equals_git(&texts[*at])
+                })
+                && outputs::output_files(
+                    &if indirect::equals_git(&texts[at]) {
+                        "git".to_string()
+                    } else {
+                        name(&texts[at])
+                    },
+                    &texts[at + 1..],
+                    /*unchecked*/ false,
+                )
+                .is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|file| self.unknown_folder_file(folders, /*unknown*/ true, file))
+                })
+            {
+                note_git(found, ProtectedActionKind::Persistence);
             }
             let (starts, overflow) = sed::command_starts(&texts);
             found.unreadable |= overflow;
@@ -591,8 +675,18 @@ impl Classifier {
                             work::step();
                             self.judge_outputs(&texts, files, cwd, found);
                         }
-                        if folders.lost && files.iter().any(|file| self.relative_place(file)) {
+                        // #1309: the word reading's rule (see
+                        // `unknown_folder_file`), with this reading's
+                        // folder; a wrapper before the command moved it
+                        // (`sudo -D ~ git config -f .zshenv …`).
+                        let moved = elsewhere_from.is_some_and(|from| from < at);
+                        if files.iter().any(|file| {
+                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                        }) {
                             note_git(found, ProtectedActionKind::Persistence);
+                        }
+                        if files.iter().any(|file| self.relative_place(file)) {
+                            found.relative_outputs += 1;
                         }
                     }
                     if WRITERS.contains(&resolved_name.as_str())
@@ -841,23 +935,29 @@ impl Classifier {
         let mut git_programs_read = false;
         let mut local_config = git_config::Writes::new(texts);
         let command_at = indirect::command_word(texts);
-        // D156: whether a word from here on may be a brace expansion, which
-        // the shell may expand into options (`{--upload-pack=./x,}`): in a
-        // line with quoted text the lexer may have cut git's command before
-        // it, and this reading keeps it as written. Only a `,` or `..`
-        // between braces expands (not `{x}`).
+        // D156/D258: the other lexer may cut this command at quoted text
+        // before a brace-generated option. In a line of plain words
+        // (`brace_plain`) quote history is command-local and only unquoted
+        // brace groups count: a quote in a later command or literal `{a,b}`
+        // cannot cause this. In any other line, D156's reading: the line's
+        // quotes and any `,` or `..` between braces.
         let mut braced_from = vec![false; texts.len() + 1];
         for at in (0..texts.len()).rev() {
             work::step();
-            let text = &texts[at];
-            let expands = text.find('{').is_some_and(|open| {
-                work::rfind(text, "}").is_some_and(|close| {
-                    open < close && {
-                        let inside = &text[open..close];
-                        inside.contains(',') || inside.contains("..")
-                    }
+            let expands = if self.brace_unsure {
+                // As D156 reads it: a `,` or `..` between braces.
+                let text = &texts[at];
+                text.find('{').is_some_and(|open| {
+                    work::rfind(text, "}").is_some_and(|close| {
+                        open < close && {
+                            let inside = &text[open..close];
+                            inside.contains(',') || inside.contains("..")
+                        }
+                    })
                 })
-            });
+            } else {
+                words[at].quoted_before && words[at].brace_expansion
+            };
             braced_from[at] = braced_from[at + 1] || expands;
         }
         for (index, word) in lower.iter().enumerate() {
@@ -1227,6 +1327,7 @@ fn collect_seds(
         saved_to.push(None);
     }
     saved_to.extend(pipeline_targets(commands, command));
+    let saved_to = byte_bounded_targets(saved_to);
     for at in sed::positions(texts) {
         work::step();
         found.sed_commands += 1;
@@ -1314,6 +1415,33 @@ fn pipeline_targets(commands: &[Command], command: &Command) -> Vec<Option<Strin
         stage = consumer.pipe_to;
     }
     targets
+}
+
+/// Keep output targets only while their count and aggregate allocation stay
+/// bounded. An unnamed target is conservative for every target this drops, so
+/// it also avoids retaining an almost-full list after either budget is spent.
+fn byte_bounded_targets(targets: Vec<Option<String>>) -> Vec<Option<String>> {
+    let mut bounded = Vec::new();
+    let mut bytes: usize = 0;
+    for target in targets {
+        work::step();
+        let target_bytes = target
+            .as_ref()
+            .map_or(0, String::len)
+            .checked_add(std::mem::size_of::<Option<String>>());
+        let Some(target_bytes) = target_bytes else {
+            return vec![None];
+        };
+        let Some(next) = bytes.checked_add(target_bytes) else {
+            return vec![None];
+        };
+        if bounded.len() == MAX_SAVED_TARGETS || next > MAX_SAVED_TARGET_BYTES {
+            return vec![None];
+        }
+        bytes = next;
+        bounded.push(target);
+    }
+    bounded
 }
 
 /// Whether a pure filter's arguments may save its output to a file:
@@ -1537,6 +1665,151 @@ fn fish_codes(texts: &[String], at: usize, cut: &mut bool) -> Vec<String> {
     codes
 }
 
+/// #1515: whether a cut command's later words may count: git under any
+/// name, a shell, interpreter or `source` (its script), a program the
+/// classifier judges by its later words (sed, the Corbanu CLI, credential
+/// tools, schedulers), or a word it cannot see. Also as a finder's exec
+/// option holds it (`--exec=git`, `-xgit`, #1276), or as one part of a word
+/// `eval` splits (`eval 'git -C' { …`).
+fn cut_matters(words: &[Word]) -> bool {
+    let judged = |text: &str| {
+        let name = basename(text);
+        name == "git"
+            || indirect::equals_git(name)
+            || git_helpers::git_name(name).is_some()
+            || invocation::parse(name, &[]).is_some()
+            || sed::NAMES.contains(&name)
+            || super::CLI_NAMES.contains(&name)
+            || matches!(name, "crontab" | "launchctl" | "systemctl")
+            || super::CREDENTIAL_COMMANDS
+                .iter()
+                .any(|(command, _)| *command == name)
+    };
+    words.iter().any(|word| {
+        work::step();
+        let lower = word.text.to_lowercase();
+        let attached = lower.strip_prefix('-').and_then(|option| {
+            option.split_once('=').map(|(_, value)| value).or_else(|| {
+                option
+                    .find('x')
+                    .map(|at| option[at + 1..].trim_start_matches('='))
+            })
+        });
+        word.dynamic
+            || judged(&lower)
+            || attached.is_some_and(judged)
+            || lower.split_whitespace().any(|part| {
+                work::step();
+                judged(part)
+            })
+    })
+}
+
+/// #1606: whether the folder option at `from` is git's own: the command
+/// is git, with nothing before it, and only its global options (and their
+/// values) come between them (`git -c k=v -C ~ log`). Not a git after a
+/// wrapper or a subcommand (`=git submodule foreach env -iC ~ git log`),
+/// and not one a wrapper's option value spells (`sudo --user git -D ~`).
+fn own_git_folder(texts: &[String], from: usize) -> bool {
+    const VALUED: &[&str] = &[
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+        "--super-prefix",
+    ];
+    // As written: `=git` is not read so here (as on main), so a later git
+    // is still judged (`=git -C ~/r submodule foreach git log …`).
+    let Some(first) = texts.first() else {
+        return false;
+    };
+    let program = name(first);
+    if !(program == "git" || git_helpers::git_name(first) == Some(None))
+        || !texts.get(from).is_some_and(|word| word.starts_with("-C"))
+    {
+        return false;
+    }
+    let mut value_next = false;
+    texts.get(1..from).unwrap_or_default().iter().all(|word| {
+        work::step();
+        let option = std::mem::take(&mut value_next) || word.starts_with('-');
+        value_next = VALUED.contains(&word.as_str());
+        option
+    })
+}
+
+/// #1620: whether a writer's operand is a word zsh reads as the installed
+/// program it names (`tee -a =mytool`, `cp x ="mytool"`, `curl -o
+/// =mytool`, `cp x ""=mytool`, `cp x {,}=mytool`: any `=` in a word with
+/// a brace group may start one of its words), after zsh's precommand
+/// modifiers (`noglob tee =mytool`). An option's quoted value (`curl
+/// --proto '=https'`) is not expanded.
+fn writes_zsh_program(words: &[Word], command_at: Option<&(usize, String)>) -> bool {
+    let Some((mut index, mut program)) = command_at.cloned() else {
+        return false;
+    };
+    while unknown_folder::MODIFIERS.contains(&program.as_str()) {
+        work::step();
+        index += 1;
+        let Some(word) = words.get(index) else {
+            return false;
+        };
+        program = name(&word.text);
+    }
+    WRITERS.contains(&program.as_str())
+        && words
+            .get(index + 1..)
+            .unwrap_or_default()
+            .iter()
+            .any(|word| {
+                work::step();
+                (word.equals_first && outputs::zsh_program_path(&word.text))
+                    || (word.brace_expansion && word.text.contains('='))
+            })
+}
+
+/// #1620: whether the command line `eval` (its words joined), `trap` or
+/// `alias` (each value) runs writes such a program: a redirection target or
+/// a writer's operand (`eval "echo x >> =mytool"`, `alias x='tee =mytool'`).
+/// Read with its quotes, so `eval "awk 'NR>=10' f"` writes nothing.
+fn code_writes_zsh_program(texts: &[String], command_at: Option<&(usize, String)>) -> bool {
+    let Some((index, name)) = command_at else {
+        return false;
+    };
+    let args = &texts[index + 1..];
+    let lines: Vec<&str> = match name.as_str() {
+        "eval" => {
+            let args = args.strip_prefix(&["--".to_string()]).unwrap_or(args);
+            return writes_in(&args.join(" "));
+        }
+        "trap" => args.iter().map(String::as_str).collect(),
+        "alias" => args
+            .iter()
+            .map(|arg| arg.split_once('=').map_or(arg.as_str(), |(_, value)| value))
+            .collect(),
+        _ => return false,
+    };
+    lines.into_iter().any(|line| {
+        work::step();
+        writes_in(line)
+    })
+}
+
+/// #1620: see [`code_writes_zsh_program`].
+fn writes_in(line: &str) -> bool {
+    quoted::commands(line).commands.iter().any(|command| {
+        work::step();
+        let texts: Vec<String> = command.words.iter().map(|word| word.text.clone()).collect();
+        command.writes_to.iter().any(|word| {
+            work::step();
+            outputs::zsh_program_path(&word.text)
+        }) || writes_zsh_program(&command.words, indirect::command_word(&texts).as_ref())
+    })
+}
+
 /// #1283: note `kind` once (a few kinds at most, so checking is cheap).
 fn note_git(found: &mut Found, kind: ProtectedActionKind) {
     if !found.git.contains(&kind) {
@@ -1725,5 +1998,17 @@ mod pipeline_tests {
             .map(|command| pipeline_targets(&reading.commands, command).len())
             .max();
         assert_eq!(longest, Some(MAX_PIPELINE_STAGES + 1));
+    }
+
+    #[test]
+    fn issue_1132_saved_target_limits_keep_one_unknown_target() {
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".to_string()); MAX_SAVED_TARGETS + 1]),
+            vec![None]
+        );
+        assert_eq!(
+            byte_bounded_targets(vec![Some("a".repeat(MAX_SAVED_TARGET_BYTES))]),
+            vec![None]
+        );
     }
 }

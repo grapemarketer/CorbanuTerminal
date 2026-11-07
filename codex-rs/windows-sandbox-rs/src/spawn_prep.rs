@@ -1,10 +1,12 @@
 use crate::acl::add_allow_ace;
 use crate::acl::add_deny_write_ace;
+use crate::acl::add_required_deny_write_ace;
 use crate::acl::allow_null_device;
 use crate::acl::ensure_allow_write_aces;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::cap::load_or_create_cap_sids;
+use crate::cap::new_command_identity_sid_string;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
@@ -27,8 +29,7 @@ use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
-use crate::token::create_readonly_token_with_cap;
-use crate::token::create_workspace_write_token_with_caps_from;
+use crate::token::create_legacy_token_with_caps_from;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
 use crate::workspace_acl::delete_child_route_denies;
@@ -158,26 +159,34 @@ pub(crate) fn prepare_legacy_session_security(
     capability_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, readonly_sid, readonly_sid_str, write_root_sids) = unsafe {
-        if uses_write_capabilities {
-            let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
-            if write_root_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-            }
-            let base = get_current_token_for_restriction()?;
-            let cap_ptrs: Vec<*mut c_void> = write_root_sids
-                .iter()
-                .map(|root| root.sid.as_ptr())
-                .collect();
-            let h_token = create_workspace_write_token_with_caps_from(base, cap_ptrs.as_slice());
-            CloseHandle(base);
-            let h_token = h_token?;
-            (h_token, None, None, write_root_sids)
-        } else {
-            let psid = LocalSid::from_string(&caps.readonly)?;
-            let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-            (h_token, Some(psid), Some(caps.readonly), Vec::new())
+    // D259 (#1507): the token copies the SID, so it can go once the token exists.
+    let command_identity = LocalSid::from_string(&new_command_identity_sid_string())?;
+    let (readonly_sid, readonly_sid_str, write_root_sids) = if uses_write_capabilities {
+        let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
+        if write_root_sids.is_empty() {
+            anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
         }
+        (None, None, write_root_sids)
+    } else {
+        let psid = LocalSid::from_string(&caps.readonly)?;
+        (Some(psid), Some(caps.readonly), Vec::new())
+    };
+    let cap_ptrs: Vec<*mut c_void> = match readonly_sid.as_ref() {
+        Some(psid) => vec![psid.as_ptr()],
+        None => write_root_sids
+            .iter()
+            .map(|root| root.sid.as_ptr())
+            .collect(),
+    };
+    let h_token = unsafe {
+        let base = get_current_token_for_restriction()?;
+        let h_token = create_legacy_token_with_caps_from(
+            base,
+            cap_ptrs.as_slice(),
+            command_identity.as_ptr(),
+        );
+        CloseHandle(base);
+        h_token?
     };
     // #158: Low integrity closes the parent FILE_DELETE_CHILD route that the
     // write-restricted token leaves open outside the writable roots.
@@ -271,6 +280,7 @@ unsafe fn deny_moving_ancestors_below_roots(
     path: &Path,
     root_sids: &[RootCapabilitySid],
     denies: &mut Vec<crate::integrity_leases::DeleteChildDeny>,
+    with_path: bool,
 ) -> Result<()> {
     let containing: Vec<&RootCapabilitySid> = root_sids
         .iter()
@@ -286,12 +296,105 @@ unsafe fn deny_moving_ancestors_below_roots(
         .iter()
         .map(|root_sid| root_sid.sid.as_ptr())
         .collect();
-    deny_moving_ancestors(path, &outermost.root, &sids, denies).with_context(|| {
+    let denied = if with_path {
+        crate::workspace_acl::deny_moving_path_and_ancestors(path, &outermost.root, &sids, denies)
+    } else {
+        deny_moving_ancestors(path, &outermost.root, &sids, denies)
+    };
+    denied.with_context(|| {
         format!(
             "the Windows sandbox could not protect the folders above read-only path {}",
             path.display()
         )
     })
+}
+
+/// D283: the writable roots watched for nested `.codex`/`.agents` folders:
+/// all but those that come only from the temp folder setting (`%TEMP%`/
+/// `%TMP%`). Every program creates folders there at any time, so while any
+/// legacy command ran, each project folder made there would count as
+/// planted. A root that is also a workspace or configured root stays
+/// watched even if the temp folder resolves to it.
+fn nested_metadata_roots(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    current_dir: &Path,
+    allow: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = permissions
+        .writable_roots_other_than_temp_for_cwd(current_dir)
+        .into_iter()
+        .map(|root| canonicalize_path(&root.root))
+        .filter(|root| allow.contains(root))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// D283: keeps each nested `.codex`/`.agents` folder in `found` (and every
+/// folder between it and its writable root) from being moved, renamed or
+/// replaced by a link, as D263 does above explicit read-only paths, then
+/// checks it is still the folder the session's walk found. Only then may the
+/// host write its other denies by path: until the folders above it are
+/// pinned, a command could have swapped one for a link and steered those
+/// writes elsewhere.
+///
+/// # Safety
+/// The root SIDs must be valid.
+unsafe fn pin_nested_metadata(
+    found: &[crate::nested_metadata::NestedMetadata],
+    root_sids: &[RootCapabilitySid],
+    log_dir: &Path,
+) -> Result<()> {
+    let mut denies = Vec::new();
+    for entry in found {
+        deny_moving_ancestors_below_roots(
+            &entry.path,
+            root_sids,
+            &mut denies,
+            /*with_path*/ true,
+        )
+        .with_context(|| {
+            format!(
+                "the Windows sandbox could not protect project folder {}",
+                entry.path.display()
+            )
+        })?;
+    }
+    crate::integrity_leases::add_tracked_delete_child_denies(
+        &denies,
+        /*required*/ true,
+        Some(log_dir),
+    )?;
+    for entry in found {
+        let unchanged = !crate::workspace_acl::is_reparse_point(&entry.path)
+            && dunce::canonicalize(&entry.path).is_ok_and(|canonical| {
+                canonical
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&entry.path.to_string_lossy())
+            })
+            && crate::nested_metadata::identity(&entry.path) == entry.identity;
+        if !unchanged {
+            anyhow::bail!(
+                "project folder {} changed while the Windows sandbox prepared the command; run it again",
+                entry.path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// D293 (#1542 item 1): the command doesn't start when a link a sandboxed
+/// command could replace lies above explicit read-only path `path`.
+fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
+    if let Some(link) = crate::workspace_acl::link_above_carve_out(path, roots) {
+        anyhow::bail!(
+            "{} is a link (a junction or symbolic link) above the read-only path {}. The non-admin Windows sandbox can't keep a command from replacing a link there and recreating the read-only path, so it doesn't start commands with this configuration (#1542). Configure the read-only path through the link's target instead, or replace the link with a folder.",
+            link.display(),
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Whether `path` lies below one of `roots` and holds none of them (a planted
@@ -339,10 +442,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
     // #158: the sandbox runs at Low integrity; its writable roots carry a
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
+    let nested_roots = nested_metadata_roots(permissions, current_dir, &allow);
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
-        Some(crate::integrity_leases::acquire(
+        Some(crate::integrity_leases::acquire_watching(
             &roots,
+            &nested_roots,
             Some(log_dir.as_path()),
         )?)
     } else {
@@ -357,6 +462,24 @@ pub(crate) fn apply_legacy_session_acl_rules(
         None
     };
     let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
+    // D283 (#1541): `.codex`/`.agents` deeper in a writable root get the
+    // top-level ones' protection; the command doesn't start without it.
+    let nested_found = match &lease {
+        Some(lease) => lease.nested_metadata_to_protect(),
+        None if allow.is_empty() => Vec::new(),
+        None => {
+            crate::nested_metadata::to_protect(&crate::nested_metadata::find(&nested_roots).entries)
+        }
+    };
+    let nested_metadata: HashSet<PathBuf> = nested_found
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    if !acl_sids.write_root_sids.is_empty() {
+        // SAFETY: the root SIDs are valid for the call.
+        unsafe { pin_nested_metadata(&nested_found, acl_sids.write_root_sids, &log_dir)? };
+    }
+    deny.extend(nested_metadata.iter().cloned());
     // The label records must not be writable from a session whose root
     // holds them: protect them like `.git`.
     if let Some(registry) = crate::integrity_leases::registry_parent_dir()
@@ -425,7 +548,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 }
             }
             for root_sid in deny_root_capabilities_for_path(p, acl_sids.write_root_sids) {
-                let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
+                if nested_metadata.contains(p) {
+                    add_required_deny_write_ace(p, root_sid.sid.as_ptr()).with_context(|| {
+                        format!(
+                            "the Windows sandbox could not protect project folder {}",
+                            p.display()
+                        )
+                    })?;
+                } else {
+                    let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
+                }
             }
             // The capability-SID deny above does not stop a delete or move
             // through the parent's FILE_DELETE_CHILD (#158).
@@ -439,11 +571,16 @@ pub(crate) fn apply_legacy_session_acl_rules(
             // Nor does it stop the command moving a folder between the root
             // and an explicit nested carve-out, then recreating the carve-out.
             if p.exists() && explicit_carve_outs.contains(p) {
+                refuse_link_above_carve_out(p, &canonical_allow)?;
                 deny_moving_ancestors_below_roots(
                     p,
                     acl_sids.write_root_sids,
                     &mut required_delete_child_denies,
+                    /*with_path*/ false,
                 )?;
+                // Again, with the folders pinned: a link swapped in meanwhile
+                // by a command already running.
+                refuse_link_above_carve_out(p, &canonical_allow)?;
             }
         }
         if !additional_deny_read_paths.is_empty() {

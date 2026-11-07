@@ -673,6 +673,29 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
     add_deny_ace(path, psid, DenyAceKind::Write)
 }
 
+/// As [`add_deny_write_ace`], but an error if the entry isn't there
+/// afterwards (the DACL couldn't be written), for a protection a command
+/// must not start without (D283).
+///
+/// # Safety
+/// Caller must ensure `psid` points to a valid SID and `path` exists.
+pub unsafe fn add_required_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
+    let added = add_deny_ace(path, psid, DenyAceKind::Write)?;
+    // `add_deny_ace` reports a failed write as "not added"; confirm instead.
+    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let present = DenyAceKind::Write.already_present(p_dacl, psid, path.is_dir());
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    if !present {
+        return Err(anyhow!(
+            "could not deny the sandbox writes to {}",
+            path.display()
+        ));
+    }
+    Ok(added)
+}
+
 /// Denies `FILE_DELETE_CHILD` to `psid` on a directory, and on its future and
 /// existing subdirectories when `inherit_to_subdirs` is set.
 ///
@@ -689,7 +712,9 @@ pub unsafe fn add_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    add_deny_ace(path, psid, DenyAceKind::DeleteChild { inherit_to_subdirs })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ true)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 /// Whether `path`'s DACL itself (not an inherited copy) denies `psid`
@@ -729,9 +754,9 @@ pub unsafe fn remove_deny_delete_child_ace(
     psid: *mut c_void,
     inherit_to_subdirs: bool,
 ) -> Result<bool> {
-    remove_matching_aces(path, |_, ace| {
-        is_exact_delete_child_deny(ace, psid, inherit_to_subdirs)
-    })
+    // D285: without the full-tree walk, same result.
+    delete_child::set_delete_child_deny(path, psid, inherit_to_subdirs, /*add*/ false)
+        .map(|written| written != delete_child::Written::Nothing)
 }
 
 unsafe fn is_exact_delete_child_deny(
@@ -1078,7 +1103,7 @@ impl Drop for ExactHandle {
 
 /// The volume serial number and 128-bit file ID of the file `handle` is open
 /// to (`FileIdInfo`; the 64-bit index is not unique on ReFS).
-unsafe fn file_identity(handle: HANDLE) -> std::io::Result<(u64, [u8; 16])> {
+pub(crate) unsafe fn file_identity(handle: HANDLE) -> std::io::Result<(u64, [u8; 16])> {
     let mut info: FILE_ID_INFO = std::mem::zeroed();
     if GetFileInformationByHandleEx(
         handle,
@@ -1669,6 +1694,9 @@ const FILE_MAPPING: GENERIC_MAPPING = GENERIC_MAPPING {
     GenericExecute: FILE_GENERIC_EXECUTE,
     GenericAll: FILE_ALL_ACCESS,
 };
+
+#[path = "acl_delete_child.rs"]
+mod delete_child;
 
 #[cfg(test)]
 #[path = "acl_tests.rs"]

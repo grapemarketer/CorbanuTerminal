@@ -27,6 +27,11 @@ pub struct RemoteNetworkProxyLaunchConfig {
     /// Controller-side policy decision budget. The executor adds transport overhead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_decision_timeout_ms: Option<u64>,
+    /// Ask the executor to report each request its own proxy denies
+    /// (`network/denied`, #722 D278), so the controller ends the command as
+    /// failed. Executors that predate it ignore the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report_denials: bool,
 }
 
 impl RemoteNetworkProxyLaunchConfig {
@@ -37,6 +42,7 @@ impl RemoteNetworkProxyLaunchConfig {
             environment_id: None,
             execution_id: None,
             policy_decision_timeout_ms: None,
+            report_denials: false,
         }
     }
 

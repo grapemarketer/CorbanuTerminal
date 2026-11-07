@@ -45,6 +45,13 @@ fn make_random_cap_sid_string() -> String {
     format!("S-1-5-21-{a}-{b}-{c}-{d}")
 }
 
+/// D259 (#1507): a fresh SID that identifies one legacy command. Never
+/// persisted or reused: no ACL names it, so it grants nothing but the
+/// command's own objects (through its token's default DACL).
+pub(crate) fn new_command_identity_sid_string() -> String {
+    make_random_cap_sid_string()
+}
+
 fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("create cap sid dir {}", dir.display()))?;

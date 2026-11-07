@@ -927,6 +927,30 @@ impl FileSystemSandboxPolicy {
         })
     }
 
+    /// As [`Self::has_explicit_non_write_entry_for_path_with_cwd`], but an
+    /// entry spelled differently also matches when both resolve (links
+    /// followed) to the same existing location: a carve-out under a writable
+    /// root reached through a link is listed against the root's resolved path
+    /// (#1542 item 2, D293).
+    pub fn has_explicit_non_write_entry_resolving_to(&self, path: &Path, cwd: &Path) -> bool {
+        if self.has_explicit_non_write_entry_for_path_with_cwd(path, cwd) {
+            return true;
+        }
+        let Some(real) = resolve_candidate_path(path, cwd)
+            .and_then(|path| std::fs::canonicalize(path.as_path()).ok())
+        else {
+            return false;
+        };
+        let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        self.entries.iter().any(|entry| {
+            !entry.skips_missing_path()
+                && !entry.access.can_write()
+                && resolve_entry_path(&entry.path, cwd.as_ref())
+                    .and_then(|entry| std::fs::canonicalize(entry.as_path()).ok())
+                    .is_some_and(|entry| entry == real)
+        })
+    }
+
     fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
@@ -2974,6 +2998,52 @@ mod tests {
     #[cfg(unix)]
     fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(original, link)
+    }
+
+    /// D293 (#1542 item 2): an entry spelled through a linked root matches
+    /// the path listed against the root's resolved location; a different
+    /// path or a writable entry doesn't.
+    #[cfg(unix)]
+    #[test]
+    fn explicit_non_write_entry_matches_through_a_link() -> std::io::Result<()> {
+        let dir = TempDir::new()?;
+        let real = dir.path().join("real");
+        fs::create_dir_all(real.join("a/b"))?;
+        fs::create_dir_all(real.join("w"))?;
+        let linked = dir.path().join("linked");
+        symlink_dir(&real, &linked)?;
+        let absolute = |path: std::path::PathBuf| {
+            AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+        };
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(linked.join("a/b")),
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(linked.join("w")),
+                },
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        let resolved = fs::canonicalize(&real)?;
+        assert_eq!(
+            (
+                policy.has_explicit_non_write_entry_for_path_with_cwd(
+                    &resolved.join("a/b"),
+                    dir.path()
+                ),
+                policy.has_explicit_non_write_entry_resolving_to(&resolved.join("a/b"), dir.path()),
+                policy.has_explicit_non_write_entry_resolving_to(&linked.join("a/b"), dir.path()),
+                policy.has_explicit_non_write_entry_resolving_to(&resolved.join("a"), dir.path()),
+                policy.has_explicit_non_write_entry_resolving_to(&resolved.join("w"), dir.path()),
+            ),
+            (false, true, true, false, false)
+        );
+        Ok(())
     }
 
     #[test]

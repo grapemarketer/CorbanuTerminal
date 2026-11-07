@@ -385,6 +385,9 @@ mod tests {
             .expect("payload is base64");
         // The payload must be the file path, not the PNG bytes themselves.
         assert_eq!(decoded, expected_path.to_string_lossy().as_bytes());
+        // No direct (inline) transmission anywhere in the output either. Base64
+        // only uses `=` as trailing padding, so the path payload cannot match.
+        assert!(!output.contains("t=d"));
         assert!(output.contains("\x1b8"));
     }
 

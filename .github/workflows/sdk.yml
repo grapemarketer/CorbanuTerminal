@@ -75,6 +75,112 @@ jobs:
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
 
+  # D287 (#1605): the Bazel `sdks` job below is too slow for PRs, so a PR could
+  # change the TypeScript SDK or `codex exec` (#1373) without these tests
+  # running. On PRs that touch sdk/typescript/**, codex-rs/exec/** or this
+  # workflow, build the CLI with Cargo and run them. A skipped job leaves the
+  # `sdk` call successful, so it blocks `CI required` only when it runs.
+  typescript-sdk-changed:
+    name: Detect TypeScript SDK changes
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect changed paths
+        id: detect
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files="$(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")"
+          run=false
+          while IFS= read -r f; do
+            [[ $f == sdk/typescript/* || $f == codex-rs/exec/* || $f == .github/workflows/sdk.yml ]] && run=true
+          done <<< "$files"
+          echo "TypeScript SDK tests: $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  typescript-sdk:
+    name: TypeScript SDK
+    needs: typescript-sdk-changed
+    if: ${{ needs.typescript-sdk-changed.outputs.run == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CORBANU_TEST_NO_NATIVE_KEYRING: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      # Same binaries the Bazel job stages: the CLI and its code-mode host,
+      # side by side in one folder.
+      - name: Build codex with Cargo
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked \
+            --manifest-path codex-rs/Cargo.toml \
+            --profile dev-small \
+            --bin codex \
+            --bin codex-code-mode-host
+          echo "CODEX_EXEC_PATH=${GITHUB_WORKSPACE}/codex-rs/target/dev-small/codex" >> "$GITHUB_ENV"
+
+      - name: Warm up Cargo-built codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${CODEX_EXEC_PATH}" --version
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK packages
+        run: pnpm -r --filter ./sdk/typescript run build
+
+      - name: Lint SDK packages
+        run: pnpm -r --filter ./sdk/typescript run lint
+
+      - name: Test SDK packages
+        run: pnpm -r --filter ./sdk/typescript run test
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
   sdks:
     if: ${{ inputs.cold_bazel }}
     runs-on: ubuntu-24.04
@@ -101,7 +207,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           run_install: false
 

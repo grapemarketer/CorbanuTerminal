@@ -60,6 +60,11 @@ pub(super) struct SimpleCommand {
     pub(super) here_string: Option<usize>,
     /// Indexes of the words its output is redirected to (`> file`, `>> file`).
     pub(super) writes_to: Vec<usize>,
+    /// #1607: files zsh writes where bash reads the line otherwise, by
+    /// word index: the word after `>!` (`>! f`, which bash passes on as an
+    /// argument; `false`) or the rest of the `!` word (`>!f`, bash's file
+    /// `!f`; `true`: drop the `!`). Judged only as files written.
+    pub(super) zsh_writes: Vec<(usize, bool)>,
     /// Indexes of the words holding what a lookup printed (`$(readlink x)`
     /// stands for `x`, but prints whatever the link holds).
     pub(super) looked_up: Vec<usize>,
@@ -532,6 +537,9 @@ struct Open {
     /// #1159: the redirection the outer word is the target of (`> $(cat
     /// f)`), not the substitution's first word.
     outer_redirect: Redirect,
+    /// #1607: the outer word follows a zsh `>!` (`>!$(cat f)`, `>! $(cat f)`).
+    outer_clobber: bool,
+    outer_zsh_writes_next: bool,
     first: usize,
     backtick: bool,
     /// `>(...)`: the substitution reads the outer command's output.
@@ -578,6 +586,12 @@ struct Lexer {
     /// Open groups and the pipe that feeds every command inside them.
     groups: Vec<(Group, Option<usize>)>,
     redirect: Redirect,
+    /// #1607: a `!` follows the output redirection just read (`>!`, `>>!`,
+    /// `&>!`, `>&!`, `2>!`), which zsh reads as `>|`: the file is the word
+    /// after the `!`, where bash writes a file `!` (or `!f`).
+    clobber: bool,
+    /// #1607: zsh writes the next word (after `>! `).
+    zsh_writes_next: bool,
     /// A substitution opened past `MAX_SUBSTITUTION_DEPTH`.
     too_deep: bool,
     /// Open substitutions that are not past `MAX_SUBSTITUTION_DEPTH`.
@@ -600,7 +614,9 @@ impl Lexer {
     fn flush(&mut self) {
         if !self.word.is_empty() {
             let index = Some(self.current.words.len());
-            match std::mem::take(&mut self.redirect) {
+            let redirect = std::mem::take(&mut self.redirect);
+            let clobber = std::mem::take(&mut self.clobber) && redirect == Redirect::Stdout;
+            match redirect {
                 Redirect::Stdin => self.current.stdin_from = index,
                 Redirect::HereString => self.current.here_string = index,
                 Redirect::Stdout => self.current.writes_to.extend(index),
@@ -619,6 +635,17 @@ impl Lexer {
             let joint = self.joint.take();
             if self.current.words.is_empty() {
                 self.current.after = joint.unwrap_or_default();
+            }
+            // #1607: the words stay bash's; zsh's file after the `!` is
+            // the rest of this word (`>!f`) or the next word (`>! f`).
+            let at = self.current.words.len();
+            if std::mem::take(&mut self.zsh_writes_next) {
+                self.current.zsh_writes.push((at, false));
+            }
+            match word.strip_prefix('!').filter(|_| clobber) {
+                Some("") => self.zsh_writes_next = true,
+                Some(_) => self.current.zsh_writes.push((at, true)),
+                None => {}
             }
             self.current.words.push(word);
         }
@@ -642,6 +669,7 @@ impl Lexer {
 
     fn finish_current(&mut self) -> Option<usize> {
         self.flush();
+        self.zsh_writes_next = false;
         if self.current.words.is_empty() && self.current.fed_by.is_empty() {
             // Nothing to finish: keep its pipe and context (`a | (sh)`,
             // `a |& sh`, `a |` + newline + `sh`).
@@ -721,6 +749,8 @@ impl Lexer {
         let outer_hidden = std::mem::take(&mut self.hidden);
         let outer_operated = std::mem::take(&mut self.operated);
         let outer_redirect = std::mem::take(&mut self.redirect);
+        let outer_clobber = std::mem::take(&mut self.clobber);
+        let outer_zsh_writes_next = std::mem::take(&mut self.zsh_writes_next);
         self.open.push(Open {
             outer,
             outer_word,
@@ -728,6 +758,8 @@ impl Lexer {
             outer_hidden,
             outer_operated,
             outer_redirect,
+            outer_clobber,
+            outer_zsh_writes_next,
             first: self.done.len(),
             backtick,
             output,
@@ -760,6 +792,8 @@ impl Lexer {
             // `> >(cmd)` adds no outer word: its redirection is done.
             if !open.output {
                 self.redirect = open.outer_redirect;
+                self.clobber = open.outer_clobber;
+                self.zsh_writes_next = open.outer_zsh_writes_next;
                 self.word.push_str(UNSEEN_OUTPUT);
             }
             return;
@@ -802,6 +836,8 @@ impl Lexer {
         self.operated = open.outer_operated;
         if !open.output {
             self.redirect = open.outer_redirect;
+            self.clobber = open.outer_clobber;
+            self.zsh_writes_next = open.outer_zsh_writes_next;
             // Not literal text: the output of a lookup or of `cd X && pwd`.
             self.looked_up |= spliced.is_some()
                 && !matches!(top.as_slice(), [only] if fact_output(&self.done[*only]));
@@ -916,6 +952,7 @@ impl Lexer {
                         .is_some_and(|after| after.is_ascii_digit() || *after == '-');
                     if !descriptor {
                         self.redirect = Redirect::Stdout;
+                        self.clobber = chars.get(index + 2) == Some(&'!');
                     }
                     index += 2;
                     continue;
@@ -923,6 +960,7 @@ impl Lexer {
                 '>' => {
                     self.flush();
                     self.redirect = Redirect::Stdout;
+                    self.clobber = next == Some('!');
                 }
                 '(' => {
                     if next == Some('(')

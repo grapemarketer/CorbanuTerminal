@@ -27,6 +27,9 @@
 //!   it ended (#1506 item 2, D262). Core doesn't load these until the user
 //!   confirms them ([`planted_project_metadata`],
 //!   [`confirm_planted_project_metadata`]);
+//!   Also each one deeper in a writable root that wasn't there, as the same
+//!   file, when a session started and is there when it ended (#1541,
+//!   D283; [`crate::nested_metadata`]);
 //! - `registry.lock`, held exclusively while the registry changes.
 //!
 //! A lease ends when the command's last process exits, so processes it
@@ -48,6 +51,7 @@ use crate::integrity::label_writable_root_low;
 use crate::integrity::read_explicit_labels;
 use crate::integrity::set_explicit_labels;
 use crate::logging::log_note;
+use crate::nested_metadata::NestedMetadata;
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_pty::JobObject;
@@ -113,6 +117,13 @@ struct SessionRecord {
     /// D262: the roots' `.codex`/`.agents` folders absent at the start.
     #[serde(default)]
     absent_metadata: Vec<PathBuf>,
+    /// D283: the ones below the top of the roots at the start (`None` from
+    /// builds before D283).
+    #[serde(default)]
+    nested_metadata: Option<Vec<NestedMetadata>>,
+    /// D283: the roots it watches for them (not `%TEMP%`/`%TMP%`).
+    #[serde(default)]
+    nested_roots: Vec<PathBuf>,
 }
 
 /// D262: project metadata folders that appeared while a session ran, and
@@ -130,6 +141,8 @@ pub(crate) struct IntegrityLease {
     session: Option<(File, PathBuf)>,
     log_dir: Option<PathBuf>,
     absent_metadata: Vec<PathBuf>,
+    nested_roots: Vec<PathBuf>,
+    nested_metadata: Vec<NestedMetadata>,
 }
 
 /// `%LOCALAPPDATA%\CorbanuTerminalSandbox`, which a session whose writable
@@ -164,14 +177,30 @@ fn local_app_data() -> Option<PathBuf> {
 
 /// Labels `roots` (canonical paths) Low for a session, until the lease is
 /// dropped. A root another live session already holds keeps its label.
+#[cfg(test)]
 pub(crate) fn acquire(roots: &[PathBuf], log_dir: Option<&Path>) -> Result<IntegrityLease> {
+    acquire_watching(roots, roots, log_dir)
+}
+
+/// As [`acquire`]; D283 watches `nested_roots` (some of `roots`) for nested
+/// `.codex`/`.agents` folders.
+pub(crate) fn acquire_watching(
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+    log_dir: Option<&Path>,
+) -> Result<IntegrityLease> {
     let registry = ensure_registry()?;
+    // Outside the lock: the walk can take a while. Whatever appears from
+    // here on counts as planted.
+    let nested_metadata = crate::nested_metadata::find(nested_roots).entries;
     let lock = lock(&registry)?;
     let mut lease = IntegrityLease {
         registry,
         session: None,
         log_dir: log_dir.map(Path::to_path_buf),
         absent_metadata: absent_project_metadata(roots),
+        nested_roots: nested_roots.to_vec(),
+        nested_metadata,
     };
     let wanted: BTreeSet<PathBuf> = roots.iter().cloned().collect();
     let result = acquire_locked(&mut lease, &wanted);
@@ -194,6 +223,8 @@ fn acquire_locked(lease: &mut IntegrityLease, wanted: &BTreeSet<PathBuf>) -> Res
         &lease.registry,
         wanted,
         &lease.absent_metadata,
+        &lease.nested_roots,
+        &lease.nested_metadata,
     )?);
     let mut labels = load_labels(&lease.registry)?;
     sweep(&lease.registry, &mut labels, lease.log_dir.as_deref())?;
@@ -240,6 +271,12 @@ fn lease_root(registry: &Path, labels: &mut Labels, root: &Path) -> Result<()> {
 }
 
 impl IntegrityLease {
+    /// D283: the `.codex`/`.agents` entries below the top of the roots when
+    /// the session started, which it must protect.
+    pub(crate) fn nested_metadata_to_protect(&self) -> Vec<NestedMetadata> {
+        crate::nested_metadata::to_protect(&self.nested_metadata)
+    }
+
     /// Ends the lease once no process of the command's `job` runs: right
     /// away when none does, so a caller that reports the exit afterwards
     /// finds the labels back; otherwise, when `descendants_preserved` (the
@@ -266,6 +303,9 @@ impl IntegrityLease {
         let Some((file, path)) = self.session.take() else {
             return Ok(());
         };
+        // D283: the command's processes are gone; walked before the lock (it
+        // can take a while) while the session file still counts as live.
+        let nested_now = crate::nested_metadata::find(&self.nested_roots);
         // If the lock can't be had, the closed session file is stale and
         // the next sweep puts the labels back.
         let lock = lock(&self.registry)?;
@@ -279,6 +319,13 @@ impl IntegrityLease {
             self.log_dir.as_deref(),
         )
         .is_ok()
+            && record_nested_planted(
+                &self.registry,
+                &self.nested_metadata,
+                nested_now,
+                self.log_dir.as_deref(),
+            )
+            .is_ok()
         {
             let _ = std::fs::remove_file(&path);
         }
@@ -376,6 +423,26 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
         {
             live.extend(record.roots.iter().cloned());
             continue;
+        }
+        // D283: a session that ended without releasing its lease: what
+        // appeared deeper in its roots, before its file goes. A live one (or
+        // one that can't be told apart from a live one) records that when it
+        // ends, so its file stays.
+        if let Some(record) = &record
+            && let Some(nested) = &record.nested_metadata
+        {
+            let recorded = session_file_is_closed(&path)
+                && record_nested_planted(
+                    registry,
+                    nested,
+                    crate::nested_metadata::find(&record.nested_roots),
+                    log_dir,
+                )
+                .is_ok();
+            if !recorded {
+                live.extend(record.roots.iter().cloned());
+                continue;
+            }
         }
         match std::fs::remove_file(&path) {
             // Its session ended without releasing the lease.
@@ -485,6 +552,96 @@ fn record_planted(registry: &Path, absent: &[PathBuf], log_dir: Option<&Path>) -
     result
 }
 
+/// D283: records each `.codex`/`.agents` entry below the top of the roots
+/// found `now` that isn't in `before` (taken when the session started) as the
+/// same file, and each folder the walk couldn't list (everything below it
+/// counts as planted). An earlier confirmation doesn't cover them: they are
+/// new or were replaced. Called with the registry locked.
+fn record_nested_planted(
+    registry: &Path,
+    before: &[NestedMetadata],
+    now: crate::nested_metadata::Found,
+    log_dir: Option<&Path>,
+) -> Result<()> {
+    let mut appeared = crate::nested_metadata::appeared(before, now.entries);
+    appeared.extend(now.unlistable);
+    if appeared.is_empty() {
+        return Ok(());
+    }
+    let result = load_planted(registry).and_then(|mut planted| {
+        for path in &appeared {
+            planted.confirmed.remove(path);
+            planted.entries.insert(path.clone());
+        }
+        save_json(registry, PLANTED_FILE, &planted)
+    });
+    let paths = appeared
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match &result {
+        Ok(()) => log_note(
+            &format!(
+                "project metadata appeared or changed below the top of a writable root while a sandboxed command ran; Core won't load it until confirmed: {paths}"
+            ),
+            log_dir,
+        ),
+        Err(err) => log_note(
+            &format!("project metadata appeared ({paths}) but could not be recorded: {err:#}"),
+            log_dir,
+        ),
+    }
+    result
+}
+
+/// Whether no handle holds the session file at `path` open: its session
+/// ended, or crashed. (A live session holds it without write or delete
+/// sharing.)
+fn session_file_is_closed(path: &Path) -> bool {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .is_ok()
+}
+
+/// D283: whether `folder` (a `.codex` or `.agents` folder, parent
+/// canonical) counts as planted right now: it lies below the top of a
+/// writable root of a legacy session that still runs (or ended without its
+/// records being swept) and wasn't there, as the same file, when that
+/// session started (one that doesn't exist yet counts too); or, read after
+/// that, the records list it or a folder above it. Core asks this for each
+/// folder it is about to load, on top of [`planted_project_metadata`]'s
+/// list, which a session ending since may have added to.
+pub fn project_metadata_counts_as_planted(folder: &Path) -> Result<bool> {
+    let Some(registry) = registry_dir() else {
+        return Ok(false);
+    };
+    match std::fs::symlink_metadata(&registry) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err).with_context(|| format!("inspect {}", registry.display())),
+        Ok(_) => {}
+    }
+    // Sessions first: one that ends meanwhile records what it saw before
+    // its file goes.
+    let live = session_records(&registry)?.iter().any(|record| {
+        record.nested_metadata.as_ref().is_some_and(|nested| {
+            crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, folder)
+        })
+    });
+    if live {
+        return Ok(true);
+    }
+    let planted = load_planted(&registry)?;
+    Ok(planted
+        .entries
+        .iter()
+        .any(|entry| crate::nested_metadata::starts_with(folder, entry)))
+}
+
 /// D262 (#1506 item 2): the `.codex`/`.agents` folders that appeared while a
 /// legacy session ran and the user hasn't confirmed yet, including those a
 /// session that is still running (a server it left behind, say) has seen
@@ -532,7 +689,11 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
     let mut labels = load_labels(&registry)?;
     sweep(&registry, &mut labels, /*log_dir*/ None)?;
     for record in session_records(&registry)? {
-        if record.absent_metadata.iter().any(|absent| absent == path) {
+        if record.absent_metadata.iter().any(|absent| absent == path)
+            || record.nested_metadata.as_ref().is_some_and(|nested| {
+                crate::nested_metadata::appeared_in_session(&record.nested_roots, nested, path)
+            })
+        {
             anyhow::bail!(
                 "a non-admin sandbox command that may have created {} is still running; confirm it once that command has ended",
                 path.display()
@@ -865,6 +1026,8 @@ fn create_session(
     registry: &Path,
     roots: &BTreeSet<PathBuf>,
     absent_metadata: &[PathBuf],
+    nested_roots: &[PathBuf],
+    nested_metadata: &[NestedMetadata],
 ) -> Result<(File, PathBuf)> {
     let mut rng = SmallRng::from_entropy();
     let path = registry.join(format!(
@@ -885,6 +1048,8 @@ fn create_session(
     let record = SessionRecord {
         roots: roots.iter().cloned().collect(),
         absent_metadata: absent_metadata.to_vec(),
+        nested_metadata: Some(nested_metadata.to_vec()),
+        nested_roots: nested_roots.to_vec(),
     };
     file.write_all(&serde_json::to_vec(&record)?)?;
     file.flush()?;

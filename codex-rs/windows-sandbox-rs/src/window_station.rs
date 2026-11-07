@@ -910,4 +910,4 @@ fn allow_entry(sid: &[u8], mask: u32) -> Vec<u8> {
 
 #[cfg(test)]
 #[path = "window_station_tests.rs"]
-mod tests;
+pub(crate) mod tests;

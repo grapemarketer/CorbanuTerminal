@@ -5,13 +5,26 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 
 ## Protocol change: `turn.completed` usage can be `null`
 
-- **`corbanu exec --json` reports `"usage": null` when the provider reported
-  no usage for the turn** (#290). Unknown usage is no longer reported as an
+- **`corbanu exec --json` reports `"usage": null` when exec receives no
+  matching usage report** (#290). Unknown usage is no longer reported as an
   all-zero usage object, so consumers can distinguish "not reported" from a
   measured zero. When usage is reported, the object is unchanged.
-- **The usage is still the completing thread's own total.** It does not add
-  usage from spawned subagents and is not a difference from the start of the
-  invocation.
+- **A non-null usage does not prove the provider reported this turn.** On a
+  resumed thread, if this turn's response reports no usage, `usage` still
+  holds the thread's earlier totals. When only some of a turn's requests report
+  usage, the totals include only those.
+- **Usage includes observed descendant work** (#290). Repeated cumulative
+  reports are counted once. Every history-forked descendant makes the total
+  `null`, as do a descendant with no report,
+  a failed or timed-out ancestry read, or dropped events (`Lagged`). The selected
+  thread's own totals are not a difference from the start of the invocation.
+  Detached children can incur further usage after this snapshot.
+- **Default multi-agent spawns copy history.** In MultiAgentV2, `spawn_agent`
+  defaults to `fork_turns: "all"` when omitted, so these default multi-agent runs
+  report `usage: null`. A non-null total can be larger than in earlier versions
+  because it includes descendant work rather than only the root's own total.
+- **Context estimates are not provider reports.** Compaction, rollback and
+  full-window estimates keep the last measured report, or `null` if none exists.
 
 ### Compatibility
 
@@ -19,7 +32,7 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   null check** will fail on turns with no reported usage and must be updated.
   The TypeScript SDK in `sdk/typescript` handles `null` from this release:
   `TurnCompletedEvent.usage` is `Usage | null`, and `Thread.run()` returns
-  `usage: null` for such turns.
+  `usage: null` when exec receives no usage report.
 
 ## Protocol change: `refused` command status
 
@@ -68,6 +81,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   as editing a later message already did: `/cost` lists it as "Reopen
   warm-up", Corbanu says once it has been sent, and `skip_reopen_warmup = true`
   skips it (#1038).
+- **Realtime-only threads can skip the warm-up.** `skip_startup_warmup = true`
+  (in `config.toml`, with `-c`, or in `thread/start`'s `config`) sends no
+  startup warm-up, new or reopened. App-server clients that start a thread
+  only for `thread/realtime/start` should set it: the warm-up on the default
+  model could cost several times the realtime session (#1045).
 - **Realtime sessions show their tokens.** A realtime WebSocket session now
   records the input, cached-input, output and total tokens OpenAI reports at
   the end of each response, and `/cost` shows them. Its cost stays unknown
@@ -219,6 +237,33 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   (Grok 4.6 and 4.5, DeepSeek V4 Pro and V4 Flash 0731 on OpenRouter, and
   GPT-5.5 on OpenAI) are still served and unchanged.
 
+## Remote work: every network refusal ends the command as failed
+
+- **A network request the remote environment's proxy refuses on its own now
+  ends the command as failed**, with the reason, as it does locally (#722,
+  D278). This covers blocked sites, local or private addresses, requests
+  limited mode doesn't allow, and requests to sites not on the allowlist when
+  no managed network rules are set. Before, these were refused but the
+  command could still end normally.
+- **Only stricter:** the remote side can only report a refusal; nothing it
+  sends can allow a request. Remote environments running an older version
+  don't send these reports, and behave as before.
+- **Hidden characters can't disguise a remote site's name** (#722): bidi
+  controls and zero-width characters are removed from the site named in a
+  remote refusal, and a remote request whose site name contains them is
+  refused without asking.
+
+## Chat Completions and Anthropic: earlier MCP calls keep their own name
+
+- **An MCP tool's earlier calls no longer replay as a built-in's** (#688). On
+  providers without tool namespaces, a call recorded for an MCP tool that the
+  request no longer offers (its server was removed, or the 128-tool limit left
+  it out) used to replay under its bare name, such as `shell`, which a
+  built-in tool can share. It now replays under the MCP tool's flat name
+  (`mcp__server__tool`), or a hashed form if another tool has that name.
+  MCP servers configured without the `mcp__` prefix get the same treatment
+  (`server__tool`); only built-in tool namespaces keep the bare name.
+
 ## `NO_PROXY` IP ranges apply to WebSocket connections
 
 - **WebSocket connections now honour IP-range entries in `NO_PROXY`** (#722,
@@ -226,6 +271,18 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   listed range now goes direct, as HTTP requests already did, instead of
   through `HTTP_PROXY`/`HTTPS_PROXY`. Host names are matched by name only (they
   are not resolved to check ranges), as before.
+
+## A timed-out network prompt for remote work closes
+
+- **The approval prompt for a remote network request now closes when the
+  request times out** (#722, D279). An unanswered request is still refused
+  after 10 minutes (plus the hook timeout) and the command still ends as
+  failed; before, its prompt stayed on screen and answering it did nothing.
+- **App-server clients:** the server resolves such a pending
+  `item/commandExecution/requestApproval` request itself and sends
+  `serverRequest/resolved`, as it already does when a turn ends. Any command
+  approval whose waiter in the core goes away unanswered is resolved the same
+  way.
 
 ## Interrupting a tool on a busy machine keeps its elapsed time
 
@@ -257,3 +314,38 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   it is in the same scope (folder, provider, not archived) and no conversation
   there got a newer turn after you quit. Otherwise it still picks the newest
   turn, as before. The `/resume` list order and `fork --last` are unchanged.
+
+## Corbanu API with no key: `/status` and first-run setup
+
+- **`/status` no longer claims a missing Corbanu API key.** Under Moderate or
+  Aggressive, with Corbanu Plan chosen but no key, `/status` said
+  `Corbanu Plan API key configured` while `/providers` said not configured. It
+  now says `Corbanu API not configured (set it up in /providers)` (#1563).
+- **First-run setup for a chosen Corbanu Plan opens the provider list.** It used
+  to open an OpenAI-worded key prompt that ended in
+  `Provider API-key selection is no longer available`. The list now starts on
+  **Corbanu API**, whose wallet and API-key setup runs after **Done**.
+
+## A force-stopped turn still reports its file changes
+
+- **The turn's file-change summary is sent when an interrupt force-stops a
+  turn** (#1604, D282). When a turn misses the interrupt grace period and is
+  stopped, it now sends the summary of the files it changed, as a turn that
+  ends normally does, so the status line stays current.
+- **A turn stopped while recording a search result still marks the
+  conversation as using outside content** (#1536). The check now runs before
+  the result is recorded instead of after it.
+
+## Telegram `/status`: token estimates are not a thread total
+
+- **`/status` no longer shows unknown usage as a free thread.** After
+  compaction or rollback on a thread whose provider never reported usage, it
+  said `Thread total: 0 tokens (0 in, 0 out)`. It now says
+  `Thread total: not reported by the provider`, and `Context` shows the token
+  estimate (#1570).
+- **A full context window is shown as context, not as the thread's cost.**
+  When the window is exceeded, `Context` shows the full window and
+  `Thread total` stays the provider-reported usage, computed from the
+  provider's counters, which the fill now keeps (#1583). After compaction,
+  `Context` shows the new, smaller estimate rather than a full window, and
+  `/new` starts the new thread without the previous thread's total.
