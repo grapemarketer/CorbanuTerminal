@@ -154,6 +154,24 @@ impl ResolvedWindowsSandboxPermissions {
         cwd: &Path,
         env_map: &HashMap<String, String>,
     ) -> Vec<WindowsWritableRoot> {
+        let mut roots = self.writable_roots_other_than_temp_for_cwd(cwd);
+        if self.has_writable_tmpdir_entry() {
+            roots.extend(windows_temp_env_roots(env_map).into_iter().map(|root| {
+                WindowsWritableRoot {
+                    root,
+                    read_only_subpaths: Vec::new(),
+                }
+            }));
+        }
+        roots
+    }
+
+    /// The writable roots that don't come from the temp folder setting
+    /// (`%TEMP%`/`%TMP%`), even where one resolves to the same folder (D283).
+    pub(crate) fn writable_roots_other_than_temp_for_cwd(
+        &self,
+        cwd: &Path,
+    ) -> Vec<WindowsWritableRoot> {
         let mut file_system = self.file_system.clone();
         file_system
             .entries
@@ -167,7 +185,7 @@ impl ResolvedWindowsSandboxPermissions {
                 )
             });
 
-        let mut roots = file_system
+        file_system
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
             .map(|root| WindowsWritableRoot {
@@ -178,18 +196,7 @@ impl ResolvedWindowsSandboxPermissions {
                     .map(AbsolutePathBuf::into_path_buf)
                     .collect(),
             })
-            .collect::<Vec<_>>();
-
-        if self.has_writable_tmpdir_entry() {
-            roots.extend(windows_temp_env_roots(env_map).into_iter().map(|root| {
-                WindowsWritableRoot {
-                    root,
-                    read_only_subpaths: Vec::new(),
-                }
-            }));
-        }
-
-        roots
+            .collect::<Vec<_>>()
     }
 
     fn has_writable_tmpdir_entry(&self) -> bool {

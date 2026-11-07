@@ -196,3 +196,68 @@ fn legacy_acl_call_cost_on_a_large_workspace() {
     }
     println!("\nd285-calls files={files} [{}]", lines.join(" "));
 }
+
+/// D283 (#1541): what watching nested `.codex`/`.agents` costs: the walk
+/// alone on the large workspace and on `%TEMP%` (a writable root too), then
+/// commands without and with three nested folders (which get the top-level
+/// ones' protection).
+#[test]
+#[ignore = "D283 measurement; run explicitly"]
+fn legacy_nested_metadata_cost_on_a_large_workspace() {
+    let _guard = legacy_process_test_guard();
+    let large = user_owned_test_root();
+    let large_files = fill_large_repo(
+        large.path(),
+        /*dirs*/ 400,
+        /*files*/ 125,
+        /*objects*/ 200,
+    );
+    let mut roots = vec![dunce::canonicalize(large.path()).expect("canonical root")];
+    if let Some(temp) = std::env::var_os("TEMP") {
+        roots.push(dunce::canonicalize(temp).expect("canonical TEMP"));
+    }
+    for root in &roots {
+        let mut times = Vec::new();
+        let mut found = 0;
+        for _ in 0..3 {
+            let started = Instant::now();
+            found = crate::nested_metadata::find(std::slice::from_ref(root))
+                .entries
+                .len();
+            times.push(started.elapsed().as_millis());
+        }
+        let entries = walkdir_count(root);
+        println!(
+            "\nd283-cost walk {}: entries={entries} found={found} ms={times:?}",
+            root.display()
+        );
+    }
+    println!("\nd283-cost large repo: files={large_files}");
+    time_commands("large-no-nested", large.path());
+    for nested in [
+        "src\\m00\\d000\\.codex",
+        "src\\m01\\.agents",
+        "src\\m02\\d002\\.codex",
+    ] {
+        fs::create_dir_all(large.path().join(nested)).expect("create nested folder");
+    }
+    time_commands("large-3-nested", large.path());
+}
+
+/// Entries below `root`, links not followed (for the walk's scale).
+fn walkdir_count(root: &Path) -> usize {
+    let mut count = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            count += 1;
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                stack.push(entry.path());
+            }
+        }
+    }
+    count
+}
