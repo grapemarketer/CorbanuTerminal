@@ -151,14 +151,24 @@ impl Seen {
     pub(super) fn of(word: &quoted::Word) -> Self {
         // In double quotes too: `"$@"`, `"${a[@]}"`, zsh's flags
         // (`"${(@f)x}"`, `"${=x}"`), and zsh's `$=x`, `$~x` and `$^x`,
-        // which the reading keeps as text.
+        // which the reading keeps as text; not a length (`"${#a[@]}"`).
+        let mut text = String::with_capacity(word.text.len());
+        let mut rest = word.text.as_str();
+        while let Some(start) = rest.find("${#") {
+            work::step();
+            text.push_str(&rest[..start]);
+            rest = rest[start..]
+                .find('}')
+                .map_or("", |end| &rest[start + end + 1..]);
+        }
+        text.push_str(rest);
         let several = [
             "$@", "${@", "[@]", "${(", "${=", "${~", "${^", "$=", "$~", "$^",
         ]
         .iter()
         .any(|form| {
             work::step();
-            word.text.contains(form)
+            text.contains(form)
         });
         if word.splits
             || word.brace_expansion
@@ -205,6 +215,18 @@ const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("zpty", "", "", Operands::At(&[1])),
     ("zlistattr", "", "", Operands::At(&[1])),
     ("zgetattr", "", "", Operands::At(&[2])),
+];
+
+/// Writers `code_variables` judges by their names, read here only with
+/// quotes (where redirections are not words: `read -r x < "$f"`), for a
+/// value that may be several words (`read -d $(cat f)`) or a word that may
+/// be an option where options go. zsh's `read -p` and `-k` take no value
+/// there; counting them as taking one only adds prompts.
+const QUOTED_NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
+    ("read", "aA", "dinNptuk", Operands::From(0)),
+    ("mapfile", "", "dnOsuCc", Operands::From(0)),
+    ("readarray", "", "dnOsuCc", Operands::From(0)),
+    ("vared", "", "prMmift", Operands::From(0)),
 ];
 
 #[derive(Clone, Copy)]
@@ -301,7 +323,9 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         // context or style that is several words may hold the name
         // (`zstyle -a $(cat f)`).
         "zstyle" => {
-            if option(0, true) {
+            // `zstyle` takes no option's value attached (`-afoo`): one
+            // word there is one option, its name a later word.
+            if option(0, false) {
                 return true;
             }
             let Some(option) = args.first().filter(|arg| arg.starts_with('-')) else {
@@ -312,8 +336,11 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
         }
         _ => {}
     }
-    let Some(&(_, names, values, operands)) =
-        NAME_POSITIONS.iter().find(|(writer, ..)| *writer == name)
+    let quoted = seen.is_some().then_some(QUOTED_NAME_POSITIONS);
+    let Some(&(_, names, values, operands)) = NAME_POSITIONS
+        .iter()
+        .chain(quoted.into_iter().flatten())
+        .find(|(writer, ..)| *writer == name)
     else {
         return false;
     };
@@ -363,6 +390,13 @@ fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>
             }
         } else if options && leading && option(at, !names.is_empty()) {
             return true;
+        } else if options && leading && seen_at(at) == Seen::Pattern {
+            // A pattern may match nothing (`*.none(N)`, `nullglob`), so
+            // options may still follow it, or several words: either moves
+            // a later word into an option's or a name's place.
+            if names_later(at) {
+                return true;
+            }
         } else {
             let index = operand.unwrap_or(0);
             // Several words before a name move a later word into it: one

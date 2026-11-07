@@ -938,7 +938,7 @@ impl Classifier {
                 continue;
             }
             // #1704: `eval` and `trap` run their text as shell, also behind
-            // zsh's modifiers (`noglob eval '…'`).
+            // zsh's modifiers and `repeat` (`noglob eval '…'`).
             let mut evaluates = false;
             let mut program = command_at.clone();
             while let Some((at, name)) = program {
@@ -947,11 +947,15 @@ impl Classifier {
                     evaluates = true;
                     break;
                 }
-                if !unknown_folder::MODIFIERS.contains(&name.as_str()) {
-                    break;
-                }
-                program = indirect::command_word(&texts[at + 1..])
-                    .map(|(next, name)| (at + 1 + next, name));
+                // zsh's `repeat N` runs the command after its count.
+                let skip = match name.as_str() {
+                    "repeat" => 2,
+                    name if unknown_folder::MODIFIERS.contains(&name) => 1,
+                    _ => break,
+                };
+                let from = (at + skip).min(texts.len());
+                program =
+                    indirect::command_word(&texts[from..]).map(|(next, name)| (from + next, name));
             }
             // Also redirection files, comments and other text the shell
             // does not pass on as words.
