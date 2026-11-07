@@ -475,12 +475,17 @@ impl Reader<'_> {
                 '(' => {
                     // #1515: a `((` that `))` closes is arithmetic up to it.
                     let opens = self.opens_group(&list, next);
-                    if opens
-                        && next == Some('(')
-                        && arithmetic_position(&self.out[list.command].words, &list)
-                        && !self.arithmetic_at(index)
-                    {
-                        self.note_arithmetic(index + 1, self.nesting);
+                    if opens && next == Some('(') && !self.arithmetic_at(index) {
+                        if arithmetic_position(&self.out[list.command].words, &list) {
+                            self.note_arithmetic(index + 1, self.nesting);
+                        } else {
+                            // #1623 review: main noted a `((` here too, which
+                            // replaced any outer span. Not noting it must not
+                            // leave an outer span hiding later cuts (`(( a
+                            // >(case x in ((b)) ;; esac); git ... ))`), so end
+                            // it: no span hides nothing.
+                            self.in_arithmetic = None;
+                        }
                     }
                     if !opens && !self.arithmetic_at(index) {
                         self.out[list.command].cut = true;

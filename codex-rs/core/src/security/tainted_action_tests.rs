@@ -11850,6 +11850,10 @@ fn issue1623_arithmetic_check_placement_keeps_verdicts() {
         "case x in ((a)) git -C .(N) config core.pager sh;; esac",
         "[[ ((a == a)) ]] && git -C .(N) config core.pager sh",
         "echo x ((git -C .(N) config core.pager sh))",
+        // Review: a `((` in a `case` pattern inside an outer arithmetic span
+        // (reached through process substitution) must not keep that span.
+        "(( a >(case x in ((b)) ;; esac); git -C .(N) config core.pager sh ))",
+        "(( a <(case x in ((b)) ;; esac); git -C .(N) config core.pager sh ))",
     ];
     let quiet = [
         // Not command position: read as before.
