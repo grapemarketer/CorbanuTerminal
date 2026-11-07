@@ -446,3 +446,7 @@ fn has_reopened_writable_descendant(writable_roots: &[WritableRoot]) -> bool {
             })
     })
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
