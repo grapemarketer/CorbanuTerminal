@@ -612,14 +612,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   (D331, #1762). A profile with a writable folder inside a read-only one is
   now refused for the agent's commands in the non-admin sandbox too, as it
   already was in the default sandbox and for app-server `command/exec`; in
-  our measurements this changes the outcome only under Permissive. On both sandboxes the message
-  now names both folders, notes that the protected `.git`, `.codex` and
-  `.agents` folders count as read-only, and says to change the profile so
-  that no writable folder lies in a read-only one. In the non-admin
-  sandbox, `command/exec` (and the exec server) now refuse a profile that
-  blocks or limits reading files with a clear message that says how to
-  switch to the default sandbox, instead of an unclear error from the
-  sandbox.
+  our measurements this changes the outcome only under Permissive. On both
+  sandboxes the message now names both folders, notes that the protected
+  `.git`, `.codex` and `.agents` folders count as read-only, and says to
+  change the profile so that no writable folder lies in a read-only one. In
+  the non-admin sandbox, `command/exec` (and the exec server) now refuse a
+  profile that blocks or limits reading files with a clear message that
+  says how to switch to the default sandbox, instead of an unclear error
+  from the sandbox.
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
