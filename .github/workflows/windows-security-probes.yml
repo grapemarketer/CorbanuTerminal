@@ -223,6 +223,13 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: cargo build --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bins
+      - name: Sandbox user passwords meet Windows complexity (#1776)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bin codex-windows-sandbox-setup -- sandbox_users::tests:: --nocapture 2>&1 | tee pw-1776.log
+          grep -q 'test result: ok. 3 passed' pw-1776.log
       - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345)
         if: ${{ !cancelled() }}
         shell: bash
