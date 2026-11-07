@@ -525,38 +525,74 @@ fn hosts_report(hosts: Vec<(u32, String)>, report: impl Fn(u32) -> String) -> St
         .join(" | ")
 }
 
+/// The ids of every thread of the processes in `pids`, with their process.
+fn threads_of(pids: &std::collections::HashSet<u32>) -> Vec<(u32, u32)> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPTHREAD;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::THREADENTRY32;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Thread32First;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::Thread32Next;
+    let mut threads = Vec::new();
+    // SAFETY: the snapshot handle is checked and closed here; the entry is
+    // sized as the API requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return threads;
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut more = Thread32First(snapshot, &mut entry) != 0;
+        while more {
+            if pids.contains(&entry.th32OwnerProcessID) {
+                threads.push((entry.th32ThreadID, entry.th32OwnerProcessID));
+            }
+            more = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    threads
+}
+
 /// Polls for elevated command runners other than this command's own until
 /// `dir/race.stop` appears (or two minutes pass), and tries to open each new
-/// one for `PROCESS_CREATE_PROCESS` and its token for
-/// `TOKEN_ADJUST_DEFAULT` until both are refused: what a command racing a
-/// runner's start-up gets (#1721).
+/// one for `PROCESS_CREATE_PROCESS`, its token for `TOKEN_ADJUST_DEFAULT`,
+/// its threads for `THREAD_SET_CONTEXT`, and the console hosts it starts for
+/// `PROCESS_CREATE_PROCESS`, until it exits: what a command racing a runner's
+/// start-up gets (#1721). Counts runners (and console hosts) won at least
+/// once.
 fn race_report(dir: &Path) -> String {
     use std::collections::HashSet;
     let (own_runner, _) = parent_of(std::process::id());
     let mut seen = HashSet::new();
-    let mut open = HashSet::new();
+    let mut hosts_seen = HashSet::new();
     let mut process_won = HashSet::new();
     let mut token_won = HashSet::new();
+    let mut thread_won = HashSet::new();
+    let mut host_won = HashSet::new();
     fs::write(dir.join("race.ready"), "ready").expect("write race ready");
     let deadline = Instant::now() + Duration::from_secs(/*secs*/ 120);
     while !dir.join("race.stop").exists() && Instant::now() < deadline {
-        for (pid, _, image) in process_entries() {
-            if pid == own_runner || !image.to_lowercase().starts_with("codex-command-runner") {
-                continue;
+        let entries = process_entries();
+        let runners: HashSet<u32> = entries
+            .iter()
+            .filter(|(pid, _, image)| {
+                *pid != own_runner && image.to_lowercase().starts_with("codex-command-runner")
+            })
+            .map(|(pid, _, _)| *pid)
+            .collect();
+        for pid in &runners {
+            seen.insert(*pid);
+            if open_result(*pid, 0x0080) == "ok" {
+                process_won.insert(*pid);
             }
-            if seen.insert(pid) {
-                open.insert(pid);
-            }
-            if !open.contains(&pid) {
-                continue;
-            }
-            let process = open_result(pid, 0x0080) == "ok";
-            // SAFETY: the handle is closed right away.
+            // SAFETY: the handles are closed right away.
             let token = unsafe {
                 let handle = windows_sys::Win32::System::Threading::OpenProcess(
                     PROCESS_QUERY_LIMITED_INFORMATION,
                     0,
-                    pid,
+                    *pid,
                 );
                 let mut token: HANDLE = 0;
                 let opened =
@@ -569,22 +605,41 @@ fn race_report(dir: &Path) -> String {
                 }
                 opened
             };
-            if process {
-                process_won.insert(pid);
-            }
             if token {
-                token_won.insert(pid);
+                token_won.insert(*pid);
             }
-            if !process && !token {
-                open.remove(&pid);
+        }
+        for (thread, pid) in threads_of(&runners) {
+            // SAFETY: the handle is closed right away.
+            let opened = unsafe {
+                let handle = windows_sys::Win32::System::Threading::OpenThread(0x0010, 0, thread);
+                if handle != 0 {
+                    CloseHandle(handle);
+                }
+                handle != 0
+            };
+            if opened {
+                thread_won.insert(pid);
+            }
+        }
+        for (host, parent, image) in &entries {
+            let image = image.to_lowercase();
+            if runners.contains(parent) && (image == "conhost.exe" || image == "openconsole.exe") {
+                hosts_seen.insert(*host);
+                if open_result(*host, 0x0080) == "ok" {
+                    host_won.insert(*host);
+                }
             }
         }
     }
     format!(
-        "race seen={} process_won={} token_won={}",
+        "race seen={} process_won={} token_won={} thread_won={} hosts_seen={} host_won={}",
         seen.len(),
         process_won.len(),
-        token_won.len()
+        token_won.len(),
+        thread_won.len(),
+        hosts_seen.len(),
+        host_won.len()
     )
 }
 
