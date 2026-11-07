@@ -332,6 +332,44 @@ fn fill_then_report_shows_the_report_and_the_counter_total() {
     );
 }
 
+/// #1638: the first update the bridge sees for a thread can be a fill, e.g. a
+/// resume replay after a bridge restart. On a thread already past the window the
+/// fill adds nothing (`last` is 0), and a recompute estimates 0 only for empty
+/// instructions and history, so it is shown as a full window rather than
+/// `0 of N (0%)`. (`a_recompute_after_a_fill_without_history_shows_the_estimate`
+/// guards the non-zero estimate.)
+#[test]
+fn issue1638_fill_seen_first_shows_the_full_window() {
+    let mut info = reported_thread();
+    info.fill_to_context_window(WINDOW);
+    assert_eq!(info.last_token_usage.total_tokens, 0);
+    let usage = fold(vec![info.into()]);
+
+    assert_eq!(shown(&usage), (WINDOW, Some(WINDOW), reported_total()));
+    let text = token_usage_text(&usage);
+    assert!(
+        text.contains("Context: 353,400 of 353,400 tokens (100%)"),
+        "{text}"
+    );
+}
+
+/// Known limit of #1638: a fill seen first on a thread still below the window
+/// adds a non-zero `last`, which looks exactly like a recompute's estimate, so
+/// `Context` shows what the fill added rather than the full window.
+#[test]
+fn fill_seen_first_below_the_window_shows_what_it_added() {
+    let mut info = TokenUsageInfo::new_or_append(
+        /*info*/ &None,
+        &Some(provider_report(/*input*/ 300_000, /*output*/ 0)),
+        Some(WINDOW),
+    )
+    .expect("a report creates usage info");
+    info.fill_to_context_window(WINDOW);
+    let usage = fold(vec![info.into()]);
+
+    assert_eq!(usage.context_tokens, WINDOW - 300_000);
+}
+
 /// #1570: the window fills before any provider report: full context, unknown total.
 #[test]
 fn issue1570_context_window_fill_without_reports_is_not_a_total() {
