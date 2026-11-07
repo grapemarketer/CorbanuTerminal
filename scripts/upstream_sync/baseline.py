@@ -57,8 +57,9 @@ def main():
     ap.add_argument("--repo", default="CorbanuCore/CorbanuTerminal")
     ap.add_argument("--out")
     a = ap.parse_args()
-    runs = json.loads(gh("api", "--paginate", f"repos/{a.repo}/actions/runs?head_sha={a.sha}&per_page=100",
-                         "-q", ".workflow_runs"))
+    runs = [json.loads(line) for line in gh("api", "--paginate",
+                                            f"repos/{a.repo}/actions/runs?head_sha={a.sha}&per_page=100",
+                                            "-q", ".workflow_runs[]").splitlines() if line.strip()]
     latest = {}
     for r in runs:
         if r["event"] not in ("push", "workflow_dispatch", "schedule"):
@@ -72,8 +73,9 @@ def main():
         r = latest[name]
         if name in ("cache-prune",) or name.startswith("Issue "):
             continue
-        jobs = json.loads(gh("api", "--paginate", f"repos/{a.repo}/actions/runs/{r['id']}/jobs?per_page=100",
-                             "-q", ".jobs"))
+        jobs = [json.loads(line) for line in gh("api", "--paginate",
+                                                f"repos/{a.repo}/actions/runs/{r['id']}/jobs?per_page=100",
+                                                "-q", ".jobs[]").splitlines() if line.strip()]
         status = r["conclusion"] or r["status"]
         lines.append(f"| {name} | {r['id']} | {status} | | | |")
         for j in sorted(jobs, key=lambda j: j["name"]):

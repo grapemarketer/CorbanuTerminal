@@ -62,11 +62,16 @@ def main():
     mpath = os.path.join(dest, manifest)
     fetch(BASE.format(version=a.version, name=manifest), mpath)
     report(sha256(mpath) == trusted[manifest], f"manifest {manifest} sha256 {sha256(mpath)[:16]}... matches trust root")
+    if not ok:
+        sys.exit(1)  # don't follow an untrusted manifest
     entries = [line.split() for line in open(mpath, encoding="utf-8").read().replace("\r", "").splitlines()
                if line.strip()]
     report(len(entries) == 2, f"manifest lists {len(entries)} files (expect 2)")
     for digest, name in entries:
         name = name.lstrip("*")
+        if "/" in name or "\\" in name or name.startswith(".") or not name:
+            report(False, f"refusing file name {name!r} from the manifest")
+            continue
         path = os.path.join(dest, name)
         fetch(BASE.format(version=a.version, name=name), path)
         got = sha256(path)

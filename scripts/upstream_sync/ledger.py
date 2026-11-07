@@ -7,6 +7,8 @@ Rows (one per path, each path exactly once):
   conflict          every unmerged path (content, modify/delete, delete/modify, add/add, file-location)
   security-review   upstream changed it since the merge base, it merged without a conflict, and it is on a
                     security path; reviewed diff-level in S3b
+  ci-review         upstream changed a file under .github/{workflows,actions,scripts} and it merged without a
+                    conflict; the integrator reviews or ports it with the CI files in S4
   migration         an upstream-added SQL migration whose number is at or below main's highest; renumbered in S1c
 
 Columns: path kind code area slice tier owner contributor status resolution hunks lines test snap
@@ -112,6 +114,14 @@ def main():
         seen.add(p)
     changed = git(wt, "diff", "--name-only", base, tag).split("\n")
     for p in changed:
+        if p and p not in seen and p.startswith((".github/workflows/", ".github/actions/", ".github/scripts/")):
+            rows.append({"path": p, "kind": "ci-review", "code": "", "area": "CI/workflows",
+                         "slice": "S0 manifests/locks/CI", "tier": "0", "owner": "integrator", "contributor": "no",
+                         "status": "open", "resolution": "", "hunks": 0, "lines": 0, "test": False, "snap": False,
+                         "sec_named": False, "sec_footprint": False,
+                         "note": "upstream CI change merged without conflict; review or port in S4"})
+            seen.add(p)
+    for p in changed:
         if not p or p in seen or slices.TIER0.search(p):
             continue
         n, f = slices.is_named_security(p) or matches(p, named), p in footprint
@@ -124,11 +134,16 @@ def main():
     rows += [r for r in migration_rows(wt, base, tag) if r["path"] not in seen]
     if a.tier0_dir:
         import tier0
-        actions = {r["path"]: r["action"] for r in tier0.read_manifest(a.tier0_dir)}
+        manifest = {r["path"]: r for r in tier0.read_manifest(a.tier0_dir)}
+        labels = tier0.read_resolutions(a.tier0_dir)
         for r in rows:
-            if r["slice"] == "S0 manifests/locks/CI" and actions.get(r["path"]) in ("file", "delete"):
+            m = manifest.get(r["path"])
+            if r["slice"] == "S0 manifests/locks/CI" and m and m["action"] in ("file", "delete"):
                 r["status"] = "resolved"
-                r["resolution"] = "deleted" if actions[r["path"]] == "delete" else "merged"
+                label, note = labels.get(r["path"], ("deleted" if m["action"] == "delete" else "merged", ""))
+                r["resolution"] = label
+                if note:
+                    r["note"] = (r["note"] + "; " if r["note"] else "") + note
     with open(a.out, "w") as out:
         out.write(f"# ledger for {a.tag} {tag} merged into {git(wt, 'rev-parse', 'HEAD').strip()} "
                   f"(merge base {base})\n")

@@ -114,7 +114,7 @@ def main():
         out.write("number\tbranch\ttitle\n")
         for p in sel:
             out.write(f"{p['number']}\t{p['headRefName']}\t{p['title'].replace(chr(9), ' ')}\n")
-    print(f"named {len(named)} footprint files {len(files)} from {len(sel)} PRs")
+    print(f"named {len(named)} footprint files {len(files - set(named))} from {len(sel)} PRs")
 
 
 if __name__ == "__main__":

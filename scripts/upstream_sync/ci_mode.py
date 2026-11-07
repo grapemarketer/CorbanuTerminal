@@ -6,7 +6,7 @@
                                  to sync-ci/**
   ci_mode.py revert <worktree>   remove exactly what apply added (every added line ends with the TAG comment)
   ci_mode.py check  <worktree>   exit 1 if any CI-mode line or file is present (S5 entry check)
-  ci_mode.py codeowners apply|revert <worktree> [@owner]
+  ci_mode.py codeowners apply|revert|check <worktree> [@owner]
                                  sync-branch CODEOWNERS block for the named security paths (reverted after main
                                  merge #3, as the last sync-branch commit before the final PR)
 
@@ -23,8 +23,10 @@ RESTORE = "# sync-ci-mode-restore {}"
 HEAVY = ("bazel", "rust-ci", "sdk")
 SKIP_IF = "${{ !startsWith(github.base_ref, 'sync/') }}"
 OK_ENV = "${{ startsWith(github.base_ref, 'sync/') && '" + ",".join(HEAVY) + "' || '' }}"
-PR_WORKFLOWS = ("credential-boundary-canary.yml", "orchestrate-tui-matrix.yml", "security-ingress-contract.yml",
-                "security-platform-contract.yml", "tmux-smoke.yml", "v8-canary.yml", "windows-security-probes.yml")
+# Whole-workspace PR workflows that can't pass while the tree has markers. The security lanes
+# (credential-boundary-canary, security-ingress-contract, security-platform-contract, windows-security-probes)
+# and v8-canary keep running on sync PRs and can also be dispatched on the sync branch.
+PR_WORKFLOWS = ("orchestrate-tui-matrix.yml", "tmux-smoke.yml")
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEW_FILES = {".github/workflows/sync-package-ci.yml": os.path.join(HERE, "ci_mode", "sync-package-ci.yml")}
 CHECK_SCRIPT = ".github/scripts/check_ci_results.py"
@@ -58,8 +60,13 @@ def blocking(text):
 def pr_ignore(text):
     m = re.search(r"(?m)^  pull_request:(?P<rest>[^\n]*)\n", text)
     if not m:
-        return text
-    if re.search(r"(?m)^    branches:", text[m.end():m.end() + 400].split("\n  push:")[0]):
+        sys.exit("error: no pull_request trigger found")
+    block = []
+    for line in text[m.end():].splitlines():
+        if line.strip() and not line.startswith("    "):
+            break
+        block.append(line)
+    if any(line.startswith("    branches:") for line in block):
         return text  # already restricted to listed bases
     line = f'    branches-ignore: ["sync/**"]  {TAG}\n'
     if m.group("rest").strip() == "{}":
@@ -73,8 +80,7 @@ def apply(wt):
     for wf in PR_WORKFLOWS:
         p = os.path.join(wt, ".github/workflows", wf)
         if os.path.exists(p):
-            text = open(p).read()
-            open(p, "w").write(pr_ignore(text))
+            edit(p, pr_ignore)
     for dst, src in NEW_FILES.items():
         shutil.copyfile(src, os.path.join(wt, dst))
     print("CI mode applied")
@@ -110,6 +116,15 @@ def check(wt):
     print("no CI-mode lines")
 
 
+def codeowners_pattern(spec):
+    """Git pathspec -> CODEOWNERS pattern. In CODEOWNERS `*` stops at `/`, so a leading wildcard in the last
+    segment (e.g. tui/src/*approval_overlay*) must become `**/`."""
+    head, _, last = spec.rpartition("/")
+    if last.startswith("*"):
+        return f"/{head}/**/{last}"
+    return f"/{spec}"
+
+
 CO_BEGIN = "# BEGIN sync-branch security owners (upstream sync; revert before the final PR)"
 CO_END = "# END sync-branch security owners"
 
@@ -120,13 +135,20 @@ def codeowners(action, wt, owner=None):
     p = os.path.join(wt, ".github", "CODEOWNERS")
     text = open(p).read() if os.path.exists(p) else ""
     start, end = text.find(CO_BEGIN), text.find(CO_END)
+    if (start == -1) != (end == -1) or end < start:
+        sys.exit("error: CODEOWNERS block markers are incomplete; fix by hand")
+    if action == "check":
+        if start != -1:
+            sys.exit("CODEOWNERS block still present")
+        print("no CODEOWNERS block")
+        return
     if start != -1:
         text = text[:start].rstrip("\n") + "\n" + text[end + len(CO_END):].lstrip("\n")
     if action == "apply":
         if not owner or not re.fullmatch(r"@[A-Za-z0-9][A-Za-z0-9-]*(/[A-Za-z0-9._-]+)?", owner):
             sys.exit("error: codeowners apply needs an @owner")
         # Last matching pattern wins, so this block goes at the end.
-        block = [CO_BEGIN] + [f"/{spec} {owner}" for spec in footprint.NAMED] + [CO_END]
+        block = [CO_BEGIN] + [f"{codeowners_pattern(spec)} {owner}" for spec in footprint.NAMED] + [CO_END]
         text = text.rstrip("\n") + "\n\n" + "\n".join(block) + "\n"
     open(p, "w").write(text)
     print(f"CODEOWNERS block {'added' if action == 'apply' else 'removed'}")

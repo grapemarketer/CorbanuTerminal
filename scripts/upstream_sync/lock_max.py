@@ -7,7 +7,9 @@ The skeleton starts from main's Cargo.lock and lets cargo add what the merged ma
 versions (security bumps) stay. Upstream bumps crates too; without this step the merged lock would keep main's
 older copy of a crate upstream had already updated (e.g. quinn-proto 0.11.14 vs 0.11.18). For each registry crate
 present in both, if the tag has a higher version on the same semver line, run `cargo update -p name@cur --precise
-tagver`. Never lowers a version.
+tagver`. Never lowers a version: crates new to main keep the newest compatible release cargo picked when the
+skeleton ran (often newer than upstream's, e.g. with security fixes); SG1 records the merged lock against the tag's
+lock (`sg1_lockdiff.py <tag> <skeleton>`) so those differences are reviewed.
 """
 
 import subprocess
@@ -67,7 +69,7 @@ def main():
                                capture_output=True, text=True)
             if r.returncode:
                 print(f"  skipped: {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'cargo update failed'}")
-    print(f"{len(todo)} crates raised to the tag's version" + (" (dry run)" if dry else ""))
+    print(f"{len(todo)} crates moved to the tag's version" + (" (dry run)" if dry else ""))
 
 
 if __name__ == "__main__":

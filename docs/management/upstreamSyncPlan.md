@@ -221,9 +221,11 @@ layers:
   flag, and its owner asks the security owner to review the hunks that come from those commits.
 
 The 458 (418) named-path files that upstream changed and that merge cleanly get ledger rows for a diff-level security
-review in S3b. The count grows when S0 adds the footprint files: those that upstream changed and that merge cleanly get
-the same rows (conflicted footprint files already have a row and carry a footprint flag). With the footprint, the S0
-ledger previews at `main` `23be0b38` have 564 (525) such rows.
+review in S3b. The count grows in S0 for two reasons. The named set is wider in `security_paths.txt` than in the
+trial (it adds upstream's new sandbox crates and all of `ext/guardian*`). And S0 adds the footprint files: those
+that upstream changed and that merge cleanly get the same rows (conflicted footprint files already have a row and
+carry a footprint flag). The S0 ledger previews at `main` `23be0b38` have 564 (525) such rows, 506 (466) of them on
+named paths.
 
 Shared hot files (`core/src/session/turn.rs`, `core/src/client.rs`) belong to S2a; the security owner reviews every hunk
 there that touches classifier, approval or sandbox call sites.

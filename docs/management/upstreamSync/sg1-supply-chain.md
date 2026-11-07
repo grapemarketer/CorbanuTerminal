@@ -2,8 +2,9 @@
 
 Gate SG1 of [the sync plan](../upstreamSyncPlan.md) (§6, S0). This is the preparation pass: it compares `main` at
 `23be0b3883b1` with each candidate tag's own lockfiles. The merged lockfiles only exist after the skeleton commit, so
-SG1 is recorded against them then (`scripts/upstream_sync/sg1_lockdiff.py <main> <skeleton>` plus cargo-deny), and
-re-run at S5. Commands are in `scripts/upstream_sync/README.md`.
+SG1 is recorded against them then (`scripts/upstream_sync/sg1_lockdiff.py <main> <skeleton>` and
+`sg1_lockdiff.py <tag> <skeleton>`, plus cargo-deny), and re-run at S5. The second diff matters because crates new
+to `main` get the newest compatible release when the skeleton runs, which can differ from upstream's pin. Commands are in `scripts/upstream_sync/README.md`.
 
 ## Result
 
@@ -50,7 +51,7 @@ No licence finding with either policy.
 |---|---:|---:|
 | Third-party crates (`main` has 1,153) | 1,168 | 1,168 |
 | Crates upstream has that `main` doesn't | 132 | 132 |
-| Same crate, different version or source | 129 | 129 |
+| Same crate, different version or source | 128 | 129 |
 | New non-registry sources | 4 | 5 |
 | `pnpm-lock.yaml` packages added / removed | 24 / 8 | 24 / 8 |
 
@@ -83,9 +84,10 @@ is 0.0.102 on `main` and 0.0.96 upstream (keep ours); `bazel_dep v8` is replaced
   `MaybeUninit<u64>` instead of a byte array), plus a layout test. Same change proposed upstream as
   denoland/rusty_v8#2091 (open, by the fork's author). Reviewed: no build-script, download or FFI-surface change.
 - Risk: a personal fork can disappear or be force-pushed. The pin is a full revision and Cargo records it in
-  `Cargo.lock`, so a force-push can't change what we build, but deletion would break fresh builds. Mitigation
-  (recommended in the S0 report): mirror the revision to a CorbanuCore-owned fork and point the patch there, or
-  return to `denoland/rusty_v8` once #2091 ships.
+  `Cargo.lock`, so a force-push can't change what we build, but deletion would break fresh builds. Proposed S5
+  entry condition (decision for Travis): before the final PR, `allow-git` and the patch point to a CorbanuCore-owned
+  mirror of this revision, or back to `denoland/rusty_v8` if #2091 has shipped, so `main`'s `deny.toml` never
+  allows a personal fork.
 - Cost: a crates.io package excludes git submodules, but a git dependency doesn't. With the patch, `cargo metadata`
   on a fresh `CARGO_HOME` clones the fork and its submodules (V8, ICU, highway, FP16 and others from
   chromium.googlesource.com), several GB. On the Mac the ICU fetch kept failing (`early EOF`) and was stopped

@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
     --push) push=1; shift ;;
     --security-owner) owner=$2; shift 2 ;;
     --rehearse) rehearse=1; shift ;;
-    --bundle) bundle=$2; shift 2 ;;
+    --bundle) bundle=$(cd "$(dirname "$2")" && pwd)/$(basename "$2"); shift 2 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -77,8 +77,9 @@ else
   echo "warning: MODULE.bazel.lock not regenerated (SKIP_BAZEL_LOCK=1)" >&2
 fi
 python3 "$here/tier0.py" check "$top"
+# "Keep our side for now" (plan section 4): a path we deleted that upstream modified stays deleted.
+git status --porcelain=v1 -z | tr '\0' '\n' | sed -n 's/^DU //p' | while IFS= read -r p; do git rm --quiet -- "$p"; done
 git add -A
-if git ls-files -u | grep -q .; then echo "error: unmerged index entries remain" >&2; exit 5; fi
 git commit --quiet -F - <<EOF
 Upstream sync skeleton: merge $tag into $branch
 
