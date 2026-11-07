@@ -787,3 +787,86 @@ fn sec_win_1648_elevated_tools_work_with_command_identity() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// #1758: a configured read-only `.git\hooks` in a workspace with no `.git`.
+/// The setup helper makes `.git\hooks`, and `.git` on the way, before the
+/// first command starts; that command can't write `.git` (a `config` there
+/// would make it a repository git later runs outside the sandbox) any more
+/// than the next one can. Before, the deny set was read before `.git` existed,
+/// so only the next command was kept out. The workspace stays writable.
+#[test]
+fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
+    let Some(codex_home) = elevated_home("sec-1758") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let workspace = dunce::canonicalize(root.path()).expect("canonical workspace");
+    let git = workspace.join(".git");
+    let hooks = git.join("hooks");
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    // The workspace profile the other elevated tests use (a profile built
+    // from entries alone couldn't write its workspace here); the configured
+    // `.git\hooks` arrives as Core passes it to this backend.
+    let profile = PermissionProfile::workspace_write();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    // Relative to the workspace (the cwd): the runner quotes arguments the
+    // C runtime's way, which cmd doesn't read, so no quotes inside.
+    let script = "(echo planted> .git\\config) & (echo planted> .git\\hooks\\pre-commit) & (mkdir .git\\objects) & (echo ok> allowed.txt)".to_string();
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &profile,
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![cmd, "/d".to_string(), "/c".to_string(), script],
+            &workspace,
+            env_map,
+            /*proxy_enforced*/ false,
+            /*network_proxy_restricting_sid*/ None,
+            Some(90_000),
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ true,
+            /*write_roots_override*/ None,
+            &crate::DenyReadTargets::default(),
+            // As Core passes a configured read-only path for this backend.
+            &[absolute(&hooks)],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home.path())
+            )
+        });
+        collect_stdout_and_exit(
+            spawned,
+            codex_home.path(),
+            Duration::from_secs(/*secs*/ 120),
+        )
+        .await
+        .1
+    });
+    record_setup(codex_home.path());
+    let state = (
+        hooks.is_dir(),
+        git.join("config").exists(),
+        hooks.join("pre-commit").exists(),
+        git.join("objects").exists(),
+        workspace.join("allowed.txt").exists(),
+    );
+    println!(
+        "\nsec-1758: exit={exit_code} (hooks, config, pre-commit, objects, allowed)={state:?}"
+    );
+
+    pretty_assertions::assert_eq!(
+        (exit_code, state),
+        (0, (true, false, false, false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
