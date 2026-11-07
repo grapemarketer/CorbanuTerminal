@@ -69,21 +69,21 @@ the folders above them. A folder the sandbox can't list counts as planted. Folde
 
 **Read-only paths that don't exist yet.** If your permission profile marks a
 path inside a writable folder read-only and that path doesn't exist when a
-non-admin sandbox command starts, Corbanu Terminal creates it as an empty
-folder and protects it, so the command can't create it and fill it. This has
-two side effects:
+sandboxed command starts, Corbanu Terminal creates it as an empty folder and
+protects it, so the command can't create it and fill it. Both Windows
+sandboxes do this. It has two side effects:
 
-- A path meant to be a file, such as `.env`, becomes an empty folder in each
-  writable folder that lacks it, and tools that expect a file there may fail
-  to read it. To keep a file there, create the file before you start a
-  session. If the folder has already been made, delete it while no session is
-  running, then create the file.
+- A path meant to be a file, such as `.env`, becomes an empty folder wherever
+  it's missing, and tools that expect a file there may fail to read it. To
+  keep a file there, create the file before you start a session. If the
+  folder has already been made, delete it while no session is running, then
+  create the file.
 - A read-only path inside `.git`, such as `.git\hooks`, in a folder that
-  isn't a git repository yet creates an empty, protected `.git` there. Git
-  doesn't treat an empty `.git` as a repository, so git commands in that
-  folder report "not a git repository" or use a repository in a folder above
-  it. Run `git init` there yourself, or remove the entry, if you don't want
-  this.
+  isn't a git repository yet creates a protected `.git` there that holds only
+  an empty `hooks` folder. Git doesn't treat that as a repository, so git
+  commands in that folder report "not a git repository" or use a repository
+  in a folder above it. Run `git init` there yourself, or remove the entry
+  and then delete that `.git` folder while no session is running.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some
