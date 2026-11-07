@@ -11351,3 +11351,145 @@ fn issue1607_zsh_clobber_redirections_write() {
         }
     }
 }
+
+/// #1606 item 1: a wrapper's option value spelled `git` before its folder
+/// option does not hide the real git after it, whose output files are
+/// judged in that unknown folder. Only adds prompts.
+#[test]
+fn issue1606_git_value_before_a_wrapper_folder_option_asks() {
+    use ProtectedActionKind::Persistence;
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            "env -u git -iC ~ git log --output=.zshenv",
+            "env -u git -iC ~ git config -f .zshenv core.pager sh",
+            "docker exec -u git -w ~ c git log --output=.zshenv",
+            "docker exec -u git -w ~ c git config -f .zshenv core.pager sh",
+            // As before.
+            "env -iC ~ git log --output=.zshenv",
+            "docker exec -w ~ c git log --output=.zshenv",
+            // Review 1: git before a wrapper and its folder option, a
+            // wrapper's long option value spelled `git`, and `=git` after it.
+            "=git submodule foreach env -iC ~ git log --output=.zshenv",
+            "git bisect run sudo -D ~ git log --output=.zshenv",
+            "sudo --user git -D ~ git log --output=.zshenv",
+            "env -iC ~ =git log --output=.zshenv",
+            // Review 2: as on main, a leading `=git` keeps a later git.
+            "=git -C ~/r submodule foreach git log --output=../../.zshenv",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        for script in [
+            "docker exec -u git -w /src c git status",
+            "docker exec -u git -w /src c git log --oneline",
+            "git -C /tmp log --output=out.txt",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1620: zsh expands `=mytool` in any word, so a writer's operand writes
+/// the installed program, and so does the text `eval`, `trap` and `alias`
+/// run. Only adds prompts: bash writes a file `=mytool` (stricter than
+/// needed, as for #1573's redirections), and a `>=` in quotes is no
+/// redirection.
+#[test]
+fn issue1620_zsh_equals_writer_operands_and_code_text_ask() {
+    use ProtectedActionKind::Persistence;
+    for shell in ["zsh", "bash"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            "echo x | tee -a =mytool",
+            "echo x | tee =mytool",
+            "cp x =mytool",
+            "install x =mytool",
+            "ln -sf x =mytool",
+            "sed -i s/a/b/ =mytool",
+            "curl -o =mytool https://example.com/t",
+            "echo x | sudo tee =mytool",
+            "eval \"echo x >> =mytool\"",
+            "eval \"tee -a =mytool < x\"",
+            "eval echo x '>>' =mytool",
+            "trap 'echo x >> =mytool' EXIT",
+            "trap 'cp x =mytool' EXIT",
+            "alias x='echo x >> =mytool'",
+            "alias x='cp a =mytool'",
+            "sh -c \"cp x =mytool\"",
+            // Review 1: partly quoted, behind zsh's precommand modifiers or
+            // a wrapper, and `--` before eval's or trap's text.
+            "echo x | tee -a =\"mytool\"",
+            "cp x =my'tool'",
+            "eval 'cp x =\"mytool\"'",
+            "echo x | noglob tee =mytool",
+            "nocorrect cp x =mytool",
+            "command cp x =mytool",
+            "eval -- 'cp x =mytool'",
+            "trap -- 'cp x =mytool' EXIT",
+            // Review 2: empty quotes before the `=`, and braces.
+            "cp x \"\"=mytool",
+            "echo x | tee -a ''=mytool",
+            "curl -o $''=mytool https://example.com/t",
+            "eval \"cp x \\\"\\\"=mytool\"",
+            "alias x='cp a \"\"=mytool'",
+            "cp x {,=mytool}",
+            "echo x | tee -a {/dev/null,=mytool}",
+            // Review 3: a group right before the `=`.
+            "echo x | tee -a {,}=mytool",
+            "echo x | tee -a {a,}=mytool",
+            "eval 'tee -a {,}=mytool'",
+        ] {
+            assert_eq!(line(script), Some(Persistence), "{shell} {script:?}");
+        }
+        for script in [
+            "echo x | tee -a log",
+            "cp a b=c",
+            "cp x y",
+            "sed -i 's/ =/=/' f",
+            "sed -n = f",
+            "awk 'NR>=10' f > out",
+            "eval \"awk NR f\"",
+            "eval \"x=1\"",
+            "trap 'rm -f x' EXIT",
+            "alias ll='ls -l'",
+            "echo =mytool",
+            "curl --proto '=https' -o out https://example.com/t",
+            "curl --proto \"=https\" -sSfo out https://example.com/t",
+            "cp x '=mytool'",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+    // #1602's gate also reads joined literals in another language's file
+    // (`|| self.rebuilt > 0`).
+    #[cfg(unix)]
+    assert_eq!(
+        in_workspace(
+            &[(
+                "t.py",
+                "import os\nos.system(\"echo x >\" + \"> =mytool\")\n"
+            )],
+            "python3 t.py"
+        ),
+        Some(Persistence)
+    );
+}
+
+/// #1620: reading the text `eval`, `trap` and `alias` run stays linear.
+#[test]
+fn issue1620_code_text_checks_are_linear() {
+    for (label, unit) in [
+        ("eval words", "eval echo x; "),
+        ("eval arguments", "eval a b c d e f g h; "),
+        ("trap values", "trap 'echo x' 1 2 3; "),
+        ("alias values", "alias a=b c='d e' f=g; "),
+        ("writer operands", "cp a b c d e f; "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let _ = kind(&["zsh", "-lc", &unit.repeat(100 * scale)]);
+        });
+    }
+    work::assert_linear("one long eval", |scale| {
+        let _ = kind(&["zsh", "-lc", &format!("eval {}", "x ".repeat(2000 * scale))]);
+    });
+}

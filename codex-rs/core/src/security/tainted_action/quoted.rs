@@ -36,6 +36,9 @@ pub(super) struct Word {
     /// A here-document body, which the word lexer reads as command lines:
     /// commands in it count against the lexer's.
     pub(super) lines: bool,
+    /// #1620: its text starts with an unquoted `=`, which zsh expands to a
+    /// program's path (`=mytool`, `="mytool"`, `""=mytool`; not `'=https'`).
+    pub(super) equals_first: bool,
 }
 
 #[derive(Debug, Default)]
@@ -665,6 +668,7 @@ impl Reader<'_> {
                         }
                         _ => {}
                     }
+                    list.word.equals_first |= ch == '=' && list.word.text.is_empty();
                     list.word.text.push(ch);
                 }
             }
