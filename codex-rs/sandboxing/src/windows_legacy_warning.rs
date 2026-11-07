@@ -6,9 +6,11 @@
 //! where objects are labelled Low (`AppData\LocalLow`, objects the user
 //! labelled Low, and roots another legacy session is using at that moment).
 //! It still can't stop a command from reading files, its network block is
-//! only proxy and tool settings, and some process-launch routes leave the
-//! command's job (#1507). The elevated backend protects more, so the warning
-//! tells users how to switch to it. It never changes how commands are
+//! only proxy and tool settings, some process-launch routes leave the
+//! command's job (#1507), and concurrent commands of different projects can
+//! borrow each other's token (#1560, D291; the elevated backend too, #1648).
+//! The elevated backend protects more, so the warning tells users how to
+//! switch to it. It never changes how commands are
 //! sandboxed.
 
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -26,6 +28,9 @@ pub const LEGACY_WINDOWS_SANDBOX_WARNING: &str = concat!(
     "It does not stop commands from reading your files, its network block is only proxy ",
     "and tool settings that a program can ignore, and a few ways of starting programs ",
     "get partly outside it. ",
+    "Commands running at the same time in different projects aren't kept apart: one can ",
+    "borrow another's access and write in its folders (the default sandbox doesn't prevent ",
+    "this yet either), so avoid running commands in several projects at once. ",
     "Switch to the default sandbox (one-time Administrator setup) by running ",
     "/setup-default-sandbox, or set `sandbox = \"elevated\"` under `[windows]` in config.toml. ",
     "Learn more: ",

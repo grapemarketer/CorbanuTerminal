@@ -186,7 +186,18 @@ write right). The borrowed token carries the command's identity, so with it
 they can write to its processes again, including starting a child in its job
 through the parent-process route, and write in its writable roots while it
 runs (#1560). The boundary D259 draws between legacy commands holds only once
-#1560 is closed. Two routes still start a child
+#1560 is closed. This matters only while two legacy commands run at the same
+time with different writable roots (different projects, or different extra
+writable folders): either can write in the other's. Documented for now
+(D291, Travis 2026-11-06) in the non-admin warning and `docs/sandbox.md`. D291
+also pointed people who work on several projects at once to the elevated
+backend, but measured since, its commands can do the same to each other and
+more: they share one sandbox account and get full access to each other's
+processes even without borrowing a token (#1648, awaiting a decision). So the
+docs say neither backend keeps concurrent projects apart. A redesigned legacy
+token that closes the borrowing is to be measured separately. Killing
+another command's processes stays possible on purpose (D292). Two routes
+still start a child
 outside the command's job: the COM servers `ShellBrowserWindow` (the child
 runs at Low integrity but with an unrestricted token) and
 `MMC20.Application` (Low, restricted). Closing them waits on a measurement
@@ -226,7 +237,18 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user.
+folder while a session runs is reported, including the user. A top-level
+`.codex` or `.agents` that is itself a link (a junction, symbolic link or
+mount point), or can't be inspected, stops the command: its protections
+would land on the link's target, and a command could replace the link with
+a writable folder that D262 doesn't report, since something was there when
+the session started (#1682). Replace the link with a folder. This applies
+to the roots D283 watches (not those that come only from `%TEMP%`/`%TMP%`)
+that hold their own write capability; the user profile folder doesn't
+(only its children do), so a linked `~\.codex` there doesn't stop the
+command. Other reparse points, such as cloud placeholders, aren't links
+(#1668). A top-level `.git` link isn't refused: `.git` may be missing and
+then created by a command anyway, and some tools (Google's `repo`) link it.
 
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too
@@ -237,7 +259,10 @@ while any legacy command ran would count as planted, and the temp folder
 isn't treated as a project location; a workspace or configured root stays
 watched even if the temp folder resolves to it), with its file identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
-100,000-file workspace). Names are compared the way NTFS compares them, so
+100,000-file workspace). Other reparse points, such as ProjFS (VFS for Git)
+folders or cloud placeholders a program sees as they are, aren't links: the
+walk looks inside them, and one named `.codex` or `.agents` is protected and
+identified like a plain folder (#1672). Names are compared the way NTFS compares them, so
 a name such as `.agentſ` counts (and is never trusted). Each one it finds
 gets the top-level ones' protection: an explicit Medium label, the
 capability-SID write deny and the tracked Everyone delete-child denies. It
@@ -262,6 +287,11 @@ refused. Costs and limits:
   there).
 - A command doesn't start if those denies can't be written.
 - Sessions started by builds before D283 aren't watched for nested folders.
+- The walk lists ProjFS folders and exposed cloud placeholders through their
+  provider (#1672): a stalled provider stalls it, and one that fails a
+  listing makes that folder unlistable. Content a provider hasn't filled in
+  yet comes from the provider, not from writes the sandbox's denies govern,
+  as for such files in a plain `.codex`.
 
 The
 Everyone deny entries are visible in the folder's security settings while a

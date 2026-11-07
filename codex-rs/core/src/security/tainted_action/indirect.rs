@@ -168,7 +168,28 @@ fn hex_bytes(word: &str) -> Option<Vec<u8>> {
 pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     (
         "sudo",
-        &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"],
+        &[
+            "-u",
+            "-g",
+            "-h",
+            "-p",
+            "-C",
+            "-D",
+            "-r",
+            "-t",
+            "-U",
+            "-T",
+            "--user",
+            "--group",
+            "--host",
+            "--prompt",
+            "--close-from",
+            "--chdir",
+            "--role",
+            "--type",
+            "--other-user",
+            "--command-timeout",
+        ],
         0,
     ),
     ("doas", &["-u", "-C"], 0),
@@ -206,7 +227,9 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     ("unbuffer", &[], 0),
     ("ionice", &["-c", "-n", "-p", "-P", "-u"], 0),
     ("chrt", &[], 1),
-    ("taskset", &["-c", "--cpu-list"], 1),
+    // `taskset -c 0 cmd`: `-c` (`--cpu-list`) takes no value; it reads the
+    // mask operand as a CPU list.
+    ("taskset", &[], 1),
     (
         "flock",
         &["-w", "-E", "--timeout", "--conflict-exit-code"],
@@ -222,6 +245,67 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     ("toybox", &[], 0),
     ("watch", &["-n", "--interval"], 0),
 ];
+
+/// #1482: letters known to take no value, per wrapper. A cluster is read
+/// through these only: a letter not listed here may take a value (`sudo
+/// -R`, `xargs -i`, `nsenter -n`), which would hold the rest of the word,
+/// so a cluster with one is read as one word, as before.
+const FLAG_LETTERS: &[(&str, &str)] = &[
+    ("sudo", "ABbEeHiKklnPSsVv"),
+    ("doas", "Lns"),
+    ("env", "0iv"),
+    ("time", "alpqv"),
+    ("timeout", "v"),
+    ("exec", "cl"),
+    ("xargs", "0oprtx"),
+    ("caffeinate", "dimsu"),
+    ("ionice", "t"),
+    ("flock", "Fnosux"),
+    ("runuser", "flmPp"),
+    ("nsenter", "aFZ"),
+    ("systemd-run", "dGPqrSt"),
+    ("watch", "bcegptx"),
+];
+
+/// #1482: how many words a wrapper's option word uses: one, or two when
+/// it takes a value that is not attached. A short cluster takes the next
+/// word only when its last letter takes a value and every letter before it
+/// is a known flag of `wrapper` (`sudo -nC 3`, `sudo -nD sub`, `env -iu
+/// X`); any other cluster is one word. A long option takes the next word
+/// only when it is named in full (`sudo --chdir sub`); an abbreviation is
+/// read as before, since some long options take an optional value that is
+/// never a separate word.
+pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) -> usize {
+    if value_options.contains(&option) {
+        return 2;
+    }
+    if option.starts_with("--") {
+        return 1;
+    }
+    let Some(letters) = option.strip_prefix('-') else {
+        return 1;
+    };
+    let flags = FLAG_LETTERS
+        .iter()
+        .find(|(name, _)| *name == wrapper)
+        .map_or("", |(_, flags)| *flags);
+    for (at, letter) in letters.char_indices() {
+        work::step();
+        let takes_value = value_options.iter().any(|value_option| {
+            work::step();
+            value_option
+                .strip_prefix('-')
+                .is_some_and(|name| name.len() == letter.len_utf8() && name.starts_with(letter))
+        });
+        if takes_value {
+            return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !flags.contains(letter) {
+            return 1;
+        }
+    }
+    1
+}
 
 /// Lowercase basename of the command a simple command runs, skipping
 /// assignments, shell keywords and wrappers (with their options and
@@ -271,22 +355,17 @@ fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(us
         };
         wrapper(index);
         index += 1;
-        let mut operands = *operands;
         while let Some(option) = words.get(index) {
             work::step();
             if option.starts_with('-') {
-                // `taskset -c 0 cmd` names the CPUs in the option instead.
-                if name == "taskset" && matches!(option.as_str(), "-c" | "--cpu-list") {
-                    operands = 0;
-                }
-                index += 1 + usize::from(value_options.contains(&option.as_str()));
+                index += option_words(&name, option, value_options);
             } else if option.contains('=') {
                 index += 1;
             } else {
                 break;
             }
         }
-        index += operands;
+        index += *operands;
     }
     None
 }

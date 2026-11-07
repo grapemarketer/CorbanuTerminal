@@ -311,7 +311,9 @@ impl ExternalAgentConfigService {
                         let (migrated_server_names, skipped_servers) = self
                             .import_mcp_server_config(cwd, |name| {
                                 config.as_ref().and_then(|config| {
-                                    config.non_prefixed_mcp_server_name_clash(name)
+                                    config
+                                        .non_prefixed_mcp_server_name_clash(name)
+                                        .map(|clash| clash.to_string())
                                 })
                             })?;
                         emit_migration_metric(

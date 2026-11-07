@@ -367,7 +367,7 @@ unsafe fn pin_nested_metadata(
         Some(log_dir),
     )?;
     for entry in found {
-        let unchanged = !crate::workspace_acl::is_reparse_point(&entry.path)
+        let unchanged = !crate::workspace_acl::is_link(&entry.path)
             && dunce::canonicalize(&entry.path).is_ok_and(|canonical| {
                 canonical
                     .to_string_lossy()
@@ -399,6 +399,41 @@ fn refuse_link_above_carve_out(path: &Path, roots: &[PathBuf]) -> Result<()> {
             link.display(),
             path.display()
         );
+    }
+    Ok(())
+}
+
+/// #1682: the command doesn't start when the top-level `.codex` or `.agents`
+/// of one of the writable `roots` (canonical; D283's, so not those that come
+/// only from `%TEMP%`/`%TMP%`) is a link (a junction, symbolic link or mount
+/// point; one that can't be inspected counts) and the root holds a write
+/// capability, so a command could remove the link: the protections land on
+/// its target, and the writable folder made in its place isn't reported by
+/// D262, since something was there when the session started. A root without
+/// its own capability, such as the user profile folder (only its children
+/// get one), is skipped. Other reparse points, such as cloud placeholders,
+/// are the folder itself (#1668).
+pub(crate) fn refuse_linked_project_metadata(
+    roots: &[PathBuf],
+    write_root_sids: &[RootCapabilitySid],
+) -> Result<()> {
+    for root in roots {
+        if matching_root_capability(root, write_root_sids).is_none() {
+            continue;
+        }
+        for name in [".codex", ".agents"] {
+            let path = root.join(name);
+            let is_link = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata.file_type().is_symlink(),
+                Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+            };
+            if is_link {
+                anyhow::bail!(
+                    "{} is a link (a junction or symbolic link), or can't be inspected, in a writable folder. The non-admin Windows sandbox can't keep a command from replacing it with a writable folder, so it doesn't start commands there (#1682). Replace the link with a folder.",
+                    path.display()
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -502,6 +537,7 @@ pub(crate) fn apply_legacy_session_acl_rules(
     // Low label while it runs, so writes inside them keep working.
     let log_dir = codex_home.join(".sandbox");
     let nested_roots = nested_metadata_roots(permissions, current_dir, &allow);
+    refuse_linked_project_metadata(&nested_roots, acl_sids.write_root_sids)?;
     let lease = if session && !allow.is_empty() {
         let roots: Vec<PathBuf> = allow.iter().cloned().collect();
         Some(crate::integrity_leases::acquire_watching(
@@ -520,6 +556,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
         }
         None
     };
+    // Again, with the session's absent `.codex`/`.agents` recorded: a link
+    // another session's command planted meanwhile (D262 would count it as
+    // there from the start).
+    if lease.is_some() {
+        refuse_linked_project_metadata(&nested_roots, acl_sids.write_root_sids)?;
+    }
     let canonical_allow: Vec<PathBuf> = allow.iter().map(|root| canonicalize_path(root)).collect();
     // D283 (#1541): `.codex`/`.agents` deeper in a writable root get the
     // top-level ones' protection; the command doesn't start without it.

@@ -17,11 +17,13 @@ use crate::server::McpServerMetadata;
 use crate::server::McpServerOrigin;
 use crate::tool_catalog_cache::McpToolCatalogCache;
 use crate::tools::BUILTIN_TOOL_NAMESPACES;
+use crate::tools::RESPONSES_RESERVED_NAMESPACES;
+use crate::tools::ReservedMcpNamespace;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
 use crate::tools::normalize_tools_for_model_with_prefix;
-use crate::tools::unprefixed_mcp_namespace_is_builtin;
+use crate::tools::unprefixed_mcp_namespace_reservation;
 use codex_config::AppToolApproval;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
@@ -1070,6 +1072,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
         create_test_tool("web", "search"),
         create_test_tool("image.gen", "draw"),
         create_test_tool("team", "spawn"),
+        create_test_tool("python", "run"),
         create_test_tool("history", "search"),
     ];
 
@@ -1081,6 +1084,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
                 "web".to_string(),
                 "image.gen".to_string(),
                 "team".to_string(),
+                "python".to_string(),
                 "history".to_string(),
             ],
         ),
@@ -1098,6 +1102,7 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
                 ToolName::namespaced("mcp__web", "search"),
                 ToolName::namespaced("mcp__image_gen", "draw"),
                 ToolName::namespaced("mcp__team", "spawn"),
+                ToolName::namespaced("mcp__python", "run"),
                 ToolName::namespaced("history", "search"),
             ])
         );
@@ -1116,31 +1121,51 @@ fn test_normalize_tools_keeps_prefix_for_builtin_namespaces() {
 }
 
 #[test]
-fn test_unprefixed_mcp_namespace_is_builtin() {
+fn test_unprefixed_mcp_namespace_reservation() {
+    let reservation = |name: &str, multi_agent_v2_tool_namespace: Option<&str>| {
+        unprefixed_mcp_namespace_reservation(name, multi_agent_v2_tool_namespace)
+    };
     for name in BUILTIN_TOOL_NAMESPACES {
-        assert!(
-            unprefixed_mcp_namespace_is_builtin(name, /*multi_agent_v2_tool_namespace*/ None),
+        assert_eq!(
+            reservation(name, /*multi_agent_v2_tool_namespace*/ None),
+            Some(ReservedMcpNamespace::BuiltinTool),
             "{name}"
         );
     }
-    assert!(unprefixed_mcp_namespace_is_builtin(
-        "image.gen",
-        /*multi_agent_v2_tool_namespace*/ None
-    ));
-    assert!(unprefixed_mcp_namespace_is_builtin("a.b", Some("a_b")));
-    assert!(!unprefixed_mcp_namespace_is_builtin(
-        "my-team",
-        Some("my-team")
-    ));
-    assert!(!unprefixed_mcp_namespace_is_builtin(
-        "mcp__web", /*multi_agent_v2_tool_namespace*/ None
-    ));
-    assert!(!unprefixed_mcp_namespace_is_builtin(
-        "web_mcp", /*multi_agent_v2_tool_namespace*/ None
-    ));
-    assert!(!unprefixed_mcp_namespace_is_builtin(
-        "Web", /*multi_agent_v2_tool_namespace*/ None
-    ));
+    for name in RESPONSES_RESERVED_NAMESPACES {
+        assert!(
+            reservation(name, /*multi_agent_v2_tool_namespace*/ None).is_some(),
+            "{name}"
+        );
+    }
+    // Names in both lists keep the built-in wording.
+    assert_eq!(
+        reservation("web", /*multi_agent_v2_tool_namespace*/ None),
+        Some(ReservedMcpNamespace::BuiltinTool)
+    );
+    for name in ["functions", "python", "browser", "multi-tool.use"] {
+        assert_eq!(
+            reservation(name, /*multi_agent_v2_tool_namespace*/ None),
+            Some(ReservedMcpNamespace::ResponsesApi),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        reservation("image.gen", /*multi_agent_v2_tool_namespace*/ None),
+        Some(ReservedMcpNamespace::BuiltinTool)
+    );
+    assert_eq!(
+        reservation("a.b", Some("a_b")),
+        Some(ReservedMcpNamespace::MultiAgentV2)
+    );
+    for name in ["mcp__web", "web_mcp", "Web", "python_mcp", "Functions"] {
+        assert_eq!(
+            reservation(name, /*multi_agent_v2_tool_namespace*/ None),
+            None,
+            "{name}"
+        );
+    }
+    assert_eq!(reservation("my-team", Some("my-team")), None);
 }
 
 #[test]

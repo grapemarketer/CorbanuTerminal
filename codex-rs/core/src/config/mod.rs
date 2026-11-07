@@ -2178,9 +2178,12 @@ impl Config {
     }
 
     /// Why an MCP server named `name` can't be used here, if it would be
-    /// exposed without the `mcp__` prefix under a built-in tool namespace
-    /// (#1655).
-    pub fn non_prefixed_mcp_server_name_clash(&self, name: &str) -> Option<String> {
+    /// exposed without the `mcp__` prefix under a reserved tool namespace
+    /// (#1655, #1666).
+    pub fn non_prefixed_mcp_server_name_clash(
+        &self,
+        name: &str,
+    ) -> Option<NonPrefixedMcpServerNameClash> {
         non_prefixed_mcp_server_name_clash(
             self.features.enabled(Feature::NonPrefixedMcpToolNames),
             self.non_prefixed_mcp_tool_servers.as_deref(),
@@ -2190,7 +2193,7 @@ impl Config {
     }
 
     /// Rejects enabled configured servers, and `server_names` entries, that
-    /// would take a built-in tool namespace without the `mcp__` prefix.
+    /// would take a reserved tool namespace without the `mcp__` prefix.
     fn validate_non_prefixed_mcp_server_names(&self) -> std::io::Result<()> {
         let configured = self
             .mcp_servers
@@ -2540,52 +2543,113 @@ pub fn non_prefixed_mcp_server_name_clashes_in_config_toml(
     ))
 }
 
+/// Why an MCP server name can't be used while
+/// `features.non_prefixed_mcp_tool_names` would expose it without the `mcp__`
+/// prefix under a reserved tool namespace (#1655, #1666). [`Display`] gives the
+/// config-load wording; the other messages fit other entry points.
+///
+/// [`Display`]: std::fmt::Display
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonPrefixedMcpServerNameClash {
+    name: String,
+    reserved: codex_mcp::ReservedMcpNamespace,
+    /// Whether `name` is listed in `features.non_prefixed_mcp_tool_names.server_names`.
+    listed: bool,
+}
+
+impl NonPrefixedMcpServerNameClash {
+    /// A replacement name that is itself a valid server name and TOML key.
+    fn suggested_name(&self) -> String {
+        self.name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .chain("_mcp".chars())
+            .collect()
+    }
+
+    fn reason(&self) -> String {
+        let name = &self.name;
+        let reserved = self.reserved.description();
+        format!(
+            "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {reserved}"
+        )
+    }
+
+    // A config that lists a clashing name in `server_names` doesn't load, so
+    // the clashes below, found on a loaded config, are never listed ones.
+
+    /// The `corbanu mcp add` wording: the name is being added, not renamed
+    /// (a disabled server with that name may already exist).
+    pub fn mcp_add_message(&self) -> String {
+        let reason = self.reason();
+        let suggested = self.suggested_name();
+        format!("{reason}. Choose another name, such as `corbanu mcp add {suggested} ...`.")
+    }
+
+    /// The warning when a skill's MCP server dependency is not installed.
+    pub fn skill_dependency_message(&self) -> String {
+        let name = &self.name;
+        let reserved = self.reserved.description();
+        let mut fixes = vec![
+            "list only other servers in `features.non_prefixed_mcp_tool_names.server_names`"
+                .to_string(),
+        ];
+        if self.reserved == codex_mcp::ReservedMcpNamespace::MultiAgentV2 {
+            fixes.push("change `features.multi_agent_v2.tool_namespace`".to_string());
+        }
+        fixes.push("turn `features.non_prefixed_mcp_tool_names` off".to_string());
+        let fixes = fixes.join(", or ");
+        format!(
+            "Skipped installing the skill's MCP server `{name}`: without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), it would take {reserved}. To install it, {fixes}."
+        )
+    }
+}
+
+impl std::fmt::Display for NonPrefixedMcpServerNameClash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = &self.name;
+        let reason = self.reason();
+        let suggested = self.suggested_name();
+        let fix = if self.listed {
+            format!(
+                "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
+            )
+        } else {
+            "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
+        };
+        write!(
+            f,
+            "{reason}. To fix it, {fix}. Rename it where it is configured, to a name such as `{suggested}` (`[mcp_servers.{suggested}]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {suggested} ...`)."
+        )
+    }
+}
+
 /// Why an MCP server named `name` can't be used, if it would be exposed
-/// without the `mcp__` prefix under a built-in tool namespace (#1655).
+/// without the `mcp__` prefix under a reserved tool namespace (#1655).
 fn non_prefixed_mcp_server_name_clash(
     non_prefixed_enabled: bool,
     listed: Option<&[String]>,
     multi_agent_v2_namespace: Option<&str>,
     name: &str,
-) -> Option<String> {
+) -> Option<NonPrefixedMcpServerNameClash> {
     if !non_prefixed_enabled {
         return None;
     }
     if listed.is_some_and(|servers| !servers.iter().any(|server| server == name)) {
         return None;
     }
-    if !codex_mcp::unprefixed_mcp_namespace_is_builtin(name, multi_agent_v2_namespace) {
-        return None;
-    }
-    let taken = if codex_mcp::unprefixed_mcp_namespace_is_builtin(
-        name, /*multi_agent_v2_tool_namespace*/ None,
-    ) {
-        "a built-in tool namespace"
-    } else {
-        "the multi-agent tool namespace (`features.multi_agent_v2.tool_namespace`)"
-    };
-    let fix = if listed.is_some() {
-        format!(
-            "remove `{name}` from `features.non_prefixed_mcp_tool_names.server_names`, or rename the server"
-        )
-    } else {
-        "rename the server, or list only other servers in `features.non_prefixed_mcp_tool_names.server_names`".to_string()
-    };
-    // The suggested name must itself be a valid server name and TOML key.
-    let suggested: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .chain("_mcp".chars())
-        .collect();
-    Some(format!(
-        "MCP server `{name}` would be exposed without the `mcp__` prefix (`features.non_prefixed_mcp_tool_names`), but `{name}` is {taken}. To fix it, {fix}. Rename it where it is configured, to a name such as `{suggested}` (`[mcp_servers.{suggested}]`; for the global config, `corbanu mcp remove {name}` then `corbanu mcp add {suggested} ...`)."
-    ))
+    let reserved = codex_mcp::unprefixed_mcp_namespace_reservation(name, multi_agent_v2_namespace)?;
+    Some(NonPrefixedMcpServerNameClash {
+        name: name.to_string(),
+        reserved,
+        listed: listed.is_some(),
+    })
 }
 
 /// Every clash among enabled `configured` servers and `server_names`
@@ -2614,6 +2678,7 @@ fn non_prefixed_mcp_server_name_clashes<'a>(
                 name,
             )
         })
+        .map(|clash| clash.to_string())
         .collect()
 }
 
@@ -3767,22 +3832,6 @@ fn validate_multi_agent_v2_wait_timeout(label: &str, value: i64) -> std::io::Res
 fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::Result<()> {
     const LABEL: &str = "features.multi_agent_v2.tool_namespace";
     const MAX_LEN: usize = 64;
-    const RESERVED_RESPONSES_NAMESPACES: &[&str] = &[
-        "api_tool",
-        "browser",
-        "computer",
-        "container",
-        "file_search",
-        "functions",
-        "image_gen",
-        "multi_tool_use",
-        "python",
-        "python_user_visible",
-        "submodel_delegator",
-        "terminal",
-        "tool_search",
-        "web",
-    ];
 
     let Some(namespace) = namespace else {
         return Ok(());
@@ -3816,7 +3865,7 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
     }
     if namespace == "mcp"
         || namespace.starts_with("mcp__")
-        || RESERVED_RESPONSES_NAMESPACES.contains(&namespace)
+        || codex_mcp::RESPONSES_RESERVED_NAMESPACES.contains(&namespace)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
