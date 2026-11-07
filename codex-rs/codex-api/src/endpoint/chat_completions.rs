@@ -1061,7 +1061,8 @@ fn is_potential_serialized_tool_text(text: &str) -> bool {
 /// whitespace, is a serialized call. Other text that merely names "function_call" (a JSON
 /// answer about function calling, or one that opens with such JSON and goes on in prose)
 /// stays an ordinary message, and so does any text already streamed: the user has seen
-/// it as a message (#1608).
+/// it as a message (#1608). Text whose first value does not parse is a broken call only
+/// when it names a tool-call `type`; other JSON-like openings are prose (#1660).
 fn parse_serialized_function_call_text(
     text: &str,
     held_back: bool,
@@ -1076,6 +1077,7 @@ fn parse_serialized_function_call_text(
     let value = match values.next() {
         Some(Ok(value)) => value,
         None => return Ok(None),
+        Some(Err(_)) if !names_a_tool_call_type(trimmed) => return Ok(None),
         Some(Err(err)) => {
             return Err(format!(
                 "chat completions stream emitted malformed function-call JSON as assistant \
@@ -1171,6 +1173,20 @@ fn looks_like_serialized_tool_call(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with('{')
         && (trimmed.contains("\"function_call\"") || trimmed.contains("\"custom_tool_call\""))
+}
+
+/// Whether `text` holds a `"type": "function_call"` or `"custom_tool_call"` pair, the mark of
+/// a call attempt in text that does not parse as JSON.
+fn names_a_tool_call_type(text: &str) -> bool {
+    text.match_indices("\"type\"").any(|(index, key)| {
+        text[index + key.len()..]
+            .trim_start()
+            .strip_prefix(':')
+            .map(str::trim_start)
+            .is_some_and(|value| {
+                value.starts_with("\"function_call\"") || value.starts_with("\"custom_tool_call\"")
+            })
+    })
 }
 
 fn diagnostic_excerpt(text: &str) -> String {
@@ -2073,6 +2089,58 @@ mod tests {
                     && message.contains("call_b")
         );
         assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_held_back_invalid_json_like_opening_stays_a_message() {
+        // #1660: the answer opens with JSON-like text naming "function_call" that does
+        // not parse, and nothing in it is a tool-call `type`.
+        let content = r#"{"function_call": auto} The legacy parameter let the model decide."#;
+        let event = content_event("chatcmpl-bare-auto", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-bare-auto");
+    }
+
+    #[tokio::test]
+    async fn serialized_tool_text_held_back_elided_json_opening_stays_a_message() {
+        // #1660: the second example, an object elided with `...`.
+        let content = r#"{"function_call": "auto", ...} means the model picks whether to call."#;
+        let event = content_event("chatcmpl-ellipsis", content);
+
+        let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+        assert_single_text_message(&events, content, "chatcmpl-ellipsis");
+    }
+
+    #[tokio::test]
+    async fn errors_on_malformed_serialized_tool_call_text_with_the_type_anywhere() {
+        // A broken call still errors (and is retried) wherever its tool-call `type` sits
+        // and whatever whitespace surrounds the colon.
+        for (response_id, content) in [
+            (
+                "chatcmpl-type-last",
+                r#"{"name":"exec_command","arguments":"{"cmd":"date"}","call_id":"call_last","type":"function_call"}"#,
+            ),
+            (
+                "chatcmpl-custom-spaced",
+                r#"{"type" : "custom_tool_call", "name": "apply_patch", "input": "say "hi"", "call_id": "call_custom"}"#,
+            ),
+        ] {
+            let event = content_event(response_id, content);
+
+            let events = collect_events(&[event.as_slice(), b"data: [DONE]\n\n"]).await;
+
+            assert_matches!(
+                &events[0],
+                Err(ApiError::Stream(message))
+                    if message.contains("malformed function-call JSON as assistant text")
+                        && message.contains("raw excerpt"),
+                "{response_id}"
+            );
+            assert_eq!(events.len(), 1, "{response_id}");
+        }
     }
 
     #[tokio::test]
