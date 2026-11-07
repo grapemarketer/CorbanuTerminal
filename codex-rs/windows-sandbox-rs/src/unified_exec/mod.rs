@@ -179,4 +179,4 @@ pub(crate) use backends::windows_common::start_runner_pipe_writer;
 pub(crate) use backends::windows_common::start_runner_stdin_writer;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

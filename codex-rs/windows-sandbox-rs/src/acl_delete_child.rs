@@ -30,6 +30,7 @@ use super::FILE_MAPPING;
 use super::INHERITED_ACE;
 use super::is_exact_delete_child_deny;
 use super::walk::Handle;
+use super::walk::Kind;
 use super::walk::Subfolder;
 use super::walk::check_threads;
 use super::walk::list;
@@ -93,8 +94,6 @@ use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
 use windows_sys::Win32::Security::SetSecurityDescriptorGroup;
 use windows_sys::Win32::Security::SetSecurityDescriptorOwner;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
@@ -280,10 +279,8 @@ unsafe fn walk(
 unsafe fn sync_below(root: &Path, written: &Handle, psid: *mut c_void) -> Result<()> {
     // The folder itself, not a link, and the one whose DACL was written.
     let handle = Handle::open(root, READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE)?;
-    if handle.attributes()? & KIND_BITS != FILE_ATTRIBUTE_DIRECTORY
-        || handle.identity()? != written.identity()?
-    {
-        bail!("{} is not the plain folder written", root.display());
+    if handle.kind()?.kind() != Kind::Folder || handle.identity()? != written.identity()? {
+        bail!("{} is not the folder written", root.display());
     }
     // The SID outlives the walk, which ends before this returns.
     let sid = psid as usize;
@@ -315,8 +312,6 @@ enum Place {
     Below(Subfolder),
 }
 
-const KIND_BITS: u32 = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
-
 /// One folder of [`sync_below`]: checks (and writes) its entries, adding its
 /// plain subfolders to `found`.
 unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>) -> Result<()> {
@@ -343,8 +338,9 @@ unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>
     }
     for (name, listed) in entries {
         let path = folder.path.join(OsString::from_wide(&name));
-        let is_dir = listed & FILE_ATTRIBUTE_DIRECTORY != 0;
-        let is_plain_dir = listed & KIND_BITS == FILE_ATTRIBUTE_DIRECTORY;
+        let is_dir = listed.is_dir();
+        // A folder, not a link: written if needed and walked.
+        let is_plain_dir = listed.kind() == Kind::Folder;
         if !is_dir && is_mutant(Mutant::FilesUnchecked) {
             continue;
         }
@@ -356,7 +352,7 @@ unsafe fn sync_folder(folder: Folder, psid: *mut c_void, found: &mut Vec<Folder>
         };
         // The entry itself, links not followed.
         let handle = open_relative(dir.0, &name, access)?;
-        if handle.attributes()? & KIND_BITS != listed & KIND_BITS {
+        if !handle.kind()?.same_kind(listed) {
             bail!("{} changed while being checked", path.display());
         }
         let child = Descriptor::read(handle.0)?;

@@ -110,23 +110,32 @@ fn list_and_open_relative_see_entries_without_following_links() {
     // SAFETY: a folder opened for listing.
     let listed = unsafe { list(handle.0) }.expect("list");
     let attributes = |name: &str| {
-        listed
-            .iter()
-            .find(|(n, _)| *n == wide(name))
-            .map(|(_, a)| a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+        listed.iter().find(|(n, _)| *n == wide(name)).map(|(_, a)| {
+            (
+                a.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT),
+                a.kind(),
+            )
+        })
     };
     assert_eq!(names(&handle), vec!["file.txt", "jn", "sub"]);
-    assert_eq!(attributes("sub"), Some(FILE_ATTRIBUTE_DIRECTORY));
+    assert_eq!(
+        attributes("sub"),
+        Some((FILE_ATTRIBUTE_DIRECTORY, Kind::Folder))
+    );
     assert_eq!(
         attributes("jn"),
-        Some(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+        Some((
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT,
+            Kind::Link
+        ))
     );
+    assert_eq!(attributes("file.txt"), Some((0, Kind::File)));
     // SAFETY: entries of the open folder.
     unsafe {
         let link = open_relative(handle.0, &wide("jn"), READ_CONTROL).expect("open link");
-        assert_ne!(
-            link.attributes().expect("attributes") & FILE_ATTRIBUTE_REPARSE_POINT,
-            0,
+        assert_eq!(
+            link.kind().expect("kind").kind(),
+            Kind::Link,
             "the link itself, not its target"
         );
         let file = open_relative(handle.0, &wide("file.txt"), FILE_READ_DATA).expect("open file");

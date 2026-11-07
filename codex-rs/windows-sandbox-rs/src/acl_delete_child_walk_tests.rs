@@ -61,9 +61,18 @@ struct Outcome {
 /// `None` if the setup could not run here.
 fn equality_case(name: &str, setup: Setup) -> Option<Outcome> {
     let base = tempfile::tempdir().expect("base dir");
+    equality_case_in(base.path(), name, &setup)
+}
+
+/// [`equality_case`] in `base`.
+fn equality_case_in(
+    base: &Path,
+    name: &str,
+    setup: &dyn Fn(&Path, &Path) -> bool,
+) -> Option<Outcome> {
     // Snapshots read through the long-path form; the steps get the plain
     // form, as the sandbox passes roots.
-    let verbatim = std::fs::canonicalize(base.path())
+    let verbatim = std::fs::canonicalize(base)
         .expect("canonical base")
         .join("t");
     let plain = dunce::simplified(&verbatim).to_path_buf();
@@ -576,4 +585,54 @@ fn d311_broken_versions_are_caught() {
         }
     }
     assert!(missed.is_empty(), "broken versions not caught: {missed:?}");
+}
+
+/// Cloud-file (OneDrive) placeholder folders are reparse points but not
+/// links: Windows' walk goes into them, and so must the check, which also
+/// finds a stale file inside one.
+#[test]
+fn d311_cloud_placeholder_folders_match_the_tree_walk() {
+    use crate::unified_exec::tests::cloud_placeholder::ExposePlaceholders;
+    use crate::unified_exec::tests::cloud_placeholder::SyncRoot;
+    use crate::unified_exec::tests::cloud_placeholder::is_placeholder;
+    let _guard = crate::unified_exec::tests::legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
+    for stale in [false, true] {
+        let base = tempfile::tempdir().expect("base dir");
+        let sync_roots = std::cell::RefCell::new(Vec::new());
+        let setup = |root: &Path, _: &Path| {
+            let cloud = root.join("src\\cloud");
+            std::fs::create_dir_all(&cloud).expect("sync root");
+            let sync_root = SyncRoot::register(&cloud);
+            sync_root.placeholder_folder("a");
+            sync_root.placeholder_folder("p");
+            std::fs::create_dir_all(cloud.join("a\\b")).expect("folder");
+            std::fs::write(cloud.join("a\\b\\f.rs"), b"f").expect("file");
+            std::fs::write(cloud.join("p\\g.rs"), b"g").expect("file");
+            assert!(is_placeholder(&cloud) && is_placeholder(&cloud.join("a")));
+            if stale {
+                add_stale_inherited_entry(&cloud.join("a\\b\\f.rs"));
+            }
+            sync_roots.borrow_mut().push(sync_root);
+            true
+        };
+        let name = if stale {
+            "P2-stale-file-in-a-placeholder"
+        } else {
+            "P1-placeholders"
+        };
+        let outcome = equality_case_in(base.path(), name, &setup).expect("runs everywhere");
+        drop(sync_roots);
+        assert!(
+            outcome.differing.is_empty(),
+            "{name}: {:?}",
+            outcome.differing
+        );
+        let first = if stale {
+            Written::Walked
+        } else {
+            Written::Direct
+        };
+        assert_eq!(outcome.written[0], first, "{name}");
+    }
 }
