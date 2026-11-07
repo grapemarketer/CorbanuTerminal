@@ -3,9 +3,12 @@
 //! - roots and children with a protected label SACL, with stale objects
 //!   below a protected folder;
 //! - reparse points other than links and cloud-file placeholders (ProjFS,
-//!   WCI, DFS), which both walks treat as plain files and folders;
-//! - D261's check of a root swapped for another folder (or a link) between
-//!   the write and the check, which must check nothing.
+//!   WCI, DFS), which both walks treat as plain files and folders. The tags
+//!   are set directly, with no provider running for them; a running ProjFS
+//!   or WCI provider may present its folders differently;
+//! - D261's check of a root swapped for another folder (its file-ID guard)
+//!   or for a link (its folder guard) between the write and the check,
+//!   which must check nothing.
 //!
 //! A root that is a link is not here: Windows' walks write the link itself,
 //! while ours follow it (#1722; production callers never pass one).
@@ -339,10 +342,11 @@ fn check_below(root: &Path, written: &Handle) -> anyhow::Result<()> {
     unsafe { super::super::super::sync_below(root, written, sid.as_ptr()) }
 }
 
-/// #1715: D261's check below a root that was swapped for another folder,
-/// or for a link to the folder written, between the write and the check
-/// fails (so the caller walks) and writes nothing below the swapped-in
-/// folder, which a check of it would write.
+/// #1715: D261's check below a root that was swapped for another folder
+/// (caught by the file-ID guard), or for a junction to the folder written
+/// (caught by the folder guard), between the write and the check fails (so
+/// the caller walks) and writes nothing below either folder, which a check
+/// of either would write.
 #[test]
 fn d311_root_swapped_before_the_check_is_not_checked() {
     let base = tempfile::tempdir().expect("base dir");
@@ -356,11 +360,11 @@ fn d311_root_swapped_before_the_check_is_not_checked() {
         plain.join("other"),
         plain.join("twin"),
     );
-    std::fs::create_dir_all(&root).expect("root");
-    build_tree(&root);
+    workspace_missing_copies(&root);
     workspace_missing_copies(&other);
     workspace_missing_copies(&twin);
-    // Control: a check of such a folder (its own handle) writes below it.
+    // Control: a check of such a folder (its own handle) writes below it,
+    // as one of either folder would.
     let before = full_snapshot(&twin);
     check_below(&twin, &written_handle(&twin)).expect("check the twin");
     assert_ne!(
