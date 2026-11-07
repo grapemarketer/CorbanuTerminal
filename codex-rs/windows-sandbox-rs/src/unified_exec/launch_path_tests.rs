@@ -23,6 +23,14 @@
 //! status name), never on message text, which Windows localizes. Every
 //! launch ends what it left running outside the sandbox, and the tests check
 //! that the Task Scheduler task and the roots' label records are gone.
+//!
+//! #1689: the PowerShell launchers must run in `FullLanguage` mode, or they
+//! can't even try a COM route ("Method invocation is supported only on core
+//! types"), so the tests fail unless the launcher reports that mode. Windows
+//! PowerShell falls back to `ConstrainedLanguage` when it can't write its
+//! policy test script to `%TEMP%`, which a Low-integrity command can't when
+//! the sandbox couldn't label the runner's shared temp folder Low. Each
+//! PowerShell launch therefore gets a temp folder of its own.
 
 use super::*;
 use crate::proc_thread_attr::ProcThreadAttributeList;
@@ -82,6 +90,9 @@ const HOLD_ENV: &str = "CODEX_1507_HOLD";
 const REPORT_ENV: &str = "CODEX_1507_REPORT";
 const LAUNCH_RESULT: &str = "launch: ";
 const NEW_PROCESSES: &str = "new: ";
+/// The PowerShell launcher's language mode, printed before anything else.
+const LANGUAGE_RESULT: &str = "language: ";
+const FULL_LANGUAGE: &str = "FullLanguage";
 /// The start of a report from a child that stayed in the session.
 const CONTAINED: &str = "in_launcher_job=true in_any_job=true low=true restricted=true";
 
@@ -453,6 +464,11 @@ fn report_command(report: &Path) -> String {
 struct LaunchOutcome {
     launch: Option<String>,
     report: Option<String>,
+    /// The launcher's PowerShell language mode (PowerShell launches only).
+    language: Option<String>,
+    /// Whether the launcher was a PowerShell script, which must report
+    /// `FullLanguage` mode.
+    powershell: bool,
     /// Processes the launch started that weren't there before, as seen
     /// from outside the sandbox (PowerShell launches only).
     new_processes: Vec<String>,
@@ -470,6 +486,19 @@ impl LaunchOutcome {
     /// `refusal` (the step and error measured, so a broken probe doesn't pass
     /// as a refusal), or started in the launcher's job, Low and restricted.
     fn assert_contained(&self, route: &str, refusal: &[&str]) {
+        println!(
+            "\nlaunch-path {route}: language={:?} launch={:?} report={:?} new={:?} sweep={:?}",
+            self.language, self.launch, self.report, self.new_processes, self.sweep
+        );
+        if self.powershell {
+            assert_eq!(
+                self.language.as_deref(),
+                Some(FULL_LANGUAGE),
+                "{route}: the PowerShell launcher did not run in FullLanguage mode, so the route was not tried (#1689)\nstdout={:?}\n{}",
+                self.stdout,
+                self.log
+            );
+        }
         let refused = self.launch.as_deref().is_some_and(|launch| {
             launch.starts_with("started=false") && refusal.iter().all(|part| launch.contains(part))
         });
@@ -477,10 +506,6 @@ impl LaunchOutcome {
             .report
             .as_deref()
             .is_some_and(|report| report.starts_with(CONTAINED));
-        println!(
-            "\nlaunch-path {route}: launch={:?} report={:?} new={:?} sweep={:?}",
-            self.launch, self.report, self.new_processes, self.sweep
-        );
         assert!(
             (refused && self.report.is_none()) || contained,
             "{route} left the session: launch={:?} report={:?} new={:?}\nstdout={:?}\n{}",
@@ -542,6 +567,10 @@ async fn run_launch(
         .lines()
         .find_map(|line| line.trim().strip_prefix(LAUNCH_RESULT))
         .map(str::to_string);
+    let language = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(LANGUAGE_RESULT))
+        .map(str::to_string);
     // Brokers start the child asynchronously.
     let wait = if launch
         .as_deref()
@@ -573,6 +602,8 @@ async fn run_launch(
     LaunchOutcome {
         launch,
         report: report_text,
+        language,
+        powershell: false,
         new_processes,
         sweep: sweep.finish(),
         // Set once all of the test's sessions have ended.
@@ -735,6 +766,9 @@ fn run_powershell_launch(
 ) -> LaunchOutcome {
     let _guard = legacy_process_test_guard();
     let root = user_owned_test_root();
+    // Not the runner's shared temp folder, which the sandbox may be unable
+    // to label Low (#1689).
+    let temp = user_owned_test_root();
     let runtime = current_thread_runtime();
     let mut outcome = runtime.block_on(async {
         let codex_home = sandbox_home(name);
@@ -751,6 +785,8 @@ fn run_powershell_launch(
             (EXE_ENV, test_exe()),
             (ARGS_ENV, report_args(&report)),
             (DIR_ENV, root.path().display().to_string()),
+            ("TEMP", temp.path().display().to_string()),
+            ("TMP", temp.path().display().to_string()),
         ];
         env.extend(extra_env);
         run_launch(
@@ -770,13 +806,18 @@ fn run_powershell_launch(
         )
         .await
     });
-    outcome.labels_left = labels_still_recorded(root.path());
+    outcome.powershell = true;
+    outcome.labels_left =
+        labels_still_recorded(root.path()).or_else(|| labels_still_recorded(temp.path()));
     outcome
 }
 
 /// Shared PowerShell prologue: `$cmd`, `$exe`, `$args1` and `$dir`, with
-/// the launcher's id filled in, and `Report-Error`.
+/// the launcher's id filled in, and `Report-Error`. It first prints the
+/// language mode, and stops there unless it is `FullLanguage`.
 const POWERSHELL_PROLOGUE: &str = r#"
+"language: $($ExecutionContext.SessionState.LanguageMode)"
+if ("$($ExecutionContext.SessionState.LanguageMode)" -ne 'FullLanguage') { exit 0 }
 $ErrorActionPreference = 'Stop'
 $cmd = $env:CODEX_1507_CMD.Replace('@LAUNCHER@', "$PID")
 $args1 = $env:CODEX_1507_ARGS.Replace('@LAUNCHER@', "$PID")
