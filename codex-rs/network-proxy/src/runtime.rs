@@ -1537,7 +1537,11 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_subdomain_wildcards_exclude_apex() {
-        let state = network_proxy_state_for_policy(network_settings(&["*.openai.com"], &[]));
+        // Exercise domain matching independently of DNS/local-address checks.
+        let state = network_proxy_state_for_policy(NetworkProxyConfig {
+            allow_local_binding: true,
+            ..network_settings(&["*.openai.com"], &[])
+        });
 
         assert_eq!(
             state
@@ -1550,6 +1554,34 @@ mod tests {
             state.host_blocked("openai.com", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_subdomain_wildcards_work_offline_and_keep_deny_precedence() {
+        // .invalid cannot resolve: these assertions must remain DNS-independent.
+        let state = network_proxy_state_for_policy(NetworkProxyConfig {
+            allow_local_binding: true,
+            ..network_settings(&["*.example.invalid"], &["blocked.example.invalid"])
+        });
+
+        for (host, expected) in [
+            ("api.example.invalid", HostBlockDecision::Allowed),
+            ("nested.api.example.invalid", HostBlockDecision::Allowed),
+            (
+                "example.invalid",
+                HostBlockDecision::Blocked(HostBlockReason::NotAllowed),
+            ),
+            (
+                "blocked.example.invalid",
+                HostBlockDecision::Blocked(HostBlockReason::Denied),
+            ),
+        ] {
+            assert_eq!(
+                state.host_blocked(host, /*port*/ 80).await.unwrap(),
+                expected,
+                "wildcard policy should not depend on DNS: {host}"
+            );
+        }
     }
 
     #[tokio::test]

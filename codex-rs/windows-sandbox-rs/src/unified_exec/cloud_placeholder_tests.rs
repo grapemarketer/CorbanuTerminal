@@ -82,10 +82,10 @@ fn library_proc(library: &str, name: &str) -> unsafe extern "system" fn() -> isi
 
 /// A Cloud Files sync root with no provider connected, as OneDrive's folder is
 /// while OneDrive isn't running; unregistered when dropped.
-struct SyncRoot(Vec<u16>);
+pub(crate) struct SyncRoot(Vec<u16>);
 
 impl SyncRoot {
-    fn register(path: &Path) -> Self {
+    pub(crate) fn register(path: &Path) -> Self {
         let wide = to_wide(path);
         let name = to_wide("CorbanuSandboxTest");
         let version = to_wide("1");
@@ -121,7 +121,13 @@ impl SyncRoot {
 
     /// Creates folder placeholder `name` in the sync root, marked fully
     /// populated (as OneDrive's are once listed).
-    fn placeholder_folder(&self, name: &str) {
+    pub(crate) fn placeholder_folder(&self, name: &str) {
+        self.placeholder_folder_in(&self.0, name);
+    }
+
+    /// Creates folder placeholder `name` in folder `base` (NUL-terminated,
+    /// in the sync root).
+    fn placeholder_folder_in(&self, base: &[u16], name: &str) {
         let relative = to_wide(name);
         let identity = [0u8; 4];
         let mut info = PlaceholderCreateInfo {
@@ -145,7 +151,7 @@ impl SyncRoot {
         let hr = unsafe {
             let create: CreatePlaceholdersFn =
                 std::mem::transmute(cloud_api("CfCreatePlaceholders"));
-            create(self.0.as_ptr(), &mut info, 1, 0, &mut created)
+            create(base.as_ptr(), &mut info, 1, 0, &mut created)
         };
         assert_eq!((hr, info.result, created), (0, 0, 1), "placeholder {name}");
     }
@@ -163,10 +169,10 @@ impl Drop for SyncRoot {
 
 /// This process sees placeholders as they are (`PHCM_EXPOSE_PLACEHOLDERS`)
 /// until dropped.
-struct ExposePlaceholders(i8);
+pub(crate) struct ExposePlaceholders(i8);
 
 impl ExposePlaceholders {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let previous = set_placeholder_mode(/*PHCM_EXPOSE_PLACEHOLDERS*/ 2);
         assert!(previous >= 0, "RtlSetProcessPlaceholderCompatibilityMode");
         Self(previous)
@@ -192,7 +198,7 @@ fn set_placeholder_mode(mode: i8) -> i8 {
 
 /// A reparse point that isn't a link (a junction, symbolic link or mount
 /// point), as cloud placeholders are.
-fn is_placeholder(path: &Path) -> bool {
+pub(crate) fn is_placeholder(path: &Path) -> bool {
     crate::workspace_acl::is_reparse_point(path)
         && fs::symlink_metadata(path).is_ok_and(|meta| !meta.file_type().is_symlink())
 }
@@ -299,4 +305,67 @@ fn legacy_cloud_placeholder_root_gets_its_label_back() {
     drop(sync_root);
 
     assert_eq!((during, after), (true, false));
+}
+
+/// #1672: D283's walk for nested `.codex`/`.agents` looks inside placeholder
+/// folders, and a placeholder named `.codex` is protected like a plain one.
+/// Before, the walk skipped every reparse point, so a `.codex` below a
+/// placeholder wasn't protected, one a command made there wasn't recorded
+/// as planted, and a placeholder `.codex` was never protected.
+#[test]
+fn legacy_nested_project_metadata_in_cloud_placeholders_is_watched() {
+    let _guard = legacy_process_test_guard();
+    let _exposed = ExposePlaceholders::new();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let cloud = workspace.join("cloud");
+    fs::create_dir_all(&cloud).expect("create sync root");
+    let sync_root = SyncRoot::register(&cloud);
+    sync_root.placeholder_folder("p");
+    sync_root.placeholder_folder("q");
+    sync_root.placeholder_folder_in(&to_wide(cloud.join("q")), ".codex");
+    fs::create_dir(cloud.join("p\\.codex")).expect("create nested .codex");
+    for dot_codex in ["p\\.codex", "q\\.codex"] {
+        fs::write(cloud.join(dot_codex).join("config.toml"), "original").expect("seed config");
+    }
+    assert_eq!(
+        [
+            &cloud,
+            &cloud.join("p"),
+            &cloud.join("q"),
+            &cloud.join("q\\.codex")
+        ]
+        .map(|path| is_placeholder(path)),
+        [true; 4]
+    );
+    let started = run_script(
+        &PermissionProfile::workspace_write(),
+        &workspace,
+        &[],
+        HashMap::from([("C".to_string(), cloud.to_string_lossy().into_owned())]),
+        concat!(
+            "echo planted>> \"%C%\\p\\.codex\\config.toml\"\r\n",
+            "echo planted>> \"%C%\\q\\.codex\\config.toml\"\r\n",
+            "ren \"%C%\\q\\.codex\" codex-moved\r\n",
+            "mkdir \"%C%\\p\\new\\.agents\"\r\n",
+        ),
+    );
+    let kept = ["p\\.codex", "q\\.codex"]
+        .map(|dot_codex| fs::read_to_string(cloud.join(dot_codex).join("config.toml")).ok());
+    let moved = cloud.join("q\\codex-moved").exists();
+    let canonical_cloud = dunce::canonicalize(&cloud).expect("canonical sync root");
+    let planted = crate::planted_project_metadata().expect("planted records");
+    let planted = ["p\\new\\.agents", "p\\.codex", "q\\.codex"]
+        .map(|entry| planted.contains(&canonical_cloud.join(entry)));
+    drop(sync_root);
+
+    assert_eq!(
+        (started, kept, moved, planted),
+        (
+            Ok(0),
+            [Some("original".to_string()), Some("original".to_string())],
+            false,
+            [true, false, false],
+        )
+    );
 }

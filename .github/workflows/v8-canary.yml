@@ -9,8 +9,15 @@ on:
   pull_request: {}
   workflow_dispatch:
 
+# A called workflow sees its caller's github context, so this workflow never
+# runs on `push` by itself: `push` means postmerge-ci called it. Scope that case
+# to the caller's run. A shared main group would keep only one pending run, so
+# each push behind a multi-hour V8 build cancelled the previous push's queued
+# canary and failed that commit's "Postmerge CI results" even though every
+# test passed. Per-run groups give every main commit its own V8 result; only
+# commits that touch V8 inputs (v8_canary_changes.py) pay for the build matrix.
 concurrency:
-  group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
+  group: ${{ github.workflow }}::${{ github.event_name == 'push' && format('run-{0}', github.run_id) || (github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name) }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
@@ -309,7 +316,7 @@ jobs:
 
       - name: Restore upstream source-build cache
         id: source_build_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache
@@ -330,7 +337,7 @@ jobs:
           $basename = "sccache-$version-$platform"
           $url = "https://github.com/mozilla/sccache/releases/download/$version/$basename.tar.gz"
           cd ~
-          curl -LO $url
+          curl.exe -fLO --retry 5 --retry-all-errors --retry-connrefused --connect-timeout 20 --max-time 300 $url
           tar -xzvf "$basename.tar.gz"
           . $basename/sccache --start-server
           echo "$(pwd)/$basename" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -387,7 +394,7 @@ jobs:
       - name: Save upstream source-build cache
         if: steps.source_build_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.setup_ci.outputs.cargo-target-dir }}/sccache

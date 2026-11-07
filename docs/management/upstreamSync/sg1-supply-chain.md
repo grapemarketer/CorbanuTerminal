@@ -85,9 +85,10 @@ is 0.0.102 on `main` and 0.0.96 upstream (keep ours); `bazel_dep v8` is replaced
   denoland/rusty_v8#2091 (open, by the fork's author). Reviewed: no build-script, download or FFI-surface change.
 - Risk: a personal fork can disappear or be force-pushed. The pin is a full revision and Cargo records it in
   `Cargo.lock`, so a force-push can't change what we build, but deletion would break fresh builds. Proposed S5
-  entry condition (decision for Travis): before the final PR, `allow-git` and the patch point to a CorbanuCore-owned
+  entry condition: before the final PR, `allow-git` and the patch point to a CorbanuCore-owned
   mirror of this revision, or back to `denoland/rusty_v8` if #2091 has shipped, so `main`'s `deny.toml` never
-  allows a personal fork.
+  allows a personal fork. **Decided (D317, 2026-11-07):** the skeleton already points at `CorbanuCore/rusty_v8`
+  ([provenance](rusty_v8-provenance.md)).
 - Cost: a crates.io package excludes git submodules, but a git dependency doesn't. With the patch, `cargo metadata`
   on a fresh `CARGO_HOME` clones the fork and its submodules (V8, ICU, highway, FP16 and others from
   chromium.googlesource.com), several GB. On the Mac the ICU fetch kept failing (`early EOF`) and was stopped
@@ -136,7 +137,8 @@ Windows it needs GStreamer 1.28 (`gstreamer` 0.25 with `v1_28`) through `pkg-con
   Upstream runs this with a BuildBuddy remote cache and its own Windows runner groups.
 - System packages: Homebrew has 1.28.8 (macOS dev machines can use it); Ubuntu 24.04 (glitch and the hosted
   runners) only has 1.24.2, which is too old; Windows would need GStreamer's MSVC installer, which none of our runners or the Windows PC has.
-- Recommendation (decision for Travis in the S0 report): exclude `codex-voice-host` from our cargo lanes and local
+- **Decided (D316, 2026-11-07):** exclude `codex-voice-host` from our cargo lanes and local
   workspace checks (`--exclude codex-voice-host`) through S4, keep the crate and upstream's `third_party/voice`
   in the tree, and decide separately whether Corbanu ships voice; if it does, adopt upstream's
-  `cargo_voice_inputs` job in S5 with an Actions cache instead of BuildBuddy.
+  `cargo_voice_inputs` job in S5 with an Actions cache instead of BuildBuddy. The skeleton puts `voice-host` in the
+  workspace `exclude` list.

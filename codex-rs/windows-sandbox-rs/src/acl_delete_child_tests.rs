@@ -589,3 +589,6 @@ impl Drop for SecurityInfo {
         }
     }
 }
+
+#[path = "acl_delete_child_walk_tests.rs"]
+mod walk_equality;

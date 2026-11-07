@@ -12,7 +12,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install dotslash.
-RUN curl -LSfs "https://github.com/facebook/dotslash/releases/download/v0.5.8/dotslash-ubuntu-22.04.$(uname -m).tar.gz" | tar fxz - -C /usr/local/bin
+RUN curl -LSfs --retry 5 --retry-connrefused --connect-timeout 20 "https://github.com/facebook/dotslash/releases/download/v0.5.8/dotslash-ubuntu-22.04.$(uname -m).tar.gz" | tar fxz - -C /usr/local/bin
 
 # Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.
 USER ubuntu

@@ -212,7 +212,24 @@ unsandboxed. For an explicitly configured read-only path nested deeper in a
 writable root (`w\a\b`, say), each folder between the root and it (`w\a`)
 also denies the sandbox `DELETE`, and that folder's parent denies Everyone
 `FILE_DELETE_CHILD`, so a command can't move or rename the folder away and
-recreate the read-only path (#1506 item 3, D263). Commands can still write
+recreate the read-only path (#1506 item 3, D263). An explicitly configured
+read-only path that doesn't exist yet is created (as a folder) before the
+command starts and protected the same way, whether it comes from the
+profile alone (the shell tool, unified exec, `codex sandbox`) or as an extra
+deny-write path (#1686); a link a command could replace on the way to it
+stops the command first. A path meant to be a file (`.env`, say) thus becomes an empty
+folder in each writable root that lacks it, which tools that read it may
+reject. Such a path is created before the session records which `.codex`/`.agents`
+folders exist (D262, D283 below), so a configured read-only `.agents` (or a
+nested `.codex`) the sandbox makes isn't reported as planted (a session that
+started before it was made, and saw it absent, still reports it, except one
+whose only root containing it is a `%TEMP%` one, which isn't watched). A
+top-level `.codex`, `.agents` or `.git` made on the way to a deeper
+read-only path (`.codex\hooks`, `.git\hooks`) is then protected as one
+that was there. A
+skip-missing entry applies only to a path that exists, a path in
+a writable root that doesn't exist is left alone, and the command root's
+top-level `.codex` is covered by D262 below. Commands can still write
 inside those folders but can't delete or rename the folders themselves; the
 default `.git`, `.codex` and `.agents` protections sit directly in the root
 and don't add these. A `.codex` or `.agents` folder at the top of a writable
@@ -228,7 +245,18 @@ session that saw it appear still runs. A planted link counts as the folder
 itself (it isn't followed), and a linked worktree's hooks from a planted root
 checkout `.codex` are ignored too. If the records can't be read, no project
 `.codex`/`.agents` content is loaded at all. Anything that creates such a
-folder while a session runs is reported, including the user.
+folder while a session runs is reported, including the user. A top-level
+`.codex` or `.agents` that is itself a link (a junction, symbolic link or
+mount point), or can't be inspected, stops the command: its protections
+would land on the link's target, and a command could replace the link with
+a writable folder that D262 doesn't report, since something was there when
+the session started (#1682). Replace the link with a folder. This applies
+to the roots D283 watches (not those that come only from `%TEMP%`/`%TMP%`)
+that hold their own write capability; the user profile folder doesn't
+(only its children do), so a linked `~\.codex` there doesn't stop the
+command. Other reparse points, such as cloud placeholders, aren't links
+(#1668). A top-level `.git` link isn't refused: `.git` may be missing and
+then created by a command anyway, and some tools (Google's `repo`) link it.
 
 `.codex`/`.agents` deeper in a writable root (Core loads them from every
 folder between the project root and its working directory) are covered too
@@ -239,7 +267,10 @@ while any legacy command ran would count as planted, and the temp folder
 isn't treated as a project location; a workspace or configured root stays
 watched even if the temp folder resolves to it), with its file identity; it doesn't look inside `.git`
 folders, inside those it finds, or behind links (about 30 ms on a
-100,000-file workspace). Names are compared the way NTFS compares them, so
+100,000-file workspace). Other reparse points, such as ProjFS (VFS for Git)
+folders or cloud placeholders a program sees as they are, aren't links: the
+walk looks inside them, and one named `.codex` or `.agents` is protected and
+identified like a plain folder (#1672). Names are compared the way NTFS compares them, so
 a name such as `.agentſ` counts (and is never trusted). Each one it finds
 gets the top-level ones' protection: an explicit Medium label, the
 capability-SID write deny and the tracked Everyone delete-child denies. It
@@ -264,6 +295,11 @@ refused. Costs and limits:
   there).
 - A command doesn't start if those denies can't be written.
 - Sessions started by builds before D283 aren't watched for nested folders.
+- The walk lists ProjFS folders and exposed cloud placeholders through their
+  provider (#1672): a stalled provider stalls it, and one that fails a
+  listing makes that folder unlistable. Content a provider hasn't filled in
+  yet comes from the provider, not from writes the sandbox's denies govern,
+  as for such files in a plain `.codex`.
 
 The
 Everyone deny entries are visible in the folder's security settings while a

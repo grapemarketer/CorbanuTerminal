@@ -55,9 +55,13 @@ doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
 has ended). Check its contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
-when the command ends is treated the same way. Commands can't change, move
-or delete the ones that existed when they started, or the folders above
-them. A folder the sandbox can't list counts as planted. Folders inside
+when the command ends is treated the same way. A read-only `.codex` or
+`.agents` folder your permission profile names that doesn't exist yet (or
+one on the way to a read-only folder inside it) is created by Corbanu
+Terminal before the command starts, so that command doesn't count it as
+planted; another command that was already running still does. Commands
+can't change, move or delete the ones that existed when they started, or
+the folders above them. A folder the sandbox can't list counts as planted. Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a

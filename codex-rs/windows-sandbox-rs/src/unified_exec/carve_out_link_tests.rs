@@ -1,6 +1,6 @@
 //! D293 (#1542 items 1 and 2, #1667): links at or above an explicit
 //! read-only path nested in a writable root, and such a path spelled through
-//! a linked root.
+//! a linked root; #1682: a top-level `.codex`/`.agents` that is a link.
 
 use super::*;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -329,5 +329,281 @@ fn link_above_carve_out_finds_links_below_the_root() {
             None,
             None,
         )
+    );
+}
+
+/// #1686: a configured read-only path that doesn't exist yet is created
+/// before the command starts and protected like one that exists, whether it
+/// comes as an extra deny-write path (as `command/exec` passes it) or only
+/// in the profile (as the shell tool and unified exec do): the command can't
+/// write in it, nor move it or the folder above it away and recreate it.
+/// Before, a path that came only in the profile was dropped while missing.
+#[test]
+fn legacy_missing_read_only_path_is_created_and_protected() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [true, false]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            let read_only = workspace.join("a\\ro");
+            missing_read_only_path_outcome(&workspace, &read_only, as_deny_write_path)
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [true, false].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            true,
+            false,
+            false,
+            Some("after\r\n".to_string())
+        ))
+    );
+}
+
+/// Runs the #1686 script with `read_only` configured read-only (and, with
+/// `as_deny_write_path`, also passed as an extra deny-write path).
+fn missing_read_only_path_outcome(
+    workspace: &Path,
+    read_only: &Path,
+    as_deny_write_path: bool,
+) -> (bool, Result<i32, String>, bool, bool, bool, Option<String>) {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(workspace),
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: absolute(read_only),
+                },
+                FileSystemAccessMode::Read,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+        vec![absolute(read_only)]
+    } else {
+        Vec::new()
+    };
+    let started = run_script(
+        &profile,
+        workspace,
+        &carve_outs,
+        HashMap::from([("W".to_string(), workspace.to_string_lossy().into_owned())]),
+        concat!(
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "rmdir \"%W%\\a\\ro\"\r\n",
+            "ren \"%W%\\a\" a-moved\r\n",
+            "mkdir \"%W%\\a\\ro\"\r\n",
+            "echo planted> \"%W%\\a\\ro\\config.toml\"\r\n",
+            "echo after> \"%W%\\a\\other.txt\"\r\n",
+        ),
+    );
+
+    (
+        as_deny_write_path,
+        started,
+        read_only.is_dir(),
+        read_only.join("config.toml").exists(),
+        workspace.join("a-moved").exists(),
+        fs::read_to_string(workspace.join("a\\other.txt")).ok(),
+    )
+}
+
+/// #1682: a writable root's top-level `.codex` or `.agents` that is a
+/// junction stops the command. Before, its protections landed on the
+/// junction's target, so the command could remove the junction and make a
+/// writable folder there, which D262 didn't report.
+#[test]
+fn legacy_top_level_project_metadata_link_stops_the_command() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [".codex", ".agents"]
+        .into_iter()
+        .map(|name| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            let real = test_root.path().join("real");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            fs::create_dir_all(&real).expect("create target");
+            fs::write(real.join("config.toml"), "original").expect("seed target file");
+            let link = workspace.join(name);
+            junction(&link, &real);
+            let _unlink = Unlink(link.clone());
+            let started = run_script(
+                &PermissionProfile::workspace_write(),
+                &workspace,
+                &[],
+                HashMap::from([("L".to_string(), link.to_string_lossy().into_owned())]),
+                concat!(
+                    "rmdir \"%L%\"\r\n",
+                    "mkdir \"%L%\"\r\n",
+                    "echo planted> \"%L%\\config.toml\"\r\n",
+                ),
+            );
+            // A root without its own write capability can't lose the
+            // link, so it doesn't count: the user profile folder, whose
+            // children each get one instead (here its `child` and the link
+            // itself). With its own capability it counts.
+            fs::create_dir_all(workspace.join("child")).expect("create child");
+            let canonical = dunce::canonicalize(&workspace).expect("canonical workspace");
+            let codex_home = sandbox_home("d1682-profile");
+            let capabilities = |roots: Vec<PathBuf>| {
+                crate::spawn_prep::root_capability_sids(codex_home.path(), &canonical, roots)
+                    .expect("capability SIDs")
+            };
+            let profile_children = capabilities(crate::setup::expand_user_profile_root_for(
+                vec![canonical.clone()],
+                &canonical,
+            ));
+            let own = capabilities(vec![canonical.clone()]);
+            let refused = |capabilities: &[crate::spawn_prep::RootCapabilitySid]| {
+                crate::spawn_prep::refuse_linked_project_metadata(
+                    std::slice::from_ref(&canonical),
+                    capabilities,
+                )
+                .is_err_and(|err| format!("{err:#}").contains("#1682"))
+            };
+            let without_capability = (
+                profile_children
+                    .iter()
+                    .any(|sid| sid.root == canonical.join("child"))
+                    && profile_children.iter().all(|sid| sid.root != canonical),
+                refused(&profile_children),
+                refused(&[]),
+                refused(&own),
+            );
+            (
+                name,
+                without_capability,
+                started
+                    .as_ref()
+                    .err()
+                    .is_some_and(|err| err.contains("#1682")),
+                crate::workspace_acl::is_reparse_point(&link),
+                fs::read_to_string(link.join("config.toml")).ok(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [".codex", ".agents"].map(|name| (
+            name,
+            (true, false, false, true),
+            true,
+            true,
+            Some("original".to_string())
+        ))
+    );
+}
+
+/// #1708: a configured read-only path inside a writable root that comes only
+/// from the temp folder setting is protected when it reaches the backend only
+/// through the profile (the shell tool, unified exec), as when it is also
+/// passed as an extra deny-write path. The rest of the temp folder stays
+/// writable. Only the profile-only case failed before #1708; the other was
+/// already protected and is kept as the reference.
+#[test]
+fn legacy_read_only_path_under_temp_root_is_protected() {
+    let _guard = legacy_process_test_guard();
+    let results: Vec<_> = [false, true]
+        .into_iter()
+        .map(|as_deny_write_path| {
+            let test_root = user_owned_test_root();
+            let workspace = test_root.path().join("workspace");
+            let temp = test_root.path().join("temp");
+            let keep = temp.join("keep");
+            fs::create_dir_all(&workspace).expect("create workspace");
+            fs::create_dir_all(&keep).expect("create read-only path");
+            fs::write(keep.join("orig.txt"), "original").expect("seed read-only file");
+            let absolute =
+                |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+            let profile = PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path {
+                            path: absolute(&workspace),
+                        },
+                        FileSystemAccessMode::Write,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Tmpdir,
+                        },
+                        FileSystemAccessMode::Write,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Path {
+                            path: absolute(&keep),
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                ]),
+                NetworkSandboxPolicy::Restricted,
+            );
+            let carve_outs: Vec<AbsolutePathBuf> = if as_deny_write_path {
+                vec![absolute(&keep)]
+            } else {
+                Vec::new()
+            };
+            let temp_value = temp.to_string_lossy().into_owned();
+            let started = run_script(
+                &profile,
+                &workspace,
+                &carve_outs,
+                HashMap::from([
+                    ("TEMP".to_string(), temp_value.clone()),
+                    ("TMP".to_string(), temp_value),
+                    ("K".to_string(), keep.to_string_lossy().into_owned()),
+                ]),
+                concat!(
+                    "echo planted> \"%K%\\new.txt\"\r\n",
+                    "echo changed> \"%K%\\orig.txt\"\r\n",
+                    "echo temp-ok> \"%TEMP%\\beside.txt\"\r\n",
+                ),
+            );
+            (
+                as_deny_write_path,
+                started,
+                keep.join("new.txt").exists(),
+                fs::read_to_string(keep.join("orig.txt")).ok(),
+                fs::read_to_string(temp.join("beside.txt"))
+                    .ok()
+                    .map(|text| text.trim_end().to_string()),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        results,
+        [false, true].map(|as_deny_write_path| (
+            as_deny_write_path,
+            Ok(0),
+            false,
+            Some("original".to_string()),
+            Some("temp-ok".to_string())
+        ))
     );
 }
