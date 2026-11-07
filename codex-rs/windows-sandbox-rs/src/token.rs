@@ -758,12 +758,7 @@ unsafe fn set_elevated_default_dacl(
         (psid_everyone, read_execute),
     ];
     grants.extend(psid_capabilities.iter().map(|sid| (*sid, read_execute)));
-    set_default_dacl_grants(token, &grants)?;
-    // The token object itself gets the same: whoever creates a token gives
-    // it the creator's default DACL, and the runner's (see
-    // `codex_process_hardening::protect_new_objects_by_default`) would leave
-    // this command unable to adjust its own token (MSYS2 does).
-    set_object_dacl(token, &grants)
+    set_default_dacl_grants(token, &grants)
 }
 
 #[cfg(test)]
