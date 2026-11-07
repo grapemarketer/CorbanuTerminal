@@ -247,7 +247,10 @@ async fn tmux_configure_many_preserves_first_default_restart_and_request() -> Re
     configure_api_key(pane, "Provider: Z.AI API Key", &zai_canary)?;
     pane.wait_stable_contains("Configured · active · ready", READY_TIMEOUT)?;
     select_label(pane, "Done")?;
-    pane.wait_stable_contains("Corbanu Terminal", READY_TIMEOUT)?;
+    // The provider list itself reads "... for Corbanu Terminal", so wait for the
+    // chat header instead: the TUI persists the onboarding selection before it
+    // builds the chat widget, so the config is final once the header is drawn.
+    wait_chat_ready(pane)?;
 
     let config = fs::read_to_string(home.path().join("config.toml"))?;
     ensure!(
@@ -266,11 +269,15 @@ async fn tmux_configure_many_preserves_first_default_restart_and_request() -> Re
         home.path(),
     ))?;
     let resumed_pane = resumed.primary_pane();
-    resumed_pane.wait_stable_contains("Corbanu Terminal", READY_TIMEOUT)?;
+    let restarted = resumed_pane.wait_stable_until(
+        "chat header or onboarding after restart",
+        READY_TIMEOUT,
+        |capture| {
+            capture.contains("/model to change") || capture.contains("Choose a provider account")
+        },
+    )?;
     ensure!(
-        !resumed_pane
-            .capture_viewport()?
-            .contains("Choose a provider account"),
+        !restarted.contains("Choose a provider account"),
         "restart unexpectedly reopened onboarding"
     );
     submit_and_wait(

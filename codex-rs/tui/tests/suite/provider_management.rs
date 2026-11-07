@@ -17,6 +17,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use crate::support::chat_ready::session_configured;
 use crate::support::file_hash::sha256_file;
 use crate::support::secret_scan;
 use crate::support::tmux::CommandSpec;
@@ -89,6 +90,7 @@ async fn tmux_astra_selection_cancel_restart_and_request() -> Result<()> {
         let pane = session.primary_pane();
         wait_chat_ready(pane)?;
         if !restart {
+            wait_session_configured(pane)?;
             let before = fs::read_to_string(&config_path)?;
             open_model_picker(pane)?;
             pane.wait_stable_contains("GPT-5.6-Sol", READY_TIMEOUT)?;
@@ -220,6 +222,7 @@ async fn tmux_ambient_model_picker_offers_only_glm() -> Result<()> {
     ))?;
     let pane = session.primary_pane();
     wait_chat_ready(pane)?;
+    wait_session_configured(pane)?;
     for _ in 0..2 {
         open_model_picker(pane)?;
         pane.wait_stable_contains("[Ambient]", READY_TIMEOUT)?;
@@ -875,6 +878,19 @@ fn wait_chat_ready(pane: &TmuxPane<'_>) -> Result<()> {
             || (capture.contains("/model to change")
                 && !capture.contains("Press enter to confirm or esc to go back"))
     })?;
+    Ok(())
+}
+
+/// The footer `wait_chat_ready` accepts is drawn before the session is configured, and a
+/// `/model` entered in that window is either refused ("disabled until startup completes") or
+/// queued, depending on keystroke timing. Wait for the configured header, which is visible
+/// right after startup, before the first `/model`.
+fn wait_session_configured(pane: &TmuxPane<'_>) -> Result<()> {
+    pane.wait_stable_until(
+        "configured session header",
+        READY_TIMEOUT,
+        session_configured,
+    )?;
     Ok(())
 }
 
