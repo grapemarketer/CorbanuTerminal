@@ -3908,6 +3908,24 @@ fn issue688_v1_history_wire_case(
     offered: &[&str],
     expected: &str,
 ) {
+    issue688_history_wire_case_with(
+        anthropic,
+        namespace,
+        name,
+        offered,
+        expected,
+        Default::default(),
+    );
+}
+
+fn issue688_history_wire_case_with(
+    anthropic: bool,
+    namespace: &str,
+    name: &str,
+    offered: &[&str],
+    expected: &str,
+    flat_tool_names: crate::tools::flat_tool_names::FlatToolNames,
+) {
     let function = |name: &str| {
         codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
             name: name.to_string(),
@@ -3953,6 +3971,7 @@ fn issue688_v1_history_wire_case(
             message("continue"),
         ],
         tools: offered.iter().map(|name| function(name)).collect(),
+        flat_tool_names,
         ..Default::default()
     };
     let client = test_model_client(SessionSource::Cli);
@@ -4107,6 +4126,34 @@ fn issue688_unoffered_mcp_history_does_not_take_a_builtin_name() {
             "shell",
             &["shell"],
             "mcp__orders__shell",
+        );
+    }
+}
+
+/// #688: an MCP server configured without the `mcp__` prefix has a plain
+/// namespace (`orders`), so its unoffered calls must not replay under a
+/// built-in's bare name either.
+#[test]
+fn issue688_unoffered_unprefixed_mcp_history_does_not_take_a_builtin_name() {
+    for anthropic in [false, true] {
+        issue688_v1_history_wire_case(anthropic, "orders", "shell", &["shell"], "orders__shell");
+    }
+}
+
+/// Built-in namespaces keep the bare fallback, including a configured
+/// multi-agent V2 namespace, whose tools these wires offer under bare names.
+#[test]
+fn issue688_builtin_namespaces_keep_the_bare_fallback() {
+    for anthropic in [false, true] {
+        issue688_v1_history_wire_case(anthropic, "clock", "sleep", &["sleep"], "sleep");
+        issue688_history_wire_case_with(
+            anthropic,
+            "agents",
+            "spawn_agent",
+            &["spawn_agent"],
+            "spawn_agent",
+            crate::tools::flat_tool_names::FlatToolNames::default()
+                .with_multi_agent_v2_namespace(Some("agents".to_string())),
         );
     }
 }
