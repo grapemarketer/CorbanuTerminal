@@ -456,11 +456,38 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
                     "echo planted> \"%L%\\config.toml\"\r\n",
                 ),
             );
-            // A root without its own write capability (as the user
-            // profile folder is) can't lose the link, so it doesn't count.
+            // A root without its own write capability can't lose the
+            // link, so it doesn't count: the user profile folder, whose
+            // children each get one instead (here its `child` and the link
+            // itself). With its own capability it counts.
+            fs::create_dir_all(workspace.join("child")).expect("create child");
             let canonical = dunce::canonicalize(&workspace).expect("canonical workspace");
-            let without_capability =
-                crate::spawn_prep::refuse_linked_project_metadata(&[canonical], &[]).is_ok();
+            let codex_home = sandbox_home("d1682-profile");
+            let capabilities = |roots: Vec<PathBuf>| {
+                crate::spawn_prep::root_capability_sids(codex_home.path(), &canonical, roots)
+                    .expect("capability SIDs")
+            };
+            let profile_children = capabilities(crate::setup::expand_user_profile_root_for(
+                vec![canonical.clone()],
+                &canonical,
+            ));
+            let own = capabilities(vec![canonical.clone()]);
+            let refused = |capabilities: &[crate::spawn_prep::RootCapabilitySid]| {
+                crate::spawn_prep::refuse_linked_project_metadata(
+                    std::slice::from_ref(&canonical),
+                    capabilities,
+                )
+                .is_err_and(|err| format!("{err:#}").contains("#1682"))
+            };
+            let without_capability = (
+                profile_children
+                    .iter()
+                    .any(|sid| sid.root == canonical.join("child"))
+                    && profile_children.iter().all(|sid| sid.root != canonical),
+                refused(&profile_children),
+                refused(&[]),
+                refused(&own),
+            );
             (
                 name,
                 without_capability,
@@ -476,6 +503,12 @@ fn legacy_top_level_project_metadata_link_stops_the_command() {
 
     assert_eq!(
         results,
-        [".codex", ".agents"].map(|name| (name, true, true, true, Some("original".to_string())))
+        [".codex", ".agents"].map(|name| (
+            name,
+            (true, false, false, true),
+            true,
+            true,
+            Some("original".to_string())
+        ))
     );
 }

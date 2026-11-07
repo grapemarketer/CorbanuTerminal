@@ -400,3 +400,105 @@ fn legacy_workspace_stays_watched_when_temp_resolves_to_it() {
 
     assert_eq!((exit_code, planted_here), (0, true));
 }
+
+/// A configured read-only `.codex`/`.agents` that doesn't exist yet, which
+/// the host makes before the command starts (#1686), isn't reported as
+/// planted: at the top of the command's root, deeper in it, and at the top of
+/// another writable root. The command can't write in them, and the folders
+/// it makes itself (at the top of the other root, and deeper in its own) are
+/// still reported. Before, the host made them after the session had
+/// recorded them as absent, so each was reported as possibly planted.
+#[test]
+fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let workspace = test_root.path().join("workspace");
+    let other = test_root.path().join("other");
+    fs::create_dir_all(&workspace).expect("create workspace");
+    fs::create_dir_all(&other).expect("create other root");
+    let (workspace, other) = (canonical(&workspace), canonical(&other));
+    let made = [
+        workspace.join(".agents"),
+        workspace.join("sub\\.codex"),
+        other.join(".codex"),
+    ];
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let mut entries = vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(&workspace),
+            },
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(&other),
+            },
+            FileSystemAccessMode::Write,
+        ),
+    ];
+    entries.extend(made.iter().map(|path| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: absolute(path),
+            },
+            FileSystemAccessMode::Read,
+        )
+    }));
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(entries),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let started = super::carve_out_link::run_script(
+        &profile,
+        &workspace,
+        &[],
+        HashMap::from([
+            ("W".to_string(), workspace.to_string_lossy().into_owned()),
+            ("O".to_string(), other.to_string_lossy().into_owned()),
+        ]),
+        concat!(
+            "echo planted> \"%W%\\.agents\\x.md\"\r\n",
+            "echo planted> \"%W%\\sub\\.codex\\config.toml\"\r\n",
+            "echo planted> \"%O%\\.codex\\config.toml\"\r\n",
+            "mkdir \"%O%\\.agents\"\r\n",
+            "mkdir \"%W%\\deep\\.agents\"\r\n",
+        ),
+    );
+    let host_made: Vec<_> = made
+        .iter()
+        .map(|path| {
+            (
+                path.is_dir(),
+                fs::read_dir(path).map(|mut dir| dir.next().is_none()).ok(),
+                planted(path),
+                counts_now(path),
+            )
+        })
+        .collect();
+    let command_made: Vec<_> = [other.join(".agents"), workspace.join("deep\\.agents")]
+        .iter()
+        .map(|path| (path.is_dir(), planted(path)))
+        .collect();
+
+    assert_eq!(
+        (started, host_made, command_made),
+        (
+            Ok(0),
+            vec![(true, Some(true), false, false); 3],
+            vec![(true, true); 2],
+        )
+    );
+}
