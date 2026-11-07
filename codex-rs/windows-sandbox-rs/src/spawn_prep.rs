@@ -565,8 +565,9 @@ pub(crate) fn apply_legacy_session_acl_rules(
     {
         create_missing_carve_out(path, &canonical_allow)?;
     }
-    // Read after that: a folder made on the way to one (`.codex` for a
-    // read-only `.codex\hooks`, say), which the session then finds present,
+    // Read after that (the first read above is used only for `allow`): a
+    // folder made on the way to one (`.codex` for a read-only `.codex\hooks`,
+    // or `.git` for `.git\hooks`), which the session then finds present,
     // gets the protection of one that was there before (#1705 review).
     let mut deny = compute_allow_paths_for_permissions(permissions, current_dir, env_map).deny;
     let lease = if session && !allow.is_empty() {

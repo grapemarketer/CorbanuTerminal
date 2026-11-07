@@ -406,7 +406,8 @@ fn legacy_workspace_stays_watched_when_temp_resolves_to_it() {
 /// planted: at the top of the command's root, deeper in it, and at the top of
 /// another writable root. Nor is a top-level one the host makes on the way to
 /// a deeper read-only path; that one gets the protection of one that was
-/// there (#1705 review). The command can't write in any of them, and the
+/// there (#1705 review), as does a `.git` made that way. The command can't
+/// write in any of them, and the
 /// folders it makes itself (at the top of a third root, and deeper in its
 /// own) are still reported. Before, the host made them after the session had
 /// recorded them as absent, so each was reported as possibly planted.
@@ -433,6 +434,7 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         workspace.join(".codex\\hooks"),
         other.join(".agents\\skills"),
     ];
+    let git_hooks = workspace.join(".git\\hooks");
     // Made on the way to the last two.
     let on_the_way = [workspace.join(".codex"), other.join(".agents")];
     let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
@@ -450,7 +452,7 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
             FileSystemAccessMode::Write,
         )
     }));
-    entries.extend(configured.iter().map(|path| {
+    entries.extend(configured.iter().chain([&git_hooks]).map(|path| {
         FileSystemSandboxEntry::new(
             FileSystemPath::Path {
                 path: absolute(path),
@@ -467,6 +469,10 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
         .chain(&on_the_way)
         .map(|path| format!("echo planted> \"{}\\config.toml\"\r\n", path.display()))
         .chain([
+            format!(
+                "echo planted> \"{}\"\r\n",
+                workspace.join(".git\\config").display()
+            ),
             format!("mkdir \"{}\"\r\n", third.join(".agents").display()),
             format!(
                 "mkdir \"{}\"\r\n",
@@ -488,16 +494,18 @@ fn legacy_configured_project_metadata_the_sandbox_makes_is_not_planted() {
             )
         })
         .collect();
+    let git = (git_hooks.is_dir(), workspace.join(".git\\config").exists());
     let command_made: Vec<_> = [third.join(".agents"), workspace.join("deep\\.agents")]
         .iter()
         .map(|path| (path.is_dir(), planted(path)))
         .collect();
 
     assert_eq!(
-        (started, host_made, command_made),
+        (started, host_made, git, command_made),
         (
             Ok(0),
             vec![(true, false, false, false); configured.len() + on_the_way.len()],
+            (true, false),
             vec![(true, true); 2],
         )
     );

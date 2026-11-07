@@ -224,8 +224,9 @@ folders exist (D262, D283 below), so a configured read-only `.agents` (or a
 nested `.codex`) the sandbox makes isn't reported as planted (a session that
 started before it was made, and saw it absent, still reports it, except one
 whose only root containing it is a `%TEMP%` one, which isn't watched). A
-top-level `.codex`/`.agents` made on the way to a deeper read-only path
-(`.codex\hooks`) is then protected as one that was there. A
+top-level `.codex`, `.agents` or `.git` made on the way to a deeper
+read-only path (`.codex\hooks`, `.git\hooks`) is then protected as one
+that was there. A
 skip-missing entry applies only to a path that exists, a path in
 a writable root that doesn't exist is left alone, and the command root's
 top-level `.codex` is covered by D262 below. Commands can still write
