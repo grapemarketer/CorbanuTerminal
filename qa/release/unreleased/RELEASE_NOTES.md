@@ -81,6 +81,11 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   as editing a later message already did: `/cost` lists it as "Reopen
   warm-up", Corbanu says once it has been sent, and `skip_reopen_warmup = true`
   skips it (#1038).
+- **Realtime-only threads can skip the warm-up.** `skip_startup_warmup = true`
+  (in `config.toml`, with `-c`, or in `thread/start`'s `config`) sends no
+  startup warm-up, new or reopened. App-server clients that start a thread
+  only for `thread/realtime/start` should set it: the warm-up on the default
+  model could cost several times the realtime session (#1045).
 - **Realtime sessions show their tokens.** A realtime WebSocket session now
   records the input, cached-input, output and total tokens OpenAI reports at
   the end of each response, and `/cost` shows them. Its cost stays unknown
