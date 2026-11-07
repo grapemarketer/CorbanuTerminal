@@ -597,11 +597,17 @@ fn d311_cloud_placeholder_folders_match_the_tree_walk() {
     use crate::unified_exec::tests::cloud_placeholder::is_placeholder;
     let _guard = crate::unified_exec::tests::legacy_process_test_guard();
     let _exposed = ExposePlaceholders::new();
-    for stale in [false, true] {
+    // Under `src`, then with a stale file inside, then under `.git`, where
+    // the check writes the delete-child copies through placeholders.
+    for (folder, stale) in [
+        ("src\\cloud", false),
+        ("src\\cloud", true),
+        (".git\\objects\\cloud", false),
+    ] {
         let base = tempfile::tempdir().expect("base dir");
         let sync_roots = std::cell::RefCell::new(Vec::new());
         let setup = |root: &Path, _: &Path| {
-            let cloud = root.join("src\\cloud");
+            let cloud = root.join(folder);
             std::fs::create_dir_all(&cloud).expect("sync root");
             let sync_root = SyncRoot::register(&cloud);
             sync_root.placeholder_folder("a");
@@ -616,23 +622,23 @@ fn d311_cloud_placeholder_folders_match_the_tree_walk() {
             sync_roots.borrow_mut().push(sync_root);
             true
         };
-        let name = if stale {
-            "P2-stale-file-in-a-placeholder"
-        } else {
-            "P1-placeholders"
-        };
-        let outcome = equality_case_in(base.path(), name, &setup).expect("runs everywhere");
+        let name = format!("{folder}{}", if stale { "-stale" } else { "" });
+        let outcome = equality_case_in(base.path(), &name, &setup).expect("runs everywhere");
         drop(sync_roots);
         assert!(
             outcome.differing.is_empty(),
             "{name}: {:?}",
             outcome.differing
         );
-        let first = if stale {
-            Written::Walked
+        if stale {
+            assert_eq!(outcome.written[0], Written::Walked, "{name}");
         } else {
-            Written::Direct
-        };
-        assert_eq!(outcome.written[0], first, "{name}");
+            // Nothing falls back, writes through placeholders included.
+            assert_eq!(
+                outcome.written,
+                vec![Written::Direct; SESSION_B.len()],
+                "{name}"
+            );
+        }
     }
 }
