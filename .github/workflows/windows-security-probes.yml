@@ -249,7 +249,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-utils-pty --lib win::job::tests -- --nocapture --test-threads=1 2>&1 | tee job-733.log
-          grep -q "test result: ok. 2 passed" job-733.log
+          # The two #733 tests by name, and no failure: the module may gain
+          # tests (upstream's background-console test arrives with the sync).
+          grep -q "job_without_breakaway_never_allows_it ... ok" job-733.log
+          grep -q "default_job_allows_breakaway_before_and_after_preserving ... ok" job-733.log
+          grep -qE "test result: ok\. [0-9]+ passed; 0 failed" job-733.log
           rm job-733.log
       - name: Broker token probes after legacy sessions (#158, PF-27-S08)
         if: ${{ !cancelled() }}
