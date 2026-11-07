@@ -892,7 +892,7 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
         "\nsec-1758: exit={exit_code} (hooks, config, pre-commit, objects, allowed)={state:?}"
     );
 
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         (exit_code, state),
         (0, (true, false, false, false, true)),
         "{}",
