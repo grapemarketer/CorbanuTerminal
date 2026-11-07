@@ -200,6 +200,63 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
     }
 }
 
+/// D331: the agent's commands (the tool path) under the unelevated sandbox
+/// now refuse a profile with a writable folder inside a read-only one, as
+/// `command/exec` does, with a message naming both folders, and nothing runs.
+/// (What the backend itself enforces for that shape is
+/// `carve_out_link::legacy_writable_folder_inside_read_only_one_with_the_profile_alone`
+/// in `codex-windows-sandbox`.)
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_d331_unelevated_tool_launch_refuses_writable_inside_read_only() {
+    let codex_home_dir = tempfile::tempdir().expect("codex home");
+    let workspace_dir = tempfile::tempdir().expect("workspace");
+    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        dunce::canonicalize(workspace_dir.path()).expect("canonical workspace"),
+    )
+    .expect("absolute workspace");
+    let (docs, out) = (cwd.join("docs"), cwd.join("docs").join("out"));
+    std::fs::create_dir_all(out.as_path()).expect("create docs\\out");
+    let base = PermissionProfile::workspace_write()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+    let (mut file_system, _) = base.to_runtime_permissions();
+    for (path, access) in [
+        (&docs, FileSystemAccessMode::Read),
+        (&out, FileSystemAccessMode::Write),
+    ] {
+        file_system.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: path.clone() },
+            access,
+            missing_path_behavior: None,
+        });
+    }
+    let nested =
+        PermissionProfile::from_runtime_permissions(&file_system, NetworkSandboxPolicy::Restricted);
+
+    let outcome = match unelevated_tool_launch_script(&nested, &cwd, "echo ran> ran.txt") {
+        Err(refused) => refused.to_string(),
+        Ok(request) => {
+            match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                Err(err) => format!("failed at spawn: {err}"),
+            }
+        }
+    };
+    eprintln!("sec-win-d331 unelevated, docs read-only, docs\\out writable: {outcome}");
+
+    assert_eq!(
+        (outcome, cwd.join("ran.txt").as_path().exists()),
+        (
+            format!(
+                "unsupported operation: {}",
+                codex_sandboxing::writable_inside_read_only_refusal(docs.as_path(), out.as_path())
+            ),
+            false,
+        )
+    );
+}
+
 /// #1506 item 2 (D262): `.codex` and `.agents` folders an unelevated sandbox
 /// command creates in a trusted project (absent when its session started)
 /// aren't loaded, config or skills, until the user confirms them.

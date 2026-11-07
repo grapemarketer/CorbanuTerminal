@@ -996,7 +996,9 @@ fn windows_elevated_supports_unreadable_globs() {
 #[test]
 fn windows_elevated_rejects_reopened_writable_descendants() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
-    let docs = temp_dir.path().join("docs");
+    // Canonical, as the resolver reports the folders (D331).
+    let root = dunce::canonicalize(temp_dir.path()).expect("canonical tempdir");
+    let docs = root.join("docs");
     let nested = docs.join("nested");
     std::fs::create_dir_all(&nested).expect("create nested");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -1042,13 +1044,12 @@ fn windows_elevated_rejects_reopened_writable_descendants() {
         unsupported_windows_restricted_token_sandbox_reason(
             SandboxType::WindowsRestrictedToken,
             &permission_profile,
-            &temp_dir.path().abs(),
+            &root.abs(),
             WindowsSandboxLevel::Elevated,
         ),
-        Some(
-            "windows elevated sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
-                .to_string()
-        )
+        Some(codex_sandboxing::writable_inside_read_only_refusal(
+            &docs, &nested
+        ))
     );
 }
 

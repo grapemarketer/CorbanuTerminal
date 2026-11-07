@@ -52,6 +52,17 @@ pub const UNELEVATED_READ_ROOTS_REFUSAL: &str = concat!(
     switch_to_elevated!()
 );
 
+/// D331: refusal for a profile with a writable folder (`descendant`) at or
+/// inside a read-only one (`read_only`), which neither Windows sandbox
+/// enforces directly.
+pub fn writable_inside_read_only_refusal(read_only: &Path, descendant: &Path) -> String {
+    format!(
+        "the command was not run because the Windows sandbox doesn't support a writable folder in a read-only one, which this permission profile asks for: {} is writable but lies in {}, which is read-only (the protected .git, .codex and .agents folders count as read-only). Change the profile so that no writable folder lies in a read-only one.",
+        descendant.display(),
+        read_only.display()
+    )
+}
+
 pub fn windows_sandbox_uses_elevated_backend(
     sandbox_level: WindowsSandboxLevel,
     proxy_enforced: bool,
@@ -122,6 +133,44 @@ pub fn refuse_unenforceable_windows_read_restrictions(
     Ok(())
 }
 
+/// D331: the refusals of [`resolve_windows_restricted_token_filesystem_overrides`]
+/// that concern what the unelevated backend can enforce from the profile
+/// alone, for launches that pass it nothing else (the agent's commands): reads
+/// (#300) and a writable folder in a read-only one. Its other refusals check
+/// that `command/exec`'s extra deny-write paths can be derived from the
+/// legacy projection, which such launches don't use.
+pub fn refuse_unenforceable_windows_restricted_token_profile(
+    sandbox: SandboxType,
+    permission_profile: &PermissionProfile,
+    sandbox_policy_cwd: &AbsolutePathBuf,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> std::result::Result<(), String> {
+    if sandbox != SandboxType::WindowsRestrictedToken
+        || windows_sandbox_level == WindowsSandboxLevel::Elevated
+    {
+        return Ok(());
+    }
+    refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
+    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
+    // As the resolver: only where it gets that far.
+    if permission_profile_supports_windows_restricted_token_sandbox(permission_profile)
+        && !file_system_sandbox_policy
+            .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
+    {
+        return Ok(());
+    }
+    file_system_sandbox_policy.remove_skip_missing_path_entries();
+    let split_writable_roots =
+        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    match reopened_writable_descendant(&split_writable_roots) {
+        Some((read_only, descendant)) => {
+            Err(writable_inside_read_only_refusal(read_only, descendant))
+        }
+        None => Ok(()),
+    }
+}
+
 pub fn resolve_windows_restricted_token_filesystem_overrides(
     sandbox: SandboxType,
     permission_profile: &PermissionProfile,
@@ -133,6 +182,9 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     {
         return Ok(None);
     }
+    // D331: the backend refuses these too, with an unclear error, including
+    // the profiles the early return below lets through.
+    refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
 
     let (mut file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
@@ -159,6 +211,8 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     // deny-write sentinels.
     file_system_sandbox_policy.remove_skip_missing_path_entries();
 
+    // The read checks at the top already refuse what the next two do; they
+    // stay as a second line of defence.
     // The restricted-token backend can still enforce split write restrictions,
     // but its WRITE_RESTRICTED token does not make capability SID deny-read ACEs
     // participate in read access checks. Read restrictions therefore require the
@@ -175,13 +229,17 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         return Err(UNELEVATED_DENY_READ_REFUSAL.to_string());
     }
 
+    let split_writable_roots =
+        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    if let Some((read_only, descendant)) = reopened_writable_descendant(&split_writable_roots) {
+        return Err(writable_inside_read_only_refusal(read_only, descendant));
+    }
+
     let legacy_projection = compatibility_sandbox_policy_for_permission_profile(
         permission_profile,
         sandbox_policy_cwd.as_path(),
     );
     let legacy_writable_roots = legacy_projection.get_writable_roots_with_cwd(sandbox_policy_cwd);
-    let split_writable_roots =
-        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
         .map(|root| normalize_windows_override_path(root.root.as_path()))
@@ -196,23 +254,6 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
             "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
                 .to_string(),
         );
-    }
-
-    for writable_root in &split_writable_roots {
-        for read_only_subpath in &writable_root.read_only_subpaths {
-            if split_writable_roots.iter().any(|candidate| {
-                candidate.root.as_path() != writable_root.root.as_path()
-                    && candidate
-                        .root
-                        .as_path()
-                        .starts_with(read_only_subpath.as_path())
-            }) {
-                return Err(
-                    "windows unelevated restricted-token sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
-                        .to_string(),
-                );
-            }
-        }
     }
 
     let mut additional_deny_write_paths = BTreeSet::new();
@@ -290,11 +331,8 @@ pub fn resolve_windows_elevated_filesystem_overrides(
 
     let split_writable_roots =
         file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
-    if has_reopened_writable_descendant(&split_writable_roots) {
-        return Err(
-            "windows elevated sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
-                .to_string(),
-        );
+    if let Some((read_only, descendant)) = reopened_writable_descendant(&split_writable_roots) {
+        return Err(writable_inside_read_only_refusal(read_only, descendant));
     }
 
     let needs_direct_runtime_enforcement = file_system_sandbox_policy
@@ -430,19 +468,24 @@ fn permission_profile_display_name(permission_profile: &PermissionProfile) -> &'
     }
 }
 
-fn has_reopened_writable_descendant(writable_roots: &[WritableRoot]) -> bool {
-    writable_roots.iter().any(|writable_root| {
+/// A read-only subpath of one writable root and another writable root at or
+/// inside it, if any.
+fn reopened_writable_descendant(writable_roots: &[WritableRoot]) -> Option<(&Path, &Path)> {
+    writable_roots.iter().find_map(|writable_root| {
         writable_root
             .read_only_subpaths
             .iter()
-            .any(|read_only_subpath| {
-                writable_roots.iter().any(|candidate| {
-                    candidate.root.as_path() != writable_root.root.as_path()
-                        && candidate
-                            .root
-                            .as_path()
-                            .starts_with(read_only_subpath.as_path())
-                })
+            .find_map(|read_only_subpath| {
+                writable_roots
+                    .iter()
+                    .find(|candidate| {
+                        candidate.root.as_path() != writable_root.root.as_path()
+                            && candidate
+                                .root
+                                .as_path()
+                                .starts_with(read_only_subpath.as_path())
+                    })
+                    .map(|candidate| (read_only_subpath.as_path(), candidate.root.as_path()))
             })
     })
 }

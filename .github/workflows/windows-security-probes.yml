@@ -137,6 +137,7 @@ env:
     carve_out_link::legacy_top_level_project_metadata_link_stops_the_command
     carve_out_link::legacy_missing_read_only_path_is_created_and_protected
     carve_out_link::legacy_read_only_path_under_temp_root_is_protected
+    carve_out_link::legacy_writable_folder_inside_read_only_one_with_the_profile_alone
     cloud_placeholder::legacy_cloud_placeholders_at_or_above_a_read_only_path_cannot_be_moved
     cloud_placeholder::legacy_cloud_placeholder_root_gets_its_label_back
     cloud_placeholder::legacy_nested_project_metadata_in_cloud_placeholders_is_watched
@@ -289,7 +290,7 @@ jobs:
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_1506 --nocapture --test-threads=1
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_d331 sec_win_1506 --nocapture --test-threads=1
       # The runners are elevated, which hid #294/#295. This reruns those probes
       # with the token of an administrator's normal session (medium integrity).
       # Not covered here: a separate non-administrator account, and the
@@ -451,6 +452,10 @@ jobs:
             Assert-Tests $core 'sec_win_300' 2
             & $medium -Program $core -Arguments @('sec_win_300', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#300 regressions failed in a normal session" }
+            # D331: the agent path refuses a writable folder inside a read-only one.
+            Assert-Tests $core 'sec_win_d331' 1
+            & $medium -Program $core -Arguments @('sec_win_d331', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D331 agent-path refusal failed in a normal session" }
             # #1506 item 2: planted .codex/.agents aren't loaded until confirmed.
             Assert-Tests $core 'sec_win_1506' 1
             & $medium -Program $core -Arguments @('sec_win_1506', '--nocapture', '--test-threads=1')
