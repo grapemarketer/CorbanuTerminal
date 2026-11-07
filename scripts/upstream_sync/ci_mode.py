@@ -7,8 +7,9 @@
   ci_mode.py revert <worktree>   remove exactly what apply added (every added line ends with the TAG comment)
   ci_mode.py check  <worktree>   exit 1 if any CI-mode line or file is present (S5 entry check)
   ci_mode.py codeowners apply|revert|check <worktree> [@owner]
-                                 sync-branch CODEOWNERS block for the named security paths (reverted after main
-                                 merge #3, as the last sync-branch commit before the final PR)
+                                 sync-branch CODEOWNERS block for the named security paths and the
+                                 dependency-policy files (reverted after main merge #3, as the last
+                                 sync-branch commit before the final PR)
 
 Edits are textual so they apply on top of whatever Tier 0 resolution the skeleton produced.
 """
@@ -155,12 +156,16 @@ CO_BEGIN = (
     "# BEGIN sync-branch security owners (upstream sync; revert before the final PR)"
 )
 CO_END = "# END sync-branch security owners"
-# Dependency policy: a slice PR must not change these without the security owner (SG1).
+# Dependency policy: a slice PR must not change these without the security owner (SG1). A new third-party crate
+# always changes a lockfile; per-crate Cargo.toml files are not listed, so the S5 SG1 re-run remains the backstop.
 DEPENDENCY_POLICY = (
     "codex-rs/Cargo.toml",
+    "codex-rs/Cargo.lock",
     "codex-rs/deny.toml",
     "codex-rs/.cargo/audit.toml",
     "MODULE.bazel",
+    "MODULE.bazel.lock",
+    "pnpm-lock.yaml",
     ".github/workflows/cargo-deny.yml",
 )
 

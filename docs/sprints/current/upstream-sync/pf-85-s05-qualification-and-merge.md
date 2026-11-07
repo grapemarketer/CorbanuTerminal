@@ -47,7 +47,7 @@ updated: 2026-11-07
 ## Remaining
 
 - [ ] Main merge #3; revert the CODEOWNERS block; full run; SG1 re-run; SG3.
-- [ ] Rollback: synced-build vault files and the upgraded state DB open in the last released binary (D319, S1c).
+- [ ] Rollback: synced-build vault files and the upgraded state DB open in the last released binary (D319; state-DB upgrade test from S1c).
 - [ ] Final review (up to 8 rounds, D307); merge; 48-hour merge hold on `main` (D306) and canary.
 - [ ] Code-blind functional design frozen before test-result disclosure, or non-user-facing N/A reason recorded.
 

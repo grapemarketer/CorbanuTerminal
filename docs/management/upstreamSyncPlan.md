@@ -10,7 +10,7 @@ sign-off" PR; keep our `AGENTS.md` and skills), D276 (afterwards, sync per upstr
 record: [`docs/plans/active/upstream-sync-rust-v0.167.0.md`](../plans/active/upstream-sync-rust-v0.167.0.md), sprints
 PF-85-S00..S06); D305 monthly cadence afterwards (replaces D276; security-file changes get their own reviewed slice);
 D306 48-hour merge hold on `main` after the final merge; D307 up to 8 review rounds for the S3 security PR and the
-final merge PR; D316 `codex-voice-host` stays out of our lanes (workspace `exclude`); D317 `rusty_v8` from a
+final merge PR; D316 `codex-voice-host` stays out of our lanes (workspace `exclude` and `.bazelignore`); D317 `rusty_v8` from a
 CorbanuCore-owned copy ([provenance](upstreamSync/rusty_v8-provenance.md)); D318 security-owner reviewer account
 pending (CODEOWNERS block request-only); D319 the security owner decides `age` 0.11 and the reduced `zip` decoders in
 S1, with hard backward compatibility for existing vault files and archives.
@@ -337,7 +337,7 @@ reels, code-blind functional runs).
 - **Exit:** a PR into the sync branch titled "Upstream sync S3: security port onto unified exec — needs security
   sign-off", with a parity matrix (security level × tool path × platform) compared with the S0 baseline, a
   fail-before/pass-after test for every boundary that moved, and the adversarial permission cases from `AGENTS.md`'s
-  functional-test model. Green: the core-security lane (via `rust-ci` dispatch), `security-platform-contract`,
+  functional-test model. Green: the core-security lane (`rust-ci-core-security.yml` dispatch on Linux and macOS), `security-platform-contract`,
   `security-ingress-contract`, `credential-boundary-canary`, `windows-security-probes` (dispatch), Linux sandbox tests
   on glitch, seatbelt tests on macOS, Windows sandbox tests on native Windows CI and on the Windows PC.
 - **Security gate SG2:** Travis's sign-off on that PR, recorded against its exact head SHA. It doesn't merge into the

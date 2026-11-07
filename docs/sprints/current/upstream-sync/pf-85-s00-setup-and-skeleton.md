@@ -7,7 +7,7 @@ plan_feature: "PF-85"
 execution_order: 1
 owner: "Upstream-sync integrator (maintainer)"
 parallel_lane: "upstream-sync"
-write_scope: "codex-rs/Cargo.toml, codex-rs/Cargo.lock, codex-rs/deny.toml, MODULE.bazel, MODULE.bazel.lock, .github/workflows/, .github/actions/, .github/scripts/, .github/CODEOWNERS, docs/management/upstreamSync/, scripts/upstream_sync/"
+write_scope: "codex-rs/Cargo.toml, codex-rs/Cargo.lock, codex-rs/deny.toml, codex-rs/.cargo/, codex-rs/.config/, MODULE.bazel, MODULE.bazel.lock, .bazelignore, patches/, .github/workflows/, .github/actions/, .github/scripts/, .github/CODEOWNERS, docs/management/upstreamSync/, scripts/upstream_sync/"
 integration_gate: "Merged-tree work (skeleton, Tier 0, CI mode, ledger) lands only on sync/upstream-rust-v0.167.0 by PR (ruleset) and reaches main only through the PF-85-S05 final PR with SG1-SG3. Governed records, docs/management/upstreamSync/ and scripts/upstream_sync/ also land on main through reviewed docs/scripts PRs. Received by the upstream-sync integrator, who reruns cargo metadata --locked, cargo deny --locked check and the workflow parse check on the combined tree."
 worktree: "/Volumes/CorbanuDrive/Corbanu/worktrees/sync-upstream-rust-v0.167.0"
 branch: "sync/upstream-rust-v0.167.0"
@@ -33,7 +33,7 @@ updated: 2026-11-07
 
 ## Code boundaries
 
-- Write scope: the front-matter `write_scope`, plus, on the sync branch only, the per-crate `Cargo.toml` and `BUILD.bazel` files of ledger slice S0.
+- Write scope: the front-matter `write_scope`, plus, on the sync branch only, every other Tier 0 path (`scripts/upstream_sync/slices.py`), e.g. per-crate `Cargo.toml` and `BUILD.bazel` files.
 - Branch target: `sync/upstream-rust-v0.167.0` (PRs only).
 
 ## Preconditions

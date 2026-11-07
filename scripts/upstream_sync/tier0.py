@@ -9,7 +9,8 @@
                                                   blobs still match, else stop and name the file
   tier0.py extra <worktree> <dir> <path>...      record non-conflicted Tier 0 files the resolution also changes
                                                   (e.g. a workflow that must match a resolved caller)
-  tier0.py check <worktree>                       no Tier 0 path unmerged or with markers; workflows/actions parse;
+  tier0.py check <worktree>                       no Tier 0 path unmerged or with markers; during the merge each keeps
+                                                  the three-way merged file mode; workflows/actions parse;
                                                   actionlint reports nothing that HEAD's own files don't
 
 Optional <dir>/resolutions.tsv (path, resolution, note) labels ledger rows (ours|theirs|merged|deleted); unlisted
@@ -64,6 +65,13 @@ def stage_modes(wt, p):
 def tree_mode(wt, rev, p):
     line = git(wt, "ls-tree", rev, "--", p, check=False).strip()
     return line.split()[0] if line else ""
+
+
+def merged_mode(base, ours, theirs):
+    """Three-way merge of a file mode: take theirs only when ours didn't change it."""
+    if not ours:
+        return theirs
+    return theirs if theirs and base == ours else ours
 
 
 def copy_prepared(a, wt, p, mode):
@@ -220,7 +228,8 @@ def cmd_apply(a):
         elif r["action"] == "delete":
             git(a.worktree, "rm", "--quiet", "--", p)
         else:
-            copy_prepared(a, a.worktree, p, tree_mode(a.worktree, "HEAD", p))
+            staged = git(a.worktree, "ls-files", "-s", "--", p).split()
+            copy_prepared(a, a.worktree, p, staged[0] if staged else "")
     # Lockfiles always start from our side, whether or not they conflicted.
     for p in LOCKS:
         if (
@@ -247,7 +256,7 @@ def cmd_apply(a):
         if r["action"] == "delete":
             git(a.worktree, "rm", "--quiet", "--", p)
         else:
-            copy_prepared(a, a.worktree, p, m["2"] or m["3"])
+            copy_prepared(a, a.worktree, p, merged_mode(m["1"], m["2"], m["3"]))
     for p in sorted(
         p for p, r in prepared.items() if r["code"] != "extra" and p not in current
     ):
@@ -307,6 +316,7 @@ def actionlint_messages(root, files):
 
 def cmd_check(a):
     wt, problems = a.worktree, []
+    base = git(wt, "merge-base", "HEAD", "MERGE_HEAD", check=False).strip()
     unmerged = {
         line.split("\t", 1)[1] for line in git(wt, "ls-files", "-u").splitlines()
     }
@@ -318,13 +328,16 @@ def cmd_check(a):
         full = os.path.join(wt, p)
         if os.path.isfile(full) and MARKER.search(open(full, "rb").read()):
             problems.append(f"markers: {p}")
-        # A resolved file keeps one side's mode (e.g. an executable CI script stays executable).
+        # A resolved file keeps the three-way merged mode (e.g. an executable CI script stays executable).
         staged = git(wt, "ls-files", "-s", "--", p).split()
-        sides = {tree_mode(wt, "HEAD", p), tree_mode(wt, "MERGE_HEAD", p)} - {""}
-        if staged and sides and staged[0] not in sides:
-            problems.append(
-                f"mode: {p} is {staged[0]}, both sides have {'/'.join(sorted(sides))}"
+        if base and staged:
+            want = merged_mode(
+                tree_mode(wt, base, p),
+                tree_mode(wt, "HEAD", p),
+                tree_mode(wt, "MERGE_HEAD", p),
             )
+            if want and staged[0] != want:
+                problems.append(f"mode: {p} is {staged[0]}, the merged mode is {want}")
     try:
         import yaml
     except ImportError:
