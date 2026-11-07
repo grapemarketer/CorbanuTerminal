@@ -1,15 +1,23 @@
-//! D311/D313 (#1542): the multi-threaded, handle-relative below-check leaves
-//! every object exactly as #1549's `SetNamedSecurityInfoW` walk does. These
+//! D311/D313 (#1542): the multi-threaded, handle-relative below-check and the
+//! label walk of our own leave every object exactly as Windows' walks
+//! (`SetNamedSecurityInfoW`) do. These
 //! are perf-walk's equality cases: two identical trees (plus the folders
 //! their links point at) go through a legacy session's D261 denies, one with
 //! #1549's calls and one with [`set_delete_child_deny`]; after every step
 //! every object's owner, group, DACL and label, as SDDL, must be identical,
 //! including objects outside the roots. Deliberately broken versions of the
 //! direct write must make some case differ.
+//!
+//! The `d311_label_walk_` tests run two whole legacy commands the same way
+//! (protected paths labelled Medium, the root labelled Low, the denies, the
+//! root's label put back), with Windows' label walk on one side and ours on
+//! the other; broken versions of the label walk must make a case differ.
 
 use super::super::MUTANT;
 use super::super::Mutant;
 use super::*;
+use crate::integrity::walk::MUTANT as LABEL_MUTANT;
+use crate::integrity::walk::Mutant as LabelMutant;
 use pretty_assertions::assert_eq;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
@@ -521,6 +529,175 @@ fn d311_broken_versions_are_caught() {
         let outcome = equality_case(&format!("{mutant:?}/{name}"), setup);
         MUTANT.with(|cell| cell.set(None));
         let outcome = outcome.expect("the case runs everywhere");
+        if outcome.differing.is_empty() {
+            missed.push(mutant);
+        }
+    }
+    assert!(missed.is_empty(), "broken versions not caught: {missed:?}");
+}
+
+/// One step of a legacy command, done the same way on both sides; returns
+/// what it reported.
+type CommandStep = fn(&Path) -> String;
+
+fn step_protect(root: &Path) -> String {
+    // SAFETY: existing folders.
+    unsafe {
+        format!(
+            "{:?}/{:?}",
+            crate::integrity::label_protected_path_medium(&root.join(".git")).is_ok(),
+            crate::integrity::label_protected_path_medium(&root.join(".codex")).is_ok()
+        )
+    }
+}
+
+fn step_label(root: &Path) -> String {
+    // SAFETY: an existing folder.
+    let result = unsafe { crate::integrity::label_writable_root_low(root) };
+    format!("{:?}", result.map_err(|err| err.to_string()))
+}
+
+fn step_restore(root: &Path) -> String {
+    // The root had no explicit label before (as in a fresh workspace).
+    // SAFETY: an existing folder.
+    let result = unsafe { crate::integrity::set_explicit_labels(root, &[]) };
+    format!("{:?}", result.map_err(|err| err.to_string()))
+}
+
+/// Runs two legacy commands on both sides of a fresh base folder after
+/// `setup`: Windows' label walk and #1549's deny calls on one, ours (with
+/// `mutant`, if any) on the other. `None` if the setup could not run here.
+fn command_case(name: &str, setup: Setup, mutant: Option<LabelMutant>) -> Option<Outcome> {
+    let base = tempfile::tempdir().expect("base dir");
+    let verbatim = std::fs::canonicalize(base.path())
+        .expect("canonical base")
+        .join("t");
+    let plain = dunce::simplified(&verbatim).to_path_buf();
+    let sides = [plain.join("walked"), plain.join("direct")];
+    // Both trees are built with Windows' walk.
+    LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
+    for side in &sides {
+        let root = side.join("root");
+        std::fs::create_dir_all(&root).expect("root");
+        build_tree_b(&root);
+        if !setup(&root, side) {
+            LABEL_MUTANT.with(|cell| cell.set(None));
+            println!("d311 label case={name} skipped: no symbolic link privilege");
+            return None;
+        }
+    }
+    LABEL_MUTANT.with(|cell| cell.set(None));
+    let (walked, direct) = (verbatim.join("walked"), verbatim.join("direct"));
+    let (walked_root, direct_root) = (sides[0].join("root"), sides[1].join("root"));
+    let start = full_diff(&full_snapshot(&walked), &full_snapshot(&direct));
+    assert!(
+        start.is_empty(),
+        "{name}: the trees start differently: {start:?}"
+    );
+    let mut outcome = Outcome {
+        differing: Vec::new(),
+        written: Vec::new(),
+    };
+    let mut log = Vec::new();
+    let check = |what: String, outcome: &mut Outcome| {
+        let diff = full_diff(&full_snapshot(&walked), &full_snapshot(&direct));
+        if !diff.is_empty() {
+            outcome.differing.push(format!(
+                "{what}: {} objects, {:?}",
+                diff.len(),
+                diff.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+    };
+    let both = |step: CommandStep| -> String {
+        LABEL_MUTANT.with(|cell| cell.set(Some(LabelMutant::WindowsWalk)));
+        let w = step(&walked_root);
+        LABEL_MUTANT.with(|cell| cell.set(mutant));
+        let d = step(&direct_root);
+        LABEL_MUTANT.with(|cell| cell.set(None));
+        if w == d {
+            w
+        } else {
+            format!("walk={w} direct={d}")
+        }
+    };
+    for command in 0..2 {
+        if command == 0 {
+            // The first command keeps `.git` and `.codex` Medium.
+            log.push(format!("protect={}", both(step_protect)));
+            check(format!("{command}:protect"), &mut outcome);
+        }
+        log.push(format!("label={}", both(step_label)));
+        check(format!("{command}:label"), &mut outcome);
+        for (i, (folder, inherit, add)) in SESSION_B.into_iter().enumerate() {
+            // SAFETY: a valid SID and existing folders.
+            let how = unsafe {
+                reference(&walked_root.join(folder), inherit, add);
+                let sid = LocalSid::from_string(EVERYONE).expect("Everyone");
+                set_delete_child_deny(&direct_root.join(folder), sid.as_ptr(), inherit, add)
+                    .expect("direct write")
+            };
+            outcome.written.push(how);
+            check(format!("{command}:deny {i}"), &mut outcome);
+        }
+        log.push(format!("restore={}", both(step_restore)));
+        check(format!("{command}:restore"), &mut outcome);
+    }
+    println!(
+        "d311 label case={name} objects={} differing_steps={} [{}]",
+        full_snapshot(&direct).len(),
+        outcome.differing.len(),
+        log.join(" ")
+    );
+    Some(outcome)
+}
+
+fn assert_commands_equal(cases: &[(&str, Setup)]) {
+    let mut failed = Vec::new();
+    for (name, setup) in cases {
+        if let Some(outcome) = command_case(name, *setup, None)
+            && !outcome.differing.is_empty()
+        {
+            failed.push(format!("{name}: {:?}", outcome.differing));
+        }
+    }
+    assert!(failed.is_empty(), "differing cases: {failed:#?}");
+}
+
+#[test]
+fn d311_label_walk_basic_cases_match_windows_walk() {
+    assert_commands_equal(&BASIC_CASES);
+}
+
+#[test]
+fn d311_label_walk_link_cases_match_windows_walk() {
+    assert_commands_equal(&LINK_CASES);
+}
+
+#[test]
+fn d311_label_walk_label_cases_match_windows_walk() {
+    assert_commands_equal(&LABEL_CASES);
+}
+
+#[test]
+fn d311_label_walk_deep_and_wide_cases_match_windows_walk() {
+    assert_commands_equal(&SIZE_CASES);
+}
+
+/// Each deliberately broken version of the label walk leaves some object
+/// different from Windows' walk.
+#[test]
+fn d311_label_walk_broken_versions_are_caught() {
+    let (name, junction) = LINK_CASES[0];
+    let mut missed = Vec::new();
+    for mutant in [
+        LabelMutant::FilesUnwritten,
+        LabelMutant::SubfoldersUnwalked,
+        LabelMutant::AutoInheritDropped,
+        LabelMutant::LinksFollowed,
+    ] {
+        let outcome = command_case(&format!("{mutant:?}/{name}"), junction, Some(mutant))
+            .expect("a junction needs no privilege");
         if outcome.differing.is_empty() {
             missed.push(mutant);
         }
