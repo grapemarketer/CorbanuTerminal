@@ -2984,6 +2984,10 @@ mod launch_paths;
 #[path = "command_identity_tests.rs"]
 mod command_identity;
 
+/// #1770: a command's own token keeps it out of folders any user may write to.
+#[path = "token_boundary_tests.rs"]
+mod token_boundary;
+
 /// D285: what the per-command ACL work costs on a large workspace.
 #[path = "acl_cost_tests.rs"]
 mod acl_cost;

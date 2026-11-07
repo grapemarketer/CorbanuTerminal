@@ -20,7 +20,7 @@ const SETUP_FILES: [(&str, &str); 2] = [
 ];
 
 /// A codex home for an elevated-backend test, or `None` to skip it.
-fn elevated_home(name: &str) -> Option<TempDir> {
+pub(in crate::unified_exec::tests) fn elevated_home(name: &str) -> Option<TempDir> {
     // Bazel gives unit tests no staged sandbox helpers (#691).
     if option_env!("BAZEL_PACKAGE").is_some() {
         return None;
@@ -111,7 +111,7 @@ async fn spawn_elevated(
 
 /// Runs `argv` as an elevated workspace-write command on `root`; returns its
 /// stdout and exit code.
-async fn run_elevated(
+pub(in crate::unified_exec::tests) async fn run_elevated(
     root: &Path,
     codex_home: &Path,
     argv: Vec<String>,

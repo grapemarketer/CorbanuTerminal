@@ -666,7 +666,7 @@ fn probe_argv(entry: &str) -> Vec<String> {
 
 /// Runs `argv` as a legacy workspace-write command on `root` with `env`
 /// added to this process's environment; returns its stdout and exit code.
-async fn run_legacy(
+pub(super) async fn run_legacy(
     root: &Path,
     codex_home: &Path,
     argv: Vec<String>,
@@ -1003,4 +1003,4 @@ fn legacy_command_tools_work_with_command_identity() {
 }
 
 #[path = "elevated_identity_tests.rs"]
-mod elevated;
+pub(super) mod elevated;
