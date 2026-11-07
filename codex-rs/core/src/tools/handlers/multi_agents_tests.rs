@@ -7512,12 +7512,25 @@ async fn spawned_children_inherit_the_parent_account_even_with_a_role() {
 /// with approvals off, a follow-up task to a running agent goes ahead; once
 /// the agent has finished, a follow-up would start a new turn, so it is
 /// refused as a restart, through both follow-up tool names.
-#[tokio::test]
-async fn d334_followup_task_to_a_finished_agent_asks_like_a_restart() {
+#[test]
+fn d334_followup_task_to_a_finished_agent_asks_like_a_restart() {
     use codex_security_policy::SecurityLevel;
-    for level in [SecurityLevel::Moderate, SecurityLevel::Aggressive] {
-        Box::pin(followup_task_after_untrusted_content(level)).await;
-    }
+    // Like the other spawning tests here: debug-build futures need the room.
+    std::thread::Builder::new()
+        .name("d334_followup_task".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime should build");
+            for level in [SecurityLevel::Moderate, SecurityLevel::Aggressive] {
+                runtime.block_on(followup_task_after_untrusted_content(level));
+            }
+        })
+        .expect("test thread should spawn")
+        .join()
+        .expect("test thread should finish");
 }
 
 async fn followup_task_after_untrusted_content(level: codex_security_policy::SecurityLevel) {
