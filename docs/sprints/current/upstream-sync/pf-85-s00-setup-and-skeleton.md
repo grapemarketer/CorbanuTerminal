@@ -51,7 +51,7 @@ updated: 2026-11-07
 - [x] CorbanuCore/rusty_v8 pins `350c5a85` (D317); `voice-host` excluded from the workspace (D316).
 - [x] Skeleton run on glitch and opened as #1690 (evidence in its description; logs `~/corbanu-rtx/sync-s0b/` on glitch).
 - [x] Code-blind functional design: N/A, S00 changes no user-visible behaviour (no runnable build until S04); accepted by the integrator; the functional gate is PF-85-S05.
-- [x] Baseline lanes dispatched on the sync branch at `781b935f` before the skeleton merge (runs 42354273115, 42354275358, 42354277670, 42354280028).
+- [x] Baseline lanes dispatched on the sync branch at `781b935f` before the skeleton merge (`rust-ci`, `rust-ci-full`, `tmux smoke`, the security lanes; run IDs in the records README).
 
 ## Remaining
 

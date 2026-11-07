@@ -55,10 +55,11 @@ All lanes that ran on this commit passed (CodeQL was cancelled; it runs on `main
 shards, 0 failed; core security tests 1,613 on Linux and 1,678 on macOS), `tmux smoke` (84 tests),
 `corbanu-terminal-ci`. The last `windows-security-probes` run on `main` (`d874e0e1`) passed 395 tests.
 
-Baseline on the cut SHA `781b935f` (results to be recorded on #1627): `main`'s push lanes for that commit, plus
-`windows-security-probes`, `credential-boundary-canary` and both security contracts dispatched on
-`sync/upstream-rust-v0.167.0` while it still pointed at `781b935f`, before the skeleton merge (runs 42354273115,
-42354275358, 42354277670, 42354280028). `orchestrate-tui-matrix` has no manual trigger;
+Baseline on the cut SHA `781b935f` (results to be recorded on #1627). `main`'s own push lanes for that commit were
+cancelled by later pushes, so the lanes were dispatched on `sync/upstream-rust-v0.167.0` while it still pointed at
+`781b935f`, before the skeleton merge: `rust-ci` 42355550513, `rust-ci-full` 42355552519, `tmux smoke` 42355554842,
+`windows-security-probes` 42354273115, `credential-boundary-canary` 42354275358, `security-ingress-contract`
+42354277670, `security-platform-contract` 42354280028. `orchestrate-tui-matrix` has no manual trigger;
 its last `main` run stands in.
 
 ## Tier 0 resolution decisions (`rust-v0.167.0`, prepared 2026-11-06)
