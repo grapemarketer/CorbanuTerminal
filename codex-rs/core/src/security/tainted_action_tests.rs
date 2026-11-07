@@ -11226,8 +11226,21 @@ fn issue1636_brace_made_git_options_ask_without_quotes() {
             "git clone $~N--upload-pack=./x r d",
             "git clone $N[1]--upload-pack=./x r d",
             "git clone $N:t--upload-pack=./x r d",
+            // Review 2: bash 3.2's closing `}`, zsh's nested expansions.
+            "git clone {-b},-u./x} ./r d",
+            "git clone ./r d {-b},--upload-pack=./x}",
+            "git clone -{},u./x} ./r d",
+            "git clone {-u}u,}u ./r d",
+            "git clone ${${N}:---upload-pack=./x} ./r d",
+            "git clone ${${N:-}:--u./x} ./r d",
+            "git clone ${(e)${N}:--u./x} ./r d",
         ] {
             assert_eq!(line(script), Some(UnseenCode), "{shell} {script:?}");
+        }
+        // Review 2: git's name past the 64-word bound.
+        for last in ["g{i..i}t", "{g,x}{i,x}{t,x}"] {
+            let script = format!("env {{{}{last}}} clone -u./x ./r d", "-i,".repeat(64));
+            assert_eq!(line(&script), Some(UnseenCode), "{shell} {script:?}");
         }
         // Ordinary lines stay as they were.
         for script in [
@@ -11244,6 +11257,7 @@ fn issue1636_brace_made_git_options_ask_without_quotes() {
             "git log -n ${N}5 | cat",
             "git log $RANGE --stat",
             "git add tests/case{1..80}.json",
+            "git add {1..100}.txt",
             "git rm -q out{000..199}.log",
             "git log $$-x | cat",
             "echo {1..100} | git hash-object --stdin",
@@ -11267,6 +11281,15 @@ fn issue1636_shell_made_words_are_linear() {
             let _ = script(&unit.repeat(100 * scale));
         });
     }
+    // Review 2: many words past the made-word bound after many before git.
+    work::assert_linear("words past the bound", |scale| {
+        let words = 600 * scale;
+        let _ = script(&format!(
+            "echo {}git {}",
+            "a ".repeat(words),
+            "x{1,2} ".repeat(words)
+        ));
+    });
     work::assert_linear("one long word", |scale| {
         let _ = script(&format!("git clone --{}", "{u..u}".repeat(100 * scale)));
     });

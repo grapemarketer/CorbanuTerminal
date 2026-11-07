@@ -894,13 +894,25 @@ impl Classifier {
         // command first (`git clone r d {-q,--upload-pack=./x}|cat`,
         // `-b }x`, `$((1))`, a comment) or does not expand the group
         // (`--{u..u}pload-pack`, `${N}{--upload-pack=./x,}`).
-        if let Some(made) = shell_made(words) {
+        // As bash 5 and zsh expand braces, and as bash 3.2 does.
+        let mut previous: Option<Vec<String>> = None;
+        for old_bash in [false, true] {
+            work::step();
+            let Some(made) = shell_made(words, old_bash) else {
+                continue;
+            };
             let made_texts: Vec<String> = made.words.iter().map(|word| word.text.clone()).collect();
+            if previous.as_ref() == Some(&made_texts) {
+                continue;
+            }
             self.judge_git_words(&made_texts, &made.words, loops, found);
-            // Past a bound, the words not made may hold git's or an option.
-            if made.unsure() && texts.iter().chain(&made_texts).any(|text| spells_git(text)) {
+            // Past a bound, the words not made may hold git's name or an
+            // option.
+            let spelled = texts.iter().chain(&made_texts).any(|text| spells_git(text));
+            if made.unsure(spelled) {
                 note_git(found, ProtectedActionKind::UnseenCode);
             }
+            previous = Some(made_texts);
         }
     }
 
@@ -1712,37 +1724,77 @@ fn cut_matters(words: &[Word]) -> bool {
 /// #1636: a command's words as the shell may make them ([`shell_made`]).
 struct ShellMade {
     words: Vec<Word>,
-    /// Where the words of each word expanded only in part start, with
-    /// whether that word may make an option (it starts with `-`, `{`, `$`,
-    /// `=` or a substitution's output).
-    truncated: Vec<(usize, bool)>,
+    /// The words expanded only in part ([`Truncated`]).
+    truncated: Vec<Truncated>,
+}
+
+/// #1636: a word expanded only in part.
+struct Truncated {
+    /// It may make an option ([`may_make_option`]).
+    option: bool,
+    /// It may spell git ([`may_spell_git`]).
+    git: bool,
+    /// A git word comes before it.
+    after_git: bool,
 }
 
 impl ShellMade {
-    /// Whether a word expanded only in part may hide an option or git's
-    /// name: it may make an option, or no git comes before it.
-    fn unsure(&self) -> bool {
-        self.truncated.iter().any(|(at, option)| {
+    /// Whether a word expanded only in part may hide an option of a git
+    /// command (`spelled`: the line spells git), or git's name itself.
+    fn unsure(&self, spelled: bool) -> bool {
+        self.truncated.iter().any(|word| {
             work::step();
-            *option
-                || !self.words[..*at].iter().any(|word| {
-                    work::step();
-                    let program = name(&word.text);
-                    program == "git"
-                        || git_helpers::git_name(&program).is_some()
-                        || indirect::equals_git(&word.text)
-                })
+            (word.option && (spelled || word.git)) || (!word.after_git && word.git)
         })
     }
 }
 
+/// #1636: whether some word `text` expands to may start with `-`: it starts
+/// with `-`, `=`, an expansion or a substitution's output, or with a group
+/// whose alternative may (`{-q,x}`, `{x,$N}`, `{+../}`).
+fn may_make_option(text: &str) -> bool {
+    if text.starts_with(['-', '=', '$']) || text.starts_with(UNSEEN_OUTPUT) {
+        return true;
+    }
+    text.starts_with('{')
+        && {
+            let bytes = text.as_bytes();
+            bytes.windows(2).any(|pair| {
+            work::step();
+            matches!(pair, [b'{' | b',', b'-' | b'$' | b'=' | 1 | 2])
+                || matches!(pair, [b'{', ch] | [b'.', ch] if !ch.is_ascii_alphanumeric() && !b"{},.".contains(ch))
+        })
+        }
+}
+
+/// #1636: whether a word expanded only in part may spell git: `g`, `i` and
+/// `t` in that order, a letter range (`{f..h}`) or an expansion.
+fn may_spell_git(text: &str) -> bool {
+    let mut wanted = "git".chars().peekable();
+    for ch in text.chars() {
+        work::step();
+        if wanted.peek() == Some(&ch.to_ascii_lowercase()) {
+            wanted.next();
+        }
+    }
+    wanted.peek().is_none()
+        || text.contains('$')
+        || text.contains(UNSEEN_OUTPUT)
+        || text.as_bytes().windows(5).any(|window| {
+            work::step();
+            matches!(window, [b'{', from, b'.', b'.', to]
+                if from.is_ascii_alphabetic() && to.is_ascii_alphabetic())
+        })
+}
+
 /// #1636: a command's words as the shell may make them, where that differs
-/// from this reading: brace groups expanded ([`braces::expand`]; in a word
-/// with quoted text only when it has an unquoted group; empty words of an
-/// unquoted one dropped, as the shell drops them), and an unknown
-/// expansion (or a substitution's output) at the start of a word that then
-/// reads as an option ([`option_readings`]). `None`: the same words.
-fn shell_made(words: &[Word]) -> Option<ShellMade> {
+/// from this reading: brace groups expanded ([`braces::expand`], as bash 3.2
+/// does with `old_bash`; in a word with quoted text only when it has an
+/// unquoted group; empty words of an unquoted one dropped, as the shell
+/// drops them), and an unknown expansion (or a substitution's output) at
+/// the start of a word that then reads as an option ([`option_readings`]).
+/// `None`: the same words.
+fn shell_made(words: &[Word], old_bash: bool) -> Option<ShellMade> {
     /// Words one word may expand to, as the word lexer allows.
     const MAX_WORDS: usize = 64;
     /// Words of one command, made.
@@ -1752,16 +1804,20 @@ fn shell_made(words: &[Word]) -> Option<ShellMade> {
         truncated: Vec::new(),
     };
     let mut changed = false;
+    // A git word is among the words made so far.
+    let mut after_git = false;
     for word in words {
         work::step();
         let expands = word.text.contains('{') && (!word.quoted || word.brace_expansion);
         let alternatives = if expands {
             let room = MAX_WORDS.min(MAX_MADE.saturating_sub(made.words.len()).max(1));
-            let expansion = braces::expand(&word.text, room);
+            let expansion = braces::expand(&word.text, room, old_bash);
             if expansion.truncated {
-                let option = word.text.starts_with(['-', '{', '$', '='])
-                    || word.text.starts_with(UNSEEN_OUTPUT);
-                made.truncated.push((made.words.len(), option));
+                made.truncated.push(Truncated {
+                    option: may_make_option(&word.text),
+                    git: may_spell_git(&word.text),
+                    after_git,
+                });
             }
             expansion.words
         } else {
@@ -1787,6 +1843,10 @@ fn shell_made(words: &[Word]) -> Option<ShellMade> {
             };
             for text in texts {
                 work::step();
+                let program = name(&text);
+                after_git |= program == "git"
+                    || git_helpers::git_name(&program).is_some()
+                    || indirect::equals_git(&text);
                 made.words.push(Word {
                     text,
                     brace_expansion: false,
@@ -1860,6 +1920,8 @@ fn leading_expansion(text: &str) -> Option<(usize, Option<String>)> {
             None => body,
         };
         let body = body.trim_start_matches(['#', '!', '=', '^', '~']);
+        // zsh: a nested expansion's value (`${${N}:-word}`, `${$N:-word}`).
+        let body = after_nested(body);
         let name = body
             .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || "@*".contains(ch)))
             .unwrap_or(body.len());
@@ -1892,6 +1954,29 @@ fn leading_expansion(text: &str) -> Option<(usize, Option<String>)> {
         after = &modified[1..];
     }
     Some((text.len() - after.len(), None))
+}
+
+/// #1636: `body` after the nested expansion it starts with, if any.
+fn after_nested(body: &str) -> &str {
+    if let Some(inner) = body.strip_prefix("${") {
+        let mut depth = 1usize;
+        return inner
+            .char_indices()
+            .find_map(|(at, ch)| {
+                work::step();
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(&inner[at + 1..])
+            })
+            .unwrap_or(body);
+    }
+    match body.strip_prefix('$') {
+        Some(rest) => rest.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_'),
+        None => body,
+    }
 }
 
 /// `text` after a `[…]` subscript it starts with.

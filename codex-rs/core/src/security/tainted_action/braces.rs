@@ -20,13 +20,17 @@ const MAX_WORD_BYTES: usize = 4096;
 /// The words a word expands to, in the shell's order.
 pub(super) struct Expansion {
     pub(super) words: Vec<String>,
-    /// Past a bound: `words` are the first ones, and the rest (or, for a
-    /// word past `MAX_WORD_BYTES`, the word as written) was not expanded.
+    /// Past a bound: some words are missing, and some may still hold groups
+    /// not expanded (a word past `MAX_WORD_BYTES` is kept as written).
     pub(super) truncated: bool,
 }
 
-/// `text`'s expansion, up to `limit` words.
-pub(super) fn expand(text: &str, limit: usize) -> Expansion {
+/// `text`'s expansion, up to `limit` words. `old_bash`: as bash 3.2 (the
+/// macOS `/bin/bash`) expands, where the outermost `}` closes a group only
+/// after a `,` or a `..` not right before it, and `{}` starting a word
+/// opens none: `{-b},-u./x}` is `-b}` and `-u./x`. Groups inside a first
+/// group that does not expand are read as by later bash.
+pub(super) fn expand(text: &str, limit: usize, old_bash: bool) -> Expansion {
     if text.len() > MAX_WORD_BYTES {
         return Expansion {
             words: vec![text.to_string()],
@@ -40,7 +44,7 @@ pub(super) fn expand(text: &str, limit: usize) -> Expansion {
     let mut truncated = false;
     while let Some(word) = pending.pop() {
         work::step();
-        let Some(group) = first_group(&word) else {
+        let Some(group) = first_group(&word, old_bash) else {
             done.push(word);
             continue;
         };
@@ -114,6 +118,8 @@ struct Open {
     any_comma: bool,
     /// `..` outside nested groups.
     dots: bool,
+    /// bash 3.2: such a `..` not right before a `}`.
+    open_dots: bool,
     nested: bool,
     previous_dot: bool,
 }
@@ -122,66 +128,82 @@ struct Open {
 /// matching `}` holds a comma outside nested groups or is a range (or bash
 /// drops its braces, see [`Kind::Dropped`]). One pass: groups close inner
 /// first, and none opened later can come before one already found once no
-/// group is open around it.
-fn first_group(word: &str) -> Option<Group> {
+/// group is open around it. `old_bash`: see [`expand`].
+fn first_group(word: &str, old_bash: bool) -> Option<Group> {
+    let bytes = word.as_bytes();
     let mut stack: Vec<Open> = Vec::new();
     let mut best: Option<Group> = None;
-    for (at, byte) in word.bytes().enumerate() {
+    for (at, &byte) in bytes.iter().enumerate() {
         work::step();
-        match byte {
-            b'{' => {
-                if let Some(open) = stack.last_mut() {
-                    open.nested = true;
-                    open.previous_dot = false;
-                }
-                stack.push(Open {
-                    at,
-                    comma: false,
-                    any_comma: false,
-                    dots: false,
-                    nested: false,
-                    previous_dot: false,
-                });
-            }
+        let next = bytes.get(at + 1).copied();
+        let plain = match byte {
+            // bash 3.2: `{}` starting a word opens no group, and the
+            // outermost open group closes only after a `,` or a `..`.
+            b'{' => old_bash && at == 0 && next == Some(b'}'),
             b'}' => {
-                let Some(open) = stack.pop() else {
-                    continue;
-                };
-                if let Some(outer) = stack.last_mut() {
-                    outer.any_comma |= open.any_comma;
-                    outer.previous_dot = false;
-                }
-                let inner = &word[open.at + 1..at];
-                let kind = if open.comma {
-                    Some(Kind::Commas)
-                } else if !open.nested && range(inner, 0).is_some() {
-                    Some(Kind::Range)
-                } else if open.dots && open.any_comma {
-                    Some(Kind::Dropped)
-                } else {
-                    None
-                };
-                if let Some(kind) = kind
-                    && best.as_ref().is_none_or(|best| open.at < best.open)
-                {
-                    best = Some(Group {
-                        open: open.at,
-                        close: at,
-                        kind,
-                    });
-                }
-                if stack.is_empty() && best.is_some() {
-                    break;
-                }
+                old_bash
+                    && stack.len() == 1
+                    && stack
+                        .last()
+                        .is_some_and(|open| !(open.comma || open.open_dots))
             }
-            _ => {
-                if let Some(open) = stack.last_mut() {
-                    open.comma |= byte == b',';
-                    open.any_comma |= byte == b',';
-                    open.dots |= byte == b'.' && open.previous_dot;
-                    open.previous_dot = byte == b'.';
-                }
+            _ => true,
+        };
+        if plain {
+            if let Some(open) = stack.last_mut() {
+                open.comma |= byte == b',';
+                open.any_comma |= byte == b',';
+                let dots = byte == b'.' && open.previous_dot;
+                open.dots |= dots;
+                open.open_dots |= dots && next != Some(b'}');
+                open.previous_dot = byte == b'.';
             }
+            continue;
+        }
+        if byte == b'{' {
+            if let Some(open) = stack.last_mut() {
+                open.nested = true;
+                open.previous_dot = false;
+            }
+            stack.push(Open {
+                at,
+                comma: false,
+                any_comma: false,
+                dots: false,
+                open_dots: false,
+                nested: false,
+                previous_dot: false,
+            });
+            continue;
+        }
+        let Some(open) = stack.pop() else {
+            continue;
+        };
+        if let Some(outer) = stack.last_mut() {
+            outer.any_comma |= open.any_comma;
+            outer.previous_dot = false;
+        }
+        let inner = &word[open.at + 1..at];
+        let kind = if open.comma {
+            Some(Kind::Commas)
+        } else if !open.nested && range(inner, 0).is_some() {
+            Some(Kind::Range)
+        } else if open.dots && open.any_comma {
+            Some(Kind::Dropped)
+        } else {
+            None
+        };
+        if let Some(kind) = kind
+            && best.as_ref().is_none_or(|best| open.at < best.open)
+        {
+            best = Some(Group {
+                open: open.at,
+                close: at,
+                kind,
+            });
+        }
+        if stack.is_empty() && best.is_some() {
+            break;
         }
     }
     best
@@ -351,7 +373,7 @@ mod tests {
             ("{x{1..2}..{c,d}}", vec!["x1..c", "x1..d", "x2..c", "x2..d"]),
             ("{x{a..b}{c,d}}", vec!["{xac}", "{xad}", "{xbc}", "{xbd}"]),
         ] {
-            let expansion = expand(text, 64);
+            let expansion = expand(text, 64, /*old_bash*/ false);
             assert_eq!(
                 (expansion.words, expansion.truncated),
                 (words.iter().map(ToString::to_string).collect(), false),
@@ -364,16 +386,37 @@ mod tests {
             ("{1..99999999999999999999}", "1"),
             ("--x{1..99999999999999999999}", "--x1"),
         ] {
-            let expansion = expand(text, 64);
+            let expansion = expand(text, 64, /*old_bash*/ false);
             assert!(expansion.truncated, "{text}");
             assert_eq!(expansion.words.len(), 64, "{text}");
             assert_eq!(expansion.words[0], first, "{text}");
         }
         let chain = "{u..u}".repeat(300);
-        let expansion = expand(&chain, 64);
+        let expansion = expand(&chain, 64, /*old_bash*/ false);
         assert!(expansion.truncated);
         assert_eq!(expansion.words.len(), 1);
         let long = format!("--{}", "x".repeat(5000));
-        assert!(expand(&long, 64).truncated);
+        assert!(expand(&long, 64, /*old_bash*/ false).truncated);
+        // bash 3.2.
+        for (text, words) in [
+            ("{-b},-u./x}", vec!["-b}", "-u./x"]),
+            ("-{},u./x}", vec!["-}", "-u./x"]),
+            ("{-u}u,}u", vec!["-u}uu", "u"]),
+            ("{a,b}", vec!["a", "b"]),
+            ("{a..c}", vec!["a", "b", "c"]),
+            ("{x}", vec!["{x}"]),
+            ("{},a}", vec!["{},a}"]),
+            ("x{},a}", vec!["x}", "xa"]),
+            ("{a..}b,c}", vec!["a..}b", "c"]),
+            ("{x{a},b}", vec!["x{a}", "b"]),
+            ("{a}{b,c}", vec!["{a}b", "{a}c"]),
+        ] {
+            let expansion = expand(text, 64, /*old_bash*/ true);
+            assert_eq!(
+                expansion.words,
+                words.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "{text}"
+            );
+        }
     }
 }
