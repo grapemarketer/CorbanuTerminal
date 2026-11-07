@@ -1758,17 +1758,19 @@ fn may_make_option(text: &str) -> bool {
     if text.starts_with(['-', '=', '$']) || text.starts_with(UNSEEN_OUTPUT) {
         return true;
     }
-    text.starts_with('{')
-        && {
-            let bytes = text.as_bytes();
-            bytes.iter().any(|byte| {
-            work::step();
-            matches!(byte, b'-' | b'$' | b'=' | 1 | 2)
-        }) || bytes.windows(2).any(|pair| {
-            work::step();
-            matches!(pair, [b'{', ch] | [b'.', ch] if !ch.is_ascii_alphanumeric() && !b"{},.".contains(ch))
-        })
-        }
+    if !text.starts_with('{') {
+        return false;
+    }
+    // A range end that is no letter or digit (`{+../}`).
+    let odd_end = |ch: &u8| !ch.is_ascii_alphanumeric() && !b"{},.".contains(ch);
+    let bytes = text.as_bytes();
+    bytes.iter().any(|byte| {
+        work::step();
+        matches!(byte, b'-' | b'$' | b'=' | 1 | 2)
+    }) || bytes.windows(2).any(|pair| {
+        work::step();
+        matches!(pair, [b'{' | b'.', ch] if odd_end(ch))
+    })
 }
 
 /// #1636: whether a word expanded only in part may spell git: `g`, `i` and
