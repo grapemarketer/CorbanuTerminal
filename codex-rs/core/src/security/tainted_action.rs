@@ -545,6 +545,9 @@ pub(super) fn classify_as_windows(
 /// it otherwise (`shell::simple_commands_read`), the action judged again
 /// with main's reading: the stronger finding is kept, so the new reading
 /// only adds findings (`echo '>"'; ./x; echo '"'`, `sh -c 'true &>f ./x'`).
+/// #1772 review 2: the second judgment is main's reading exactly (every
+/// change of reading sets `read_newly`, and the helper lexers read as
+/// main), so the verdict is never quieter than main's.
 fn judged_both(action: &ApprovalAction, homes: impl Fn() -> Homes, as_named: bool) -> Classifier {
     let mut classifier = judged(action, homes(), as_named, /*main_reading*/ false);
     if classifier.read_newly {
@@ -571,10 +574,23 @@ fn judged(action: &ApprovalAction, homes: Homes, as_named: bool, main_reading: b
 }
 
 /// [`judged`] with the zsh-only checks skipped at the top level when
-/// `avoids_zsh` (#932's measuring harness also judges with it forced).
+/// `avoids_zsh` (#932's measuring harness also judges with it forced), and
+/// judged again with main's reading as [`judged_both`] does.
 #[cfg(test)]
-fn judged_avoiding(action: &ApprovalAction, homes: Homes, avoids_zsh: bool) -> Classifier {
-    judged_avoiding_read(action, homes, avoids_zsh, /*main_reading*/ false)
+fn judged_avoiding(
+    action: &ApprovalAction,
+    homes: impl Fn() -> Homes,
+    avoids_zsh: bool,
+) -> Classifier {
+    let mut classifier =
+        judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ false);
+    if classifier.read_newly {
+        let main = judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ true);
+        if let Some(kind) = main.found {
+            classifier.note(kind);
+        }
+    }
+    classifier
 }
 
 /// One judgment, with the zsh-only checks skipped at the top level when
@@ -3789,3 +3805,7 @@ mod tainted_action_refusal_tests;
 #[cfg(test)]
 #[path = "tainted_action_redirect_tests.rs"]
 mod tainted_action_redirect_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_reading_tests.rs"]
+mod tainted_action_reading_tests;

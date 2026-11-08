@@ -112,8 +112,10 @@ pub(super) struct Lexed {
     /// were read without linking their output (#1020).
     pub(super) too_deep: bool,
     /// #1772 review 1: some text was read where main reads it otherwise: a
-    /// quoted or escaped redirection file holding a blank as one word, or
-    /// `&>` as one redirection (see `simple_commands_read`).
+    /// quoted or escaped redirection file holding a blank as one word,
+    /// `&>` as one redirection, a redirection's words moved last, a second
+    /// `<` or `<<<`, or a substitution with its stdout redirected left
+    /// unspliced (see `simple_commands_read`).
     pub(super) read_newly: bool,
 }
 
@@ -131,9 +133,12 @@ pub(super) fn basename(word: &str) -> &str {
         .unwrap_or(word)
 }
 
-/// Simple commands of the argv and of any script inside it (`bash -lc "..."`).
+/// Simple commands of the argv and of any script inside it (`bash -lc "..."`),
+/// read as main reads them. #1772 review 2: the helper lexers (`one_word`,
+/// `holds_git_name`, arithmetic's) keep main's reading; only the
+/// classifier's own lexing reads newly (`simple_commands_read`).
 pub(super) fn simple_commands(command: &[String]) -> Lexed {
-    simple_commands_read(command, /*main_reading*/ false)
+    simple_commands_read(command, /*main_reading*/ true)
 }
 
 /// [`simple_commands`], with `main_reading`: as main reads redirections.
@@ -143,7 +148,10 @@ pub(super) fn simple_commands(command: &[String]) -> Lexed {
 /// (`true &>f ./x` runs `./x`). So a quoted or escaped redirection file is
 /// one word and `&>` one redirection only when `main_reading` is off; the
 /// classifier then also judges the action with it on and keeps the
-/// stricter verdict (`Lexed::read_newly`).
+/// stricter verdict (`Lexed::read_newly`). #1772 review 2: with
+/// `main_reading` on, nothing is read otherwise than on main: no word moves
+/// (`SimpleCommand::redirections_last`), only the last `<` and `<<<` are
+/// kept, and a substitution with its stdout redirected is spliced.
 pub(super) fn simple_commands_read(command: &[String], main_reading: bool) -> Lexed {
     let mut lexer = Lexer {
         joint: Some(Joint::Start),
@@ -682,8 +690,21 @@ impl Lexer {
             let redirect = std::mem::take(&mut self.redirect);
             let clobber = std::mem::take(&mut self.clobber) && redirect == Redirect::Stdout;
             match redirect {
-                Redirect::Stdin => self.current.stdin_from.extend(index),
-                Redirect::HereString => self.current.here_string.extend(index),
+                // #1772 review 2: main keeps only the last one.
+                Redirect::Stdin if self.main_reading => {
+                    self.current.stdin_from = index.into_iter().collect()
+                }
+                Redirect::HereString if self.main_reading => {
+                    self.current.here_string = index.into_iter().collect();
+                }
+                Redirect::Stdin => {
+                    self.read_newly |= !self.current.stdin_from.is_empty();
+                    self.current.stdin_from.extend(index);
+                }
+                Redirect::HereString => {
+                    self.read_newly |= !self.current.here_string.is_empty();
+                    self.current.here_string.extend(index);
+                }
                 Redirect::Stdout => self.current.writes_to.extend(index),
                 Redirect::None => {}
             }
@@ -772,7 +793,11 @@ impl Lexer {
             ..SimpleCommand::default()
         };
         let mut finished = std::mem::replace(&mut self.current, next);
-        finished.redirections_last();
+        // #1772 review 2: main's reading moves no word (`>/dev/null done`
+        // keeps bash's reading: `done` is no reserved word there).
+        if !self.main_reading {
+            self.read_newly |= finished.redirections_last();
+        }
         // A compound command fed by a pipe feeds every command inside it.
         let first = finished.words.first().map(|word| word.to_lowercase());
         match first.as_deref() {
@@ -910,7 +935,10 @@ impl Lexer {
             _ if open.output || open.process => None,
             // #1772 review 3: `$(>&2 echo x)`, `$(echo x >log)` print
             // nothing here.
-            [only] if self.done[*only].stdout_redirected => None,
+            [only] if !self.main_reading && self.done[*only].stdout_redirected => {
+                self.read_newly = true;
+                None
+            }
             [only] => substitution_output(&self.done[*only].words),
             // `$(cd X && pwd)` prints X.
             [cd, pwd]
@@ -1206,13 +1234,14 @@ impl SimpleCommand {
     /// every index moves with its word: each reading then sees the command
     /// it runs, and its redirections where it reads them on any line.
     /// Commands whose redirections already come last are unchanged.
-    fn redirections_last(&mut self) {
+    /// Returns whether any word moved.
+    fn redirections_last(&mut self) -> bool {
         let held: Vec<bool> = (0..self.words.len()).map(|at| self.held(at)).collect();
         let Some(first_held) = held.iter().position(|held| *held) else {
-            return;
+            return false;
         };
         if held[first_held..].iter().all(|held| *held) {
-            return;
+            return false;
         }
         let order: Vec<usize> = (0..held.len())
             .filter(|at| !held[*at])
@@ -1253,6 +1282,7 @@ impl SimpleCommand {
         }
         self.zsh_writes.sort_unstable();
         self.written_at = order;
+        true
     }
 }
 

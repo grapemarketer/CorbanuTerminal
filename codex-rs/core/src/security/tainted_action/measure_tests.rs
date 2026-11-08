@@ -32,8 +32,8 @@ use super::splits_differently;
 use crate::sandboxing::SandboxPermissions;
 use crate::security::tainted_action::ProtectedActionKind;
 use crate::security::tainted_action::grammar;
-use crate::security::tainted_action::judged;
 use crate::security::tainted_action::judged_avoiding;
+use crate::security::tainted_action::judged_both;
 use crate::security::tainted_action::named_shell;
 use crate::security::tainted_action::paths::Homes;
 use crate::security::tainted_action::quoted;
@@ -190,16 +190,11 @@ struct Judgment {
 fn judge(homes: &MeasureHomes, shell: &str, script: &str, cwd: &Path, forced: bool) -> Judgment {
     let action = action(shell, script, cwd);
     let (found, sites) = recording(|| {
+        // #1772 review 2: both readings, as production judges.
         if forced {
-            judged_avoiding(&action, homes.homes(), /*avoids_zsh*/ true).found
+            judged_avoiding(&action, || homes.homes(), /*avoids_zsh*/ true).found
         } else {
-            judged(
-                &action,
-                homes.homes(),
-                /*as_named*/ true,
-                /*main_reading*/ false,
-            )
-            .found
+            judged_both(&action, || homes.homes(), /*as_named*/ true).found
         }
     });
     Judgment { found, sites }

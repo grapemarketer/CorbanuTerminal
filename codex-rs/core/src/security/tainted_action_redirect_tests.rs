@@ -1,14 +1,16 @@
 //! #1772: redirection follow-ups to #1719. Each `ASKS` line was quiet on
 //! main (judged with the classifier test harness, `bash -lc <line>` in a
 //! workspace whose `./x` and `sub/run.sh` are harmful); each `QUIET` line
-//! stays quiet. In its own file: `tainted_action_tests.rs` is at the
-//! repository's blob size limit.
+//! stays quiet. `REVIEW_ASKS` and `REVIEW_2_ASKS` (PR #1794 reviews) ask on
+//! main and keep asking. `tainted_action_reading_tests.rs` checks both
+//! claims against main's reading. In its own file:
+//! `tainted_action_tests.rs` is at the repository's blob size limit.
 
 use super::*;
 use pretty_assertions::assert_eq;
 
 #[cfg(unix)]
-const HOME: &str = "/home/fixture/.corbanu";
+pub(super) const HOME: &str = "/home/fixture/.corbanu";
 #[cfg(unix)]
 const EVIL: &str = "echo x >> ~/.zshenv\n";
 
@@ -21,9 +23,18 @@ fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKin
 
 /// [`in_workspace`] of the action whose argv is `argv`.
 #[cfg(unix)]
-fn in_workspace_argv(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActionKind> {
-    use crate::sandboxing::SandboxPermissions;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+pub(super) fn in_workspace_argv(
+    files: &[(&str, &str)],
+    argv: &[&str],
+) -> Option<ProtectedActionKind> {
+    let root = workspace(files);
+    let action = action_in(root.path(), argv);
+    classify_with(&action, Path::new(HOME), Some(root.path()))
+}
+
+/// A temporary workspace holding `files` and an empty `sub/`.
+#[cfg(unix)]
+pub(super) fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("tempdir");
     let work = root.path();
     std::fs::create_dir_all(work.join("sub")).expect("sub");
@@ -34,7 +45,15 @@ fn in_workspace_argv(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedA
         }
         std::fs::write(path, text).expect("file");
     }
-    let action = ApprovalAction::Shell {
+    root
+}
+
+/// The shell action whose argv is `argv`, run in `work`.
+#[cfg(unix)]
+pub(super) fn action_in(work: &Path, argv: &[&str]) -> ApprovalAction {
+    use crate::sandboxing::SandboxPermissions;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    ApprovalAction::Shell {
         id: "call".into(),
         environment_id: "local".into(),
         command: argv.iter().map(|arg| (*arg).to_string()).collect(),
@@ -44,53 +63,23 @@ fn in_workspace_argv(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedA
         sandbox_permissions: SandboxPermissions::UseDefault,
         additional_permissions: None,
         justification: None,
-    };
-    classify_with(&action, Path::new(HOME), Some(work))
-}
-
-/// One command as the lexer reads it: words, stdin files, here-strings,
-/// files written, other words a redirection holds.
-type Read = (Vec<String>, Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>);
-
-/// The words and redirection positions the lexer reads, per command.
-// `iter().copied()`: `stdin_from` and `here_string` are `Option`s on main,
-// where the reverted run builds these tests too.
-#[allow(clippy::iter_cloned_collect)]
-fn lexed(line: &str) -> Vec<Read> {
-    shell::simple_commands(&[line.to_string()])
-        .commands
-        .into_iter()
-        .map(|command| {
-            (
-                command.words,
-                // `iter()`: also on main, where each was an `Option`.
-                command.stdin_from.iter().copied().collect(),
-                command.here_string.iter().copied().collect(),
-                command.writes_to,
-                command.redirect_words,
-            )
-        })
-        .collect()
-}
-
-fn strings(words: &[&str]) -> Vec<String> {
-    words.iter().map(|word| (*word).to_string()).collect()
+    }
 }
 
 /// Files of a temporary workspace: name and text.
 #[cfg(unix)]
-type Files = &'static [(&'static str, &'static str)];
+pub(super) type Files = &'static [(&'static str, &'static str)];
 
 #[cfg(unix)]
-const SUB_EVIL: &[(&str, &str)] = &[("run.sh", "true\n"), ("sub/run.sh", EVIL)];
+pub(super) const SUB_EVIL: &[(&str, &str)] = &[("run.sh", "true\n"), ("sub/run.sh", EVIL)];
 #[cfg(unix)]
-const X_EVIL: &[(&str, &str)] = &[("x", EVIL)];
+pub(super) const X_EVIL: &[(&str, &str)] = &[("x", EVIL)];
 #[cfg(unix)]
-const X_OK: &[(&str, &str)] = &[("x", "true\n")];
+pub(super) const X_OK: &[(&str, &str)] = &[("x", "true\n")];
 
 /// Every line #1772 lists, by item, with the files it is judged among.
 #[cfg(unix)]
-const ASKS: &[(&str, Files, &str)] = &[
+pub(super) const ASKS: &[(&str, Files, &str)] = &[
     // Item 1: a command behind a leading redirection, judged by name only.
     ("1", SUB_EVIL, "2>/dev/null cd sub && ./run.sh"),
     ("1", SUB_EVIL, ">log cd sub; ./run.sh"),
@@ -122,7 +111,7 @@ const ASKS: &[(&str, Files, &str)] = &[
 
 /// Ordinary lines with the same redirections.
 #[cfg(unix)]
-const QUIET: &[&str] = &[
+pub(super) const QUIET: &[&str] = &[
     "2>/dev/null git status",
     ">log ls",
     "ls >'a b'",
@@ -178,7 +167,7 @@ fn issue_1772_keeps_1719_hidden_command_asks() {
 /// commands after it. Item 2: `sh` and `dash` read `&>` as `&` and `>`.
 /// Item 3: a substitution whose stdout is redirected prints nothing.
 #[cfg(unix)]
-const REVIEW_ASKS: &[(&str, &str)] = &[
+pub(super) const REVIEW_ASKS: &[(&str, &str)] = &[
     ("1", "echo '>\"'; ./x; echo '\"'"),
     ("1", "echo \">'\" && ./x && echo \"'\""),
     ("1", "echo '>'; echo \"'\"; ./x; echo \"'\""),
@@ -217,132 +206,113 @@ fn issue_1772_review_lines_ask() {
     assert_eq!(quiet, Vec::<String>::new(), "review lines quiet");
 }
 
-/// The lexer's reading: a redirection's words follow the command's, every
-/// `<` and `<<<` is kept, a quoted or escaped file is one word, and `&>`
-/// is one redirection, not a command separator.
+/// PR #1794 review 2: lines that ask on main and were quiet with the
+/// reorder and the quoted-file reading in main's judgment too. Item 1: a
+/// reserved word after a redirection is no reserved word, so the loop
+/// stays open and `sh` reads the piped text. Item 2 (argv) and item 3
+/// (`git -c`): the helper lexers read as main. Item 4: a leading
+/// non-stdout redirection in a substitution that prints nothing. Item 5:
+/// quoted `<` and `>` in a search pattern (main's verdict, kept). Item 6:
+/// a leading redirection asks as on main.
+#[cfg(unix)]
+pub(super) const REVIEW_2_ASKS: &[(&str, Files, &[&str])] = &[
+    (
+        "1",
+        X_EVIL,
+        &[
+            "bash",
+            "-lc",
+            "cat x | while read l; do true; >/dev/null done; sh; done",
+        ],
+    ),
+    (
+        "1",
+        X_EVIL,
+        &[
+            "bash",
+            "-lc",
+            "cat x | while read l; do true; 2>/dev/null done; sh; done",
+        ],
+    ),
+    (
+        "1",
+        X_EVIL,
+        &[
+            "bash",
+            "-lc",
+            "cat x | if true; then true; >/dev/null fi; sh; fi",
+        ],
+    ),
+    (
+        "1",
+        X_EVIL,
+        &[
+            "bash",
+            "-lc",
+            "cat x | case a in a) true; >/dev/null esac; sh;; esac",
+        ],
+    ),
+    ("2", X_OK, &[">'a b'", "ls"]),
+    ("2", X_OK, &["env", ">'a b'", "ls"]),
+    ("2", X_OK, &[">a\\ b", "ls"]),
+    ("2", X_OK, &[">\"a b\"", "ls"]),
+    (
+        "3",
+        X_OK,
+        &["bash", "-lc", "git -c \"user.name=x>'a g\\it'\" status"],
+    ),
+    ("3", X_OK, &["git", "-c", "user.name=x>'a g\\it'", "status"]),
+    ("4", X_EVIL, &["bash", "-lc", "$(2>log echo) ./x"]),
+    ("4", X_EVIL, &["bash", "-lc", "$(2>&1 echo) ./x"]),
+    ("4", X_EVIL, &["bash", "-lc", "$(<f echo) ./x"]),
+    ("4", X_EVIL, &["bash", "-lc", "$(<<<a echo) ./x"]),
+    ("4", X_EVIL, &["bash", "-lc", "$(2>log printf '') ./x"]),
+    ("4", X_EVIL, &["bash", "-lc", "`2>log echo` ./x"]),
+    (
+        "5",
+        X_OK,
+        &[
+            "bash",
+            "-lc",
+            "grep -n \"<<<<<<<\\|>>>>>>>\\|=======\" -A3 f",
+        ],
+    ),
+    ("6", X_OK, &["bash", "-lc", ">./out.txt echo hi"]),
+];
+
+#[cfg(unix)]
 #[test]
-fn issue_1772_lexer_reads_redirections_as_the_shell_does() {
-    let none: Vec<usize> = Vec::new();
-    // Item 1: the words a leading redirection holds move last.
-    assert_eq!(
-        lexed(">log cd sub"),
-        vec![(
-            strings(&["cd", "sub", "log"]),
-            none.clone(),
-            none.clone(),
-            vec![2],
-            none.clone()
-        )]
-    );
-    assert_eq!(
-        lexed("2>/dev/null git status"),
-        vec![(
-            strings(&["git", "status", "2", "/dev/null"]),
-            none.clone(),
-            none.clone(),
-            vec![3],
-            vec![2]
-        )]
-    );
-    // Already last: unchanged.
-    assert_eq!(
-        lexed("cd sub >log"),
-        vec![(
-            strings(&["cd", "sub", "log"]),
-            none.clone(),
-            none.clone(),
-            vec![2],
-            none.clone()
-        )]
-    );
-    // Item 2.
-    for line in [">'a b' ./x", ">\"a b\" ./x", ">a\\ b ./x"] {
-        assert_eq!(
-            lexed(line),
-            vec![(
-                strings(&["./x", "a b"]),
-                none.clone(),
-                none.clone(),
-                vec![1],
-                none.clone()
-            )],
-            "{line}"
-        );
-    }
-    assert_eq!(
-        lexed("2>'a;b' ./x"),
-        vec![(
-            strings(&["./x", "2", "a;b"]),
-            none.clone(),
-            none.clone(),
-            vec![2],
-            vec![1]
-        )]
-    );
-    // A double-quoted file holding an expansion, and a quote inside it,
-    // are read as before (the quotes dropped).
-    assert_eq!(
-        lexed(">\"$d's\" ./x 'q'"),
-        vec![(
-            strings(&["./x", "q", "$ds"]),
-            none.clone(),
-            none.clone(),
-            vec![2],
-            none.clone()
-        )]
-    );
-    // Item 3.
-    assert_eq!(
-        lexed("<a <b ./x"),
-        vec![(
-            strings(&["./x", "a", "b"]),
-            vec![1, 2],
-            none.clone(),
-            none.clone(),
-            none.clone()
-        )]
-    );
-    assert_eq!(
-        lexed("sudo <<<a <<<b -A true"),
-        vec![(
-            strings(&["sudo", "-A", "true", "a", "b"]),
-            none.clone(),
-            vec![3, 4],
-            none.clone(),
-            none.clone()
-        )]
-    );
-    // Item 4.
-    assert_eq!(
-        lexed("sudo &>log -u root ./x"),
-        vec![(
-            strings(&["sudo", "-u", "root", "./x", "log"]),
-            none.clone(),
-            none.clone(),
-            vec![4],
-            none
-        )]
-    );
-    assert_eq!(lexed("sleep 1 & ls").len(), 2);
+fn issue_1772_review_2_lines_ask() {
+    let quiet: Vec<String> = REVIEW_2_ASKS
+        .iter()
+        .filter(|(_, files, argv)| in_workspace_argv(files, argv).is_none())
+        .map(|(item, _, argv)| format!("item {item}: {argv:?}"))
+        .collect();
+    assert_eq!(quiet, Vec::<String>::new(), "review 2 lines quiet");
 }
 
-/// The quoted-file reading scans each text once: an unclosed quote before
-/// many redirections, quoted files, double quotes holding an expansion and
-/// escaped spaces. Each input is 100 units at 1x, so the 1x run is the same
-/// reading as the larger one.
+/// PR #1794 review 2: the reorder through the whole classifier, both
+/// readings, with redirections and other words interleaved (`>a x >b y
+/// ...`). Each input is 100 units at 1x.
+#[cfg(unix)]
 #[test]
-fn issue_1772_quoted_files_are_linear() {
-    for (label, prefix, unit) in [
-        ("unclosed single", ">'", " >a\\ b"),
-        ("unclosed double", ">\"", " >a\\ b"),
-        ("quoted single", "", ">'a b' "),
-        ("quoted double", "", ">\"a b\" "),
-        ("expanding double", "", ">\"$a\" "),
-        ("escaped space", "", ">a\\ b "),
+fn issue_1772_interleaved_redirections_are_linear() {
+    let root = workspace(X_OK);
+    for (label, unit) in [
+        ("stdout", " >a x"),
+        ("stderr", " 2>a x"),
+        ("stdin", " <a x"),
+        ("here-string", " <<<a x"),
+        ("both", " &>a x"),
+        ("quoted file", " >'a b' x"),
+        ("escaped file", " >a\\ b x"),
+        ("descriptor", " 2>&1 x"),
     ] {
         tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
             work::assert_linear(label, |scale| {
-                lexed(&format!("{prefix}{}", unit.repeat(100 * scale)));
+                let line = format!("echo{}", unit.repeat(100 * scale));
+                let action = action_in(root.path(), &["bash", "-lc", &line]);
+                classify_with(&action, Path::new(HOME), Some(root.path()));
             });
         });
     }
