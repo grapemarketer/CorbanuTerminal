@@ -1028,8 +1028,13 @@ mod tests {
             let _ = tx.send(result);
         });
 
+        // `recv_timeout` returns as soon as `run` exits, so this is only a
+        // ceiling for a hung run. It is generous because loaded Windows CI
+        // runners have missed a 2 s bound (#1839). If cancellation were
+        // ignored, `run` would finish the walk and report matches, which the
+        // assertions below reject.
         let result = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(30))
             .expect("run should exit after cancellation");
         handle.join().unwrap();
 
