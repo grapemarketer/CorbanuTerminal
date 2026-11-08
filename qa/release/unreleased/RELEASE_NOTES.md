@@ -662,3 +662,10 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   now leaves that folder to Windows' own walk, so the result always matches
   what Windows does. Corbanu doesn't normally start a walk at a link, so
   nothing changes in normal use.
+- **Known limitation, now documented: the non-admin sandbox breaks tools that
+  use named pipes** (#1797, #1561). Its commands can't write to named pipes
+  they create, so Node.js child processes with piped output (`EPERM`), Git
+  Bash (`couldn't create signal pipe`), a local `git clone` and Python
+  `multiprocessing` fail there. This is not new in this release. The default
+  (elevated) sandbox runs all of them; see "Known limitations" in
+  `docs/sandbox.md`.
