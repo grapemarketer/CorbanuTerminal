@@ -578,13 +578,22 @@ asking and now ask first:
   `zselect -t 0 -r 0 -A $n`, `zsystem flock -t 0 -f $n file` (#1704).
   `print`, `printf` and `getopts` are now read this way too. So an
   unquoted variable, `$(…)` or pattern where `print`, `printf`, `set`,
-  `stat`, `read`, `mapfile`, `vared` or `getopts` read their options or the
+  `read`, `mapfile`, `vared` or `getopts` read their options or the
   name they write can now ask (`print -r $(cat f)`,
-  `set ?A commands ls ./x`, `stat -f %m $(cat f)`, `read -d $(cat f)`,
+  `set ?A commands ls ./x`, `read -d $(cat f)`,
   `getopts $(cat f)`), and so can a quoted one with more words after it
   (`printf "$fmt" x`). `print -r -- $x`, `set -- $(cat f)`,
-  `stat -f %m "$f"`, `printf "$fmt"`, `print -l *.png` and `wait $pid` stay
+  `printf "$fmt"`, `print -l *.png` and `wait $pid` stay
   quiet.
+- zsh's `stat` builtin, which can write those tables (`stat -A functions
+  x`), now asks only when the same action may load it: a line of it runs
+  `zmodload` or names `zsh/stat` (`zmodload zsh/stat; stat -f %m $(cat f)`
+  asks, before or after the `stat`), holds a brace range, or runs bash's
+  `enable` or a command named by a variable, command output or a pattern.
+  zsh starts without it. Elsewhere `stat` is the system program, so macOS
+  `stat -f %m $f` stays quiet. A module loaded by your zsh start-up files,
+  or by an earlier command in the same long-running shell session, isn't
+  seen (D410, #1704). `zstat` is always checked.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
