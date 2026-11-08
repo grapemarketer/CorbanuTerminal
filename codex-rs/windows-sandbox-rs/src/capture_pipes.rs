@@ -83,7 +83,7 @@ impl<T: Send + 'static> PipeReader<T> {
 /// What `readers` read: each runs until end of file or, at the latest,
 /// until `timeout` has passed, when its read in progress is cancelled.
 pub(crate) fn finish<const N: usize>(readers: [PipeReader; N], timeout: Duration) -> [Vec<u8>; N] {
-    finish_each(readers, timeout).map(|read| read.unwrap_or_default())
+    finish_each(readers, timeout).map(Result::unwrap_or_default)
 }
 
 /// What `readers` returned: each runs until end of file or, at the latest,
