@@ -175,6 +175,33 @@ fn issue_1773_legacy_prompt_floor_holds_in_zsh() {
     }
 }
 
+/// The compatibility floor must cover every reader of a command word, not
+/// just a simple command's direct words or eval operands.
+#[test]
+fn issue_1773_legacy_prompt_floor_covers_carried_and_redirected_commands() {
+    use ProtectedActionKind::UnseenCode;
+
+    for shell in ["bash", "zsh"] {
+        for line in [
+            "trap 'sudo -R ./root true' EXIT",
+            "trap 'sudo --us ./x true' EXIT",
+            "eval -- sudo -R ./root true",
+            "eval eval sudo --us ./x true",
+            "coproc sudo -R ./root true",
+            "sudo >log -- --us ./x true",
+            "sudo >log - --us ./x true",
+            "sudo >log FOO=1 -Nu ./x true",
+            "sudo 2>&1 -- -a ./x true",
+        ] {
+            assert_eq!(
+                script_with(shell, line),
+                Some(UnseenCode),
+                "{shell}: {line}"
+            );
+        }
+    }
+}
+
 /// #1773: after those options, a nested sudo's helper options are read rather
 /// than hidden behind the value that programs skipped on main.
 #[test]
@@ -210,6 +237,10 @@ fn issue_1773_sudo_value_option_checks_are_linear() {
             let _ = script(&line);
         });
     }
+    work::assert_linear("carried sudo boundaries", |scale| {
+        let line = format!("{}sudo --us ./x true", "eval -- ".repeat(400 * scale));
+        let _ = script(&line);
+    });
 }
 
 /// #1482: a wrapper's option that takes a value consumes it inside a short

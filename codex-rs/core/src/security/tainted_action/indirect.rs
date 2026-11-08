@@ -490,11 +490,15 @@ fn legacy_programs(words: &[String]) -> Vec<usize> {
 /// The caller must retain a prompt in that case, even when the new parser can
 /// identify a harmless command, because main may have classified the old path.
 pub(super) fn sudo_legacy_programs_differ(words: &[String]) -> bool {
-    let has_sudo = words.iter().any(|word| {
+    // `programs` stops as soon as it reaches the current command. In
+    // particular, a carried `eval eval … sudo` reaches its eventual sudo only
+    // when `carried_command` has peeled the evals, so checking every carried
+    // layer remains linear rather than repeatedly scanning its tail.
+    let current = programs(words);
+    current.iter().any(|at| {
         work::step();
-        basename(word).eq_ignore_ascii_case("sudo")
-    });
-    has_sudo && programs(words) != legacy_programs(words)
+        basename(&words[*at]).eq_ignore_ascii_case("sudo")
+    }) && current != legacy_programs(words)
 }
 
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.
@@ -615,12 +619,21 @@ pub(super) fn redirect_hides_command(
     let Some(rest) = words.get(from..) else {
         return false;
     };
+    // A redirection can hide the word that the old sudo scan stopped at. Keep
+    // that changed program boundary prompt-only even though `command_word`
+    // below correctly evaluates the unredirected command.
+    if sudo_legacy_programs_differ(rest) {
+        return true;
+    }
     if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
         return false;
     }
     let Some(runs) = unredirected(command, words, from) else {
         return false;
     };
+    if sudo_legacy_programs_differ(&runs) {
+        return true;
+    }
     command_word(&runs).is_some_and(|(at, name)| {
         runs[at].contains('/')
             || runs[at].starts_with('-')
