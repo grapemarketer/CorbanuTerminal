@@ -100,8 +100,10 @@ repository with exactly the shape `git init` or `git clone` leave (only
 the config keys they write and no `ext::` URL, only `*.sample` hooks, no
 links, no other repositories inside) isn't flagged, so cloning a project
 to look at it doesn't ask; a later change to it is, and so is a repository
-that replaced another. A folder too large to look through (over 20,000
-entries) counts as changed after every command. The warning names what
+that replaced another. A repository reached through a folder link (moved
+elsewhere and linked back, say) is checked too. A folder too large to look
+through (over 20,000 entries, or more than 2,000 or six levels of nested
+repositories) counts as changed after every command. The warning names what
 changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
 checked, and a nested `.git` link is flagged after every command, as at the
 top.

@@ -221,7 +221,7 @@ pub(crate) fn acquire_watching(
     let git_dirs = crate::nested_metadata::top_level_git(roots);
     // D420: the repositories below the top of the watched roots, and the
     // roots (`%TEMP%` too) that are bare repositories.
-    let repos = crate::nested_metadata::repo_states(&repo_paths(found.repos, roots), roots);
+    let repos = crate::nested_metadata::repo_states(&repo_paths(found.repos, roots, &[]), roots);
     let lock = lock(&registry)?;
     let mut lease = IntegrityLease {
         registry,
@@ -342,7 +342,11 @@ impl IntegrityLease {
         let mut nested_now = crate::nested_metadata::find(&self.nested_roots);
         let git_now = crate::nested_metadata::top_level_git(&self.roots);
         let repos_now = crate::nested_metadata::repo_states(
-            &repo_paths(std::mem::take(&mut nested_now.repos), &self.roots),
+            &repo_paths(
+                std::mem::take(&mut nested_now.repos),
+                &self.roots,
+                &self.repos,
+            ),
             &self.roots,
         );
         // If the lock can't be had, the closed session file is stale and
@@ -510,6 +514,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                                 crate::nested_metadata::find(&record.nested_roots).repos
                             }),
                             &record.roots,
+                            repos,
                         ),
                         &record.roots,
                     ),
@@ -743,8 +748,20 @@ fn record_git_planted(
 
 /// D420 (#1775): the repositories `nested` (from the walk of the watched
 /// roots) and those of `roots` that are bare repositories.
-fn repo_paths(mut nested: Vec<PathBuf>, roots: &[PathBuf]) -> Vec<PathBuf> {
+/// Also each of `before` (the repositories at the session's start) that
+/// the walk didn't find but that still opens: one a command hid behind a
+/// link somewhere above it is still compared.
+fn repo_paths(mut nested: Vec<PathBuf>, roots: &[PathBuf], before: &[RepoState]) -> Vec<PathBuf> {
     nested.extend(crate::nested_metadata::bare_roots(roots));
+    for state in before {
+        let listed = nested.iter().any(|path| {
+            crate::git_watch::is_at_or_below(path, &state.path)
+                && crate::git_watch::is_at_or_below(&state.path, path)
+        });
+        if !listed && std::fs::symlink_metadata(&state.path).is_ok() {
+            nested.push(state.path.clone());
+        }
+    }
     nested
 }
 

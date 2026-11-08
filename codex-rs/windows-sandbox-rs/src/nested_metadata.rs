@@ -124,6 +124,19 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                         }
                     }
                 }
+                // D420: a folder link isn't walked, but git follows it: a
+                // repository behind one (moved to `%TEMP%`, say) counts.
+                if !name.eq_ignore_ascii_case(".git")
+                    && !folds_to(&name, ".git")
+                    && is_link(metadata.as_ref())
+                {
+                    let link = entry.path();
+                    if std::fs::metadata(link.join(".git")).is_ok() {
+                        found.repos.push(link.join(".git"));
+                    } else if crate::git_watch::is_git_directory(&link) {
+                        found.repos.push(link);
+                    }
+                }
                 let Ok(metadata) = metadata else {
                     found.unlistable.push(entry.path());
                     continue;

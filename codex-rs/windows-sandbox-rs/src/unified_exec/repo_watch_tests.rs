@@ -178,3 +178,55 @@ fn legacy_root_becoming_a_bare_repository_is_recorded() {
         )
     );
 }
+
+fn junction(link: &Path, target: &Path) {
+    let status = std::process::Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("mklink");
+    assert!(status.success(), "mklink /J failed");
+}
+
+/// #1849 review 3: a nested repository whose folder is moved out of the
+/// roots and reached again through a junction is still compared, and a
+/// repository behind a new junction counts.
+#[test]
+fn legacy_repositories_behind_links_are_watched() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    for dir in ["root\\sub", "outside"] {
+        fs::create_dir_all(test_root.path().join(dir)).expect("create");
+    }
+    let root = canonical(&test_root.path().join("root"));
+    let outside = canonical(&test_root.path().join("outside"));
+    init_shape(&root.join("sub\\.git"), INIT_CONFIG);
+    init_shape(&outside.join("new\\.git"), INIT_CONFIG);
+    fs::write(outside.join("new\\.git\\hooks\\post-checkout"), "evil").expect("hook");
+
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    fs::rename(root.join("sub"), outside.join("sub")).expect("move out");
+    fs::write(
+        outside.join("sub\\.git\\config"),
+        format!("{INIT_CONFIG}\tfsmonitor = evil.exe\r\n"),
+    )
+    .expect("config");
+    junction(&root.join("sub"), &outside.join("sub"));
+    junction(&root.join("linked"), &outside.join("new"));
+    drop(lease);
+
+    assert_eq!(
+        (
+            changes(&root.join("sub\\.git")),
+            changes(&root.join("linked\\.git")),
+        ),
+        (
+            Some(vec!["config changed".to_string()]),
+            Some(vec!["new repository".to_string()]),
+        )
+    );
+}
