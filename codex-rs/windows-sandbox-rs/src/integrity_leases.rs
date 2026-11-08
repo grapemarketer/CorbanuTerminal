@@ -224,13 +224,14 @@ pub(crate) fn acquire_watching(
     let registry = ensure_registry()?;
     // Outside the lock: the walk can take a while. Whatever appears from
     // here on counts as planted.
-    let found = crate::nested_metadata::find(nested_roots);
+    let mut found = crate::nested_metadata::find(nested_roots);
+    let walk = take_repo_walk(&mut found);
     let nested_metadata = found.entries;
     // D332: every root, `%TEMP%` too, as D262 does: one look per root.
     let git_dirs = crate::nested_metadata::top_level_git(roots);
     // D420: the repositories below the top of the watched roots, and the
     // roots (`%TEMP%` too) that are bare repositories.
-    let repo_entries = repo_paths(found.repos, roots);
+    let (repo_entries, _notes) = repo_paths(walk, roots, nested_roots, &[]);
     let repos = crate::nested_metadata::repo_states(&repo_entries, roots);
     // D422: what their configs, and the top-level `.git`'s, name.
     let config_targets = config_target_states(&repo_entries, roots);
@@ -346,9 +347,13 @@ impl IntegrityLease {
         // can take a while) while the session file still counts as live.
         let mut nested_now = crate::nested_metadata::find(&self.nested_roots);
         let git_now = crate::nested_metadata::top_level_git(&self.roots);
-        let repo_entries = repo_paths(std::mem::take(&mut nested_now.repos), &self.roots);
-        let repos_now = crate::nested_metadata::repo_states(&repo_entries, &self.roots);
-        let targets_now = config_target_states(&repo_entries, &self.roots);
+        let repos_changed = session_repo_changes(
+            &self.repos,
+            &self.config_targets,
+            take_repo_walk(&mut nested_now),
+            &self.roots,
+            &self.nested_roots,
+        );
         // If the lock can't be had, the closed session file is stale and
         // the next sweep puts the labels back.
         let lock = lock(&self.registry)?;
@@ -376,18 +381,7 @@ impl IntegrityLease {
                 self.log_dir.as_deref(),
             )
             .is_ok()
-            && record_repo_changes(
-                &self.registry,
-                crate::nested_metadata::repo_changes(&self.repos, repos_now),
-                self.log_dir.as_deref(),
-            )
-            .is_ok()
-            && record_repo_changes(
-                &self.registry,
-                crate::git_config_targets::target_changes(&self.config_targets, targets_now),
-                self.log_dir.as_deref(),
-            )
-            .is_ok()
+            && record_repo_changes(&self.registry, repos_changed, self.log_dir.as_deref()).is_ok()
         {
             let _ = std::fs::remove_file(&path);
         }
@@ -491,13 +485,13 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
         // one that can't be told apart from a live one) records that when it
         // ends, so its file stays.
         // D420 reuses the walk's repositories.
-        let mut walked_repos: Option<Vec<PathBuf>> = None;
+        let mut walked_repos: Option<RepoWalk> = None;
         if let Some(record) = &record
             && let Some(nested) = &record.nested_metadata
         {
             let recorded = session_file_is_closed(&path) && {
                 let mut found = crate::nested_metadata::find(&record.nested_roots);
-                walked_repos = Some(std::mem::take(&mut found.repos));
+                walked_repos = Some(take_repo_walk(&mut found));
                 record_nested_planted(registry, nested, found, log_dir).is_ok()
             };
             if !recorded {
@@ -510,30 +504,17 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
             && let Some(repos) = &record.repos
         {
             let recorded = session_file_is_closed(&path) && {
-                let entries = repo_paths(
-                    walked_repos.take().unwrap_or_else(|| {
-                        crate::nested_metadata::find(&record.nested_roots).repos
-                    }),
+                let walk = walked_repos.take().unwrap_or_else(|| {
+                    take_repo_walk(&mut crate::nested_metadata::find(&record.nested_roots))
+                });
+                let changed = session_repo_changes(
+                    repos,
+                    record.config_targets.as_deref().unwrap_or_default(),
+                    walk,
                     &record.roots,
+                    &record.nested_roots,
                 );
-                record_repo_changes(
-                    registry,
-                    crate::nested_metadata::repo_changes(
-                        repos,
-                        crate::nested_metadata::repo_states(&entries, &record.roots),
-                    ),
-                    log_dir,
-                )
-                .is_ok()
-                    && record_repo_changes(
-                        registry,
-                        crate::git_config_targets::target_changes(
-                            record.config_targets.as_deref().unwrap_or_default(),
-                            config_target_states(&entries, &record.roots),
-                        ),
-                        log_dir,
-                    )
-                    .is_ok()
+                record_repo_changes(registry, changed, log_dir).is_ok()
             };
             if !recorded {
                 live.extend(record.roots.iter().cloned());
@@ -773,21 +754,82 @@ fn config_target_states(repos: &[PathBuf], roots: &[PathBuf]) -> Vec<TargetState
     crate::git_config_targets::target_states(&crate::git_config_targets::repo_dirs(&entries), roots)
 }
 
-/// D420 (#1775): the repositories `nested` (from the walk of the watched
-/// roots) and those of `roots` that are bare repositories.
-fn repo_paths(mut nested: Vec<PathBuf>, roots: &[PathBuf]) -> Vec<PathBuf> {
-    nested.extend(crate::nested_metadata::bare_roots(roots));
-    nested
+/// D420 (#1775): what a walk found for repositories: the repositories, its
+/// folder links, and its notes ([`crate::nested_metadata::Found`]).
+type RepoWalk = (Vec<PathBuf>, Vec<PathBuf>, Vec<(PathBuf, String)>);
+
+fn take_repo_walk(found: &mut crate::nested_metadata::Found) -> RepoWalk {
+    (
+        std::mem::take(&mut found.repos),
+        std::mem::take(&mut found.links),
+        std::mem::take(&mut found.notes),
+    )
 }
 
-/// D420/D421 (#1775): records `changed`, each repository that is new
-/// (unless it has the plain `git init`/`git clone` shape) or replaced, or
-/// whose config, hooks or other files git runs programs from changed since
-/// the session started ([`crate::nested_metadata::repo_changes`]), or
-/// (D422) each file or folder a config names whose contents changed
-/// ([`crate::git_config_targets::target_changes`]), with what changed. An
-/// earlier confirmation doesn't cover a later change. Called with the
-/// registry locked.
+/// D420 (#1775): the repositories to compare for a session over `roots`
+/// (`nested_roots` walked), and the notes: the walk's repositories, those
+/// behind its folder links into roots it doesn't walk (`%TEMP%`), the roots
+/// that are bare repositories, and each of `before` (the repositories at the
+/// session's start) the walk didn't find but that still opens (one a
+/// command hid behind a link somewhere above it is still compared).
+fn repo_paths(
+    walk: RepoWalk,
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+    before: &[RepoState],
+) -> (Vec<PathBuf>, Vec<(PathBuf, String)>) {
+    let (mut repos, links, mut notes) = walk;
+    let unwalked: Vec<PathBuf> = roots
+        .iter()
+        .filter(|root| !nested_roots.contains(root))
+        .cloned()
+        .collect();
+    let (behind, behind_notes) = crate::nested_metadata::repos_behind_links(&links, &unwalked);
+    repos.extend(behind);
+    notes.extend(behind_notes);
+    repos.extend(crate::nested_metadata::bare_roots(roots));
+    for state in before {
+        let listed = repos.iter().any(|path| {
+            crate::git_watch::is_at_or_below(path, &state.path)
+                && crate::git_watch::is_at_or_below(&state.path, path)
+        });
+        if !listed && std::fs::symlink_metadata(&state.path).is_ok() {
+            repos.push(state.path.clone());
+        }
+    }
+    (repos, notes)
+}
+
+/// D420/D421 (#1775): what changed in a session's repositories since
+/// `before`, (D422) in the files and folders their configs name since
+/// `before_targets`, and the notes (which count every time).
+fn session_repo_changes(
+    before: &[RepoState],
+    before_targets: &[TargetState],
+    walk: RepoWalk,
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+) -> Vec<(PathBuf, Vec<String>)> {
+    let (entries, notes) = repo_paths(walk, roots, nested_roots, before);
+    let mut changed = crate::nested_metadata::repo_changes(
+        before,
+        crate::nested_metadata::repo_states(&entries, roots),
+    );
+    // D422: what their configs name.
+    changed.extend(crate::git_config_targets::target_changes(
+        before_targets,
+        config_target_states(&entries, roots),
+    ));
+    changed.extend(notes.into_iter().map(|(path, note)| (path, vec![note])));
+    changed
+}
+
+/// D420/D421 (#1775): records `changed` ([`session_repo_changes`]): each
+/// repository that is new (unless it has the plain `git init`/`git clone`
+/// shape) or replaced, or whose config, hooks or other files git runs
+/// programs from changed since the session started, with what changed, and
+/// each note. An earlier confirmation doesn't cover a later change. Called
+/// with the registry locked.
 fn record_repo_changes(
     registry: &Path,
     changed: Vec<(PathBuf, Vec<String>)>,
@@ -960,10 +1002,9 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
                 .as_ref()
                 .is_some_and(|repos| repo_changed_in_session(&record.roots, repos, path))
             || record.config_targets.as_ref().is_some_and(|targets| {
-                let repos = repo_paths(
-                    crate::nested_metadata::find(&record.nested_roots).repos,
-                    &record.roots,
-                );
+                let walk = take_repo_walk(&mut crate::nested_metadata::find(&record.nested_roots));
+                let before = record.repos.as_deref().unwrap_or_default();
+                let (repos, _notes) = repo_paths(walk, &record.roots, &record.nested_roots, before);
                 let now = config_target_states(&repos, &record.roots);
                 crate::git_config_targets::target_changes(targets, now)
                     .iter()

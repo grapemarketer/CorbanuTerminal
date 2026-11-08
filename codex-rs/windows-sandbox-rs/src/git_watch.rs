@@ -151,7 +151,8 @@ pub(crate) fn fingerprint(entry: &Path, roots: &[PathBuf]) -> Prints {
 
 /// The git folders one fingerprint has looked at, and how many more it may.
 struct Walk {
-    visited: std::collections::HashSet<PathBuf>,
+    /// Each folder with whether its `commondir` was followed.
+    visited: std::collections::HashSet<(PathBuf, bool)>,
     budget: usize,
 }
 
@@ -220,7 +221,12 @@ pub(crate) fn is_at_or_below(path: &Path, base: &Path) -> bool {
 /// A marker that differs every time: a folder too big to look through
 /// counts as changed after every session.
 fn truncated() -> String {
-    format!("truncated at {:?}", std::time::SystemTime::now())
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "truncated at {:?} #{}",
+        std::time::SystemTime::now(),
+        COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
 }
 
 fn git_folder(
@@ -239,8 +245,8 @@ fn git_folder(
     walk.budget -= 1;
     // Each folder once (a `commondir` or module can lead back to one).
     let key = dunce::canonicalize(dir).unwrap_or_else(|_| normalize(dir));
-    if !walk.visited.insert(key) {
-        prints.insert(prefix.to_string(), "seen".to_string());
+    if !walk.visited.insert((key, follow_common)) {
+        prints.insert(format!("{prefix}(seen)"), "seen".to_string());
         return;
     }
     for name in PROGRAM_FILES {
@@ -303,23 +309,24 @@ fn module_tree(
 ) {
     prints.insert(prefix.to_string(), file_print(path));
     git_folder(path, prefix, roots, depth, follow_common, walk, prints);
-    if depth <= 1 {
-        return;
-    }
     let Ok(children) = std::fs::read_dir(path) else {
         return;
     };
+    // A git folder's own subfolders are its, not modules; in any other
+    // folder every subfolder may be one (a module `vendor/refs`).
+    let is_git = is_git_directory(path);
     for child in children.flatten() {
-        if walk.budget == 0 {
-            prints.insert(prefix.to_string(), truncated());
-            return;
-        }
         let name = child.file_name().to_string_lossy().into_owned();
-        let known = GIT_SUBFOLDERS
-            .iter()
-            .any(|known| known.eq_ignore_ascii_case(&name));
+        let known = is_git
+            && GIT_SUBFOLDERS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&name));
         if known || !std::fs::metadata(child.path()).is_ok_and(|metadata| metadata.is_dir()) {
             continue;
+        }
+        if depth <= 1 || walk.budget == 0 {
+            prints.insert(format!("{prefix}(more)"), truncated());
+            return;
         }
         module_tree(
             &child.path(),
@@ -460,7 +467,16 @@ fn folder_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
             return;
         };
         let name = entry.file_name().to_string_lossy().into_owned();
-        prints.insert(format!("{prefix}{name}"), file_print(&entry.path()));
+        // Git never runs a `*.sample` hook, so its name is enough (one
+        // renamed to a hook's name is a new entry).
+        let print = if name.to_ascii_lowercase().ends_with(".sample")
+            && entry.file_type().is_ok_and(|kind| kind.is_file())
+        {
+            "sample".to_string()
+        } else {
+            file_print(&entry.path())
+        };
+        prints.insert(format!("{prefix}{name}"), print);
     }
 }
 

@@ -324,3 +324,41 @@ fn slashed_modules_loops_and_quoted_urls() {
         )
     );
 }
+
+/// #1849 review 3: a module whose name has a segment git uses for its own
+/// folders (`vendor/refs`) is watched when its parent isn't a git folder,
+/// and a module path too deep to look through counts as changed.
+#[test]
+fn modules_named_like_git_folders_and_too_deep() {
+    let (_dir, base) = tempdir();
+    let roots = [base.clone()];
+    let git = base.join("repo").join(".git");
+    init_shape(&git, INIT_CONFIG);
+    let module = git.join("modules").join("vendor").join("refs");
+    init_shape(&module, INIT_CONFIG);
+    let before = fingerprint(&git, &roots);
+    fs::write(module.join("hooks").join("post-checkout"), "evil").expect("hook");
+    let changed = changes(&before, &fingerprint(&git, &roots));
+
+    let deep = base.join("deep").join(".git");
+    init_shape(&deep, INIT_CONFIG);
+    let mut path = deep.join("modules");
+    for segment in 0..8 {
+        path = path.join(format!("s{segment}"));
+    }
+    fs::create_dir_all(&path).expect("deep module");
+    let deep_before = fingerprint(&deep, &roots);
+    let deep_again = changes(&deep_before, &fingerprint(&deep, &roots));
+    assert_eq!(
+        (
+            changed,
+            deep_again
+                .iter()
+                .any(|change| change.ends_with("(more) changed"))
+        ),
+        (
+            vec!["modules/vendor/refs/hooks/post-checkout added".to_string()],
+            true
+        )
+    );
+}

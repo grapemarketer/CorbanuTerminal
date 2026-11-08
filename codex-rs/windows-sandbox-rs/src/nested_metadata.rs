@@ -47,6 +47,15 @@ pub(crate) struct Found {
     /// nested `.git` (folder, file or link) and each folder that is itself a
     /// git folder (a bare repository), by git's rule.
     pub(crate) repos: Vec<PathBuf>,
+    /// D420: folder links the walk found (it doesn't follow them).
+    pub(crate) links: Vec<PathBuf>,
+    /// D420: folders that count as changed after every session, and why: a
+    /// folder holding an entry whose name isn't valid Unicode (it can't be
+    /// recorded, so it isn't looked at), or a link to a folder too large to
+    /// look through.
+    pub(crate) notes: Vec<(PathBuf, String)>,
+    /// The walk stopped at its budget.
+    exhausted: bool,
 }
 
 /// The `.codex`/`.agents` entries below the top of `roots` (canonical), of
@@ -58,10 +67,20 @@ pub(crate) struct Found {
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
 /// name never matches a snapshot.
 pub(crate) fn find(roots: &[PathBuf]) -> Found {
+    let mut budget = usize::MAX;
+    find_bounded(roots, &mut budget)
+}
+
+/// [`find`], looking at no more than `budget` entries (it counts down).
+fn find_bounded(roots: &[PathBuf], budget: &mut usize) -> Found {
     let mut found = Found::default();
     for root in roots {
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
+            if *budget == 0 {
+                found.exhausted = true;
+                return found;
+            }
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
                 // Gone. A folder that is still there but says "not found"
@@ -87,6 +106,18 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                     found.unlistable.push(dir.clone());
                     break;
                 };
+                *budget = budget.saturating_sub(1);
+                // D420: a name that isn't valid Unicode can't be recorded
+                // (the records are JSON), so what is below it isn't walked
+                // and its folder counts as changed every time.
+                if entry.file_name().to_str().is_none() {
+                    found.notes.push((
+                        dir.clone(),
+                        "holds an entry whose name isn't valid Unicode, so it isn't checked"
+                            .to_string(),
+                    ));
+                    continue;
+                }
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
                 git_candidate |=
@@ -122,6 +153,22 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                         if exact {
                             continue;
                         }
+                    }
+                }
+                // D420: a folder link isn't walked, but git follows it: a
+                // repository behind one (moved to `%TEMP%`, say) counts.
+                if !name.eq_ignore_ascii_case(".git")
+                    && !folds_to(&name, ".git")
+                    && is_link(metadata.as_ref())
+                {
+                    let link = entry.path();
+                    if std::fs::metadata(link.join(".git")).is_ok() {
+                        found.repos.push(link.join(".git"));
+                    } else if crate::git_watch::is_git_directory(&link) {
+                        found.repos.push(link.clone());
+                    }
+                    if std::fs::metadata(&link).is_ok_and(|metadata| metadata.is_dir()) {
+                        found.links.push(link);
                     }
                 }
                 let Ok(metadata) = metadata else {
@@ -268,6 +315,43 @@ pub(crate) fn git_appeared_in_session(
         || !before
             .iter()
             .any(|old| same_path(&old.path, folder) && old.identity == now)
+}
+
+/// D420 (#1775): the repositories deeper behind `links` (folder links a walk
+/// found) whose target lies in one of `unwalked` (writable roots the walk
+/// doesn't cover, such as `%TEMP%`): a command could build one there and
+/// link it in. Each such link is walked by its own path, its links in turn,
+/// up to 20,000 entries in all; past that the link is a note (it counts as
+/// changed after every session).
+pub(crate) fn repos_behind_links(
+    links: &[PathBuf],
+    unwalked: &[PathBuf],
+) -> (Vec<PathBuf>, Vec<(PathBuf, String)>) {
+    let mut budget = 20_000_usize;
+    let mut repos = Vec::new();
+    let mut notes = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue: Vec<PathBuf> = links.to_vec();
+    while let Some(link) = queue.pop() {
+        let Ok(target) = dunce::canonicalize(&link) else {
+            continue;
+        };
+        if !unwalked.iter().any(|root| starts_with(&target, root)) || !visited.insert(target) {
+            continue;
+        }
+        let found = find_bounded(std::slice::from_ref(&link), &mut budget);
+        if found.exhausted {
+            notes.push((
+                link,
+                "links to a folder too large to check for repositories".to_string(),
+            ));
+            break;
+        }
+        repos.extend(found.repos);
+        notes.extend(found.notes);
+        queue.extend(found.links);
+    }
+    (repos, notes)
 }
 
 /// D420 (#1775): a repository and what git would run from it, when a
