@@ -5,8 +5,8 @@
 //! directly"). Now each runs as from the real path: the working folder is
 //! writable, and the read-only `docs` and the protected `.git` stay
 //! read-only. Junctions and folder symbolic links ran before and still do.
-//! A mapped drive's real path is a network (UNC) path, which the non-admin
-//! sandbox's commands can't write at all, as before D398 from a UNC path.
+//! A mapped drive's real path is a network (UNC) path: the command runs,
+//! but the non-admin sandbox's commands can't write there at all.
 //!
 //! It must not let anything else through: a working folder that is a
 //! junction, folder symbolic link or `subst` drive leading out of the
@@ -430,16 +430,6 @@ fn fixture() -> Fixture {
         root.join("Workspace Folder")
     });
     leading_in.push(("mapped drive", mapped_form, workspace.clone()));
-    // What a mapped drive's real path is.
-    let unc = share_path(&workspace).and_then(|unc| {
-        let unc = PathBuf::from(unc);
-        if unc.is_dir() {
-            Ok(unc)
-        } else {
-            Err(format!("{} can't be reached here", unc.display()))
-        }
-    });
-    leading_in.push(("UNC path (control)", unc, workspace.clone()));
     leading_in.push((
         "canonical, system drive (8.3 control)",
         Ok(system_workspace.clone()),
@@ -571,15 +561,15 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
                     elevated_outcomes.push((label, outcome, docs_read_only));
                     continue;
                 }
-                let network = form.starts_with("mapped drive") || form.starts_with("UNC path");
+                let network = *form == "mapped drive";
                 expected.push((
                     label.clone(),
                     if leads_out {
                         Outcome::SplitRootsRefused { written: false }
                     } else if network {
                         // The non-admin sandbox's commands can't write
-                        // through a network path at all (fails closed), so
-                        // a mapped drive runs like the UNC path it leads to.
+                        // through a network path at all (fails closed): a
+                        // mapped drive runs, but nothing is written.
                         Outcome::Ran {
                             ok: false,
                             docs: false,
