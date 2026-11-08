@@ -56,6 +56,17 @@ pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Whether a test in this process holds `legacy_process_test_guard()`. The
+/// elevated setup checks it (#1827): it sets the sandbox users' passwords, so
+/// two tests running it at once make one's logons fail (1326). Under nextest,
+/// where each test has its own process, this is exact.
+pub(crate) fn legacy_process_test_guard_is_held() -> bool {
+    matches!(
+        LEGACY_PROCESS_TEST_LOCK.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    )
+}
+
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread()
         .enable_all()

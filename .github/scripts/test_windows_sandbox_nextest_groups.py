@@ -21,6 +21,8 @@ CRATE_DIR = CODEX_RS / "windows-sandbox-rs"
 PACKAGE = "codex-windows-sandbox"
 GROUP = "windows_sandbox_legacy_sessions"
 GUARD = "legacy_process_test_guard"
+# Only checks whether the lock is held (#1827); it never holds it.
+HELD_CHECK = "legacy_process_test_guard_is_held"
 LOCK = "LEGACY_PROCESS_TEST_LOCK"
 
 FN_RE = re.compile(
@@ -150,7 +152,7 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
         for match in re.finditer(rf"\b{LOCK}\b", code):
             inside = [span for span in spans[path] if span[3] < match.start() < span[2]]
             before = code[max(0, match.start() - 80) : match.start()]
-            in_guard = inside and max(inside, key=lambda span: span[1])[0] == GUARD
+            in_guard = inside and max(inside, key=lambda span: span[1])[0] in (GUARD, HELD_CHECK)
             if not re.search(r"\bstatic\s+$", before) and not in_guard:
                 line = code.count("\n", 0, match.start()) + 1
                 raise ScanError(f"{path}:{line}: {LOCK} is used outside {GUARD}")
@@ -379,6 +381,17 @@ fn through_an_extern_helper() {
                 "through_an_extern_helper",
             ],
         )
+
+    def test_scan_accepts_the_held_check(self) -> None:
+        source = """
+static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+fn legacy_process_test_guard() -> MutexGuard<'static, ()> { LEGACY_PROCESS_TEST_LOCK.lock().unwrap() }
+fn legacy_process_test_guard_is_held() -> bool { LEGACY_PROCESS_TEST_LOCK.try_lock().is_err() }
+fn setup() { assert!(legacy_process_test_guard_is_held()); }
+#[test]
+fn legacy_one() { let _guard = legacy_process_test_guard(); setup(); }
+"""
+        self.assertEqual(sorted(guard_users({"x.rs": source})), ["legacy_one"])
 
     def test_scan_fails_on_uses_it_cannot_follow(self) -> None:
         for case, source in {

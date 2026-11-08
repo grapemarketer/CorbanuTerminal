@@ -107,8 +107,10 @@ test-group = 'core_apply_patch_cli_integration'
 # test in its own. .github/scripts/test_windows_sandbox_nextest_groups.py
 # checks this, and accepts only `test(name substring)` terms joined by `|`.
 # The D311 walk tests take it too (#1825): a session relabels the temporary
-# folder their trees are in.
-filter = 'package(codex-windows-sandbox) & (test(legacy_) | test(elevated_) | test(sec_win_1648_) | test(d311_))'
+# folder their trees are in. So does every test that runs the elevated setup
+# (#1827): it resets the sandbox users' passwords, failing other tests'
+# logons (1326), and in tests it asserts the guard is held.
+filter = 'package(codex-windows-sandbox) & (test(legacy_) | test(elevated_) | test(sec_win_1648_) | test(d311_) | test(sec_win_345_sandboxed_commands_dont_get_the_runners_access))'
 test-group = 'windows_sandbox_legacy_sessions'
 
 [[profile.default.overrides]]
