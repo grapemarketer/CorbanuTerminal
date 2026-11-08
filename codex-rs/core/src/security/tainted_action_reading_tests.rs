@@ -324,11 +324,13 @@ fn issue_1772_case_lists_hold_on_mains_reading() {
             .filter(|(_, files, argv)| mains_verdict(files, argv).is_none())
             .map(|(item, _, argv)| format!("review 2 item {item}: {argv:?}")),
     );
-    assert_eq!(quiet, REVIEW_QUIET_ON_MAIN, "review lines quiet on main's reading");
+    assert_eq!(
+        quiet, REVIEW_QUIET_ON_MAIN,
+        "review lines quiet on main's reading"
+    );
     let line = "$(echo true >log) ./x";
     assert!(
-        REVIEW_ASKS.contains(&("3", line))
-            && new_verdict(X_EVIL, &["bash", "-lc", line]).is_some(),
+        REVIEW_ASKS.contains(&("3", line)) && new_verdict(X_EVIL, &["bash", "-lc", line]).is_some(),
         "review 1 item 3 asks on the new reading"
     );
 }
