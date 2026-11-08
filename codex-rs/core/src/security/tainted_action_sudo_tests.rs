@@ -214,6 +214,22 @@ fn issue_1773_legacy_prompt_floor_covers_carried_and_redirected_commands() {
     }
 }
 
+/// Everyday sudo commands must remain quiet once sudo itself has stopped
+/// reading options; command options are not sudo options (#1773).
+#[test]
+fn issue_1773_sudo_command_options_stay_quiet() {
+    for shell in ["bash", "zsh"] {
+        for line in [
+            "sudo chown -R u d",
+            "sudo ls -la",
+            "sudo sh -c \"echo hi\"",
+            "sudo -u postgres psql -c \"select 1\"",
+        ] {
+            assert_eq!(script_with(shell, line), None, "{shell}: {line}");
+        }
+    }
+}
+
 /// #1773: after those options, a nested sudo's helper options are read rather
 /// than hidden behind the value that programs skipped on main.
 #[test]

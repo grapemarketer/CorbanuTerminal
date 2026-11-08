@@ -6309,12 +6309,6 @@ fn issue_1309_unknown_folders_ask() {
             "{command}"
         );
     }
-    // #1773's line-level compatibility floor intentionally keeps this
-    // quote-blind nested-shell spelling prompt-only.
-    assert_eq!(
-        script("sudo -u me sh -c 'echo x > out.txt'"),
-        Some(ProtectedActionKind::UnseenCode)
-    );
     for command in [
         "cd /tmp; sh -c 'echo x > out.txt'",
         "sh -c 'echo x > out.txt'; cd /tmp",
@@ -6323,6 +6317,7 @@ fn issue_1309_unknown_folders_ask() {
         "for i in 1 2; do echo $i; done; sh -c 'echo x > out.txt'",
         "xargs -d '\\n' sh -c 'echo x > out.txt'",
         "env -i sh -c 'echo x > out.txt'",
+        "sudo -u me sh -c 'echo x > out.txt'",
         "docker exec -it c sh -c 'echo x > out.txt'",
         "git -C /tmp commit -m 'fix (x): cd into it'",
         "pushd /tmp; popd; sh -c 'echo x > out.txt'",
@@ -7128,9 +7123,6 @@ fn issue_1482_items_2_to_5_ask() {
         &["true;./x"],
         &["env", "A=1 ./y", "./x"],
         &["sudo", "-u", "root ./y", "./x"],
-        // The line-level #1773 floor intentionally preserves an UnseenCode
-        // prompt when a later shell option is also a changed sudo spelling.
-        &["sudo", "sh", "-c", "true ./x"],
         &["./{x,y}"],
         &["true`./x`"],
     ] {
@@ -7144,6 +7136,7 @@ fn issue_1482_items_2_to_5_ask() {
         &["./x"],
         &["echo", "a b"],
         &["bash", "-lc", "true ./x"],
+        &["sudo", "sh", "-c", "true ./x"],
         &["env", "A=1", "./x"],
         &["sudo", "-u", "root", "./x"],
         &["./x", "a b", "{c,d}"],
@@ -11161,15 +11154,9 @@ fn issue_1309_login_wrappers_patterns_and_loaders_ask() {
             "{command}"
         );
     }
-    // The position-independent #1773 floor is intentionally conservative
-    // when `-c` appears after sudo in quote-blind nested-shell text.
     for command in [
         "sudo -u me sh -c 'echo x > out.txt'",
         "sudo -s sh -c 'echo x > out.txt'",
-    ] {
-        assert_eq!(script(command), Some(ProtectedActionKind::UnseenCode));
-    }
-    for command in [
         "su me -c \"sh -c 'echo x > out.txt'\"",
         "systemd-run --scope sh -c 'echo x > out.txt'",
         "systemd-run --user --same-dir sh -c 'echo x > out.txt'",

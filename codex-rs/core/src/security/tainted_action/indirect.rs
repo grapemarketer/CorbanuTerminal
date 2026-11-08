@@ -10,6 +10,21 @@ use super::shell::SimpleCommand;
 use super::shell::basename;
 use super::work;
 use base64::Engine;
+use std::cell::Cell;
+
+thread_local! {
+    /// Whether an actual sudo option reader consumed a word differently from
+    /// the pre-#1773 reader during this judgment.
+    static SUDO_OPTION_BOUNDARY_CHANGED: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(super) fn reset_sudo_option_boundary_changed() {
+    SUDO_OPTION_BOUNDARY_CHANGED.with(|changed| changed.set(false));
+}
+
+pub(super) fn sudo_option_boundary_changed() -> bool {
+    SUDO_OPTION_BOUNDARY_CHANGED.with(Cell::get)
+}
 
 /// Bytes of one script file the classifier reads.
 pub(super) const SCRIPT_READ_LIMIT: u64 = 256 * 1024;
@@ -375,7 +390,11 @@ fn sudo_value_letter(letter: char, value_options: &[&str]) -> bool {
 /// cluster letter (`sudo --us root`, `sudo -xu root`).
 pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) -> usize {
     if wrapper == "sudo" {
-        return sudo_option_words(option, value_options);
+        let current = sudo_option_words(option, value_options);
+        if current != sudo_legacy_option_words(option) {
+            SUDO_OPTION_BOUNDARY_CHANGED.with(|changed| changed.set(true));
+        }
+        return current;
     }
     if value_options.contains(&option) {
         return 2;
@@ -510,7 +529,10 @@ fn sudo_option_boundaries_differ_in(words: &[String]) -> bool {
     for (at, word) in words.iter().enumerate().rev() {
         work::step();
         different_from[at] = if word.starts_with('-') {
-            let current = option_words("sudo", word, value_options);
+            // This compatibility-only scan must not set the per-judgment
+            // reader flag below; only a reader that actually follows sudo's
+            // options may do that.
+            let current = sudo_option_words(word, value_options);
             let legacy = sudo_legacy_option_words(word);
             current != legacy
                 || different_from
@@ -523,30 +545,10 @@ fn sudo_option_boundaries_differ_in(words: &[String]) -> bool {
             false
         };
     }
-    if words.iter().enumerate().any(|(at, word)| {
+    words.iter().enumerate().any(|(at, word)| {
         work::step();
         basename(word).eq_ignore_ascii_case("sudo") && different_from[at + 1]
-    }) {
-        return true;
-    }
-
-    // Quote-blind words split a quoted value such as `"a b"`, whereas the
-    // quote-aware readers keep it whole. Do not require the two readings to
-    // remain aligned: once a sudo word appears, any later changed option keeps
-    // the line prompt-only. This can add a prompt for data named `sudo`, but
-    // avoids reintroducing reader-specific gaps.
-    let mut saw_sudo = false;
-    for word in words {
-        work::step();
-        saw_sudo |= basename(word).eq_ignore_ascii_case("sudo");
-        if saw_sudo
-            && word.starts_with('-')
-            && option_words("sudo", word, value_options) != sudo_legacy_option_words(word)
-        {
-            return true;
-        }
-    }
-    false
+    })
 }
 
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.
