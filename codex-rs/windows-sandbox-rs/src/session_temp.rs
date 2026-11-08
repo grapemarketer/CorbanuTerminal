@@ -53,6 +53,7 @@ const TEMP_KEYS: [&str; 2] = ["TMP", "TEMP"];
 const DELETE: u32 = 0x1_0000;
 const READ_CONTROL: u32 = 0x2_0000;
 const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_LIST_DIRECTORY: u32 = 0x1;
 const FILE_SHARE_READ: u32 = 0x1;
 const FILE_SHARE_WRITE: u32 = 0x2;
 const FILE_SHARE_DELETE: u32 = 0x4;
@@ -217,8 +218,10 @@ fn make_session_temp(base: &Path) -> Result<(PathBuf, File)> {
     descriptor
         .create_dir(&dir)
         .with_context(|| format!("make the sandbox's temp folder in {}", base.display()))?;
+    // `FILE_LIST_DIRECTORY`: a handle with attribute rights only is exempt
+    // from share checks, so it would not keep the folder from being removed.
     let hold = std::fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES)
+        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&dir)
