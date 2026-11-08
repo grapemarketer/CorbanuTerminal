@@ -198,7 +198,7 @@ fn find_matches_one_walk() {
         }
         path = path.join("b1");
     }
-    let roots = vec![root.clone(), root.join("b1\\b1"), root.clone()];
+    let roots = vec![root.clone(), root.join("b1\\b1"), root];
 
     let parallel = find(&roots);
     let mut budget = usize::MAX;
