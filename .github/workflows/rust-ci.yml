@@ -67,8 +67,8 @@ jobs:
           # login (#636); windows-sandbox-rs and the crates whose Windows
           # tests use it or that it uses: network-proxy, process-hardening
           # and sandboxing (#1813, after #1795 merged unseen); exec-server,
-          # which has whole Windows-only test files; utils/pty (ConPTY tests)
-          # and app-server (#1839).
+          # which has whole Windows-only test files; utils/pty (Windows-only
+          # pipe and ConPTY tests) and app-server (#1839).
           windows_native_tests=false
           windows_native_core=false
           windows_native_sandbox=false
