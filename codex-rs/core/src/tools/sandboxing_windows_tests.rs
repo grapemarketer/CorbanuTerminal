@@ -604,14 +604,16 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
     assert_eq!(outcomes, expected);
 }
 
-/// #1810: a profile in the older workspace-write format (here built from a
-/// legacy `WorkspaceWrite` policy, as config does) with a writable folder
-/// inside a protected `.git`, `.codex` or `.agents` folder of the workspace,
-/// spelled as such, with the working folder given as a junction, or through
-/// a junction or folder symbolic link to that protected folder. The agent's
-/// commands under the unelevated sandbox refuse it (D331) and write nothing
-/// there. Not refused: `.git` itself named writable (its explicit rule
-/// replaces the protection) and a plain folder.
+/// #1810: a profile built from a legacy `WorkspaceWrite` policy (as config
+/// does) with a writable folder inside a protected `.git`, `.codex` or
+/// `.agents` folder of the workspace: spelled as such, with the working
+/// folder given as a junction, or through a junction or folder symbolic link
+/// to that protected folder. The agent's commands under the unelevated
+/// sandbox refuse it (D331) and write nothing there. Before #1810 the first
+/// four, which keep the older workspace-write format, ran and wrote there;
+/// the linked ones leave that format and were already refused (#1801). Not
+/// refused: `.git` itself named writable (its explicit rule replaces the
+/// protection) and a plain folder.
 #[tokio::test]
 #[serial_test::serial(codex_home)]
 async fn sec_win_d331_1810_legacy_format_profile_with_writable_inside_protected_folder() {
@@ -722,10 +724,10 @@ async fn sec_win_d331_1810_legacy_format_profile_with_writable_inside_protected_
         (".codex\\sub", true, true, false),
         (".agents\\x", true, true, false),
         ("cwd through a junction, .git\\hooks", true, true, false),
-        (".git\\hooks through a junction to .git", true, true, false),
+        (".git\\hooks through a junction to .git", false, true, false),
         (
             ".git\\hooks through a symbolic link to .git",
-            true,
+            false,
             true,
             false,
         ),

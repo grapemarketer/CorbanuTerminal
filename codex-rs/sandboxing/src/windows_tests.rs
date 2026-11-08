@@ -383,7 +383,12 @@ fn sec_win_1810_legacy_format_profile_with_writable_inside_protected_folder_is_r
         resolve_windows_restricted_token_filesystem_overrides(
             SandboxType::WindowsRestrictedToken,
             &PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-                &SandboxPolicy::new_workspace_write_policy(),
+                &SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                },
                 cwd.as_path(),
             ),
             &cwd,
