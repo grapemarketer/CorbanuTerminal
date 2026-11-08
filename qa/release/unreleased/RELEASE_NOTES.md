@@ -574,11 +574,13 @@ asking and now ask first:
   `o=$(cat f); zstyle $o :x y functions`, `zstyle -a $(cat f)`,
   `zselect -t 0 -r 0 -A $n`, `zsystem flock -t 0 -f $n file` (#1704).
   `print -v`, `printf -v` and `getopts` count as such commands now too. So
-  an unquoted variable or `$(…)` among the options of `print`, `printf`,
-  `set`, `stat`, `read`, `mapfile` or `vared` can now ask
-  (`print -r $(cat f)`, `stat -f %m $(cat f)`, `read -d $(cat f)`); quote
-  it, or put it after `--`. `print -r -- $x`, `stat -f %m "$f"`,
-  `printf "$fmt"` and `wait $pid` stay quiet.
+  an unquoted variable or `$(…)` where `print`, `printf`, `set`, `stat`,
+  `read`, `mapfile`, `vared` or `getopts` read their options or the name
+  they write can now ask (`print -r $(cat f)`, `stat -f %m $(cat f)`,
+  `read -d $(cat f)`, `getopts $(cat f)`), and so can a quoted one with
+  more words after it (`printf "$fmt" x`). `print -r -- $x`,
+  `set -- $(cat f)`, `stat -f %m "$f"`, `printf "$fmt"` and `wait $pid`
+  stay quiet.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
@@ -653,9 +655,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   or folder symbolic link (on either folder, or on the working folder)
   wasn't refused, and the non-admin sandbox let commands write there. It
   now compares real paths too (`subst` drives included), for the agent's
-  commands in both sandboxes and for `command/exec`. The same folder marked read-only and
-  writable under two spellings is still not refused; in the non-admin
-  sandbox read-only wins (#1780).
+  commands in both sandboxes and for `command/exec`. The same folder
+  marked read-only and writable under two spellings is still not refused;
+  in the non-admin sandbox read-only wins (#1780).
 - **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
   or `.agents` folder is refused for older workspace-write profiles too**
   (#1810, D331). A profile in the older workspace-write format, for example
@@ -723,9 +725,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   what Windows does. Corbanu doesn't normally start a walk at a link, so
   nothing changes in normal use.
 - **Known limitation, now documented: the non-admin sandbox breaks tools that
-  use named pipes** (#1797, #1561, #1778). Its commands can't write to named pipes
-  they create, so Node.js child processes with piped output (`EPERM`), Git
-  Bash (`couldn't create signal pipe`), a local `git clone` and Python
-  `multiprocessing` fail there. This is not new in this release. The default
-  (elevated) sandbox runs all of them; see "Known limitations" in
-  `docs/sandbox.md`.
+  use named pipes** (#1797, #1561, #1778). Its commands can't write to
+  named pipes they create, so Node.js child processes with piped output
+  (`EPERM`), Git Bash (`couldn't create signal pipe`), a local `git clone`
+  and Python `multiprocessing` fail there. This is not new in this release.
+  The default (elevated) sandbox runs all of them; see "Known limitations"
+  in `docs/sandbox.md`.
