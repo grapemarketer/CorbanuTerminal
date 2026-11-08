@@ -40,31 +40,19 @@ const PROGRAM_FOLDERS: [&str; 6] = [
     "remotes",
     "branches",
 ];
-/// Files git writes through: a link or hard link there makes git write
-/// elsewhere.
-const WRITTEN_FILES: [&str; 8] = [
-    "COMMIT_EDITMSG",
-    "MERGE_MSG",
-    "SQUASH_MSG",
-    "TAG_EDITMSG",
-    "FETCH_HEAD",
-    "ORIG_HEAD",
-    "MERGE_HEAD",
-    "packed-refs",
-];
 /// Nested repositories followed this deep (`modules` within `modules`, a
 /// `commondir` within a `gitdir`, ...).
 const MAX_DEPTH: usize = 6;
-/// Entries listed in one folder of a repository before the rest counts as
-/// changed (`truncated`).
-const MAX_ENTRIES: usize = 4096;
+/// Entries looked at in one folder of a repository; past that the folder
+/// counts as changed after every session.
+const MAX_ENTRIES: usize = 20_000;
 
 /// Whether `dir` is a git folder by git's own rule (`is_git_directory`): a
 /// valid `HEAD`, and `objects` and `refs` either in `dir` or in the folder
 /// its `commondir` names. A `HEAD` that can't be read counts as valid.
 pub(crate) fn is_git_directory(dir: &Path) -> bool {
     let common = match std::fs::read(dir.join("commondir")) {
-        Ok(bytes) => resolve(dir, String::from_utf8_lossy(&bytes).trim()),
+        Ok(bytes) => resolve(dir, &file_value(&bytes)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => dir.to_path_buf(),
         // Unreadable: git may read it.
         Err(_) => return std::fs::symlink_metadata(dir.join("HEAD")).is_ok(),
@@ -76,23 +64,32 @@ fn exists(path: &Path) -> bool {
     std::fs::metadata(path).is_ok()
 }
 
+/// Git's `validate_headref`, leniently: any link (git reads through it),
+/// `ref: refs/...`, or a value that starts with 40 or 64 hex digits
+/// (git ignores what follows).
 fn valid_head(head: &Path) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(head) else {
         return false;
     };
     if metadata.file_type().is_symlink() {
-        // Git accepts a link into `refs/`; anything it can't read counts.
-        return std::fs::read_link(head).map_or(true, |target| target.starts_with("refs"));
+        return true;
     }
     let Ok(bytes) = std::fs::read(head) else {
         return true;
     };
-    let text = String::from_utf8_lossy(&bytes);
-    let text = text.trim_end();
-    if let Some(rest) = text.strip_prefix("ref:") {
-        return rest.trim_start().starts_with("refs/");
+    if let Some(rest) = bytes.strip_prefix(b"ref:") {
+        return rest.trim_ascii_start().starts_with(b"refs/");
     }
-    matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
+    let hex = bytes.iter().take_while(|b| b.is_ascii_hexdigit()).count();
+    hex >= 40
+}
+
+/// The path in a `commondir` file as git reads it: the whole file, with
+/// trailing line ends removed.
+fn file_value(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches(['\n', '\r'])
+        .to_string()
 }
 
 /// `target` (a `gitdir:` or `commondir` value) relative to `base`.
@@ -113,16 +110,33 @@ fn resolve(base: &Path, target: &str) -> PathBuf {
 /// followed (the caller counts it as changed every time).
 pub(crate) fn fingerprint(entry: &Path, roots: &[PathBuf]) -> Prints {
     let mut prints = Prints::new();
+    let mut walk = Walk::default();
     match std::fs::symlink_metadata(entry) {
-        Ok(metadata) if metadata.is_dir() => {
-            git_folder(entry, "", roots, MAX_DEPTH, &mut prints);
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            git_folder(
+                entry,
+                "",
+                roots,
+                MAX_DEPTH,
+                /*follow_common*/ true,
+                &mut walk,
+                &mut prints,
+            );
         }
         Ok(metadata) if metadata.is_file() => {
             prints.insert(".git".to_string(), file_print(entry));
             if let Some(target) = gitdir_target(entry)
                 && in_roots(&target, roots)
             {
-                git_folder(&target, "gitdir/", roots, MAX_DEPTH, &mut prints);
+                git_folder(
+                    &target,
+                    "gitdir/",
+                    roots,
+                    MAX_DEPTH,
+                    /*follow_common*/ true,
+                    &mut walk,
+                    &mut prints,
+                );
             }
         }
         Ok(_) => {
@@ -135,11 +149,34 @@ pub(crate) fn fingerprint(entry: &Path, roots: &[PathBuf]) -> Prints {
     prints
 }
 
-/// The folder a `.git` file's `gitdir:` line names.
-fn gitdir_target(file: &Path) -> Option<PathBuf> {
+/// The git folders one fingerprint has looked at, and how many more it may.
+struct Walk {
+    visited: std::collections::HashSet<PathBuf>,
+    budget: usize,
+}
+
+impl Default for Walk {
+    fn default() -> Self {
+        Self {
+            visited: std::collections::HashSet::new(),
+            budget: MAX_GIT_FOLDERS,
+        }
+    }
+}
+
+/// Git folders (modules, worktrees, `commondir`s ...) one fingerprint looks
+/// at; past that it counts as changed after every session.
+const MAX_GIT_FOLDERS: usize = 2_000;
+
+/// The folder a `.git` file names, as git reads it (`read_gitfile`): the
+/// whole file must start with `gitdir: `, and trailing line ends are
+/// removed.
+pub(crate) fn gitdir_target(file: &Path) -> Option<PathBuf> {
     let bytes = std::fs::read(file).ok()?;
     let text = String::from_utf8_lossy(&bytes);
-    let target = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let target = text
+        .strip_prefix("gitdir: ")?
+        .trim_end_matches(['\n', '\r']);
     Some(resolve(file.parent()?, target))
 }
 
@@ -180,9 +217,30 @@ pub(crate) fn is_at_or_below(path: &Path, base: &Path) -> bool {
     })
 }
 
-fn git_folder(dir: &Path, prefix: &str, roots: &[PathBuf], depth: usize, prints: &mut Prints) {
-    if depth == 0 {
-        prints.insert(format!("{prefix}*"), "too deep".to_string());
+/// A marker that differs every time: a folder too big to look through
+/// counts as changed after every session.
+fn truncated() -> String {
+    format!("truncated at {:?}", std::time::SystemTime::now())
+}
+
+fn git_folder(
+    dir: &Path,
+    prefix: &str,
+    roots: &[PathBuf],
+    depth: usize,
+    follow_common: bool,
+    walk: &mut Walk,
+    prints: &mut Prints,
+) {
+    if depth == 0 || walk.budget == 0 {
+        prints.insert(format!("{prefix}*"), truncated());
+        return;
+    }
+    walk.budget -= 1;
+    // Each folder once (a `commondir` or module can lead back to one).
+    let key = dunce::canonicalize(dir).unwrap_or_else(|_| normalize(dir));
+    if !walk.visited.insert(key) {
+        prints.insert(prefix.to_string(), "seen".to_string());
         return;
     }
     for name in PROGRAM_FILES {
@@ -194,53 +252,196 @@ fn git_folder(dir: &Path, prefix: &str, roots: &[PathBuf], depth: usize, prints:
     for name in PROGRAM_FOLDERS {
         folder_prints(&dir.join(name), &format!("{prefix}{name}/"), prints);
     }
-    for name in WRITTEN_FILES {
-        if let Some(mark) = write_through_mark(&dir.join(name)) {
-            prints.insert(format!("{prefix}{name}"), mark);
-        }
-    }
+    // Every other file at the top (`COMMIT_EDITMSG`, `FETCH_HEAD`, ...),
+    // which git writes through, and every folder there that is a link
+    // (`objects`, `refs`, `logs`, `rr-cache` ...), as D6 does.
+    top_level_links(dir, prefix, prints);
     logs_prints(&dir.join("logs"), &format!("{prefix}logs/"), prints);
-    // Other repositories git reads from here.
-    for (folder, own) in [("modules", true), ("worktrees", false)] {
-        let Ok(entries) = std::fs::read_dir(dir.join(folder)) else {
-            continue;
-        };
-        for entry in entries.take(MAX_ENTRIES).flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            let child = format!("{prefix}{folder}/{name}/");
-            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
-                prints.insert(child, "link".to_string());
-            } else if own {
-                // `modules\a\b` holds the module `a/b` when `a` isn't one.
-                git_folder(&path, &child, roots, depth - 1, prints);
-            } else {
-                for name in PROGRAM_FILES {
-                    let file = path.join(name);
-                    if std::fs::symlink_metadata(&file).is_ok() {
-                        prints.insert(format!("{child}{name}"), file_print(&file));
-                    }
-                }
-            }
-        }
+    // Other repositories git reads from here: each module is a git folder
+    // (`modules\a\b` holds the module `a/b`), and so is each worktree's own
+    // folder (its `commondir` is this one).
+    for (folder, follow) in [("modules", true), ("worktrees", false)] {
+        container(
+            &dir.join(folder),
+            &format!("{prefix}{folder}/"),
+            roots,
+            depth - 1,
+            follow,
+            walk,
+            prints,
+        );
     }
     // The folder `commondir` names holds the config and hooks git reads.
-    if let Ok(bytes) = std::fs::read(dir.join("commondir")) {
-        let common = resolve(dir, String::from_utf8_lossy(&bytes).trim());
+    if follow_common && let Ok(bytes) = std::fs::read(dir.join("commondir")) {
+        let common = resolve(dir, &file_value(&bytes));
         if in_roots(&common, roots) {
             git_folder(
                 &common,
                 &format!("{prefix}commondir/"),
                 roots,
                 depth - 1,
+                /*follow_common*/ true,
+                walk,
                 prints,
             );
         }
     }
 }
 
-/// Each entry of `dir` (not below it, but a subfolder counts as `dir`).
+/// A module (or worktree) folder at `path`: fingerprinted as a git folder,
+/// and its other subfolders likewise, since a module `a/b` lives in
+/// `modules\a\b` whether or not `a` is one. Even an empty folder is
+/// recorded, so one added is a change.
+fn module_tree(
+    path: &Path,
+    prefix: &str,
+    roots: &[PathBuf],
+    depth: usize,
+    follow_common: bool,
+    walk: &mut Walk,
+    prints: &mut Prints,
+) {
+    prints.insert(prefix.to_string(), file_print(path));
+    git_folder(path, prefix, roots, depth, follow_common, walk, prints);
+    if depth <= 1 {
+        return;
+    }
+    let Ok(children) = std::fs::read_dir(path) else {
+        return;
+    };
+    for child in children.flatten() {
+        if walk.budget == 0 {
+            prints.insert(prefix.to_string(), truncated());
+            return;
+        }
+        let name = child.file_name().to_string_lossy().into_owned();
+        let known = GIT_SUBFOLDERS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&name));
+        if known || !std::fs::metadata(child.path()).is_ok_and(|metadata| metadata.is_dir()) {
+            continue;
+        }
+        module_tree(
+            &child.path(),
+            &format!("{prefix}{name}/"),
+            roots,
+            depth - 1,
+            follow_common,
+            walk,
+            prints,
+        );
+    }
+}
+
+/// The folders git reads from inside a git folder's subfolders.
+const GIT_SUBFOLDERS: [&str; 15] = [
+    "hooks",
+    "objects",
+    "refs",
+    "logs",
+    "info",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+    "remotes",
+    "branches",
+    "modules",
+    "worktrees",
+    "lfs",
+    "rr-cache",
+    "annex",
+];
+
+/// `modules` or `worktrees` (or a folder below `modules` on the way to a
+/// module named with slashes): each subfolder is fingerprinted as a git
+/// folder, and its other subfolders are looked into the same way, since a
+/// module `a/b` lives in `modules\a\b`. A link here is recorded, and
+/// followed.
+fn container(
+    dir: &Path,
+    prefix: &str,
+    roots: &[PathBuf],
+    depth: usize,
+    follow_common: bool,
+    walk: &mut Walk,
+    prints: &mut Prints,
+) {
+    match std::fs::symlink_metadata(dir) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            prints.insert(format!("{prefix}(link)"), file_print(dir));
+        }
+        _ => {}
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            prints.insert(prefix.to_string(), "unreadable".to_string());
+            return;
+        }
+    };
+    for (count, entry) in entries.enumerate() {
+        if count >= MAX_ENTRIES || walk.budget == 0 {
+            prints.insert(prefix.to_string(), truncated());
+            break;
+        }
+        let Ok(entry) = entry else {
+            prints.insert(prefix.to_string(), "unreadable".to_string());
+            break;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let child = format!("{prefix}{name}/");
+        let path = entry.path();
+        // A link to a folder counts as a folder here (git follows it).
+        if !std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
+            prints.insert(child, file_print(&path));
+            continue;
+        }
+        module_tree(&path, &child, roots, depth, follow_common, walk, prints);
+    }
+}
+
+/// Links and hard links among the entries at the top of the git folder
+/// `dir` that aren't recorded by content already.
+fn top_level_links(dir: &Path, prefix: &str, prints: &mut Prints) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for (count, entry) in entries.enumerate() {
+        if count >= MAX_ENTRIES {
+            prints.insert(format!("{prefix}./"), truncated());
+            return;
+        }
+        let Ok(entry) = entry else {
+            prints.insert(format!("{prefix}./"), "unreadable".to_string());
+            return;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let known = PROGRAM_FILES
+            .iter()
+            .chain(PROGRAM_FOLDERS.iter())
+            .chain(["modules", "worktrees"].iter())
+            .any(|known| known.eq_ignore_ascii_case(&name));
+        if known {
+            continue;
+        }
+        if let Some(mark) = link_mark(&entry.path()) {
+            prints.insert(format!("{prefix}{name}"), mark);
+        }
+    }
+}
+
+/// Each entry of `dir` (not below it, but a subfolder counts as `dir`); a
+/// `dir` that is itself a link is recorded as one, not followed.
 fn folder_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
+    match std::fs::symlink_metadata(dir) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        // Recorded as a link, and its contents through it (git follows it).
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            prints.insert(prefix.to_string(), file_print(dir));
+        }
+        _ => {}
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
@@ -249,11 +450,9 @@ fn folder_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
             return;
         }
     };
-    let mut count = 0;
-    for entry in entries {
-        count += 1;
-        if count > MAX_ENTRIES {
-            prints.insert(prefix.to_string(), "truncated".to_string());
+    for (count, entry) in entries.enumerate() {
+        if count >= MAX_ENTRIES {
+            prints.insert(prefix.to_string(), truncated());
             return;
         }
         let Ok(entry) = entry else {
@@ -265,7 +464,9 @@ fn folder_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
     }
 }
 
-/// Links and hard links below `logs`, which git appends to.
+/// Links below `logs`, which git appends to. (A hard link needs write
+/// access to the file it names, which a command could write directly, so
+/// only the top-level files are checked for those.)
 fn logs_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
     let mut stack = vec![(dir.to_path_buf(), prefix.to_string())];
     let mut seen = 0;
@@ -276,31 +477,28 @@ fn logs_prints(dir: &Path, prefix: &str, prints: &mut Prints) {
         for entry in entries.flatten() {
             seen += 1;
             if seen > MAX_ENTRIES {
-                prints.insert(prefix, "truncated".to_string());
+                prints.insert(prefix, truncated());
                 return;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
             match entry.file_type() {
-                Ok(kind) if kind.is_dir() => stack.push((path, format!("{prefix}{name}/"))),
-                _ => {
-                    if let Some(mark) = write_through_mark(&path) {
-                        prints.insert(format!("{prefix}{name}"), mark);
-                    }
+                Ok(kind) if kind.is_symlink() => {
+                    prints.insert(format!("{prefix}{name}"), file_print(&entry.path()));
                 }
+                Ok(kind) if kind.is_dir() => {
+                    stack.push((entry.path(), format!("{prefix}{name}/")));
+                }
+                _ => {}
             }
         }
     }
 }
 
-/// `Some` for a file git writes through that is a link or hard link.
-fn write_through_mark(path: &Path) -> Option<String> {
+/// `Some` for a link, or a file with more than one name (a hard link).
+fn link_mark(path: &Path) -> Option<String> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() {
-        return Some(format!(
-            "link to {}",
-            std::fs::read_link(path).map_or_else(|_| "?".to_string(), |t| t.display().to_string())
-        ));
+        return Some(file_print(path));
     }
     (metadata.is_file() && link_count(path).is_none_or(|count| count > 1))
         .then(|| "hard link".to_string())
@@ -324,20 +522,35 @@ fn link_count(_path: &Path) -> Option<u64> {
     Some(1)
 }
 
-/// A file's content hash, `dir`, `link to <target>` or `unreadable`.
+/// A file's content hash (with `hard link` when it has more than one
+/// name), `dir`, `link to <target>` or `unreadable`.
 pub(crate) fn file_print(path: &Path) -> String {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return "unreadable".to_string();
     };
     if metadata.file_type().is_symlink() {
-        return format!(
-            "link to {}",
-            std::fs::read_link(path).map_or_else(|_| "?".to_string(), |t| t.display().to_string())
-        );
+        // The link, and what git reads through it.
+        let target =
+            std::fs::read_link(path).map_or_else(|_| "?".to_string(), |t| t.display().to_string());
+        let through = match std::fs::metadata(path) {
+            Ok(target) if target.is_file() => content_print(path),
+            Ok(_) => "dir".to_string(),
+            Err(_) => "missing".to_string(),
+        };
+        return format!("link to {target}: {through}");
     }
     if metadata.is_dir() {
         return "dir".to_string();
     }
+    let mut text = content_print(path);
+    if link_count(path).is_none_or(|count| count > 1) {
+        text.push_str(" hard link");
+    }
+    text
+}
+
+/// The SHA-256 of the file at `path` (followed), or `unreadable`.
+fn content_print(path: &Path) -> String {
     let Ok(mut file) = std::fs::File::open(path) else {
         return "unreadable".to_string();
     };
@@ -505,7 +718,8 @@ pub(crate) fn plain_config(text: &str) -> bool {
             continue;
         }
         // Continuation lines, and `ext::` URLs anywhere, are never plain.
-        if line.ends_with('\\') || line.to_ascii_lowercase().contains("ext::") {
+        // Quotes are dropped first: git joins `"e"xt::` into `ext::`.
+        if line.ends_with('\\') || line.replace('"', "").to_ascii_lowercase().contains("ext::") {
             return false;
         }
         let rest = if let Some(header) = line.strip_prefix('[') {

@@ -217,3 +217,110 @@ fn fingerprints_track_what_git_would_run() {
         )
     );
 }
+
+/// Git's own parsing (#1849 review): a detached `HEAD` with anything after
+/// 40 hex digits is valid, and `commondir`/`gitdir:` values keep their
+/// leading blanks (only trailing line ends go).
+#[test]
+fn heads_and_paths_parse_like_git() {
+    let (_dir, base) = tempdir();
+    let junk_head = base.join("junk-head");
+    init_shape(&junk_head, INIT_CONFIG);
+    fs::write(
+        junk_head.join("HEAD"),
+        "0123456789abcdef0123456789abcdef01234567 trailing junk",
+    )
+    .expect("HEAD");
+    // ` c` (leading blank) is the folder git uses.
+    let spaced = base.join("spaced");
+    init_shape(&spaced.join(" c"), INIT_CONFIG);
+    fs::write(spaced.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+    fs::write(spaced.join("commondir"), " c\r\n").expect("commondir");
+    let file = base.join("checkout").join(".git");
+    fs::create_dir_all(file.parent().expect("parent")).expect("checkout");
+    fs::write(&file, "gitdir:  x\n").expect(".git file");
+    let no_space = base.join("other").join(".git");
+    fs::create_dir_all(no_space.parent().expect("parent")).expect("other");
+    fs::write(&no_space, "gitdir:x\n").expect(".git file");
+    assert_eq!(
+        (
+            is_git_directory(&junk_head),
+            is_git_directory(&spaced),
+            gitdir_target(&file),
+            gitdir_target(&no_space),
+        ),
+        (true, true, Some(base.join("checkout").join(" x")), None)
+    );
+}
+
+/// #1849 review: an empty module folder added, a hard-linked config and a
+/// hooks folder turned into a link all count.
+#[cfg(unix)]
+#[test]
+fn links_and_empty_modules_count() {
+    let (_dir, base) = tempdir();
+    let roots = [base.clone()];
+    let git = base.join("repo").join(".git");
+    init_shape(&git, INIT_CONFIG);
+    let before = fingerprint(&git, &roots);
+    fs::create_dir_all(git.join("modules").join("aaa")).expect("empty module");
+    let module = changes(&before, &fingerprint(&git, &roots));
+    let before = fingerprint(&git, &roots);
+    fs::hard_link(git.join("config"), base.join("elsewhere-config")).expect("hard link");
+    let hard = changes(&before, &fingerprint(&git, &roots));
+    let before = fingerprint(&git, &roots);
+    fs::rename(git.join("hooks"), base.join("hooks-real")).expect("move hooks");
+    std::os::unix::fs::symlink(base.join("hooks-real"), git.join("hooks")).expect("link");
+    let linked = changes(&before, &fingerprint(&git, &roots));
+    let before = fingerprint(&git, &roots);
+    std::os::unix::fs::symlink(base.join("msg"), git.join("COMMIT_EDITMSG")).expect("link");
+    let written = changes(&before, &fingerprint(&git, &roots));
+    assert_eq!(
+        (
+            module,
+            hard,
+            linked.contains(&"hooks/ added".to_string()),
+            written
+        ),
+        (
+            vec!["modules/aaa/ added".to_string()],
+            vec!["config changed".to_string()],
+            true,
+            vec!["COMMIT_EDITMSG added".to_string()],
+        )
+    );
+}
+
+/// #1849 review 2: a module named with a slash (`modules\vendor\foo`) is
+/// watched, a `commondir` loop is looked at once, and a quoted `ext::` URL
+/// isn't plain.
+#[test]
+fn slashed_modules_loops_and_quoted_urls() {
+    let (_dir, base) = tempdir();
+    let roots = [base.clone()];
+    let git = base.join("repo").join(".git");
+    init_shape(&git, INIT_CONFIG);
+    let module = git.join("modules").join("vendor").join("foo");
+    init_shape(&module, INIT_CONFIG);
+    // Modules whose `commondir` leads back to the repository.
+    for n in 0..50 {
+        let looped = git.join("modules").join(format!("loop{n}"));
+        fs::create_dir_all(&looped).expect("loop module");
+        fs::write(looped.join("commondir"), "../..").expect("commondir");
+    }
+    let before = fingerprint(&git, &roots);
+    fs::write(module.join("hooks").join("post-checkout"), "evil").expect("hook");
+    let changed = changes(&before, &fingerprint(&git, &roots));
+    assert_eq!(
+        (
+            changed,
+            before.len() < 2_000,
+            plain_config(&CLONE_CONFIG.replace("https://example.com/a.git", "\"e\"xt::sh -c evil")),
+        ),
+        (
+            vec!["modules/vendor/foo/hooks/post-checkout added".to_string()],
+            true,
+            false
+        )
+    );
+}

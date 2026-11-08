@@ -141,6 +141,7 @@ pub use planted_project_metadata::PLANTED_PROJECT_METADATA_WARNING_PREFIX;
 pub use planted_project_metadata::PlantedGitChange;
 pub use planted_project_metadata::PlantedProjectMetadata;
 pub use planted_project_metadata::git_changes_to_show;
+pub use planted_project_metadata::git_changes_warning;
 pub use planted_project_metadata::is_git_dir;
 pub use planted_project_metadata::planted_after_command_notice;
 pub use planted_project_metadata::planted_git_changes;

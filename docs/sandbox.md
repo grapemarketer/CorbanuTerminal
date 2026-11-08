@@ -91,14 +91,17 @@ repository), and a writable folder that is itself a bare repository. One is
 flagged when it is new or replaced, or when what git would run from it
 changes: its `config`, `config.worktree`, `commondir` or `gitdir` file, its
 `hooks`, rebase or sequencer steps, legacy `remotes`/`branches`
-definitions, a link or hard link among the files git writes to, or the same
-in its submodules (`modules`), its worktrees and the folders a `gitdir:`
-line or `commondir` names inside the writable folders. Files are compared
+definitions, a link or hard link among those files, at the top of its git
+folder or in its `logs`, or the same in its submodules (`modules`), its
+worktrees and the folders a `gitdir:` line or `commondir` names inside the
+writable folders. Files are compared
 by content, so rewriting one with the same content isn't a change. A new
 repository with exactly the shape `git init` or `git clone` leave (only
 the config keys they write and no `ext::` URL, only `*.sample` hooks, no
 links, no other repositories inside) isn't flagged, so cloning a project
-to look at it doesn't ask; a later change to it is. The warning names what
+to look at it doesn't ask; a later change to it is, and so is a repository
+that replaced another. A folder too large to look through (over 20,000
+entries) counts as changed after every command. The warning names what
 changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
 checked, and a nested `.git` link is flagged after every command, as at the
 top.

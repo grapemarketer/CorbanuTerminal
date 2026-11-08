@@ -163,9 +163,16 @@ pub(crate) fn targets(
     roots: &[PathBuf],
 ) -> Vec<Target> {
     let mut files: Vec<PathBuf> = outside.to_vec();
-    let common = std::fs::read(git_dir.join("commondir"))
-        .ok()
-        .map(|bytes| resolve(git_dir, String::from_utf8_lossy(&bytes).trim(), home));
+    let common = std::fs::read(git_dir.join("commondir")).ok().map(|bytes| {
+        // As git reads it: only trailing line ends go.
+        let value = String::from_utf8_lossy(&bytes);
+        let value = Path::new(value.trim_end_matches(['\n', '\r']));
+        if value.is_absolute() {
+            value.to_path_buf()
+        } else {
+            git_dir.join(value)
+        }
+    });
     files.push(common.as_deref().unwrap_or(git_dir).join("config"));
     files.push(git_dir.join("config.worktree"));
     // Hooks and program paths are relative to the work tree (the git folder
@@ -510,14 +517,8 @@ pub(crate) fn repo_dirs(entries: &[PathBuf]) -> Vec<(PathBuf, Option<PathBuf>)> 
             if metadata.is_dir() {
                 Some((entry.clone(), Some(work_tree)))
             } else if metadata.is_file() {
-                let text = String::from_utf8_lossy(&std::fs::read(entry).ok()?).into_owned();
-                let target = text
-                    .lines()
-                    .next()?
-                    .strip_prefix("gitdir:")?
-                    .trim()
-                    .to_string();
-                Some((resolve(&work_tree, &target, None), Some(work_tree)))
+                // As git reads it.
+                Some((crate::git_watch::gitdir_target(entry)?, Some(work_tree)))
             } else {
                 None
             }

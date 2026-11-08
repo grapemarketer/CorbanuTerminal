@@ -227,3 +227,26 @@ fn git_changes_to_show_use_the_same_scope() {
         vec![change("/w/project/vendor/.git"), change("/w/temp/scratch")]
     );
 }
+
+/// D420, rule 4: one startup warning for all changed repositories, at most
+/// 20 named.
+#[test]
+fn git_changes_warning_is_batched() {
+    let changes: Vec<PlantedGitChange> = (0..22)
+        .map(|n| PlantedGitChange {
+            path: PathBuf::from(format!("/w/r{n}/.git")),
+            changes: vec!["new repository".to_string()],
+        })
+        .collect();
+    let warning = git_changes_warning(&changes).expect("warning");
+    assert_eq!(
+        (
+            warning.starts_with(&format!(
+                "{PLANTED_GIT_WARNING_PREFIX}/w/r0/.git (new repository); /w/r1/.git"
+            )),
+            warning.contains("/w/r19/.git (new repository) and 2 more."),
+            git_changes_warning(&[]),
+        ),
+        (true, true, None)
+    );
+}
