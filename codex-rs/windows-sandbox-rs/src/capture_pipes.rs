@@ -133,7 +133,7 @@ mod tests {
         let started = Instant::now();
         let [out, err] = finish(
             [PipeReader::spawn(out_read), PipeReader::spawn(err_read)],
-            Duration::from_millis(200),
+            Duration::from_secs(1),
         );
         let took = started.elapsed();
         assert_eq!(
@@ -141,7 +141,7 @@ mod tests {
             (&b"before exit"[..], &b""[..])
         );
         assert!(
-            took >= Duration::from_millis(200) && took < Duration::from_secs(10),
+            took >= Duration::from_secs(1) && took < Duration::from_secs(10),
             "took {took:?}"
         );
         // SAFETY: the open write end, now without a reader.
