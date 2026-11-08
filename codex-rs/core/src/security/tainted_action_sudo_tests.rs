@@ -192,6 +192,13 @@ fn issue_1773_legacy_prompt_floor_covers_carried_and_redirected_commands() {
             "sudo >log - --us ./x true",
             "sudo >log FOO=1 -Nu ./x true",
             "sudo 2>&1 -- -a ./x true",
+            "find . -exec sudo --us sh -c ./x \\;",
+            "echo -- sudo --us sh -c ./x",
+            "find . -exec sudo --us {} true \\;",
+            "find . -exec sudo -R {} true \\;",
+            "noglob sudo --us tee -a ~/.zshrc",
+            "noglob sudo --us git log --output=~/.zshrc",
+            "nocorrect sudo --us tee -a ~/.zshrc",
         ] {
             assert_eq!(
                 script_with(shell, line),
@@ -239,6 +246,12 @@ fn issue_1773_sudo_value_option_checks_are_linear() {
     }
     work::assert_linear("carried sudo boundaries", |scale| {
         let line = format!("{}sudo --us ./x true", "eval -- ".repeat(400 * scale));
+        let _ = script(&line);
+    });
+    // The legacy `-u` reading makes `eval` the option value, so a per-carrier
+    // comparison would rescan the entire remaining carrier chain.
+    work::assert_linear("legacy sudo boundaries through eval", |scale| {
+        let line = format!("{}true", "eval sudo -R -u ".repeat(400 * scale));
         let _ = script(&line);
     });
 }

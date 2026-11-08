@@ -486,19 +486,47 @@ fn legacy_programs(words: &[String]) -> Vec<usize> {
     found
 }
 
-/// Whether #1773 changes the pre-existing classifier's sudo program path.
-/// The caller must retain a prompt in that case, even when the new parser can
-/// identify a harmless command, because main may have classified the old path.
-pub(super) fn sudo_legacy_programs_differ(words: &[String]) -> bool {
-    // `programs` stops as soon as it reaches the current command. In
-    // particular, a carried `eval eval … sudo` reaches its eventual sudo only
-    // when `carried_command` has peeled the evals, so checking every carried
-    // layer remains linear rather than repeatedly scanning its tail.
-    let current = programs(words);
-    current.iter().any(|at| {
+/// Whether any quote-blind sudo word in this simple command crosses a
+/// pre-#1773 option boundary differently. This is a prompt-only compatibility
+/// floor: no caller that discovers a command (carried text, `-exec`, a zsh
+/// precommand, or a redirection-stripped command) needs to remember to apply
+/// it separately.
+///
+/// `different_from[at]` is the answer if sudo starts its option scan at that
+/// word. It is filled once from the end, so overlapping sudo scans remain
+/// linear even when a legacy value option reaches through later `eval` words.
+pub(super) fn sudo_option_boundaries_differ(command: &SimpleCommand, words: &[String]) -> bool {
+    sudo_option_boundaries_differ_in(words)
+        || unredirected(command, words, /*from*/ 0)
+            .is_some_and(|runs| sudo_option_boundaries_differ_in(&runs))
+}
+
+fn sudo_option_boundaries_differ_in(words: &[String]) -> bool {
+    let value_options = WRAPPERS
+        .iter()
+        .find(|(wrapper, _, _)| *wrapper == "sudo")
+        .map_or(&[][..], |(_, options, _)| *options);
+    let mut different_from = vec![false; words.len() + 2];
+    for (at, word) in words.iter().enumerate().rev() {
         work::step();
-        basename(&words[*at]).eq_ignore_ascii_case("sudo")
-    }) && current != legacy_programs(words)
+        different_from[at] = if word.starts_with('-') {
+            let current = option_words("sudo", word, value_options);
+            let legacy = sudo_legacy_option_words(word);
+            current != legacy
+                || different_from
+                    .get(at + current)
+                    .copied()
+                    .unwrap_or_default()
+        } else if word.contains('=') {
+            different_from[at + 1]
+        } else {
+            false
+        };
+    }
+    words.iter().enumerate().any(|(at, word)| {
+        work::step();
+        basename(word).eq_ignore_ascii_case("sudo") && different_from[at + 1]
+    })
 }
 
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.
@@ -619,21 +647,12 @@ pub(super) fn redirect_hides_command(
     let Some(rest) = words.get(from..) else {
         return false;
     };
-    // A redirection can hide the word that the old sudo scan stopped at. Keep
-    // that changed program boundary prompt-only even though `command_word`
-    // below correctly evaluates the unredirected command.
-    if sudo_legacy_programs_differ(rest) {
-        return true;
-    }
     if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
         return false;
     }
     let Some(runs) = unredirected(command, words, from) else {
         return false;
     };
-    if sudo_legacy_programs_differ(&runs) {
-        return true;
-    }
     command_word(&runs).is_some_and(|(at, name)| {
         runs[at].contains('/')
             || runs[at].starts_with('-')

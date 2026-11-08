@@ -717,9 +717,6 @@ fn rank(kind: ProtectedActionKind) -> u8 {
 struct Carried {
     /// The command it runs, if any.
     command: Option<(usize, String)>,
-    /// A carried command whose current sudo reading crosses a program
-    /// boundary differently from main. It remains prompt-only (#1773).
-    legacy_sudo_boundary: bool,
     /// Where each piece of text starts, and where its command word is
     /// (`words.len()` for none): the words between are read as
     /// assignments and wrappers (`eval '=tee …'`, `trap './env ls' EXIT`).
@@ -741,11 +738,6 @@ fn carried_command(words: &[String], from: Option<&(usize, String)>) -> Carried 
             _ => break,
         };
         let after = (index + skip).min(words.len());
-        // This is called once for each syntactic carrier. For nested evals,
-        // `sudo_legacy_programs_differ` stops at each `eval` and examines the
-        // sudo tail only after it becomes the carried command, preserving the
-        // classifier's linear-work contract.
-        carried.legacy_sudo_boundary |= indirect::sudo_legacy_programs_differ(&words[after..]);
         let Some((at, next)) = indirect::command_word(&words[after..]) else {
             carried.spans.push((after, words.len()));
             return carried;
@@ -2341,12 +2333,10 @@ impl Classifier {
             .as_ref()
             .filter(|(_, name)| name == "eval")
             .map(|(index, _)| index + 1);
-        // #1773: parsing sudo's value options more accurately must not erase a
-        // prompt that main reached through its older program boundary, whether
-        // it appears directly or in eval's operands.
-        if indirect::sudo_legacy_programs_differ(words)
-            || operands.is_some_and(|from| indirect::sudo_legacy_programs_differ(&words[from..]))
-        {
+        // #1773: the compatibility floor runs once over every quote-blind
+        // word, not at individual command-word readers. It therefore covers
+        // direct, carried, `-exec`, precommand, and redirection paths alike.
+        if indirect::sudo_option_boundaries_differ(simple, words) {
             self.note(ProtectedActionKind::UnseenCode);
         }
         if indirect::redirect_hides_command(simple, words, /*from*/ 0)
@@ -2514,12 +2504,8 @@ impl Classifier {
         // before: this only adds what that command writes.
         let Carried {
             command: carried,
-            legacy_sudo_boundary: carried_legacy_sudo_boundary,
             spans: carried_spans,
         } = carried_command(words, modified.as_ref().or(command.as_ref()));
-        if carried_legacy_sudo_boundary {
-            self.note(ProtectedActionKind::UnseenCode);
-        }
         // #1685: a variable that text sets has a value this reading does
         // not follow (`eval 'F=~/.zshrc'; tee -a "$F"`): unseen, as for
         // output it cannot see. One with a value already keeps it, since
