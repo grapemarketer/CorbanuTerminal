@@ -194,7 +194,7 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         // repository, whose stored remotes are route 2 (#1268 keeps it quiet).
         "find . -type d -name .git -execdir git pull \\;",
     ];
-    assert_eq!(wrong(&lines, None), Vec::<String>::new());
+    assert_eq!(wrong(&lines, /*expected*/ None), Vec::<String>::new());
 }
 
 /// Route 2: a remote stored in `.git/config` or `.gitmodules` is not on the
@@ -209,7 +209,7 @@ fn issue_1876_stored_remotes_ask_only_when_the_line_allows_ext() {
                 "git submodule update --init",
                 "git pull"
             ],
-            None
+            /*expected*/ None
         ),
         Vec::<String>::new()
     );
