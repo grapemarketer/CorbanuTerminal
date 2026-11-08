@@ -523,10 +523,30 @@ fn sudo_option_boundaries_differ_in(words: &[String]) -> bool {
             false
         };
     }
-    words.iter().enumerate().any(|(at, word)| {
+    if words.iter().enumerate().any(|(at, word)| {
         work::step();
         basename(word).eq_ignore_ascii_case("sudo") && different_from[at + 1]
-    })
+    }) {
+        return true;
+    }
+
+    // Quote-blind words split a quoted value such as `"a b"`, whereas the
+    // quote-aware readers keep it whole. Do not require the two readings to
+    // remain aligned: once a sudo word appears, any later changed option keeps
+    // the line prompt-only. This can add a prompt for data named `sudo`, but
+    // avoids reintroducing reader-specific gaps.
+    let mut saw_sudo = false;
+    for word in words {
+        work::step();
+        saw_sudo |= basename(word).eq_ignore_ascii_case("sudo");
+        if saw_sudo
+            && word.starts_with('-')
+            && option_words("sudo", word, value_options) != sudo_legacy_option_words(word)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.

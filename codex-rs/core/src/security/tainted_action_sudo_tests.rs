@@ -199,6 +199,11 @@ fn issue_1773_legacy_prompt_floor_covers_carried_and_redirected_commands() {
             "noglob sudo --us tee -a ~/.zshrc",
             "noglob sudo --us git log --output=~/.zshrc",
             "nocorrect sudo --us tee -a ~/.zshrc",
+            "sudo -u \"a b\" --us git log --output=~/.zshrc",
+            "sudo -u\"a b\" --us git log --output=~/.zshrc",
+            // This is quiet on main, but the alignment-independent floor is
+            // intentionally stricter once it sees a changed option after sudo.
+            "sudo -p \"x y\" -R ./root true",
         ] {
             assert_eq!(
                 script_with(shell, line),
