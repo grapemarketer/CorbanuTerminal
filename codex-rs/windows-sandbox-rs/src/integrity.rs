@@ -324,9 +324,15 @@ unsafe fn for_each_label_ace(
     Ok(())
 }
 
-/// Gives a protected path inside a writable root (and everything below it)
-/// an explicit Medium label, so it does not inherit the root's Low label: no
-/// other Low-integrity program may write `.git`, `.codex` or `.agents` there.
+/// Gives `path` (and everything below it) an explicit Medium label, so it
+/// does not inherit a legacy writable root's Low label, and no Low-integrity
+/// program may write it. Used for the protected `.git`, `.codex` and
+/// `.agents` inside a writable root, and (#1819) for the elevated runner's
+/// `.sandbox-bin` folder or, when copying it there failed, the runner file
+/// itself: a program starts at no higher integrity than its file, so a Low
+/// runner can't open the parent's pipes. Medium is what an unlabelled file
+/// has anyway. Callers skip links: a link's label lands on the link, not on
+/// what it points at.
 ///
 /// # Safety
 /// Calls Win32 security APIs on `path`.

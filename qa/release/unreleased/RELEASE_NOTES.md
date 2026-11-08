@@ -699,3 +699,6 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   folder above it), the elevated command failed after 15 seconds with
   `timed out after 15000ms connecting runner pipe-out`. The folder with the
   sandbox's helper programs now keeps its normal (Medium) integrity level.
+  If that folder is a link, it is left alone and the sandbox log says so. If
+  copying the helper fails and the one next to `codex.exe` is used instead,
+  a Low label on it is fixed the same way, or the log names it as the cause.
