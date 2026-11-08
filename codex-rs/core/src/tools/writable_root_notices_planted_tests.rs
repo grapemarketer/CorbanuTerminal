@@ -34,7 +34,7 @@ fn planted_records_in_the_runs_roots_are_told_once() {
                 .collect()
         }
     };
-    let only_root = [root];
+    let only_root = [root.clone()];
     let thread = ThreadId::new();
 
     // The thread's first run (mark 0) ends when only 1 and 2 are recorded.
@@ -57,7 +57,7 @@ fn planted_records_in_the_runs_roots_are_told_once() {
             codex_config::planted_after_command_notice(
                 &[],
                 &[codex_config::PlantedGitChange {
-                    path: root.clone(),
+                    path: root,
                     changes: vec!["config changed".to_string()],
                 }],
             ),

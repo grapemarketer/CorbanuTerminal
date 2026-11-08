@@ -1412,6 +1412,33 @@ async fn planted_prompt_covers_git_below_the_working_folder() {
     );
 }
 
+/// D420 (#1775): the same prompt for repositories that appeared or whose
+/// config or hooks changed, with what changed.
+#[tokio::test]
+async fn planted_repo_changes_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_planted_prompt(
+        vec![PathBuf::from("project/.git")],
+        vec![
+            codex_config::PlantedGitChange {
+                path: PathBuf::from("project/vendor/.git"),
+                changes: vec!["new repository".to_string()],
+            },
+            codex_config::PlantedGitChange {
+                path: PathBuf::from("scratch"),
+                changes: vec![
+                    "hooks/post-checkout added".to_string(),
+                    "config changed".to_string(),
+                ],
+            },
+        ],
+    );
+    assert_chatwidget_snapshot!(
+        "planted_repo_changes_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}
+
 /// D332 (#1682): the same prompt for a `.git` that appeared or changed, alone
 /// and next to project folders.
 #[tokio::test]
