@@ -68,7 +68,9 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. Such folders
+has ended); a warning follows the command too (or a later command, if it
+left processes running). Check its
+contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. A read-only `.codex` or
 `.agents` folder your permission profile names that doesn't exist yet (or
@@ -82,8 +84,13 @@ the folders above them. A folder the sandbox can't list counts as planted. Folde
 **A `.git` created while a command runs.** Git runs a `.git` folder's hooks
 and config outside the sandbox whenever you run git there. So if the `.git`
 at the top of a folder non-admin sandbox commands may write to appears, or
-is replaced, while a command runs, Corbanu Terminal warns you at startup and
-asks in the TUI whether you have checked it. Commands can still create a
+is replaced, while a command runs, Corbanu Terminal warns you right after
+that command ends (for one that leaves processes running, after a later
+command once they have ended), warns you again at startup and asks in the TUI whether you
+have checked it. Since git runs anywhere, the startup warning and the TUI
+prompt cover every folder commands may write to (`%TEMP%` included) and
+anything below the working folder, not only the working folder and the
+folders above it. Commands can still create a
 `.git` (`git init` works). A `.git` that is a link (a junction or symbolic
 link) is flagged after every command. Only that top-level `.git` is checked,
 not `.git` folders deeper inside.
