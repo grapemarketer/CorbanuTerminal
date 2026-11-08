@@ -1,0 +1,442 @@
+//! #1704: commands writing zsh's and bash's tables of code run by name
+//! (`code_tables.rs`), and, from round 8 of #1698's review, words the
+//! classifier cannot see where such a writer reads its options.
+
+use super::kind;
+use super::work;
+use pretty_assertions::assert_eq;
+
+/// #1704, round 8 of #1698's review: where a writer reads its options, a
+/// word the classifier cannot see may be an option taking a name (`o=-A;
+/// set $o commands ls ./x` defines `ls`) or, unquoted, several words
+/// (`set $(cat f)`); so may an unquoted one before a name (`zstyle -a
+/// $(cat f)`). One word with a word after it asks too (`"$o"` may be
+/// `-Acommands`). Read with quotes, in text read as shell and in `eval` and
+/// `trap` text. `zselect` and `zsystem flock` read options after operands.
+/// Only adds prompts.
+#[test]
+fn issue1704_hidden_words_where_writers_read_options_ask() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // Round 8.
+            "o=$(cat f); set $o commands ls ./x; ls",
+            "o=$(cat f); zstyle $o :x y functions; f",
+            "set $(cat f); ls",
+            "zstyle -a $(cat f); f",
+            "zselect -t 0 -r 0 -A $n",
+            "zsystem flock -t 0 -f $n file",
+            // The class: an option, an option's value, a pattern.
+            "set -$o commands ls ./x",
+            "set -e \"$o\" commands ls ./x",
+            "set -o $(cat f)",
+            "set ?A commands ls ./x",
+            "set *~a/b",
+            "set ^*.png",
+            "set -.#A commands ls ./x",
+            "set -e? commands ls ./x",
+            "print -r* x",
+            "print -l *a.b]",
+            // One word holding an option and its name, or several in
+            // quotes or zsh's own spellings (review 1).
+            "o=$(cat f); set \"$o\" ls ./x; ls",
+            "o=$(cat f); print \"$o\" 'echo pwned'; f",
+            "printf \"$fmt\" x",
+            "o=$(cat f); set $=o; ls",
+            "o=$(cat f); set \"$=o\"; ls",
+            "o=-A; set $~o commands ls ./x",
+            "set $^o commands ls ./x",
+            "set -- $(cat f); set \"$@\"; ls",
+            "set \"${(@f)$(<f)}\"; ls",
+            "mapfile -t a < f; printf \"${a[@]}\"; ls",
+            "eval 'set ?A commands ls ./x'",
+            // Review 2.
+            "o=$(cat f); noglob eval 'set $o commands ls ./x'; ls",
+            "noglob eval 'set ?A commands ls ./x'",
+            "n=$(cat f); print -f %s -v $n 'echo pwned'; f",
+            "o=$(cat f); set \"$o\"*; ls",
+            "zstyle -a \"$c\"*",
+            "zgetattr *.png \"$n\"",
+            // Review 3.
+            "read -d $(cat f); f",
+            "read -p $(cat f); f",
+            "mapfile -C $(cat f) x",
+            "vared -p $(cat f) x",
+            "n=$(cat f); set *.none -A $n ls ./x; ls",
+            "repeat 1 eval 'set ?A commands ls ./x'",
+            // Review 4: as on main.
+            "eval $'getln *.png'",
+            "trap $'getln *.png' EXIT",
+            "eval $'regexp-replace *.x y z'",
+            "eval $'zlistattr *.png b*.png'",
+            "eval $'zgetattr *.png a b*.png'",
+            "trap 'set ?A commands ls ./x' EXIT",
+            "zstyle -$o :x y functions",
+            "zstyle \"$o\" :x y functions",
+            "zstyle -s $c y n",
+            "printf $o 'BASH_CMDS[ls]' ./x",
+            "printf \"$o\" 'BASH_CMDS[ls]' ./x",
+            "print $o 'functions[f]' 'tee -a ~/.zshrc'",
+            "print -r $(cat f)",
+            "zstat $o functions x",
+            "zstat \"$o\" \"$n\" x",
+            "zmodload zsh/stat; stat -f %m $(cat f)",
+            "zformat $o $n x",
+            "pcre_match $o $n x",
+            "compadd -X $(cat f) x",
+            "sysread -i $fd line",
+            // Before a name several words may move.
+            "getopts $(cat f)",
+            "zlistattr $(cat f)",
+            "zgetattr x $(cat f)",
+            "zgetattr \"$f\" \"$attr\" value",
+            // Options after operands.
+            "zselect 0 -A $n",
+            "zselect -r 0 -a$n",
+            "zsystem flock -f $n x",
+            "zsystem flock -t 1 -f \"$(cat n)\" x",
+            // Behind wrappers, `eval`, `sh -c`.
+            "builtin zstyle $o :x y functions",
+            "eval 'zstyle $o :x y functions'",
+            "sh -c 'zstyle $o :x y functions'",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "set -- $(cat f)",
+            "set -euo pipefail",
+            "set x $y",
+            "printf '%s\\n' \"$x\"",
+            "printf \"$fmt\"",
+            "printf -- \"$x\"",
+            "printf '* -text\\n' > f",
+            "printf '<%s>' x",
+            "print -r -- $x",
+            "print -r \"$x\"",
+            "stat -c %s \"$f\"",
+            "stat -f %m \"$f\"",
+            "stat -f %m ~/x",
+            "set -e */x",
+            "print -l *.png",
+            "zgetattr *.png user.y value",
+            "zstyle \"$c\" y n",
+            "read -r line < \"$f\"",
+            "IFS= read -r -d '' f",
+            "read -t 5 x",
+            "while IFS= read -r line; do echo \"$line\"; done < \"$f\"",
+            "mapfile -t lines < <(ls)",
+            "readarray -t -O \"${#arr[@]}\" arr < notes",
+            "set x.# y",
+            "zstat -A info x \"$f\"",
+            "zgetattr \"$f\" user.y value",
+            "zstyle ':completion:*' menu select",
+            "zstyle -s \"$c\" y n",
+            "zstyle :x y \"$v\"",
+            "wait $pid",
+            "wait -n $!",
+            "zselect -t 10 -r $fd",
+            "zsystem flock -t 1 \"$f\"",
+            "getopts ab: opt",
+            // awk programs, read again as code, are not shell.
+            "gh pr checks 1 | awk -F'\\t' '{print $2}' | sort",
+            "awk '/^x$/{getline; print NR\": \"$0}' f",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1704: reading a writer's options stays linear in its words.
+#[test]
+fn issue1704_option_checks_are_linear() {
+    work::assert_linear("many options", |scale| {
+        let line = format!("set {}x $y", "-e -o pipefail ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("options among operands", |scale| {
+        let line = format!("zselect {}", "0 -t 1 ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("words after one unseen", |scale| {
+        let line = format!("print \"$o\" {}", "x ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("unseen words where options take no names", |scale| {
+        let line = format!("zgetattr {}x", "\"$a\" ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("eval text", |scale| {
+        let line = format!("eval 'set -e {}x'", "\"$a\" y ".repeat(200 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+    work::assert_linear("many zstyles", |scale| {
+        let _ = kind(&["zsh", "-lc", &"zstyle -a :x y z; ".repeat(200 * scale)]);
+    });
+    work::assert_linear("stat after a long line, its load lexed", |scale| {
+        let line = format!(
+            "echo {}; $'zmo\\144load' $'zsh/st\\141t'; stat -A $n x",
+            "z ".repeat(400 * scale)
+        );
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+}
+
+/// D410 (#1704): zsh has a `stat` builtin (zsh/stat, which writes arrays
+/// by name with `-A`/`-H`) only once loaded; zsh starts without it. Its
+/// table checks ask only when a line of the same action may load it: names
+/// `zmodload` (any use, quotes aside, as written or as lexed) or
+/// `zsh/stat`, holds a brace range, or runs (also through `eval`, `trap`,
+/// `repeat` or a modifier) bash's `enable` or a command named by an
+/// expansion or a pattern. A separate command on the same line (`zmodload
+/// zsh/stat; stat …`, or a later line of the same text) counts, as a
+/// line's aliases do (#1422); so does a load after the `stat` or in a line
+/// judged later (a `functions[f]` value), which keeps main's prompt: both
+/// are decided once the whole action is judged. Elsewhere `stat` is the
+/// external program (`stat -f %m $f` on macOS) and only its table checks
+/// are skipped; `zstat` is always judged.
+#[test]
+fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // The same command list.
+            "zmodload zsh/stat && stat -A functions x",
+            "zmodload -F zsh/stat b:zstat && stat -f %m $v",
+            // A separate command on the same line.
+            "zmodload zsh/stat; stat -f %m $v",
+            "zmodload zsh/stat\nstat -H aliases x",
+            "zmodload -a zsh/stat stat; stat -A $n x",
+            "m=zsh/stat; zmodload $m; stat -f %m $(cat f)",
+            "zmod''load zsh/stat; stat -A functions x",
+            "z$'m'odload zsh/stat; stat -A functions x",
+            "eval 'zmodload zsh/stat'; stat -A functions x",
+            "zsh -c 'zmodload zsh/stat; stat -A functions x'",
+            // Spelled so only the lexed words show it (review 1): decoded,
+            // joined, brace-expanded; and bash's loadable `stat`.
+            "zmod$''load zsh/st$''at; stat -f %m $(cat f)",
+            "$'zmo\\144load' $'zsh/st\\141t'; stat -A functions x",
+            "zmod\\\nload zsh/st\\\nat; stat -f %m $(cat f)",
+            "zmo{d,}load zsh/stat; stat -A functions x",
+            "builtin zmodload zsh/stat; stat -A functions x",
+            "enable -f stat stat; stat -A functions x",
+            // Neither reading spells it (reviews 2 and 3): a command named
+            // by known values or a pattern, also behind `eval`, `trap`,
+            // `repeat` and modifiers; a brace range, which the lexer does
+            // not expand; zsh's `braceccl`.
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG; stat -f %m $(cat f)",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t; stat -f %m $(cat f)",
+            "eval zm* zsh/st?t; stat -f %m $(cat f)",
+            "zmo{d..d}load zsh/st{a..a}t; stat -A functions x",
+            "zm* $(cat m); stat -A functions x",
+            // After a redirection or a zsh short `if`/`until` test
+            // (review 4).
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; until [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
+            // A load in a line judged after the `stat` (review 3).
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f; stat -f %m $(cat f)",
+            // A load after it keeps main's prompt.
+            "stat -A functions x; zmodload zsh/stat",
+            // zstat needs no `stat` load.
+            "zstat -A functions x",
+            "zstat -f %m $v",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        // Not loaded on this line: the external `stat`.
+        for script in [
+            "stat -f %m $v",
+            "stat -f %m $(cat f)",
+            "for f in *.log; do stat -f '%m %N' $f; done",
+            "stat -c %Y $f | sort -n",
+            "stat -A functions x",
+            // The load alone, and `stat` with no word to hide, stay quiet:
+            // the prompts above come from the load.
+            "zmodload zsh/stat",
+            "zmodload zsh/stat; stat -f %m x",
+            "zmo{d..d}load zsh/st{a..a}t",
+            "zm* $(cat m)",
+            "enable -f stat stat",
+            "zmodload zsh/stat && zmodload -F zsh/stat b:zstat",
+            "zmod''load zsh/stat; z$'m'odload zsh/stat; builtin zmodload zsh/stat",
+            // (`$'zmo\144load'` asks on its own: a command name spelled
+            // with an escape.)
+            "zmod$''load zsh/st$''at",
+            "zmod\\\nload zsh/st\\\nat; zmo{d,}load zsh/stat",
+            "eval 'zmodload zsh/stat'; zsh -c 'zmodload zsh/stat'",
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG",
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d",
+            "eval zm* zsh/st?t",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t",
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+        // Wherever the shell may run a command named by known values or a
+        // pattern, the load is quiet alone and makes a later `stat` ask
+        // (review 4).
+        for load in [
+            "time $a$b $c$d",
+            "! $a$b $c$d",
+            "( $a$b $c$d )",
+            "case x in x) $a$b $c$d;; esac",
+            "foreach i (1) $a$b $c$d; end",
+            "if (( 1 )) $a$b $c$d",
+            "f() $a$b $c$d; f",
+            "x=$($a$b $c$d)",
+            "sudo $a$b $c$d",
+            "$a$b $c$d &",
+            ">f zm* zsh/st?t",
+            "2>&1 zm* zsh/st?t",
+            "if [[ 1 ]] zm* zsh/st?t",
+        ] {
+            let load = format!("a=zmod b=load c=zsh/st d=at; {load}");
+            assert_eq!(line(&load), None, "{shell} {load:?}");
+            let script = format!("{load}; stat -f %m $(cat f)");
+            assert!(line(&script).is_some(), "{shell} {script:?}");
+        }
+    }
+}
+
+/// #1704: a command writing variables named by its operands (zparseopts,
+/// zstyle, zsh modules, `read`, `set -A`, declarations, `printf -v`) asks
+/// when a word names a table of code run by name (zsh's `functions`, alias
+/// tables, `commands`, bash's `BASH_ALIASES`/`BASH_CMDS`), or where it
+/// takes a name from a word the classifier cannot see (an expansion, a
+/// glob); so does a write to one in an expansion. The review-6 and
+/// review-7 forms (each ran its payload in zsh 5.9) and the class. Only
+/// adds prompts.
+#[test]
+fn issue1704_code_table_writers_fail_closed() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // Review 6.
+            "set -- -f 'tee -a ~/.zshrc'; zparseopts -a functions -- f:; -f",
+            "set -- --x 'tee -a ~/.zshrc'; zparseopts -- -x:=functions; --x",
+            "zstyle :x y f 'tee -a ~/.zshrc'; zstyle -a :x y functions; f",
+            // Attached, among other options, other specs and writers.
+            "zparseopts -afunctions -- f:",
+            "zparseopts -E -D -a functions -- f:",
+            "zparseopts -D -- f:=functions",
+            "zparseopts -A aliases -- f:",
+            "zparseopts -a dis_functions -- f:",
+            "zstyle -g functions :x y",
+            "zstyle -ga :x y aliases",
+            "pcre_match -a functions x y",
+            "zformat -a functions : x:y",
+            "zregexparse i p functions x",
+            "zselect -A functions 0",
+            "getopts f: functions",
+            "vared functions",
+            "let 'functions[f]=1'",
+            "read -A galiases < x",
+            "mapfile -t BASH_ALIASES < x",
+            "set -A saliases sh 'tee -a ~/.zshrc'",
+            "set -A commands ls ./x",
+            "printf -v functions %s x",
+            "print -v 'aliases[x]' 'tee -a ~/.zshrc'",
+            "typeset -A functions=(f 'tee -a ~/.zshrc')",
+            "local -A aliases=(x y)",
+            "declare -n r=BASH_CMDS",
+            "typeset -n r=aliases",
+            // Behind modifiers, wrappers, `eval`, `trap`, `repeat`.
+            "noglob zparseopts -a functions -- f:",
+            "builtin zstyle -a :x y functions",
+            "IFS=: noglob builtin read -A functions < x",
+            "eval 'zparseopts -a functions -- f:'",
+            "eval -- zstyle -a :x y functions",
+            "trap 'zparseopts -a functions -- f:' EXIT",
+            "repeat 1 zparseopts -a functions -- f:",
+            "alias z='zparseopts -a functions -- f:'",
+            // The name from a value.
+            "t=functions; zparseopts -a $t -- f:",
+            "t=aliases; set -A \"$t\" x 'tee -a ~/.zshrc'",
+            // Review 7: a name the classifier cannot see, where one goes.
+            "set -- -f 'tee -a ~/.zshrc'; n=$(printf %s func tions); zparseopts -a $n -- f:; -f",
+            "zstyle :x y f 'tee -a ~/.zshrc'; zstyle -a :x y \"$(printf %s func tions)\"; f",
+            "n=$(printf %s com mands); set -A $n ls ./x; ls",
+            "zparseopts -a ${:-func}tions -- f:",
+            "touch functions; zparseopts -a function[s] -- f:",
+            "zparseopts -D -- \"f:=$n\"",
+            "zparseopts -a functi{on,}s -- f:",
+            "zstyle -g $n :x y",
+            "set -eA `cat n` x",
+            "set +A $n x",
+            "zformat -f $n x y",
+            "pcre_match -a$n x y",
+            "zstat -A $n x",
+            "getln -A $n",
+            "wait -n -p $n",
+            "compgen -V $n -W x",
+            "eval 'zparseopts -a $n -- f:'",
+            "zlistattr x $n",
+            "zgetattr x user.y $n",
+            // The ~ ^ + flags before a table's name.
+            ": ${~functions[f]::=./x}; f",
+            ": ${^commands[ls]::=./x}; ls",
+            ": ${^^~~aliases[x]::=./x}; x",
+            // zsh/attr writes attribute names (chosen by whoever sets
+            // them) into an array by name.
+            "zlistattr x functions",
+            "zgetattr x user.y functions",
+            // In expansions, and tables of programs.
+            ": ${(AA)=aliases::=x 'tee -a ~/.zshrc'}",
+            ": ${BASH_ALIASES[x]:='tee -a ~/.zshrc'}",
+            ": ${commands[ls]::=./x}; ls",
+            ": ${BASH_CMDS[ls]:=./x}; ls",
+            "commands[ls]=./x; ls",
+            "BASH_CMDS[ls]=./x; ls",
+            "commands=(ls ./x)",
+            // A value naming a table may name it later.
+            "x=commands; eval \"$x[ls]=./x\"; ls",
+            "local x=functions",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        for script in [
+            "firebase deploy --only=functions",
+            "ls -A functions",
+            "set -- functions",
+            "grep -rn functions src",
+            "jq '.functions[0]' f.json",
+            "zparseopts -D -E -a opts -- f: -x:=xs",
+            "zstyle ':completion:*:functions' ignored-patterns '_*'",
+            "read -r myfunctions < x",
+            "printf '%s\\n' functions",
+            "stat functions/index.js",
+            "echo ${commands[git]}",
+            "(( $+commands[git] )) && echo yes",
+            "aliases[ll]='ls -l'",
+            // Operands that are not names stay quiet.
+            "set -- \"$@\"",
+            "set -e -o pipefail -- $args",
+            "zparseopts -D -E -a opts -- h=help -verbose=verbose",
+            "zstyle ':x' y \"$v\"",
+            "zstyle -s ':completion:*' menu style",
+            "zstat -A info \"$f\"",
+            "zlistattr \"$f\" attrs",
+            "stat -c %A \"$f\"",
+            "wait $pid",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
+}

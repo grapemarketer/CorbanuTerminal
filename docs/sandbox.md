@@ -16,6 +16,16 @@ to, except in places marked low-integrity: `AppData\LocalLow`, anything you
 or a program labelled Low, and folders another non-admin sandbox session is
 using at that moment.
 
+Windows itself creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` is
+labelled Low and lets everyone write to it, so non-admin sandbox commands can
+create, change and delete files there (#1770; measured on Windows Server
+2022). We accept this: it is one Windows folder, and a normal user can't
+change its permissions. Don't keep files there that you rely on. Default
+sandbox commands can currently write there too, and create files in the
+other folders that let everyone do so (such as the machine key folders under
+`C:\ProgramData\Microsoft\Crypto`); a change awaiting security sign-off
+(#1798) would stop that.
+
 **What it does not stop.**
 
 - Reading your files (see "Files a profile protects from reading" below).
@@ -27,8 +37,10 @@ using at that moment.
 - Two commands running at the same time in different projects (or with
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
-  other runs (#1560). The default sandbox doesn't prevent this yet either
-  (#1560, #1648), so avoid running commands in several projects at once.
+  other runs (#1560), and read the other's memory, such as secrets in its
+  environment or what you type at its prompts (#1838). The default sandbox
+  doesn't prevent borrowing yet either (#1560, #1648), so avoid running
+  commands in several projects at once.
   In the default sandbox, a command that races another command's start-up
   can also run code with the sandbox account's full access, outside its own
   restrictions (#1721).
@@ -56,7 +68,9 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. Such folders
+has ended); a warning follows the command too (or a later command, if it
+left processes running). Check its
+contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. A read-only `.codex` or
 `.agents` folder your permission profile names that doesn't exist yet (or
@@ -70,11 +84,35 @@ the folders above them. A folder the sandbox can't list counts as planted. Folde
 **A `.git` created while a command runs.** Git runs a `.git` folder's hooks
 and config outside the sandbox whenever you run git there. So if the `.git`
 at the top of a folder non-admin sandbox commands may write to appears, or
-is replaced, while a command runs, Corbanu Terminal warns you at startup and
-asks in the TUI whether you have checked it. Commands can still create a
+is replaced, while a command runs, Corbanu Terminal warns you right after
+that command ends (for one that leaves processes running, after a later
+command once they have ended), warns you again at startup and asks in the TUI whether you
+have checked it. Since git runs anywhere, the startup warning and the TUI
+prompt cover every folder commands may write to (`%TEMP%` included) and
+anything below the working folder, not only the working folder and the
+folders above it. Commands can still create a
 `.git` (`git init` works). A `.git` that is a link (a junction or symbolic
 link) is flagged after every command. Only that top-level `.git` is checked,
 not `.git` folders deeper inside.
+
+**Bare repositories a command plants.** Git also uses a folder that holds
+`HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
+its config and hooks. A sandboxed command can make one in any folder it may
+write to, and git run there or in a folder below it later runs whatever
+that config names. Corbanu Terminal doesn't check for these (#1775), on
+Windows or elsewhere. We recommend making git refuse a bare repository it
+finds by searching:
+
+```shell
+git config --global safe.bareRepository explicit
+```
+
+Use git 2.45 or later: 2.38 to 2.44 also refuse git run inside `.git`,
+which breaks some hooks and submodule tools, and versions before 2.38 ignore
+the setting. It covers the git command line
+with your global config, not tools built on libgit2 or JGit, nor a git with
+another home folder (such as WSL's). Where you do work in a bare repository,
+name it with `--git-dir` or `GIT_DIR`.
 
 **Read-only paths that don't exist yet.** If your permission profile marks a
 path inside a writable folder read-only and that path doesn't exist when a
@@ -89,13 +127,30 @@ sandboxes do this. It has two side effects:
   create the file.
 - A read-only path inside `.git`, such as `.git\hooks`, in a folder that
   isn't a git repository yet creates a `.git` there that holds only an empty
-  `hooks` folder. The non-admin sandbox protects that `.git` at once. The
-  default sandbox protects only `hooks` for the command that made it, and the
-  whole `.git` from the next command on (#1758). Git doesn't treat such a
-  `.git` as a repository, so git commands in that folder report "not a git
-  repository" or use a repository in a folder above it. Run `git init` there
-  yourself, or remove the entry and then delete that `.git` folder while no
-  session is running.
+  `hooks` folder. When that `.git` is at the top of a folder commands may
+  write to (other than `%TEMP%`), both sandboxes protect the whole of it at
+  once, starting with the command that made it (#1758); a deeper one, such
+  as `sub\.git` for `sub\.git\hooks`, has only `hooks` protected. Git
+  doesn't treat such a `.git` as a repository, so git commands in that
+  folder report "not a git repository" or use a repository in a folder
+  above it. Run `git init` there yourself, or remove the entry and then
+  delete that `.git` folder while no session is running.
+
+**A writable folder inside a read-only one.** Neither Windows sandbox can
+enforce a profile that makes a folder writable inside a read-only one
+(the protected `.git`, `.codex` and `.agents` folders count as read-only), so
+both refuse it, and the message names both folders. Folders are compared as
+spelled and by their real path, so a junction, folder symbolic link or
+`subst` drive doesn't hide this (#1801). Two cases behave differently:
+
+- The same folder marked read-only under one spelling and writable under
+  another (for example by its real path and through a junction) isn't
+  refused. In the non-admin sandbox it is read-only (#1780).
+- A protected `.git`, `.codex` or `.agents` folder that is itself a link to a
+  folder holding another writable folder of the profile is refused, because
+  that writable folder then lies inside a protected one. Replace the link
+  with a folder, or drop that writable folder from the profile. If this
+  refuses a setup you rely on, please report it.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some
@@ -106,6 +161,42 @@ Windows sandbox mode can't block reading the protected files. The same applies
 to a profile that limits which folders commands may read. Switch to the
 default sandbox, as below, to run it. Profiles without such entries are not
 affected.
+
+**Known limitations: tools that use named pipes.** (#1797) A command in the
+non-admin sandbox can't open a named pipe it created for writing when the pipe
+has Windows' default permissions. By default Windows lets only the pipe's
+owner, SYSTEM and Administrators write to a pipe, and the non-admin sandbox's
+write restriction doesn't count the command as the owner. So opening such a
+pipe for writing, as most programs do to connect to it, fails with "access
+denied" (Windows error 5). These fail there:
+
+- Node.js starting a child process with piped input or output (`execSync`,
+  `spawnSync`): `EPERM`. A child started with `stdio: 'inherit'` or
+  `'ignore'` works.
+- Git Bash (`bash.exe`) crashes on start with
+  `couldn't create signal pipe, Win32 error 5`.
+- A local `git clone` (from a folder on your computer) fails with the same
+  crash, from Git's own `sh.exe`.
+- Python `multiprocessing` (for example `multiprocessing.Pool`):
+  `PermissionError: [WinError 5] Access is denied`. `subprocess` with pipes
+  works.
+- Other programs that create and then use their own named pipe, such as .NET's
+  `NamedPipeClientStream` in PowerShell (`Access to the path is denied.`).
+
+The default sandbox runs all of these. If you need them, switch to the default
+sandbox as below. This was measured on Windows Server 2022, in both an
+administrator and a normal session.
+
+**Default sandbox: commands can read other projects' running commands.**
+(#1803) A default sandbox command can read the memory of another default
+sandbox command running at the same time in a different project, such as
+secrets in its environment and what it prints. For a command run in a
+terminal, it can also read that command's console host, which holds what you
+type at its prompts and what it prints. It can't change them or start
+programs through them. A change awaiting security sign-off (#1800), which
+starts each command on a logon of its own, stops the memory read; a
+follow-up built on it, with a test that checks it, will stop the console
+read. Until then, avoid running commands in several projects at once.
 
 **How to switch to the default sandbox.**
 

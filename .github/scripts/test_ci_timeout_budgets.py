@@ -514,9 +514,18 @@ class PrAppServerSchemaFixturesTest(unittest.TestCase):
 
 class PrWindowsNativeTestsTest(unittest.TestCase):
     """#636 (owner decision 2026-10-15): native Windows tests on PRs that
-    change codex-tui, codex-core, codex-state or codex-login."""
+    change codex-tui, codex-core, codex-state or codex-login; since #1813 also
+    windows-sandbox-rs, network-proxy, process-hardening, sandboxing and
+    exec-server."""
 
     CRATES = ("tui", "core", "state", "login")
+    MORE_CRATES = (
+        "windows-sandbox-rs",
+        "network-proxy",
+        "process-hardening",
+        "sandboxing",
+        "exec-server",
+    )
     REUSABLE = "rust-ci-windows-native-tests.yml"
 
     def workflow(self, name: str) -> str:
@@ -547,8 +556,8 @@ class PrWindowsNativeTestsTest(unittest.TestCase):
         )
         return result.stdout.strip() == "true"
 
-    def test_runs_only_for_the_four_crates_and_its_workflow(self) -> None:
-        for crate in self.CRATES:
+    def test_runs_only_for_its_crates_and_its_workflow(self) -> None:
+        for crate in self.CRATES + self.MORE_CRATES:
             with self.subTest(crate=crate):
                 self.assertTrue(self.detect(["README.md", f"codex-rs/{crate}/src/lib.rs"]))
         self.assertTrue(self.detect([f".github/workflows/{self.REUSABLE}"]))
@@ -582,6 +591,8 @@ class PrWindowsNativeTestsTest(unittest.TestCase):
             r"(?m)^    needs: changed\n"
             r"    if: \$\{\{ needs\.changed\.outputs\.windows_native_tests == 'true' \}\}\n"
             rf"    uses: \./\.github/workflows/{re.escape(self.REUSABLE)}\n"
+            r"    with:\n"
+            r"      targets: \$\{\{ needs\.changed\.outputs\.windows_native_targets \}\}\n"
             r"    secrets: inherit$",
         )
 
@@ -606,11 +617,13 @@ class PrWindowsNativeTestsTest(unittest.TestCase):
         self.assertNotRegex(triggers, r"(?m)^  (pull_request|push|schedule):")
         self.assertIn("runs-on: windows-2022", reusable)
         self.assertIn("timeout-minutes: 90", reusable)
-        targets = re.search(r"(?ms)^ +bazel_targets=\(\n(.*?)^ +\)$", reusable)
-        self.assertIsNotNone(targets)
+        # Called without targets, it tests the four #636 crates.
+        default = re.search(r"(?m)^        default: (.*)$", triggers)
+        self.assertIsNotNone(default)
         self.assertEqual(
-            targets.group(1).split(), [f"//codex-rs/{crate}/..." for crate in self.CRATES]
+            default.group(1).split(), [f"//codex-rs/{crate}/..." for crate in self.CRATES]
         )
+        self.assertIn('read -r -a bazel_targets <<< "$TARGETS"', reusable)
         self.assertIn("--build_tests_only", reusable)
         # Native, like nightly's test-windows-native-main, not the gnullvm
         # cross build that needs BuildBuddy.

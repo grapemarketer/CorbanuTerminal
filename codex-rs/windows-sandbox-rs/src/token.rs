@@ -56,6 +56,8 @@ const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_EXECUTE: u32 = 0x2000_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
+/// The one standard right every object type maps the same way.
+const SYNCHRONIZE: u32 = 0x0010_0000;
 const WIN_WORLD_SID: i32 = 1;
 const WIN_LOCAL_SYSTEM_SID: i32 = 22;
 const WIN_CREATOR_OWNER_RIGHTS_SID: i32 = 71;
@@ -597,8 +599,8 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
 /// SIDs. Its default DACL, which the objects its processes create without
 /// explicit security get (their processes, threads, tokens, pipes, events,
 /// sections), grants full access only to the user, SYSTEM and
-/// `psid_command`; Everyone, the logon SID and the capability SIDs get read
-/// and execute. A write-restricted token needs a restricting SID granted
+/// `psid_command`; Everyone, the logon SID and the capability SIDs get only
+/// `SYNCHRONIZE` (D429). A write-restricted token needs a restricting SID granted
 /// each write right, so one legacy command can still write to its own
 /// objects, but not to another command's: it can't open them with
 /// `PROCESS_CREATE_PROCESS` (to start a child in that command's job),
@@ -607,8 +609,21 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
 /// legacy token, `GENERIC_ALL`. Not closed: `TOKEN_DUPLICATE` isn't a write
 /// right, so another legacy command can still impersonate this command's
 /// token, and with it (it carries `psid_command`) write to this command's
-/// processes and writable roots (#1560). Read/execute still includes
-/// `PROCESS_TERMINATE`.
+/// processes and writable roots (#1560).
+///
+/// D429 (#1803): until D429 the shared SIDs got read and execute, which on a
+/// process is `PROCESS_VM_READ`, `PROCESS_QUERY_INFORMATION` and
+/// `PROCESS_TERMINATE` and on a thread `THREAD_GET_CONTEXT`, so an elevated
+/// command (another account, which holds Everyone and the logon SID) could
+/// read a legacy command's memory and registers. `SYNCHRONIZE` is the only
+/// right granted to them because one default DACL covers every object type:
+/// `PROCESS_QUERY_LIMITED_INFORMATION` (0x1000) is `THREAD_RESUME` on a
+/// thread, and `THREAD_QUERY_LIMITED_INFORMATION` (0x800) is
+/// `PROCESS_SUSPEND_RESUME` on a process. Read rights pass a
+/// write-restricted token on its normal SIDs alone, and every legacy command
+/// holds the user SID, which keeps full access here (Core and the command
+/// itself need it), so this doesn't stop another legacy command reading this
+/// one (#1838).
 ///
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token,
@@ -703,12 +718,33 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     psid_capabilities: &[*mut c_void],
     additional_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
+    let mut group = sandbox_users_group_of(base_token)?;
+    create_elevated_token_with_group(
+        base_token,
+        psid_capabilities,
+        additional_restricting_sids,
+        group.as_mut_ptr() as *mut c_void,
+    )
+}
+
+/// Builds the token for
+/// [`create_token_with_caps_user_and_additional_restrictions_from`], with
+/// `psid_group` as the sandbox users' group in its default DACL and no check
+/// that `base_token` holds it. Private: production reaches it only through
+/// that function, after D324's group check. This module's tests call it
+/// directly with a group the test process holds, because they run as a user
+/// outside the sandbox users' group (#1795).
+unsafe fn create_elevated_token_with_group(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    additional_restricting_sids: &[*mut c_void],
+    psid_group: *mut c_void,
+) -> Result<HANDLE> {
     let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
     let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
-    let mut group = sandbox_users_group_of(base_token)?;
     // The token copies the SID, so it can go once the token exists.
     let command = LocalSid::from_string(&crate::cap::new_command_identity_sid_string())?;
     extra_restricting_sids.push(command.as_ptr());
@@ -718,7 +754,7 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
         &extra_restricting_sids,
         DefaultDacl::Elevated {
             psid_user,
-            psid_group: group.as_mut_ptr() as *mut c_void,
+            psid_group,
             psid_command: command.as_ptr(),
         },
     )
@@ -876,15 +912,14 @@ unsafe fn set_legacy_default_dacl(
 ) -> Result<()> {
     let mut user = get_user_sid_bytes(base_token)?;
     let mut system = well_known_sid(WIN_LOCAL_SYSTEM_SID)?;
-    let read_execute = GENERIC_READ | GENERIC_EXECUTE;
     let mut grants = vec![
         (user.as_mut_ptr() as *mut c_void, GENERIC_ALL),
         (system.as_mut_ptr() as *mut c_void, GENERIC_ALL),
         (psid_command, GENERIC_ALL),
-        (psid_logon, read_execute),
-        (psid_everyone, read_execute),
+        (psid_logon, SYNCHRONIZE),
+        (psid_everyone, SYNCHRONIZE),
     ];
-    grants.extend(psid_capabilities.iter().map(|sid| (*sid, read_execute)));
+    grants.extend(psid_capabilities.iter().map(|sid| (*sid, SYNCHRONIZE)));
     set_default_dacl_grants(token, &grants)
 }
 

@@ -84,6 +84,9 @@ const PURE_FILTERS: &[&str] = &[
 /// What the pass found in one command line.
 #[derive(Default)]
 struct Found {
+    /// #1704: the text read is the code `eval` or `trap` runs, read as
+    /// shell like a line's own words.
+    evaluated: bool,
     /// Scripts that nested shells run, with the folder they run in, and
     /// what a launcher does with its input there (#1268).
     /// #1283: and whether that folder is unknown.
@@ -99,6 +102,9 @@ struct Found {
     /// Text it could not read in full: substitutions nested too deeply, a
     /// quote left open, or too many places a command may start.
     unreadable: bool,
+    /// D410: a `stat` would write a table were its builtin loaded
+    /// ([`code_tables::Writes::StatIfLoaded`]).
+    stat_writes: bool,
     /// Files the line writes (`None`: one it cannot name).
     written: Vec<Option<String>>,
     /// A command other than sed writes a file (a copy, move, download or
@@ -281,6 +287,7 @@ impl Classifier {
         if found.unreadable || folders.unfollowed {
             self.note(ProtectedActionKind::UnseenCode);
         }
+        self.stat_pending |= found.stat_writes;
         for kind in std::mem::take(&mut found.git) {
             work::step();
             self.note(kind);
@@ -611,7 +618,33 @@ impl Classifier {
             // command writing a table by name (`zparseopts -a functions`,
             // `set -A aliases …`), nor any other write to one: they fail
             // closed (#1704).
-            found.unreadable |= code_tables::writes_table(&texts, &texts);
+            // #1704: words that may be any or several where a writer reads
+            // its options count where text is read as shell: at this
+            // reading's own level or for `eval`/`trap` text (not `awk
+            // '{print $2}'` read again as code), as for #937's arithmetic.
+            let seen: Option<Vec<code_tables::Seen>> = ((level == 0 || found.evaluated)
+                && self.not_shell == 0
+                && self.rebuilt == 0)
+                .then(|| {
+                    command
+                        .words
+                        .iter()
+                        .map(|word| {
+                            work::step();
+                            code_tables::Seen::of(word)
+                        })
+                        .collect()
+                });
+            // Main's reading stays a floor: the reading with quotes reads
+            // some words otherwise (`eval $'getln *.png'`).
+            let writes = [
+                code_tables::writes_table(&texts, &texts, /*seen*/ None),
+                seen.map_or(code_tables::Writes::No, |seen| {
+                    code_tables::writes_table(&texts, &texts, Some(&seen))
+                }),
+            ];
+            found.unreadable |= writes.contains(&code_tables::Writes::Table);
+            found.stat_writes |= writes.contains(&code_tables::Writes::StatIfLoaded);
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
@@ -717,14 +750,41 @@ impl Classifier {
                         // folder; a wrapper before the command moved it
                         // (`sudo -D ~ git config -f .zshenv …`).
                         let moved = elsewhere_from.is_some_and(|from| from < at);
+                        // #1661: and a `submodule foreach` or `bisect run`
+                        // runs its inner git in the submodule or an unknown
+                        // folder, so the inner git's relative outputs ask
+                        // even where the outer git was told a folder (`git
+                        // -C ~/r submodule foreach git log
+                        // --output=../../.zshenv`).
+                        let wrapped = git_helpers::runs_wrapped_git(&texts, at);
                         if files.iter().any(|file| {
-                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                            self.unknown_folder_file(
+                                folders,
+                                moved || wrapped || folders.unchecked,
+                                file,
+                            )
                         }) {
                             note_git(found, ProtectedActionKind::Persistence);
                         }
                         if files.iter().any(|file| self.relative_place(file)) {
                             found.relative_outputs += 1;
                         }
+                    }
+                    // #1661: the script a wrapped git runs (`git submodule
+                    // foreach 'git fetch; git log --output=...'`, `git
+                    // bisect run '...'`): its commands run in a submodule
+                    // or an unknown folder, so push it as a script with
+                    // the folder unknown, as `-execdir` does.
+                    if let Some(operand) = git_helpers::wrapped_git_operand(&texts, at)
+                        && operand < texts.len()
+                    {
+                        push_script(
+                            found,
+                            folders,
+                            texts[operand..].join(" "),
+                            replaced(launches[operand]),
+                            /*unknown*/ true,
+                        );
                     }
                     if WRITERS.contains(&resolved_name.as_str())
                         || outputs.is_some()
@@ -917,6 +977,26 @@ impl Classifier {
                 }
                 continue;
             }
+            // #1704: `eval` and `trap` run their text as shell, also behind
+            // zsh's modifiers and `repeat` (`noglob eval '…'`).
+            let mut evaluates = false;
+            let mut program = command_at.clone();
+            while let Some((at, name)) = program {
+                work::step();
+                if matches!(name.as_str(), "eval" | "trap") {
+                    evaluates = true;
+                    break;
+                }
+                // zsh's `repeat N` runs the command after its count.
+                let skip = match name.as_str() {
+                    "repeat" => 2,
+                    name if unknown_folder::MODIFIERS.contains(&name) => 1,
+                    _ => break,
+                };
+                let from = (at + skip).min(texts.len());
+                program =
+                    indirect::command_word(&texts[from..]).map(|(next, name)| (from + next, name));
+            }
             // Also redirection files, comments and other text the shell
             // does not pass on as words.
             let quoted = command
@@ -959,7 +1039,12 @@ impl Classifier {
                     // command lines do not count: a decoy (`echo 'sed p'`)
                     // must not make up for a command this reading missed.
                     let counts = (found.sed_commands, found.shell_commands);
+                    // Only its words; not its input, files or comments.
+                    let words = command.words.as_ptr_range();
+                    let own = words.contains(&std::ptr::from_ref(word));
+                    let evaluated = std::mem::replace(&mut found.evaluated, evaluates && own);
                     self.walk(&reading.commands, &mut inner, level + 1, found);
+                    found.evaluated = evaluated;
                     found.unreadable |= inner.unfollowed;
                     if !word.lines {
                         (found.sed_commands, found.shell_commands) = counts;
@@ -976,6 +1061,7 @@ impl Classifier {
                     found.shell_commands += counted.shell_commands;
                 }
                 found.unreadable |= counted.unreadable || inner.unfollowed;
+                found.stat_writes |= counted.stat_writes;
             }
         }
         certain_cd::finish(folders);

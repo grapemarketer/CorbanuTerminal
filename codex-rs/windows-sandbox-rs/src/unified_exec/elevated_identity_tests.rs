@@ -74,11 +74,38 @@ async fn spawn_elevated(
     env: &[(&str, String)],
     tty: bool,
 ) -> codex_utils_pty::SpawnedProcess {
+    try_spawn_elevated(root, codex_home, argv, env, tty)
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        })
+}
+
+async fn try_spawn_elevated(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env: &[(&str, String)],
+    tty: bool,
+) -> anyhow::Result<codex_utils_pty::SpawnedProcess> {
     // Core passes its environment on; PowerShell needs it.
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     for (key, value) in env {
         env_map.insert((*key).to_string(), value.clone());
     }
+    spawn_elevated_with_env_map(root, codex_home, argv, env_map, tty).await
+}
+
+async fn spawn_elevated_with_env_map(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env_map: HashMap<String, String>,
+    tty: bool,
+) -> anyhow::Result<codex_utils_pty::SpawnedProcess> {
     spawn_windows_sandbox_session_elevated_for_permission_profile(
         &PermissionProfile::workspace_write(),
         workspace_roots_for(root).as_slice(),
@@ -101,12 +128,6 @@ async fn spawn_elevated(
         /*use_private_desktop*/ true,
     )
     .await
-    .unwrap_or_else(|err| {
-        panic!(
-            "spawn elevated command: {err:#}\n{}",
-            sandbox_log(codex_home)
-        )
-    })
 }
 
 /// Runs `argv` as an elevated workspace-write command on `root`; returns its
@@ -119,6 +140,26 @@ pub(in crate::unified_exec::tests) async fn run_elevated(
     tty: bool,
 ) -> (String, i32) {
     let spawned = spawn_elevated(root, codex_home, argv, env, tty).await;
+    let (stdout, exit_code) =
+        collect_stdout_and_exit(spawned, codex_home, Duration::from_secs(/*secs*/ 120)).await;
+    (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
+}
+
+/// [`run_elevated`] with the command's whole environment given.
+pub(in crate::unified_exec::tests) async fn run_elevated_with_env_map(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env_map: HashMap<String, String>,
+) -> (String, i32) {
+    let spawned = spawn_elevated_with_env_map(root, codex_home, argv, env_map, /*tty*/ false)
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        });
     let (stdout, exit_code) =
         collect_stdout_and_exit(spawned, codex_home, Duration::from_secs(/*secs*/ 120)).await;
     (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
@@ -788,6 +829,11 @@ fn sec_win_1648_elevated_tools_work_with_command_identity() {
     );
 }
 
+/// D429 (#1803): what commands of either backend may read of a legacy
+/// command.
+#[path = "d429_read_tests.rs"]
+mod d429;
+
 /// #1758: a configured read-only `.git\hooks` in a workspace with no `.git`.
 /// The setup helper makes `.git\hooks`, and `.git` on the way, before the
 /// first command starts; that command can't write `.git` (a `config` there
@@ -866,6 +912,209 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
     pretty_assertions::assert_eq!(
         (exit_code, state),
         (0, (true, false, false, false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
+
+/// #1780 (the bug was in the non-admin sandbox): the elevated sandbox keeps a
+/// read-only `docs` read-only when it or the working folder is spelled
+/// through a junction and the other by its real path, with nothing passed
+/// beyond the profile (Core's resolvers pass no deny path for these). With
+/// both spelled by the real path, the command writes its workspace and not
+/// `docs`, also with `docs` spelled through the junction. With the cwd
+/// spelled through it the command may not start at all here (the sandbox
+/// account can't pass the user-owned test root at the link), which is fine;
+/// it just mustn't write `docs`.
+#[test]
+fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only() {
+    let Some(codex_home) = elevated_home("sec-1780") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let base = dunce::canonicalize(root.path()).expect("canonical test root");
+    let real = base.join("real");
+    fs::create_dir_all(real.join("docs")).expect("create docs");
+    let linked = base.join("linked");
+    assert!(
+        super::super::real_path_read_only::make_link("/J", &linked, &real),
+        "mklink /J failed"
+    );
+    let probe = real.join("docs").join("probe.txt");
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    let runtime = current_thread_runtime();
+    let mut outcomes = Vec::new();
+    for (cwd, docs) in [
+        (&real, real.join("docs")),
+        (&linked, real.join("docs")),
+        (&real, linked.join("docs")),
+    ] {
+        let (mut file_system, network) =
+            PermissionProfile::workspace_write().to_runtime_permissions();
+        file_system
+            .entries
+            .push(codex_protocol::permissions::FileSystemSandboxEntry::new(
+                codex_protocol::permissions::FileSystemPath::Path {
+                    path: AbsolutePathBuf::from_absolute_path(&docs).expect("absolute"),
+                },
+                codex_protocol::permissions::FileSystemAccessMode::Read,
+            ));
+        let profile = PermissionProfile::from_runtime_permissions(&file_system, network);
+        // Relative to the cwd (no quotes, see #1758's test); `docs` there is
+        // `real\docs` either way.
+        let script = "(echo x> docs\\probe.txt) & (echo y> ok.txt)".to_string();
+        let env_map: HashMap<String, String> = std::env::vars().collect();
+        let exit = runtime.block_on(async {
+            match spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &profile,
+                workspace_roots_for(cwd).as_slice(),
+                codex_home.path(),
+                vec![cmd.clone(), "/d".to_string(), "/c".to_string(), script],
+                cwd,
+                env_map,
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(90_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                /*tty*/ false,
+                /*stdin_open*/ false,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            {
+                Ok(spawned) => Some(
+                    collect_stdout_and_exit(
+                        spawned,
+                        codex_home.path(),
+                        Duration::from_secs(/*secs*/ 120),
+                    )
+                    .await
+                    .1,
+                ),
+                Err(err) => {
+                    println!("sec-win-1780 elevated: start error: {err:#}");
+                    None
+                }
+            }
+        });
+        let outcome = (exit, probe.exists(), real.join("ok.txt").exists());
+        println!(
+            "sec-win-1780 elevated: cwd {}, docs {}: (exit, docs written, workspace written)={outcome:?}",
+            cwd.display(),
+            docs.display()
+        );
+        let _ = fs::remove_file(&probe);
+        let _ = fs::remove_file(real.join("ok.txt"));
+        outcomes.push(outcome);
+    }
+    record_setup(codex_home.path());
+    let _ = fs::remove_dir(&linked);
+
+    // The cwd by its real path starts either way; through the junction, only
+    // `docs` staying unwritten is required.
+    pretty_assertions::assert_eq!(
+        (outcomes[0], outcomes[1].1, outcomes[2]),
+        ((Some(0), false, true), false, (Some(0), false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
+
+/// #1819: an elevated command starts while a legacy command runs. The legacy
+/// session labels its writable roots (here `%TEMP%`, which holds this codex
+/// home) Low; a runner copied below them inherited that label and so started
+/// at Low integrity, where it may not open the parent's pipe for writing.
+#[test]
+fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
+    let Some(codex_home) = elevated_home("sec-1819") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let legacy_home = sandbox_home("sec-1819-legacy");
+    let holder_root = user_owned_test_root();
+    let root = user_owned_test_root();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    let argv = || {
+        vec![
+            cmd.clone(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo ok".to_string(),
+        ]
+    };
+    let runtime = current_thread_runtime();
+    // Control: the backend works with no legacy command running.
+    let alone = runtime.block_on(run_elevated(
+        root.path(),
+        codex_home.path(),
+        argv(),
+        &[],
+        /*tty*/ false,
+    ));
+    record_setup(codex_home.path());
+    let bin_dir = crate::sandbox_bin_dir(codex_home.path());
+    let (home_low, during, bin_low) = runtime.block_on(with_holder(
+        holder_root.path(),
+        legacy_home.path(),
+        async |_holder_pid| {
+            // SAFETY: reads labels only.
+            let home_low = unsafe { crate::integrity::effective_label_is_low(codex_home.path()) };
+            let during = match try_spawn_elevated(
+                root.path(),
+                codex_home.path(),
+                argv(),
+                &[],
+                /*tty*/ false,
+            )
+            .await
+            {
+                Ok(spawned) => {
+                    let (stdout, code) = collect_stdout_and_exit(
+                        spawned,
+                        codex_home.path(),
+                        Duration::from_secs(/*secs*/ 120),
+                    )
+                    .await;
+                    (String::from_utf8_lossy(&stdout).into_owned(), code)
+                }
+                Err(err) => (format!("start error: {err:#}"), -1),
+            };
+            // The runner's file and its folder.
+            let mut labelled = vec![bin_dir.clone()];
+            labelled.extend(
+                fs::read_dir(&bin_dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path()),
+            );
+            let bin_low = labelled
+                .iter()
+                // SAFETY: reads labels only.
+                .map(|path| unsafe { crate::integrity::effective_label_is_low(path) })
+                .collect::<anyhow::Result<Vec<bool>>>()
+                .map(|lows| lows.contains(&true));
+            (home_low.ok(), during, bin_low.ok())
+        },
+    ));
+    println!(
+        "\nsec-win-1819: alone={alone:?} during legacy={during:?} home Low={home_low:?} .sandbox-bin Low={bin_low:?}"
+    );
+    // Otherwise the legacy session never covered this home and the test
+    // proves nothing.
+    pretty_assertions::assert_eq!(
+        home_low,
+        Some(true),
+        "the legacy session did not label this codex home Low"
+    );
+    pretty_assertions::assert_eq!(
+        (alone.1, alone.0.trim(), during.1, during.0.trim(), bin_low),
+        (0, "ok", 0, "ok", Some(false)),
         "{}",
         sandbox_log(codex_home.path())
     );

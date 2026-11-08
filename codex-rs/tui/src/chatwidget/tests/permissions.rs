@@ -1391,6 +1391,27 @@ async fn planted_project_metadata_prompt_snapshot() {
     );
 }
 
+/// D424 (#1775): the startup prompt asks about a recorded `.git` below the
+/// working folder too (git runs anywhere), not only one at or above it;
+/// recorded `.codex`/`.agents` folders below it stay out (Core doesn't load
+/// them from there), and so does a `.git` elsewhere.
+#[tokio::test]
+async fn planted_prompt_covers_git_below_the_working_folder() {
+    let config = test_config().await;
+    let cwd = config.cwd.to_path_buf();
+    let other = cwd.parent().expect("parent").join("other");
+    let planted = vec![
+        cwd.join(".git"),
+        cwd.join("vendor").join(".git"),
+        cwd.join("vendor").join(".codex"),
+        other.join(".git"),
+    ];
+    assert_eq!(
+        crate::chatwidget::windows_sandbox_prompts::planted_to_ask_about(planted, &config),
+        vec![cwd.join(".git"), cwd.join("vendor").join(".git")]
+    );
+}
+
 /// D332 (#1682): the same prompt for a `.git` that appeared or changed, alone
 /// and next to project folders.
 #[tokio::test]
