@@ -4,6 +4,8 @@
 
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod git_watch;
 mod planted_log;
 mod unlabelled_roots;
 
