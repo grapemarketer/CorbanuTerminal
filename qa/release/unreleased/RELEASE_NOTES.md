@@ -583,11 +583,13 @@ asking and now ask first:
   `printf "$fmt"`, `print -l *.png` and `wait $pid` stay
   quiet.
 - zsh's `stat` builtin, which can write those tables (`stat -A functions
-  x`), is checked only when the same command line runs `zmodload` or names
-  `zsh/stat` (`zmodload zsh/stat; stat -f %m $(cat f)` asks); zsh starts
-  without it. Elsewhere `stat` is the system program, so macOS
-  `stat -f %m $f` stays quiet. A module loaded by your zsh start-up files
-  isn't seen (D410, #1704). `zstat` is always checked.
+  x`), is checked only when the same command line may load it: it runs
+  `zmodload` or names `zsh/stat` (`zmodload zsh/stat; stat -f %m $(cat f)`
+  asks), or runs bash's `enable` or a command named by a variable. zsh
+  starts without it. Elsewhere `stat` is the system program, so macOS
+  `stat -f %m $f` stays quiet. A module loaded by your zsh start-up files,
+  or by an earlier command in the same long-running shell session, isn't
+  seen (D410, #1704). `zstat` is always checked.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),

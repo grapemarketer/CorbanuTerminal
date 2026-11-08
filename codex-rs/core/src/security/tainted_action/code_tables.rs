@@ -139,20 +139,37 @@ pub(super) fn writes_table(
     false
 }
 
-/// D410 (#1704): whether a line's `text` may load zsh's `stat` builtin:
-/// it names `zmodload` (any use, `zmodload -F zsh/stat b:zstat` too) or
-/// the module, quotes and backslashes aside (`zmod''load`, `z$'m'odload`).
-/// zsh starts without the module (start-up files may load it; D410 accepts
-/// that).
-pub(super) fn may_load_stat(text: &str) -> bool {
-    let plain: String = text
-        .chars()
-        .filter(|ch| {
+/// D410 (#1704): whether a line (`command`, as written, and `commands`, its
+/// simple commands as lexed) may load a `stat` builtin. zsh starts without
+/// one (start-up files may load it; D410 accepts that). A word, as written
+/// with quotes and backslashes aside (`zmod''load`) or as lexed
+/// (`$'zmo\144load'`, lines joined, braces expanded), names `zmodload`
+/// (any use, `zmodload -F zsh/stat b:zstat` too) or the module; or a
+/// command is bash's `enable` (`enable -f stat stat` loads bash's own) or
+/// named by an expansion (`$a$b`).
+pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand]) -> bool {
+    let names = |text: &str| {
+        let plain: String = text
+            .chars()
+            .filter(|ch| {
+                work::step();
+                !matches!(ch, '\'' | '"' | '\\')
+            })
+            .collect();
+        plain.contains("modload") || plain.contains("zsh/stat")
+    };
+    command.iter().any(|part| {
+        work::step();
+        names(part)
+    }) || commands.iter().any(|simple| {
+        work::step();
+        simple.words.iter().any(|word| {
             work::step();
-            !matches!(ch, '\'' | '"' | '\\')
+            names(word)
+        }) || indirect::command_word(&simple.words).is_some_and(|(_, name)| {
+            name == "enable" || name.contains(['$', '`']) || name.contains(shell::UNSEEN_OUTPUT)
         })
-        .collect();
-    plain.contains("modload") || plain.contains("zsh/stat")
+    })
 }
 
 /// What the quote-aware reading shows of a word ([`writes_table`]).

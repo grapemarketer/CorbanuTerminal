@@ -1780,10 +1780,10 @@ impl Classifier {
         self.sudo_redefined |= command
             .iter()
             .any(|part| unknown_folder::may_redefine_sudo(part));
-        self.stat_builtin |= command.iter().any(|part| code_tables::may_load_stat(part));
         // #841: this line's own sed programs (nested lines have theirs).
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
         let lexed = shell::simple_commands(command);
+        self.stat_builtin |= code_tables::may_load_stat(command, &lexed.commands);
         // D191: only the action's own line, judged under POSIX path rules.
         let outer_temp = std::mem::replace(
             &mut self.temp,

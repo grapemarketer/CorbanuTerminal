@@ -182,7 +182,8 @@ fn issue1704_option_checks_are_linear() {
 /// by name with `-A`/`-H`) only once loaded; zsh starts without it. Its
 /// table checks run only when the command line, or a line judged before it
 /// in the same action, may load it: names `zmodload` (any use, quotes
-/// aside) or `zsh/stat`. A separate command on the same line (`zmodload
+/// aside, as written or as lexed) or `zsh/stat`, or runs bash's `enable`
+/// or a command named by an expansion. A separate command on the same line (`zmodload
 /// zsh/stat; stat …`, or a later line of the same text) counts, as a line's
 /// aliases do (#1422); so does a load after the `stat`, which keeps main's
 /// prompt. Elsewhere `stat` is the external program (`stat -f %m $f` on
@@ -204,9 +205,18 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "z$'m'odload zsh/stat; stat -A functions x",
             "eval 'zmodload zsh/stat'; stat -A functions x",
             "zsh -c 'zmodload zsh/stat; stat -A functions x'",
-            // A load the classifier cannot read asks as on main.
+            // Spelled so only the lexed words, or neither reading, show it
+            // (review 1): decoded, joined, brace-expanded, or a command
+            // named by an expansion; and bash's loadable `stat`.
+            "zmod$''load zsh/st$''at; stat -f %m $(cat f)",
+            "$'zmo\\144load' $'zsh/st\\141t'; stat -A functions x",
+            "zmod\\\nload zsh/st\\\nat; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st; $a$b ${c}at; stat -f %m $(cat f)",
+            "z=zmod; a=at; ${z}load zsh/st$a; stat -A functions x",
+            "for i in 1 2; do stat -A functions x; $a$b ${c}at; done",
             "zmo{d,}load zsh/stat; stat -A functions x",
-            "z=zmod; ${z}load zsh/st${a}at; stat -A functions x",
+            "builtin zmodload zsh/stat; stat -A functions x",
+            "enable -f stat stat; stat -A functions x",
             // A load after it keeps main's prompt.
             "stat -A functions x; zmodload zsh/stat",
             // zstat needs no `stat` load.
@@ -222,6 +232,10 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "for f in *.log; do stat -f '%m %N' $f; done",
             "stat -c %Y $f | sort -n",
             "stat -A functions x",
+            // The load alone, and `stat` with no word to hide, stay quiet:
+            // the prompts above come from the load.
+            "zmodload zsh/stat",
+            "zmodload zsh/stat; stat -f %m x",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
