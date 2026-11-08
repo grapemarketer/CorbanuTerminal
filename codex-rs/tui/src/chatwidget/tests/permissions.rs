@@ -1397,9 +1397,14 @@ async fn planted_project_metadata_prompt_snapshot() {
 /// them from there), and so does a `.git` elsewhere.
 #[tokio::test]
 async fn planted_prompt_covers_git_below_the_working_folder() {
-    let config = test_config().await;
-    let cwd = config.cwd.to_path_buf();
-    let other = cwd.parent().expect("parent").join("other");
+    let mut config = test_config().await;
+    // A real folder, canonical, so the result doesn't depend on the host.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dunce::canonicalize(dir.path()).expect("canonical");
+    let cwd = base.join("project");
+    std::fs::create_dir_all(&cwd).expect("create project");
+    config.cwd = cwd.abs();
+    let other = base.join("other");
     let planted = vec![
         cwd.join(".git"),
         cwd.join("vendor").join(".git"),

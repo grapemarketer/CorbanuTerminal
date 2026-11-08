@@ -100,6 +100,22 @@ pub(crate) fn planted_after_run_notice(
     )
 }
 
+/// Whether any record this thread wasn't told about lies after its first
+/// mark (or `mark`), so [`planted_after_run_notice`] is worth asking (it
+/// needs the run's writable roots, which cost a look at each). Notes the
+/// thread's first mark.
+pub(crate) fn planted_notice_pending(thread_id: ThreadId, mark: u64) -> bool {
+    let mut told = PLANTED_TOLD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (first, told) = told
+        .entry(thread_id)
+        .or_insert_with(|| (mark, HashSet::new()));
+    codex_windows_sandbox::planted_records_since((*first).min(mark))
+        .iter()
+        .any(|record| !told.contains(&record.seq))
+}
+
 /// [`planted_after_run_notice`] with the planted-records log passed in.
 fn planted_notice_from(
     thread_id: ThreadId,
