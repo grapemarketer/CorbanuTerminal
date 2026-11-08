@@ -2,9 +2,9 @@
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+mod planted_log;
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
-mod planted_log;
 mod unlabelled_roots;
 
 use std::fmt;
@@ -313,6 +313,8 @@ pub use logon_launch::run_logon_launcher;
 pub use logon_launch::run_window_access_reaper;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
+pub use planted_log::planted_records_mark;
+pub use planted_log::planted_records_since;
 #[cfg(target_os = "windows")]
 pub use process::ConsoleMode;
 #[cfg(target_os = "windows")]
@@ -398,8 +400,6 @@ pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_prof
 pub use unified_exec::spawn_windows_sandbox_session_for_level;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
-pub use planted_log::planted_records_mark;
-pub use planted_log::planted_records_since;
 pub use unlabelled_roots::legacy_writable_roots;
 pub use unlabelled_roots::unlabelled_roots_mark;
 pub use unlabelled_roots::unlabelled_roots_since;
