@@ -1,3 +1,5 @@
+use crate::deny_read_sessions::Descriptor;
+use crate::deny_read_sessions::current_user_sid;
 use crate::path_normalization::canonical_path_key;
 use crate::path_normalization::canonicalize_path;
 use anyhow::Context;
@@ -113,6 +115,35 @@ fn read_caps(path: &Path) -> Result<Option<(CapSids, bool)>> {
     Ok((!t.is_empty()).then(|| (new_caps(t.to_string()), true)))
 }
 
+/// Opens the update lock, making it if missing open only to the user,
+/// SYSTEM and Administrators: a sandboxed command that could open it could
+/// hold the lock and stall every update.
+fn open_lock(path: &Path) -> Result<fs::File> {
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const FILE_SHARE_ALL: u32 = 0x7;
+    let open = || fs::OpenOptions::new().read(true).write(true).open(path);
+    match open() {
+        Ok(file) => return Ok(file),
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            return Err(err).with_context(|| format!("open {}", path.display()));
+        }
+        Err(_) => {}
+    }
+    let user = current_user_sid()?;
+    let made = Descriptor::parse(&format!(
+        "O:{user}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{user})"
+    ))
+    .and_then(|descriptor| {
+        descriptor.create_new_file(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_ALL)
+    });
+    match made {
+        Ok(file) => Ok(file),
+        // Another process made it meanwhile.
+        Err(_) => open().with_context(|| format!("open {}", path.display())),
+    }
+}
+
 /// #1871: runs `update` on the recorded SIDs (made if there are none) with
 /// the update lock held from the read to the write, so concurrent updates,
 /// in this process or another, never lose one another's SIDs. `update`
@@ -121,13 +152,7 @@ fn update_caps<T>(codex_home: &Path, update: impl FnOnce(&mut CapSids) -> (T, bo
     fs::create_dir_all(codex_home)
         .with_context(|| format!("create cap sid dir {}", codex_home.display()))?;
     let lock_path = cap_sid_lock_file(codex_home);
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("open {}", lock_path.display()))?;
+    let lock = open_lock(&lock_path)?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
         match lock.try_lock() {
@@ -316,6 +341,30 @@ mod tests {
         let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
         assert_eq!(caps.workspace_by_cwd.len(), 1);
         assert_eq!(caps.writable_root_by_path.len(), 1);
+    }
+
+    /// #1871: the update lock is the user's only, even in a home others
+    /// may read (a sandboxed command that could open it could hold it).
+    #[test]
+    fn update_lock_is_the_users_only() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        let granted = std::process::Command::new("icacls")
+            .arg(&codex_home)
+            .args(["/grant", "*S-1-1-0:(OI)(CI)R"])
+            .output()
+            .expect("icacls");
+        assert!(granted.status.success(), "{granted:?}");
+        writable_root_cap_sid_for_path(&codex_home, &temp.path().join("root")).expect("sid");
+        let lock = codex_home.join("cap_sid.lock");
+        let user = crate::deny_read_sessions::current_user_sid().expect("user");
+        let reads = |sid: &str| {
+            let sid = crate::token::LocalSid::from_string(sid).expect("sid");
+            crate::acl::path_mask_allows(&lock, &[sid.as_ptr()], 0x1, true).expect("dacl")
+        };
+        assert!(!reads("S-1-1-0"), "Everyone may read the lock");
+        assert!(reads(&user), "the user may not read the lock");
     }
 
     /// #1871: updates made at the same time keep every SID they record, and
