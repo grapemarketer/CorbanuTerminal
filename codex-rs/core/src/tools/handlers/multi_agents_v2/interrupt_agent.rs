@@ -149,7 +149,10 @@ async fn handle_interrupt_agent(
                 CodexErrorDetails::ThreadNotFound(_) | CodexErrorDetails::InternalAgentDied
             ) =>
         {
-            return Ok(not_running);
+            return Ok(InterruptAgentResult {
+                previous_status: session.services.agent_control.get_status(agent_id).await,
+                ..not_running
+            });
         }
         Err(err) => return Err(collab_agent_error(agent_id, err)),
     }

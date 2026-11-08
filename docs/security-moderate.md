@@ -366,11 +366,13 @@ The kill switch (`/security` → `g`) works under every level.
   command's output; it never changes what runs.
 - A remote app server can't enforce a level chosen here; Corbanu refuses to
   start against one until you choose Permissive.
-- A follow-up task, `send_input` or interrupt goes ahead without asking
-  when the agent is running at the moment of the check. If that agent's turn
-  ends just before the message arrives, the message starts a new turn
-  without asking (D389). The agent still carries the untrusted-content mark
-  and runs at the same level.
+- A follow-up task or `send_input` goes ahead without asking when the agent
+  is running at the moment of the check. If that agent's turn ends just
+  before the message arrives, the message starts a new turn without asking
+  (D389). An interrupt never asks: if the agent's turn ends between
+  Corbanu's check and the interrupt, the interrupt notice can start a new
+  turn, at any level. The agent still carries the untrusted-content mark and
+  runs at the same level.
 
 See [Aggressive security level: protected files](security-aggressive.md) for
 the protected-file rules both levels share.
