@@ -16,6 +16,12 @@ const EVIL: &str = "echo x >> ~/.zshenv\n";
 /// holding `files` and an empty `sub/`.
 #[cfg(unix)]
 fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKind> {
+    in_workspace_argv(files, &["bash", "-lc", line])
+}
+
+/// [`in_workspace`] of the action whose argv is `argv`.
+#[cfg(unix)]
+fn in_workspace_argv(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActionKind> {
     use crate::sandboxing::SandboxPermissions;
     use codex_utils_absolute_path::AbsolutePathBuf;
     let root = tempfile::tempdir().expect("tempdir");
@@ -31,7 +37,7 @@ fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKin
     let action = ApprovalAction::Shell {
         id: "call".into(),
         environment_id: "local".into(),
-        command: ["bash", "-lc", line].map(str::to_string).to_vec(),
+        command: argv.iter().map(|arg| (*arg).to_string()).collect(),
         cwd: PathUri::from_abs_path(
             &AbsolutePathBuf::from_absolute_path_checked(work).expect("absolute"),
         ),
@@ -164,6 +170,54 @@ fn issue_1772_keeps_1719_hidden_command_asks() {
     .filter(|line| in_workspace(X_OK, line).is_none())
     .collect();
     assert_eq!(quiet, Vec::<&str>::new(), "#1719 lines now quiet");
+}
+
+/// PR #1794 review 1: lines that ask on main and must keep asking. Item 1:
+/// the `>` or `<` before a quote may be quoted text, a comment, a `case`
+/// pattern or a here-document, so the quoted-file reading can swallow the
+/// commands after it. Item 2: `sh` and `dash` read `&>` as `&` and `>`.
+/// Item 3: a substitution whose stdout is redirected prints nothing.
+#[cfg(unix)]
+const REVIEW_ASKS: &[(&str, &str)] = &[
+    ("1", "echo '>\"'; ./x; echo '\"'"),
+    ("1", "echo \">'\" && ./x && echo \"'\""),
+    ("1", "echo '>'; echo \"'\"; ./x; echo \"'\""),
+    ("1", "printf '%s\\n' 'a>\"b'; ./x; echo '\"'"),
+    ("1", "echo '<\"'; ./x; echo '\"'"),
+    ("1", "echo '2>\"'; ./x; echo '\"'"),
+    ("1", "case a in \">'\") ;; esac; ./x; echo \"'\""),
+    ("1", "ls # >\"\n./x\n# \""),
+    ("1", "cat <<'EOF'\na >'\nEOF\n./x\necho \"'\""),
+    ("1", "grep '>\"' f | xargs ./x '\"'"),
+    ("1", "find . -name '>\"' -exec ./x {} + -name '\"'"),
+    ("2", "sh -c 'true &>f ./x'"),
+    ("2", "dash -c 'true &>f ./x'"),
+    ("2", "bash -c 'true &>f ./x'"),
+    ("2", "true &>a ./x"),
+    ("3", "$(>&2 echo true) ./x"),
+    ("3", "`>&2 echo true` ./x"),
+    ("3", "$(>log echo true) ./x"),
+    ("3", "$(>&2 printf true) ./x"),
+    ("3", "$(echo true >log) ./x"),
+];
+
+#[cfg(unix)]
+#[test]
+fn issue_1772_review_lines_ask() {
+    let mut quiet: Vec<String> = REVIEW_ASKS
+        .iter()
+        .filter(|(_, line)| in_workspace(X_EVIL, line).is_none())
+        .map(|(item, line)| format!("item {item}: {line}"))
+        .collect();
+    for argv in [
+        ["sh", "-c", "true &>f ./x"],
+        ["dash", "-c", "true &>f ./x"],
+    ] {
+        if in_workspace_argv(X_EVIL, &argv).is_none() {
+            quiet.push(format!("item 2: {argv:?}"));
+        }
+    }
+    assert_eq!(quiet, Vec::<String>::new(), "review lines quiet");
 }
 
 /// The lexer's reading: a redirection's words follow the command's, every

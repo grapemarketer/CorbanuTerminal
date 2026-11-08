@@ -408,8 +408,9 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
 /// delimiter (`<<EOF ./x`), while the words without those run a command
 /// this reading would judge by more than its name: a program named by a
 /// path, a shell or interpreter, `eval`, `source`, `.` or `trap` (`>log
-/// eval ./x`), or a word starting with `-` (`&>log` is lexed as `&` and
-/// `>log`, so `sudo &>log -u root ./x` leaves `-u root ./x`). The shell
+/// eval ./x`), or a word starting with `-` (main's reading, as `sh` runs
+/// it, lexes `&>log` as `&` and `>log`, so `sudo &>log -u root ./x` leaves
+/// `-u root ./x`; #1772 lexes it as one redirection otherwise). The shell
 /// removes the redirection's words, so that command is never judged.
 /// `2>/dev/null git status`, `exec >out` and foreign text read as shell
 /// (`<?php echo 1;`) are read as before. `from`: the operands of `eval`.
@@ -454,12 +455,21 @@ fn as_written(
         .checked_sub(1)
         .map_or(0, |before| command.written_at[before] + 1);
     let mut written: Vec<(usize, usize)> = (0..words.len())
-        .map(|now| (command.written_at[now], now))
+        .map(|now| {
+            work::step();
+            (command.written_at[now], now)
+        })
         .filter(|(at, _)| *at >= start)
         .collect();
     written.sort_unstable();
     let holds = written.iter().map(|(_, now)| held(command, *now)).collect();
-    let words = written.iter().map(|(_, now)| words[*now].clone()).collect();
+    let words = written
+        .iter()
+        .map(|(_, now)| {
+            work::step();
+            words[*now].clone()
+        })
+        .collect();
     Some((words, holds))
 }
 

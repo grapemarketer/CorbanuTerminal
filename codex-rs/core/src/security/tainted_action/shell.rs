@@ -92,6 +92,10 @@ pub(super) struct SimpleCommand {
     pub(super) operated: Vec<usize>,
     /// D194: what joins it to the command before it.
     pub(super) after: Joint,
+    /// #1772 review 3: a redirection sends its stdout elsewhere (`>log`,
+    /// `>&2`, `1>&2`, `&>log`; not `2>log` or `2>&1`), so a substitution
+    /// of it prints nothing the words show.
+    pub(super) stdout_redirected: bool,
     /// #1772 item 1: when `redirections_last` moved the words a
     /// redirection holds after the others, the position each word had as
     /// written (`written_at[now]`); empty when nothing moved.
@@ -107,6 +111,10 @@ pub(super) struct Lexed {
     /// Substitutions nested past `MAX_SUBSTITUTION_DEPTH`; the deeper ones
     /// were read without linking their output (#1020).
     pub(super) too_deep: bool,
+    /// #1772 review 1: some text was read where main reads it otherwise: a
+    /// quoted or escaped redirection file holding a blank as one word, or
+    /// `&>` as one redirection (see `simple_commands_read`).
+    pub(super) read_newly: bool,
 }
 
 /// How deeply substitutions (`$(`, `<(`, `>(`, backticks) are read inside
@@ -125,8 +133,21 @@ pub(super) fn basename(word: &str) -> &str {
 
 /// Simple commands of the argv and of any script inside it (`bash -lc "..."`).
 pub(super) fn simple_commands(command: &[String]) -> Lexed {
+    simple_commands_read(command, /*main_reading*/ false)
+}
+
+/// [`simple_commands`], with `main_reading`: as main reads redirections.
+/// #1772 review 1: the lexer cannot tell whether the `>` or `<` before a
+/// quote was inside quotes, a comment, a `case` pattern or a here-document
+/// (`echo '>"'; ./x; echo '"'`), and `&>` splits under `sh` and `dash`
+/// (`true &>f ./x` runs `./x`). So a quoted or escaped redirection file is
+/// one word and `&>` one redirection only when `main_reading` is off; the
+/// classifier then also judges the action with it on and keeps the
+/// stricter verdict (`Lexed::read_newly`).
+pub(super) fn simple_commands_read(command: &[String], main_reading: bool) -> Lexed {
     let mut lexer = Lexer {
         joint: Some(Joint::Start),
+        main_reading,
         ..Lexer::default()
     };
     let mut incomplete = false;
@@ -154,10 +175,12 @@ pub(super) fn simple_commands(command: &[String]) -> Lexed {
         lexer.flush();
     }
     let too_deep = lexer.too_deep;
+    let read_newly = lexer.read_newly;
     Lexed {
         commands: lexer.finish(),
         incomplete,
         too_deep,
+        read_newly,
     }
 }
 
@@ -632,6 +655,11 @@ struct Lexer {
     real_open: usize,
     /// D194: the operators since the last word (`None`: a word).
     joint: Option<Joint>,
+    /// #1772 review 1: redirections are read as on main
+    /// (`simple_commands_read`).
+    main_reading: bool,
+    /// #1772 review 1: see `Lexed::read_newly`.
+    read_newly: bool,
 }
 
 impl Lexer {
@@ -686,6 +714,14 @@ impl Lexer {
             }
             self.current.words.push(word);
         }
+    }
+
+    /// #1772 review 3: at an output redirection operator, whether it
+    /// redirects stdout: no descriptor number before it, or `1`. A `{fd}`
+    /// name counts as stdout too (it can only ask more).
+    fn redirects_stdout(&self) -> bool {
+        let word = &self.word;
+        word.is_empty() || word == "1" || !word.bytes().all(|byte| byte.is_ascii_digit())
     }
 
     /// #1482 item 2: at a redirection operator, whether the word being
@@ -872,6 +908,9 @@ impl Lexer {
             .collect();
         let spliced = match top.as_slice() {
             _ if open.output || open.process => None,
+            // #1772 review 3: `$(>&2 echo x)`, `$(echo x >log)` print
+            // nothing here.
+            [only] if self.done[*only].stdout_redirected => None,
             [only] => substitution_output(&self.done[*only].words),
             // `$(cd X && pwd)` prints X.
             [cd, pwd]
@@ -976,8 +1015,10 @@ impl Lexer {
                 // #1772 item 2: an escaped space in a redirection's file
                 // (`>a\ b ./x`) is part of the file name.
                 '\\' if self.redirect != Redirect::None
+                    && !self.main_reading
                     && next.is_some_and(char::is_whitespace) =>
                 {
+                    self.read_newly = true;
                     self.current.escaped = true;
                     self.word.extend(next);
                     index += 2;
@@ -989,6 +1030,7 @@ impl Lexer {
                 // escaped quote (`>\'a`), are read as before.
                 '\'' | '"'
                     if self.redirect != Redirect::None
+                        && !self.main_reading
                         && previous != Some('\\')
                         && !unclosed[usize::from(ch == '"')]
                         && read_as_before.is_none_or(|end| index > end) =>
@@ -1004,6 +1046,7 @@ impl Lexer {
                             continue;
                         }
                     };
+                    self.read_newly = true;
                     for inner in &chars[index + 1..end] {
                         work::step();
                         if *inner == HIDDEN {
@@ -1059,6 +1102,7 @@ impl Lexer {
                 // `>&2`, `2>&1`, `>&-`: a descriptor, not a file; `>&file`
                 // writes the file.
                 '>' if next == Some('&') => {
+                    self.current.stdout_redirected |= self.redirects_stdout();
                     self.redirect_prefix(previous);
                     self.flush();
                     let descriptor = chars
@@ -1074,6 +1118,7 @@ impl Lexer {
                     continue;
                 }
                 '>' => {
+                    self.current.stdout_redirected |= self.redirects_stdout();
                     self.redirect_prefix(previous);
                     self.flush();
                     self.redirect = Redirect::Stdout;
@@ -1095,9 +1140,13 @@ impl Lexer {
                     self.start(if pipe { Start::Piped } else { Start::Plain });
                     self.operator(&chars, index);
                 }
-                // #1772 item 4: `&>` and `&>>` redirect stdout and stderr;
-                // the `>` is read next. Not a command separator.
-                '&' if next == Some('>') => self.flush(),
+                // #1772 item 4: `&>` and `&>>` redirect stdout and stderr
+                // in bash and zsh; the `>` is read next. Not a command
+                // separator. `sh` and `dash` read `&` and `>` (review 2).
+                '&' if next == Some('>') && !self.main_reading => {
+                    self.read_newly = true;
+                    self.flush();
+                }
                 ';' | '&' | '\n' => {
                     self.start(Start::Plain);
                     self.operator(&chars, index);
