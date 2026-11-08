@@ -135,7 +135,7 @@ fn find_reports_folders_holding_names_that_are_not_unicode() {
     // Lone surrogates: valid on NTFS, not valid Unicode.
     let odd = |n: u8| std::ffi::OsString::from_wide(&[0xD800, u16::from(n)]);
     let (folders, files) = (root.join("folders"), root.join("files"));
-    for n in [b'x', b'y'] {
+    for n in *b"xy" {
         std::fs::create_dir_all(folders.join(odd(n)).join("a\\.codex")).expect("odd folder");
         std::fs::create_dir_all(&files).expect("files");
         std::fs::write(files.join(odd(n)), "x").expect("odd file");
