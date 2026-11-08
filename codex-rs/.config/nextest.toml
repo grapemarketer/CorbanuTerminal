@@ -18,6 +18,17 @@ retries = 0
 slow-timeout = { period = "60s", terminate-after = 11 }
 
 [[profile.default.overrides]]
+# #1873: these codex-core tests run the elevated sandbox setup, which resets
+# the sandbox users' passwords, so they share the legacy sessions' group with
+# codex-windows-sandbox's elevated tests (#1827). `#[serial]` serializes only
+# within one process. .github/scripts/test_windows_sandbox_nextest_groups.py
+# checks that every codex-core test staging the elevated helpers is listed.
+# First, so no other group's override can claim them before this one.
+platform = 'cfg(windows)'
+filter = 'package(codex-core) & (test(windows_elevated_does_not_create_missing_workspace_metadata) | test(windows_elevated_enforces_deny_read_and_protects_setup_marker) | test(pf_27_s06_elevated_launch_cannot_read_protected_files_or_core_memory) | test(pf_27_s06_d2_vault_unreadable_through_tool_launch_under_workspace_write))'
+test-group = 'windows_sandbox_legacy_sessions'
+
+[[profile.default.overrides]]
 # Real-key rehearsal includes startup, switching, exit/restart and cleanup.
 filter = 'package(codex-tui) & test(tmux_memory_human_fixture_rehearsal)'
 test-group = 'provider_tui_journeys'
