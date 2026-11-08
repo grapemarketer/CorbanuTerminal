@@ -537,6 +537,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn open_planted_project_metadata_prompt(&mut self, paths: Vec<PathBuf>) {
         self.open_planted_prompt(paths, Vec::new());
     }
