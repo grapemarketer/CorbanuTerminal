@@ -234,6 +234,53 @@ mod windows_tests {
         assert_eq!(result, expected);
     }
 
+    /// #1805: a `set` override replaces the inherited spelling of its name.
+    #[test]
+    fn set_override_replaces_inherited_spelling_of_the_same_name() {
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            r#set: HashMap::from([("PATH".to_string(), "C:\\set".to_string())]),
+            ..Default::default()
+        };
+
+        let result = populate_env(
+            make_vars(&[("Path", "C:\\inherited"), ("codex_thread_id", "stale")]),
+            &policy,
+            Some("thread"),
+        );
+        let expected = HashMap::from([
+            ("PATH".to_string(), "C:\\set".to_string()),
+            (CODEX_THREAD_ID_ENV_VAR.to_string(), "thread".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    /// #1805: spellings of one inherited name keep the first, as Windows does.
+    #[test]
+    fn inherited_spellings_of_one_name_keep_the_first() {
+        for inherit in [
+            ShellEnvironmentPolicyInherit::All,
+            ShellEnvironmentPolicyInherit::Core,
+        ] {
+            let policy = ShellEnvironmentPolicy {
+                inherit,
+                ignore_default_excludes: true,
+                ..Default::default()
+            };
+
+            let result = populate_env(
+                make_vars(&[("Path", "C:\\first"), ("PATH", "C:\\second")]),
+                &policy,
+                /*thread_id*/ None,
+            );
+            let expected = HashMap::from([("Path".to_string(), "C:\\first".to_string())]);
+
+            assert_eq!(result, expected);
+        }
+    }
+
     #[test]
     #[cfg(target_os = "windows")]
     fn create_env_inserts_pathext_on_windows_when_missing() {
