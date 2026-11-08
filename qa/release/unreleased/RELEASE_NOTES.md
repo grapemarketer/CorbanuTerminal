@@ -630,6 +630,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   outside its own sandbox restrictions (#1721), and can still read and end
   the other's processes. So still avoid running commands
   in several projects at once (see `docs/sandbox.md`).
+- **Non-admin sandbox: default-sandbox commands can no longer read its
+  commands' memory** (D429, #1803). A command in the default (elevated)
+  sandbox could read the memory of a non-admin sandbox command running at the
+  same time, such as secrets in its environment, its output and what was
+  typed at its prompts. Other accounts now get only the right to wait for a
+  non-admin command's processes. One non-admin command can still read
+  another's memory (#1838), so still avoid running commands in several
+  projects at once.
 - **Profiles the Windows sandbox can't enforce are refused, and say why**
   (D331, #1762). A profile with a writable folder inside a read-only one is
   now refused for the agent's commands in the non-admin sandbox too, as it

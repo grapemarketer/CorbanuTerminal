@@ -623,7 +623,7 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
 /// write-restricted token on its normal SIDs alone, and every legacy command
 /// holds the user SID, which keeps full access here (Core and the command
 /// itself need it), so this doesn't stop another legacy command reading this
-/// one (#1803).
+/// one (#1838).
 ///
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token,
