@@ -278,9 +278,10 @@ fn sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link() {
 }
 
 /// #1871: what an older version's commands made in the temp folder stays
-/// their accounts' (an owner may change an object's permissions), so taking
-/// back the folder's grant alone leaves a command able to grant itself
-/// access again. The upgrade step makes the user their owner first.
+/// their accounts', with any entry they gave themselves there, so taking
+/// back the folder's grant alone leaves later commands able to change it.
+/// The upgrade step first makes the user its owner and removes those
+/// entries.
 #[test]
 fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     let _guard = legacy_process_test_guard();
@@ -316,6 +317,9 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         /*tty*/ false,
     ));
     println!("d377 leftovers setup: exit={code} stdout={stdout:?}");
+    // Recorded now, so a normal session can run this test even when the
+    // administrator's run fails below.
+    record_setup(home.path());
     let group = crate::winutil::string_from_sid_bytes(
         &crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP).expect("group"),
     )
@@ -338,7 +342,9 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         format!(
             "@echo off\r\n\
              (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
-             mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n",
+             mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
+             icacls \"{file}\" /grant \"%USERNAME%:(M)\" >nul 2>nul && echo FILE-KEPT\r\n\
+             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul && echo DIR-KEPT\r\n",
             file = file.display(),
             dir = dir.display()
         ),
@@ -352,10 +358,9 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         /*tty*/ false,
     ));
     println!("d377 leftovers made: exit={code} stdout={stdout:?}");
-    assert!(
-        stdout.contains("FILE-MADE") && stdout.contains("DIR-MADE"),
-        "{stdout}"
-    );
+    for done in ["FILE-MADE", "DIR-MADE", "FILE-KEPT", "DIR-KEPT"] {
+        assert!(stdout.contains(done), "{done}: {stdout}");
+    }
     let owner = |path: &Path| {
         use std::os::windows::fs::OpenOptionsExt as _;
         let file = std::fs::OpenOptions::new()
@@ -381,7 +386,8 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         /*tty*/ false,
     ));
     println!("d377 leftovers upgrade: exit={code} stdout={stdout:?}");
-    // A command grants itself access to what its account made, and writes.
+    // A later command writes there (granting itself access first, as an
+    // owner may).
     let tamper = root.path().join("d377-tamper.cmd");
     fs::write(
         &tamper,
@@ -418,5 +424,4 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     crate::session_temp::end_session_temp_in(
         &dunce::canonicalize(std::env::var_os("TEMP").expect("TEMP")).expect("TEMP"),
     );
-    record_setup(home.path());
 }
