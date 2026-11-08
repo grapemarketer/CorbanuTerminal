@@ -329,7 +329,7 @@ fn includes_are_bounded_and_never_remote() {
     let big_states = target_states_with(&[], &roots, std::slice::from_ref(&big), &[]);
     let big_again = target_changes(
         &big_states,
-        target_states_with(&[], &roots, &[big.clone()], &[]),
+        target_states_with(&[], &roots, std::slice::from_ref(&big), &[]),
     );
     assert_eq!(
         (
