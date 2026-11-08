@@ -40,11 +40,15 @@ fn probe_argv(root: &Path, tools: &Path) -> Vec<String> {
     fs::write(tools.join("marker1805.cmd"), format!("@echo {MARKER}\r\n"))
         .expect("write the marker");
     let ps1 = root.join("start-process-1805.ps1");
+    // The child sleeps before it writes (#1879): Windows PowerShell's
+    // `Start-Process -Wait` checks that the child is still running and then
+    // puts it in a job object, and a child that exits in between fails it
+    // with "Cannot process request because the process (…) has exited".
     fs::write(
         &ps1,
         "$ErrorActionPreference = 'Stop'\r\n\
          try {\r\n\
-           $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\cmd.exe\" -ArgumentList '/c', 'echo ran>win-1805-child.txt' -Wait -PassThru -NoNewWindow\r\n\
+           $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -ArgumentList '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 2; Set-Content win-1805-child.txt ran' -Wait -PassThru -NoNewWindow\r\n\
            \"win-1805 start-process ran (exit=$($p.ExitCode), child wrote: $(Test-Path win-1805-child.txt))\"\r\n\
          } catch {\r\n\
            \"win-1805 start-process failed: $($_.Exception.Message)\"\r\n\
