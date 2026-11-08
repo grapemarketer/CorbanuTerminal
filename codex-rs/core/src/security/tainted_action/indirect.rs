@@ -169,6 +169,8 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     (
         "sudo",
         &[
+            "-a",
+            "-c",
             "-u",
             "-g",
             "-h",
@@ -180,6 +182,8 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
             "-t",
             "-U",
             "-T",
+            "--auth-type",
+            "--login-class",
             "--user",
             "--group",
             "--host",
@@ -249,11 +253,11 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
 ];
 
 /// #1482: letters known to take no value, per wrapper. A cluster is read
-/// through these only: a letter not listed here may take a value (`sudo
-/// -R`, `xargs -i`, `nsenter -n`), which would hold the rest of the word,
-/// so a cluster with one is read as one word, as before.
+/// through these only: a letter not listed here may take a value (`xargs -i`,
+/// `nsenter -n`), which would hold the rest of the word, so a cluster with one
+/// is read as one word, as before.
 const FLAG_LETTERS: &[(&str, &str)] = &[
-    ("sudo", "ABbEeHiKklnPSsVv"),
+    ("sudo", "ABbEeHiKkNlnPSsVv"),
     ("doas", "Lns"),
     ("env", "0iv"),
     ("time", "alpqv"),
@@ -269,10 +273,12 @@ const FLAG_LETTERS: &[(&str, &str)] = &[
     ("watch", "bcegptx"),
 ];
 
-/// Sudo's long options, including flags, so an abbreviation only consumes
-/// the following word when it unambiguously names an option that takes one.
+/// Sudo's long options, including flags. An unambiguous abbreviation keeps the
+/// option's value-taking behavior; an exact option wins over a longer name
+/// that begins with it (`--login`, not `--login-class`).
 const SUDO_LONG_OPTIONS: &[(&str, bool)] = &[
     ("askpass", false),
+    ("auth-type", true),
     ("background", false),
     ("bell", false),
     ("chdir", true),
@@ -285,6 +291,8 @@ const SUDO_LONG_OPTIONS: &[(&str, bool)] = &[
     ("host", true),
     ("list", false),
     ("login", false),
+    ("login-class", true),
+    ("no-update", false),
     ("non-interactive", false),
     ("other-user", true),
     ("preserve-env", false),
@@ -301,6 +309,62 @@ const SUDO_LONG_OPTIONS: &[(&str, bool)] = &[
     ("validate", false),
     ("version", false),
 ];
+
+/// Sudo's option parser before #1773. `sudo_runs_helper` keeps a changed
+/// value boundary prompt-only until a separate classifier decision approves
+/// making it quiet.
+const SUDO_LEGACY_VALUE_OPTIONS: &[&str] = &[
+    "-u",
+    "-g",
+    "-h",
+    "-p",
+    "-C",
+    "-D",
+    "-r",
+    "-t",
+    "-U",
+    "-T",
+    "--user",
+    "--group",
+    "--host",
+    "--prompt",
+    "--close-from",
+    "--chdir",
+    "--role",
+    "--type",
+    "--other-user",
+    "--command-timeout",
+];
+const SUDO_LEGACY_FLAGS: &str = "ABbEeHiKklnPSsVv";
+
+/// The option sudo resolves from a non-empty long spelling. An exact name
+/// resolves even if it is a prefix of another option; an ambiguous prefix does
+/// not consume a following word.
+fn sudo_long_option(name: &str) -> Option<(&'static str, bool)> {
+    let mut unique = None;
+    for (known, takes_value) in SUDO_LONG_OPTIONS {
+        work::step();
+        if *known == name {
+            return Some((known, *takes_value));
+        }
+        if known.starts_with(name) {
+            if unique.is_some() {
+                return None;
+            }
+            unique = Some((*known, *takes_value));
+        }
+    }
+    unique
+}
+
+fn sudo_value_letter(letter: char, value_options: &[&str]) -> bool {
+    value_options.iter().any(|value_option| {
+        work::step();
+        value_option
+            .strip_prefix('-')
+            .is_some_and(|name| name.len() == letter.len_utf8() && name.starts_with(letter))
+    })
+}
 
 /// #1482: how many words a wrapper's option word uses: one, or two when
 /// it takes a value that is not attached. A short cluster takes the next
@@ -344,42 +408,54 @@ pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) 
     1
 }
 
-/// #1773: sudo's parser accepts an unambiguous long-option prefix. It also
-/// scans every short-option letter: an unknown earlier letter cannot hide a
-/// known option that takes the next word.
+/// #1773: sudo accepts an unambiguous long-option prefix, and its short
+/// parser keeps reading known flags until it reaches a value-taking option.
+/// An unknown short letter stops the scan because sudo rejects that option.
 fn sudo_option_words(option: &str, value_options: &[&str]) -> usize {
     if let Some(long) = option.strip_prefix("--") {
         let (name, attached) = long
             .split_once('=')
             .map_or((long, false), |(name, _)| (name, true));
-        if attached || name.is_empty() {
+        return 1 + usize::from(
+            !attached && sudo_long_option(name).is_some_and(|(_, takes)| takes),
+        );
+    }
+    let Some(letters) = option.strip_prefix('-') else {
+        return 1;
+    };
+    let flags = FLAG_LETTERS
+        .iter()
+        .find(|(name, _)| *name == "sudo")
+        .map_or("", |(_, flags)| *flags);
+    for (at, letter) in letters.char_indices() {
+        work::step();
+        if sudo_value_letter(letter, value_options) {
+            return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !flags.contains(letter) {
             return 1;
         }
-        let mut match_takes_value = None;
-        for (known, takes_value) in SUDO_LONG_OPTIONS {
-            work::step();
-            if known.starts_with(name) {
-                if match_takes_value.is_some() {
-                    return 1;
-                }
-                match_takes_value = Some(*takes_value);
-            }
-        }
-        return 1 + usize::from(match_takes_value == Some(true));
+    }
+    1
+}
+
+fn sudo_legacy_option_words(option: &str) -> usize {
+    if SUDO_LEGACY_VALUE_OPTIONS.contains(&option) {
+        return 2;
+    }
+    if option.starts_with("--") {
+        return 1;
     }
     let Some(letters) = option.strip_prefix('-') else {
         return 1;
     };
     for (at, letter) in letters.char_indices() {
         work::step();
-        let takes_value = value_options.iter().any(|value_option| {
-            work::step();
-            value_option
-                .strip_prefix('-')
-                .is_some_and(|name| name.len() == letter.len_utf8() && name.starts_with(letter))
-        });
-        if takes_value {
+        if sudo_value_letter(letter, SUDO_LEGACY_VALUE_OPTIONS) {
             return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !SUDO_LEGACY_FLAGS.contains(letter) {
+            return 1;
         }
     }
     1
@@ -544,10 +620,11 @@ fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Optio
 }
 
 /// #1482 item 4: whether a sudo among the programs of these words runs an
-/// askpass helper or an editor named by the environment (`sudo -A`, `sudo
-/// -e`, `--askpass`, `--edit`, `sudoedit`): code the words do not name.
-/// sudo's own options are read up to its command, with their values (`sudo
-/// -p A ./x` asks for nothing; `sudo -R sub -A ./x` runs a helper).
+/// askpass helper, an editor named by the environment, or code inside a
+/// chroot (`sudo -A`, `sudo -e`, `--askpass`, `--edit`, `sudoedit`,
+/// `sudo -R dir`): code the words do not name. sudo's own options are read
+/// up to its command, with their values (`sudo -p A ./x` asks for nothing;
+/// `sudo -R sub -A ./x` runs a helper).
 /// `sudo -i` (the target user's home) is a folder option of
 /// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
 /// The words are read as written and, when a redirection holds some of
@@ -563,42 +640,45 @@ fn sudo_in_words_runs_helper(words: &[String]) -> bool {
         .iter()
         .find(|(wrapper, _, _)| *wrapper == "sudo")
         .map_or(&[][..], |(_, options, _)| *options);
-    let values: String = options
+    let flags = FLAG_LETTERS
         .iter()
-        .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
-        .collect();
-    // Whether the option runs a helper, and whether its value is the next
-    // word.
+        .find(|(name, _)| *name == "sudo")
+        .map_or("", |(_, flags)| *flags);
+    // Whether an option runs untracked code (including a chroot), or changes
+    // a word boundary that the pre-#1773 classifier protected, and whether
+    // its value is the next word.
     let read = |option: &str| -> (bool, bool) {
         work::step();
+        let changed_boundary =
+            sudo_option_words(option, options) != sudo_legacy_option_words(option);
         if let Some(long) = option.strip_prefix("--") {
-            let (name, value) = long
+            let (name, attached) = long
                 .split_once('=')
                 .map_or((long, false), |(name, _)| (name, true));
+            let resolved = sudo_long_option(name);
             let helper =
-                !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
-            let takes = !value
-                && !name.is_empty()
-                && options.iter().any(|known| {
-                    work::step();
-                    known
-                        .strip_prefix("--")
-                        .is_some_and(|known| known.starts_with(name))
-                });
-            return (helper, takes);
+                resolved.is_some_and(|(known, _)| matches!(known, "askpass" | "chroot" | "edit"));
+            let takes = !attached && resolved.is_some_and(|(_, takes)| takes);
+            return (helper || changed_boundary, takes);
         }
         let letters = option.strip_prefix('-').unwrap_or_default();
         for (at, letter) in letters.char_indices() {
             work::step();
-            if matches!(letter, 'A' | 'e') {
+            if matches!(letter, 'A' | 'R' | 'e') {
                 return (true, false);
             }
             // The rest of the word, or the next word, is this letter's value.
-            if values.contains(letter) {
-                return (false, letters[at + letter.len_utf8()..].is_empty());
+            if sudo_value_letter(letter, options) {
+                return (
+                    changed_boundary,
+                    letters[at + letter.len_utf8()..].is_empty(),
+                );
+            }
+            if !flags.contains(letter) {
+                return (changed_boundary, false);
             }
         }
-        (false, false)
+        (changed_boundary, false)
     };
     // Whether sudo's option scan, from each word on, reaches a helper: the
     // scan from a word only depends on that word and the scan after it

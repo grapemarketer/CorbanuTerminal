@@ -66,8 +66,8 @@ fn in_workspace(files: &[(&str, &str)], line: &str) -> Option<ProtectedActionKin
 }
 
 /// #1773: sudo's chroot option, unambiguous value-taking long-option
-/// prefixes and clusters with an unknown letter before a known value option
-/// all leave the real program after the option's value.
+/// prefixes and value-taking short-option clusters all leave the real program
+/// after the option's value.
 #[test]
 fn issue_1773_sudo_value_options_keep_the_real_program() {
     let words = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
@@ -76,7 +76,13 @@ fn issue_1773_sudo_value_options_keep_the_real_program() {
         ("sudo --chroot dir ./x", vec![0, 3]),
         ("sudo -R x sudo ./x", vec![0, 3, 4]),
         ("sudo --us root ./x", vec![0, 3]),
-        ("sudo -xu root ./x", vec![0, 3]),
+        ("sudo -Nu root ./x", vec![0, 3]),
+        ("sudo -cu ./x true", vec![0, 2]),
+        ("sudo -au ./x true", vec![0, 2]),
+        ("sudo -cR ./root /bin/sh", vec![0, 2]),
+        ("sudo --auth-type basic ./x", vec![0, 3]),
+        ("sudo --login-class default ./x", vec![0, 3]),
+        ("sudo --login ./x", vec![0, 2]),
         ("sudo --us root sudo ./x", vec![0, 3, 4]),
         ("sudo -R x sudo -A true", vec![0, 3, 5]),
         ("sudo -R x sudo -e f", vec![0, 3, 5]),
@@ -88,38 +94,45 @@ fn issue_1773_sudo_value_options_keep_the_real_program() {
     }
 }
 
-/// #1773: every line that was quiet on main follows the actual script after
-/// sudo has consumed its value option. Harmless scripts remain quiet.
+/// #1773 must not make an invocation quieter than main. Chroots can execute
+/// code in their new root, and every newly consumed value boundary stays
+/// fail-closed until a separate classifier rule can judge it safely.
 #[cfg(unix)]
 #[test]
-fn issue_1773_sudo_value_options_read_the_script_that_runs() {
-    let harmful = "echo x >> ~/.zshenv\n";
-    let mut wrong = Vec::new();
-    for line in [
-        "sudo -R x ./x",
-        "sudo -R sub ./x",
-        "sudo --us root ./x",
-        "sudo -xu root ./x",
-        "sudo -R x sudo ./x",
-        "sudo --us root sudo ./x",
-    ] {
-        if in_workspace(&[("x", harmful), ("sub/x", harmful)], line).is_none() {
-            wrong.push(line);
-        }
-    }
-    assert_eq!(wrong, Vec::<&str>::new(), "should ask");
+fn issue_1773_changed_sudo_boundaries_remain_unseen_code() {
+    use ProtectedActionKind::UnseenCode;
 
     for line in [
-        "sudo -R x ./x",
-        "sudo -R sub ./x",
-        "sudo --us root ./x",
-        "sudo -xu root ./x",
+        "sudo -R ./root /bin/sh -c true",
+        "sudo --chroot=./root /bin/true",
+        "sudo -Rroot /bin/true",
+        "sudo --chr -C 3 ./x",
+        "sudo -R x sudo ./x",
+        "sudo --us root true",
+        "sudo -Nu root true",
+        "sudo -a root true",
+        "sudo --auth-type basic true",
     ] {
-        if in_workspace(&[("x", "true\n"), ("sub/x", "true\n")], line).is_some() {
-            wrong.push(line);
-        }
+        assert_eq!(script(line), Some(UnseenCode), "{line}");
     }
-    assert_eq!(wrong, Vec::<&str>::new(), "should be quiet");
+
+    let harmful = "echo x >> ~/.zshenv\n";
+    for line in ["sudo -cu ./x true", "sudo -au ./x true"] {
+        assert!(
+            in_workspace(&[("x", harmful)], line).is_some(),
+            "{line} should read the real script"
+        );
+    }
+
+    let words = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(
+        indirect::programs(&words("sudo -xu root ./x")),
+        vec![0, 2],
+        "an unknown sudo option stops option scanning"
+    );
+    for line in ["sudo --user root true", "sudo -u root true", "sudo -N true"] {
+        assert_eq!(script(line), None, "{line}");
+    }
 }
 
 /// #1773: after those options, a nested sudo's helper options are read rather
@@ -135,11 +148,7 @@ fn issue_1773_sudo_value_options_do_not_hide_helpers() {
     ] {
         assert_eq!(script(line), Some(UnseenCode), "{line}");
     }
-    for line in [
-        "sudo -R x true",
-        "sudo --us root true",
-        "sudo -xu root true",
-    ] {
+    for line in ["sudo --user root true", "sudo -u root true"] {
         assert_eq!(script(line), None, "{line}");
     }
 }
@@ -151,7 +160,7 @@ fn issue_1773_sudo_value_option_checks_are_linear() {
     for (label, unit) in [
         ("sudo chroot options", "-R x "),
         ("sudo abbreviated long options", "--us root "),
-        ("sudo unknown-letter clusters", "-xu root "),
+        ("sudo no-update clusters", "-Nu root "),
     ] {
         work::assert_linear(label, |scale| {
             let line = format!("sudo {}./x", unit.repeat(400 * scale));
@@ -216,6 +225,11 @@ fn issue_1482_wrapper_option_values_are_not_the_command() {
         }
     }
     assert_eq!(wrong, Vec::<&str>::new(), "should ask");
+    assert_eq!(
+        script("sudo --chr -C 3 ./x"),
+        Some(ProtectedActionKind::UnseenCode),
+        "a chroot stays fail-closed even though 3 is the parsed command"
+    );
     for line in [
         "sudo -nC 3 sh x",
         "sudo -nC3 sh x",
