@@ -27,7 +27,6 @@ use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::AddMandatoryAce;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
@@ -181,13 +180,13 @@ fn isolated_base() -> tempfile::TempDir {
 /// each new writable-root capability SID Modify there and keeps it, so a test
 /// machine's temporary folder gains a grant per test home (about 25 per
 /// whole-crate run on CI), and with a copy every object of a case's trees
-/// carried them all. The walks' time grew with them (the deep and wide cases
-/// went from 22 s to 100 s after two whole-crate runs) until nextest killed
-/// them at 60 s.
+/// carried them all. The walks' time grew with them (the label walk's deep
+/// and wide cases went from 22 s to 100 s after two whole-crate runs) until
+/// nextest killed them at 60 s. Auto-inherited (`AI`), as a real parent is.
 fn own_dacl(path: &Path) {
     let user = crate::deny_read_sessions::current_user_sid().expect("user SID");
     let sddl = to_wide(format!(
-        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})"
+        "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})"
     ));
     let mut psd: *mut c_void = std::ptr::null_mut();
     // SAFETY: a valid SDDL string and path; the descriptor is freed below.
@@ -211,9 +210,11 @@ fn own_dacl(path: &Path) {
         LocalFree(psd as HLOCAL);
         assert_ne!(set, 0, "set the DACL of {}: {error}", path.display());
     }
-    let sddl = full_sddl(path);
+    // The DACL only: the label, which may still be inherited here, is
+    // `protect_label`'s.
+    let sddl = dacl_sddl(path);
     assert!(
-        sddl.contains("D:P") && !sddl.contains("ID;"),
+        sddl.starts_with("D:P") && !sddl.contains("ID;"),
         "{} does not have its own DACL: {sddl}",
         path.display()
     );
