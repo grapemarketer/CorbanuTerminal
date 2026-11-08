@@ -330,9 +330,10 @@ jobs:
       - name: Launch contract probes under the elevated sandbox
         if: ${{ !cancelled() }}
         shell: bash
-        # #1801's symbolic link case may not skip here.
+        # #1801's symbolic link and subst cases may not skip here.
         env:
           CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+          CORBANU_TEST_REQUIRE_SUBST: "1"
         run: |
           set -euo pipefail
           bin_dir="${CARGO_TARGET_DIR}/debug"

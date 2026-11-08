@@ -166,6 +166,15 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
             },
         ),
     ];
+    let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
+        Path::new("<read-only>"),
+        Path::new("<writable>"),
+    );
+    let refusal_start = refusal_start
+        .split("<writable>")
+        .next()
+        .expect("message names the writable folder")
+        .to_string();
     let mut outcomes = Vec::new();
     for (label, path) in denies {
         let (mut file_system, _) = base.to_runtime_permissions();
@@ -392,8 +401,10 @@ enum LinkKind {
 
 /// A link to `target`: a junction or folder symbolic link at `link`, or a
 /// `subst` drive (its root returned). `None` if this account may not make a
-/// symbolic link (a normal session without developer mode), unless
-/// `CORBANU_TEST_REQUIRE_SYMLINKS` is set (the elevated CI run).
+/// symbolic link (a normal session without developer mode) or a `subst`
+/// drive (a normal session on the CI runner gets "Access denied"), unless
+/// `CORBANU_TEST_REQUIRE_SYMLINKS` or `CORBANU_TEST_REQUIRE_SUBST` is set
+/// (the elevated CI run).
 #[allow(clippy::expect_used)] // test fixture setup
 fn make_link(kind: LinkKind, link: &Path, target: &Path) -> Option<AbsolutePathBuf> {
     let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
@@ -418,24 +429,23 @@ fn make_link(kind: LinkKind, link: &Path, target: &Path) -> Option<AbsolutePathB
                 None
             }
         },
-        LinkKind::Subst => Some(
-            ('M'..='Z')
+        LinkKind::Subst => {
+            let drive = ('M'..='Z')
                 .rev()
-                .find_map(|letter| {
-                    let drive = format!("{letter}:");
-                    if Path::new(&format!("{drive}\\")).exists() {
-                        return None;
-                    }
-                    std::process::Command::new("subst")
-                        .arg(&drive)
-                        .arg(target)
-                        .status()
-                        .ok()
-                        .filter(std::process::ExitStatus::success)
-                        .map(|_| absolute(Path::new(&format!("{drive}\\"))))
-                })
-                .expect("a free drive letter for subst"),
-        ),
+                .map(|letter| format!("{letter}:"))
+                .find(|drive| !Path::new(&format!("{drive}\\")).exists())
+                .expect("a free drive letter for subst");
+            let made = std::process::Command::new("subst")
+                .arg(&drive)
+                .arg(target)
+                .status()
+                .is_ok_and(|status| status.success());
+            assert!(
+                made || std::env::var_os("CORBANU_TEST_REQUIRE_SUBST").is_none(),
+                "subst {drive} failed"
+            );
+            made.then(|| absolute(Path::new(&format!("{drive}\\"))))
+        }
     }
 }
 
@@ -467,6 +477,15 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
     let codex_home_dir = tempfile::tempdir().expect("codex home");
     let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
 
+    let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
+        Path::new("<read-only>"),
+        Path::new("<writable>"),
+    );
+    let refusal_start = refusal_start
+        .split("<writable>")
+        .next()
+        .expect("message names the writable folder")
+        .to_string();
     let mut outcomes = Vec::new();
     // (label, cwd through a junction, writable through a link of this kind
     // (the writable folder is `out` otherwise), link target)
@@ -526,7 +545,7 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
             Some(kind) => {
                 let real_target = workspace.join(target.trim_end_matches('\\'));
                 let Some(link_root) = make_link(kind, &real_root.join("link"), &real_target) else {
-                    eprintln!("sec-win-1801 {label}: skipped: no symbolic link privilege");
+                    eprintln!("sec-win-1801 {label}: skipped: may not make this link here");
                     continue;
                 };
                 if matches!(kind, LinkKind::Subst) {
@@ -557,7 +576,9 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
             NetworkSandboxPolicy::Restricted,
         );
 
-        let script = format!("echo y> \"{}\"", writable.join("y.txt").as_path().display());
+        // Unquoted: `cmd /C` gets the script as one escaped argument, and the
+        // fixture paths have no spaces.
+        let script = format!("echo y> {}", writable.join("y.txt").as_path().display());
         let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
             Err(refused) => refused.to_string(),
             Ok(request) => {
@@ -569,14 +590,9 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
         };
         let written = lands_in.join("y.txt").exists();
         eprintln!("sec-win-1801 {label}: written={written} {outcome}");
-        let refused = outcome
-            == format!(
-                "unsupported operation: {}",
-                codex_sandboxing::writable_inside_read_only_refusal(
-                    real_docs.as_path(),
-                    writable.as_path(),
-                )
-            );
+        // The folders it names are spelled as the resolver has them (a
+        // `subst` drive is already resolved there).
+        let refused = outcome.starts_with(&format!("unsupported operation: {refusal_start}"));
         outcomes.push((label, refused, written));
         drop(subst);
     }
