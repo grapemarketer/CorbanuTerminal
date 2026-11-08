@@ -379,6 +379,8 @@ const PATH_BUILTINS: &[&str] = &[
 ];
 /// Bytes of command text one classification lexes; more fail closed.
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+/// #1774: `<<` in a line beyond which `SedScope::of` does not parse it.
+const MAX_SED_SCOPE_HEREDOCS: usize = 256;
 /// Script files one classification reads; more fail closed.
 const MAX_SCRIPT_FILES: usize = 16;
 /// Bytes of variable values one classification substitutes (#1065): a
@@ -1492,6 +1494,7 @@ impl SedScope {
     /// command there has a text-only program, and the line's other words
     /// carry no backslash or brace.
     fn of(command: &[String]) -> Option<Self> {
+        work::parse();
         let commands = codex_shell_command::bash::parse_shell_lc_plain_commands(command)?;
         let piped = codex_shell_command::bash::extract_bash_command(command)
             .is_some_and(|(_, script)| script.contains('|'));
@@ -2832,7 +2835,7 @@ impl Classifier {
         let closes = unknown_folder::sudo_close_from(words, self.sudo_unsure());
         for (position, word) in words.iter().enumerate() {
             work::step();
-            let written = simple.writes_to.contains(&position)
+            let written = work::contains(&simple.writes_to, &position)
                 || writer.is_some_and(|(index, writes)| writes && position > index);
             // A folder flag's value is where the command runs, not what it reads.
             let mut folder_value = false;
@@ -2862,7 +2865,7 @@ impl Classifier {
             previous = Some(word.as_str());
             // #1159: a file written whose name holds output the classifier
             // cannot see (`tee "$(cat f)"`, `> $(cat f)`) may be any file.
-            if (simple.writes_to.contains(&position)
+            if (work::contains(&simple.writes_to, &position)
                 || (path_writer.is_some_and(|index| position > index)
                     && simple.stdin_from != Some(position)
                     && simple.here_string != Some(position)))
@@ -3745,3 +3748,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
 mod tainted_action_refusal_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_linear_tests.rs"]
+mod tainted_action_linear_tests;

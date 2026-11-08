@@ -31,6 +31,7 @@ use std::cell::Cell;
 thread_local! {
     static STEPS: Cell<u64> = const { Cell::new(0) };
     static BYTES: Cell<u64> = const { Cell::new(0) };
+    static PARSES: Cell<u64> = const { Cell::new(0) };
 }
 
 /// One loop iteration (or recursive call) of classifier work.
@@ -38,6 +39,32 @@ thread_local! {
 pub(super) fn step() {
     #[cfg(test)]
     STEPS.with(|steps| steps.set(steps.get() + 1));
+}
+
+/// #1774: an unbounded parse by the bash grammar (`SedScope::of`). Its
+/// cost is outside our loops and allocator (the grammar's here-document
+/// scanner grows with the square of the here-documents left open), so tests
+/// count the parses themselves.
+#[inline(always)]
+pub(super) fn parse() {
+    #[cfg(test)]
+    PARSES.with(|parses| parses.set(parses.get() + 1));
+}
+
+/// The unbounded parses `run` makes on this thread (see [`parse`]).
+#[cfg(test)]
+pub(super) fn parses(run: impl FnOnce()) -> u64 {
+    let before = PARSES.with(Cell::get);
+    run();
+    PARSES.with(Cell::get) - before
+}
+
+/// #1774: `list.contains(value)`, charging the elements it looks at.
+#[inline(always)]
+pub(super) fn contains(list: &[usize], value: &usize) -> bool {
+    let found = list.iter().position(|item| item == value);
+    scanned(found.map_or(list.len(), |at| at + 1));
+    found.is_some()
 }
 
 /// A reverse substring search whose scan is visible to the work counter.
