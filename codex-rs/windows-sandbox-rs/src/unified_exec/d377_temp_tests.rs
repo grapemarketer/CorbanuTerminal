@@ -103,6 +103,7 @@ fn sec_win_d377_elevated_command_gets_its_own_temp_folder() {
     assert_eq!(fs::read_to_string(&existing).expect("read"), "other");
     assert!(!new.exists());
     let _ = fs::remove_file(&existing);
+    crate::session_temp::end_session_temp_in(&temp);
     record_setup(home.path());
 }
 
@@ -192,6 +193,9 @@ fn sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link() {
     let temp = user_owned_test_root();
     let target = user_owned_test_root();
     let script = root.path().join("d377-link.cmd");
+    // Empty, rename or remove the folder, and (had that worked) put a
+    // junction in its place. Making the folder itself a mount point needs it
+    // empty: `session_temp_tests` shows that is refused while it is held.
     fs::write(
         &script,
         format!(

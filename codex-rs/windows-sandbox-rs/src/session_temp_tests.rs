@@ -96,7 +96,7 @@ fn temp_points_at_a_private_folder_of_the_session() {
     assert!(dacl_is_protected(&dir), "inherits from the temp folder");
     // Held: not removed as left behind, nor deletable meanwhile.
     assert!(!is_left_behind(&dir, current_user_sid().ok().as_deref()));
-    assert!(std::fs::remove_dir(&dir).is_err());
+    assert!(std::fs::rename(&dir, base.path().join("moved")).is_err());
     // Its marker can be neither deleted nor written, so the folder cannot be
     // emptied (and made a link).
     let marker = dir.join(MARKER);

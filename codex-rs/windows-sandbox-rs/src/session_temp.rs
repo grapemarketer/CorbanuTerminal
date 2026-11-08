@@ -80,6 +80,9 @@ pub(crate) struct Hold {
 
 struct SessionTemp {
     dir: PathBuf,
+    /// `dir`'s key, taken when it was made (the key of what is there now
+    /// could be a link's target).
+    dir_key: String,
     hold: Hold,
     /// The `CODEX_HOME`s that recorded a capability SID for `dir`.
     homes: BTreeSet<PathBuf>,
@@ -157,9 +160,8 @@ fn remove_session_temp(session: SessionTemp) {
 }
 
 fn forget_session_cap_sids(session: &SessionTemp) {
-    let key = canonical_path_key(&session.dir);
     for home in &session.homes {
-        let _ = forget_writable_root_cap_sids(home, |recorded| recorded == key);
+        let _ = forget_writable_root_cap_sids(home, |recorded| recorded == session.dir_key);
     }
 }
 
@@ -256,6 +258,7 @@ fn session_temp_for(base: &Path, configured: &[PathBuf], codex_home: &Path) -> R
     remove_left_behind(base, codex_home);
     let (dir, hold) = make_session_temp(base)?;
     let session = SessionTemp {
+        dir_key: canonical_path_key(&dir),
         dir: dir.clone(),
         hold,
         homes: BTreeSet::from([codex_home.to_path_buf()]),
@@ -286,8 +289,14 @@ fn make_session_temp(base: &Path) -> Result<(PathBuf, Hold)> {
         .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(&dir)
-        .with_context(|| format!("open {}", dir.display()))?;
+        .open(&dir);
+    let hold = match hold {
+        Ok(hold) => hold,
+        Err(err) => {
+            let _ = std::fs::remove_dir(&dir);
+            return Err(anyhow::Error::new(err).context(format!("open {}", dir.display())));
+        }
+    };
     // Protected and the user's only, so no grant setup puts on the folder
     // reaches it; the sharing keeps anyone from deleting, renaming or
     // writing it while the session lives.

@@ -2278,7 +2278,12 @@ mod tests {
         );
         let workspace_roots = workspace_roots_for(command_cwd.as_path());
         let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
-        let env_map = HashMap::from([("TEMP".to_string(), temp.display().to_string())]);
+        // Both, so the session temp folder (D377) is made in `temp`, not in
+        // this process's temp folder.
+        let env_map = HashMap::from([
+            ("TEMP".to_string(), temp.display().to_string()),
+            ("TMP".to_string(), temp.display().to_string()),
+        ]);
         let request = super::SandboxSetupRequest {
             permissions: &permissions,
             command_cwd: &command_cwd,
@@ -2289,6 +2294,7 @@ mod tests {
 
         let deny_write_paths =
             super::build_payload_deny_write_paths(&request, Some(explicit.clone()));
+        crate::session_temp::end_session_temp_in(&temp);
 
         let mut expected: HashSet<PathBuf> = explicit.into_iter().collect();
         expected.extend([command_cwd.join(".git"), other.join(".Agents")]);
