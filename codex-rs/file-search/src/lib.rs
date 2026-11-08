@@ -698,6 +698,11 @@ mod tests {
         assert_eq!(file_name_from_path(""), "");
     }
 
+    /// Ceiling for a wait on a session's report. Each wait returns as soon as
+    /// the session reports, so this only bounds a hung session; loaded Windows
+    /// CI runners have missed tighter bounds (#1839).
+    const SESSION_WAIT: Duration = Duration::from_secs(60);
+
     #[derive(Default)]
     struct RecordingReporter {
         updates: Mutex<Vec<FileSearchSnapshot>>,
@@ -811,7 +816,7 @@ mod tests {
         session.update_query("file-01");
         thread::sleep(Duration::from_millis(20));
         let second_snapshot = reporter.snapshot();
-        let _ = reporter.wait_for_complete(Duration::from_secs(5));
+        assert!(reporter.wait_for_complete(SESSION_WAIT));
         let completed_snapshot = reporter.snapshot();
 
         assert!(second_snapshot.scanned_file_count >= first_snapshot.scanned_file_count);
@@ -831,7 +836,7 @@ mod tests {
         .expect("session");
 
         session.update_query("file-0");
-        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        let completed = reporter.wait_for_complete(SESSION_WAIT);
 
         assert!(completed);
         let updates = reporter.updates();
@@ -853,11 +858,11 @@ mod tests {
         .expect("session");
 
         session.update_query("alpha");
-        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+        assert!(reporter.wait_for_complete(SESSION_WAIT));
         let updates_before = reporter.updates().len();
 
         session.update_query("beta");
-        assert!(reporter.wait_for_updates_at_least(updates_before + 1, Duration::from_secs(5),));
+        assert!(reporter.wait_for_updates_at_least(updates_before + 1, SESSION_WAIT));
 
         let updates = reporter.updates();
         let last_update = updates.last().cloned().expect("update");
@@ -884,7 +889,7 @@ mod tests {
         .expect("session");
 
         session.update_query("asdf");
-        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+        assert!(reporter.wait_for_complete(SESSION_WAIT));
 
         let completed_snapshot = reporter.snapshot();
         assert_eq!(completed_snapshot.matches, Vec::new());
@@ -893,7 +898,7 @@ mod tests {
         reporter.clear();
 
         session.update_query("asdfa");
-        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+        assert!(reporter.wait_for_complete(SESSION_WAIT));
         assert!(!reporter.updates().is_empty());
     }
 
@@ -927,7 +932,7 @@ mod tests {
         thread::sleep(Duration::from_millis(5));
         drop(session_a);
 
-        let completed = reporter_b.wait_for_complete(Duration::from_secs(5));
+        let completed = reporter_b.wait_for_complete(SESSION_WAIT);
         assert_eq!(completed, true);
     }
 
@@ -944,13 +949,13 @@ mod tests {
         .expect("session");
 
         session.update_query("zzzzzzzz");
-        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        let completed = reporter.wait_for_complete(SESSION_WAIT);
         assert!(completed);
 
         reporter.clear();
 
         session.update_query("zzzzzzzzq");
-        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        let completed = reporter.wait_for_complete(SESSION_WAIT);
         assert!(completed);
 
         let updates = reporter.updates();
