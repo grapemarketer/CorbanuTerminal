@@ -825,6 +825,10 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     ensure_non_interactive_pager(env_map);
     inherit_path_env(env_map);
     inject_git_safe_directory(env_map, cwd);
+    // D377: the session's own temp folder, never the user's whole `%TEMP%`.
+    // Without it the command does not start: it would get no writable
+    // temp folder (setup refreshes outside a launch go on without one).
+    crate::session_temp::use_session_temp(&permissions, env_map, codex_home)?;
 
     // Use a temp-based log dir that the sandbox user can write.
     let sandbox_base = codex_home.join(".sandbox");

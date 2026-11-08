@@ -57,7 +57,20 @@ fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("create cap sid dir {}", dir.display()))?;
     }
     let json = serde_json::to_string(caps)?;
-    fs::write(path, json).with_context(|| format!("write cap sid file {}", path.display()))?;
+    // Whole or not at all: a reader never sees a half-written file.
+    let mut staging = path.as_os_str().to_os_string();
+    staging.push(format!(
+        ".{}-{:08x}.tmp",
+        std::process::id(),
+        SmallRng::from_entropy().next_u32()
+    ));
+    let staging = PathBuf::from(staging);
+    fs::write(&staging, json)
+        .with_context(|| format!("write cap sid file {}", staging.display()))?;
+    fs::rename(&staging, path).map_err(|err| {
+        let _ = fs::remove_file(&staging);
+        anyhow::Error::new(err).context(format!("replace cap sid file {}", path.display()))
+    })?;
     Ok(())
 }
 
@@ -118,6 +131,38 @@ pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<
     caps.writable_root_by_path.insert(key, sid.clone());
     persist_caps(&path, &caps)?;
     Ok(sid)
+}
+
+/// The capability SID recorded for the writable root `root`, if any; never
+/// makes one.
+pub(crate) fn existing_writable_root_cap_sid(codex_home: &Path, root: &Path) -> Option<String> {
+    if !cap_sid_file(codex_home).exists() {
+        return None;
+    }
+    load_or_create_cap_sids(codex_home)
+        .ok()?
+        .writable_root_by_path
+        .get(&canonical_path_key(root))
+        .cloned()
+}
+
+/// Forgets the writable-root capability SIDs whose key `forget` picks (D377:
+/// session temp folders that are gone).
+pub(crate) fn forget_writable_root_cap_sids(
+    codex_home: &Path,
+    forget: impl Fn(&str) -> bool,
+) -> Result<()> {
+    let path = cap_sid_file(codex_home);
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let before = caps.writable_root_by_path.len();
+    caps.writable_root_by_path.retain(|key, _| !forget(key));
+    if caps.writable_root_by_path.len() != before {
+        persist_caps(&path, &caps)?;
+    }
+    Ok(())
 }
 
 pub fn workspace_write_cap_sid_for_root(

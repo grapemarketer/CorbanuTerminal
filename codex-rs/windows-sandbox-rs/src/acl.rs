@@ -742,6 +742,28 @@ pub unsafe fn has_deny_delete_child_ace(
     Ok(present)
 }
 
+/// D377: removes every explicit allow entry for any of `psids` on `path`, and
+/// the copies its children inherited. Returns whether an entry was removed.
+///
+/// # Safety
+/// Caller must pass valid SID pointers and an existing path.
+pub unsafe fn remove_explicit_allow_aces(path: &Path, psids: &[*mut c_void]) -> Result<bool> {
+    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let result = remove_aces_from(DaclTarget::Name(path), p_sd, p_dacl, |_, ace| {
+        let hdr = &*(ace as *const ACE_HEADER);
+        if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE || (hdr.AceFlags & INHERITED_ACE) != 0 {
+            return false;
+        }
+        let sid = (ace as usize + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
+            as *mut c_void;
+        psids.iter().any(|psid| EqualSid(sid, *psid) != 0)
+    });
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    result
+}
+
 /// #1506 item 1 (D261): removes the explicit entry denying `psid` exactly
 /// `FILE_DELETE_CHILD`, with the inheritance [`add_deny_delete_child_ace`]
 /// gives it, and the copies subdirectories inherited. An entry with other

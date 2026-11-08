@@ -136,5 +136,7 @@ fn win_1805_elevated_command_gets_one_path_and_start_process_runs() {
         argv,
         caller_env(&tools, temp.path()),
     ));
+    // D377: the session's folder in `temp` is held until ended.
+    crate::session_temp::end_session_temp_in(temp.path());
     assert_one_path("elevated", &stdout, exit_code, codex_home.path());
 }
