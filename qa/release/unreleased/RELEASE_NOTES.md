@@ -573,9 +573,12 @@ asking and now ask first:
   can write code into those tables still reads its options:
   `o=$(cat f); zstyle $o :x y functions`, `zstyle -a $(cat f)`,
   `zselect -t 0 -r 0 -A $n`, `zsystem flock -t 0 -f $n file` (#1704).
-  `print -v`, `printf -v` and `getopts` count as such commands now too.
-  `stat -f %m "$f"`, `printf "$fmt"` and `wait $pid` stay quiet, but macOS
-  `stat -f … $f` with an unquoted variable now asks; quote it (`"$f"`).
+  `print -v`, `printf -v` and `getopts` count as such commands now too. So
+  an unquoted variable or `$(…)` among the options of `print`, `printf`,
+  `set`, `stat`, `read`, `mapfile` or `vared` can now ask
+  (`print -r $(cat f)`, `stat -f %m $(cat f)`, `read -d $(cat f)`); quote
+  it, or put it after `--`. `print -r -- $x`, `stat -f %m "$f"`,
+  `printf "$fmt"` and `wait $pid` stay quiet.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
@@ -597,6 +600,15 @@ thanks to @grapemarketer). A line with many `sed` commands and long output
 names is now checked within a fixed size budget; past it, its output files
 count as one unknown file, the cautious reading (#1587, #1132, thanks to
 @0xzoz).
+
+## Bare git repositories a command plants
+
+- **New advice in `docs/sandbox.md`** (#1775). A sandboxed command can make a
+  bare repository in any folder it may write to, and git run there or in a
+  folder below it later runs what its config names. Corbanu Terminal
+  doesn't check for these, on Windows or elsewhere. The guide recommends
+  `git config --global safe.bareRepository explicit` (git 2.45 or later)
+  and explains what it doesn't cover.
 
 ## Windows sandbox
 
@@ -664,21 +676,15 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   git runs them outside the sandbox. Commands can still create a `.git`
   (`git init` works). A `.git` that is a link is reported after every
   command. `.git` folders deeper inside aren't checked.
-- **New advice in `docs/sandbox.md`: make git refuse bare repositories a
-  command plants** (#1775). A sandboxed command can make a bare repository
-  in any folder it may write to, and git run there later runs what its
-  config names. Corbanu Terminal doesn't check for these, on Windows or
-  elsewhere. The guide recommends
-  `git config --global safe.bareRepository explicit` (git 2.45 or later)
-  and explains what it doesn't cover.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
-  is protected from the first command** (#1758). In a folder with no
-  `.git`, a configured read-only `.git\hooks` makes the sandbox create
-  `.git` before the command starts. The command that caused this could
-  still write `.git\config`, `HEAD` or `objects`; only later commands found
-  `.git` protected. Now that first command can't either, as in the
-  non-admin sandbox. The same holds for a `.codex` or `.agents` folder made
-  this way.
+  is protected from the first command** (#1758). At the top of a writable
+  folder (other than `%TEMP%`) with no `.git`, a configured read-only
+  `.git\hooks` makes the sandbox create `.git` before the command starts.
+  The command that caused this could still write `.git\config`, `HEAD` or
+  `objects`; only later commands found `.git` protected. Now that first
+  command can't either, as in the non-admin sandbox. The same holds for a
+  `.codex` or `.agents` folder made this way. A deeper one, such as
+  `sub\.git` for `sub\.git\hooks`, still has only `hooks` protected.
 - **Default (elevated) sandbox setup no longer fails now and then where
   Windows requires complex passwords** (#1776). Setup gives the sandbox's
   user accounts a fresh random password, and about one setup in 4,500 drew
