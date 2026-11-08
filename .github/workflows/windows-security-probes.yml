@@ -562,7 +562,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#300 regressions failed in a normal session" }
             # D331: the agent path refuses a writable folder inside a read-only
             # one, also through a junction, symbolic link or subst drive (#1801).
-            Assert-Tests $core 'sec_win_d331' 2
+            Assert-Tests $core 'sec_win_d331' 3
             & $medium -Program $core -Arguments @('sec_win_d331', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D331 agent-path refusal failed in a normal session" }
             $sandboxing = Get-TestExe @('-p', 'codex-sandboxing', '--lib')
