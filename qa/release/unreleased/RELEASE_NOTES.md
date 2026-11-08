@@ -702,9 +702,11 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   It (and the exec server) refused such a working folder with "cannot enforce split writable root
   sets directly", because it compared the folders by spelling. It now
   compares their real paths, so these commands run as they would from the
-  real path, with the same read-only folders. A working folder that leads
-  out of the workspace is still refused. The agent's own commands and the
-  default (elevated) sandbox weren't affected.
+  real path, with the same read-only folders. From a mapped drive the
+  command runs but can't write anywhere: the non-admin sandbox can't write
+  through a network path. A working folder that leads out of the workspace
+  is still refused. The agent's own commands and the default (elevated)
+  sandbox weren't affected.
 - **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
   or `.agents` folder is refused for older workspace-write profiles too**
   (#1810, D331). A profile in the older workspace-write format, for example
