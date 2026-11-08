@@ -124,6 +124,18 @@ pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen
         match skipped_words(&name, &words[at..]) {
             Some(skip) => from = (at + skip).min(words.len()),
             None if name == "coproc" => from = at + 1,
+            // #1845: a zsh `[[ … ]]` test runs the command after it in a
+            // short loop (`if [[ 1 ]] read -A functions`, SHORT_LOOPS):
+            // walk on past its `]]`.
+            None if name == "[[" => {
+                match words[at..].iter().position(|word| {
+                    work::step();
+                    word == "]]"
+                }) {
+                    Some(end) => from = at + end + 1,
+                    None => return false,
+                }
+            }
             None => return false,
         }
     }
