@@ -1565,6 +1565,7 @@ impl SedScope {
         // then gives the same answer without its cost, which grows faster
         // than the text for some inputs (long runs of `<<E`).
         let (_, script) = codex_shell_command::bash::extract_bash_command(command)?;
+        let piped = script.contains('|');
         if !script.contains("sed") {
             return None;
         }
@@ -1577,8 +1578,6 @@ impl SedScope {
         }
         work::parse();
         let commands = codex_shell_command::bash::parse_shell_lc_plain_commands(command)?;
-        let piped = codex_shell_command::bash::extract_bash_command(command)
-            .is_some_and(|(_, script)| script.contains('|'));
         let mut scope = Self {
             programs: Vec::new(),
             others: Vec::new(),

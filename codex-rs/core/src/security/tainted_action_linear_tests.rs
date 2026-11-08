@@ -87,9 +87,11 @@ fn issue_1774_argv_assignments_are_linear() {
     }
 }
 
-/// Item 2: `SedScope::of` parsed every line with the bash grammar, whose
-/// here-document scanner takes time growing with the square of the
-/// here-documents left open; the work counter cannot see inside it.
+/// Item 2, a smoke test: the classifier's own work on long here-document
+/// runs stays linear. It passes on main too: the cost was in the bash
+/// grammar, whose allocations go through C `malloc` and whose loops the work
+/// counter cannot see. The guard for the fix is the parse count in
+/// `issue_1774_sed_scope_parses_only_lines_that_can_have_one`.
 #[test]
 fn issue_1774_here_document_runs_are_linear() {
     for (label, line) in [
@@ -144,6 +146,7 @@ fn issue_1774_leading_write_runs_are_linear() {
     for (label, line) in [
         ("leading writes", "{}./x"),
         ("leading writes then a write", "{}echo x >> ~/.zshenv"),
+        ("leading writes on export", "export {}PAGER=less"),
     ] {
         work::assert_linear(label, |scale| {
             let _ = script(&line.replace("{}", &">a ".repeat(400 * scale)));
