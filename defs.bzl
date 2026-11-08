@@ -253,8 +253,9 @@ def codex_rust_crate(
             Bazel reserves the cores its tests use instead of the default one.
         unit_test_alone: Full names of library unit tests that bound wall-clock
             time. The unit-test target skips them, and a `<name>-unit-tests-alone`
-            target runs them one at a time with the same tags, so no other test
-            of the crate takes their cores. Both targets then pass libtest args,
+            target runs them one at a time, tagged `exclusive`: Bazel runs it
+            after every build action and every other test, so nothing else on
+            the machine takes their cores. Both targets then pass libtest args,
             which the launcher runs as given: `--test_filter` and
             `CODEX_BAZEL_TEST_SKIP_FILTERS` no longer apply to them, and sharding
             is refused.
@@ -390,7 +391,7 @@ def codex_rust_crate(
                 test_bin = ":" + unit_test_binary,
                 workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
                 args = ["--exact", "--test-threads=1"] + unit_test_alone,
-                tags = test_tags + unit_test_tags,
+                tags = test_tags + unit_test_tags + ["exclusive"],
             )
 
         maybe_deps += [name]

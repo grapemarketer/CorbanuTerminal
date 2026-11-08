@@ -20,10 +20,11 @@ codex_rust_crate(
     # sessions on a 4-worker runtime. With compiles beside it on the 4-core
     # Windows runner, that test went past its bound (#905). Reserve 4 cores.
     unit_test_tags = ["cpu:4"],
-    # Two of those bounds still failed with the four cores reserved, because
-    # libtest ran three other state tests beside them (#905, #1881). These
-    # run in `state-unit-tests-alone`, one at a time, and are skipped here.
-    # Their cores are still reserved (`cpu:4`), so no compile runs beside them.
+    # Two of those bounds still failed on the native Windows runner while
+    # other work kept its four cores busy (#905, #1881): the state unit tests
+    # took 750 s there, not the usual 100-210 s. These two run in
+    # `state-unit-tests-alone`, one at a time and `exclusive` (after every
+    # build action and every other test), and are skipped here.
     unit_test_alone = [
         "runtime::accounting::store::tests::expiry_at_the_detail_horizon_never_holds_up_another_writer",
         "runtime::accounting::store::writer::tests::ten_sessions_on_one_home_wait_briefly_and_lose_no_record",
