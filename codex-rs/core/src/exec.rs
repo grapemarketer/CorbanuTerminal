@@ -1248,6 +1248,10 @@ fn synthetic_exit_status_for_code(code: i32) -> ExitStatus {
     synthetic_exit_status(code)
 }
 
+#[cfg(all(test, windows))]
+#[path = "exec_windows_unc_tests.rs"]
+mod windows_unc_tests;
+
 #[cfg(test)]
 #[path = "exec_tests.rs"]
 mod tests;
