@@ -1,4 +1,7 @@
 use super::windows_common::finish_driver_spawn;
+use crate::capture_pipes::OUTPUT_DRAIN_TIMEOUT;
+use crate::capture_pipes::PipeReader;
+use crate::capture_pipes::finish_each;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
@@ -8,7 +11,6 @@ use crate::logging::log_success;
 use crate::process::ConsoleMode;
 use crate::process::StderrMode;
 use crate::process::StdinMode;
-use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
 use crate::spawn_prep::SpawnPrepOptions;
@@ -48,10 +50,33 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
+/// Reads one output pipe into its channel. Its only work besides reading is
+/// a channel send, so cancelling its read cannot cut a chunk short.
+type OutputReader = PipeReader<broadcast::Sender<Vec<u8>>>;
+
+/// The session's output readers: the ConPTY's, or stdout's and stderr's.
+enum OutputReaders {
+    Pty(OutputReader),
+    Pipes([OutputReader; 2]),
+}
+
+impl OutputReaders {
+    /// Once the command has exited, lets the readers read what is left for
+    /// at most [`OUTPUT_DRAIN_TIMEOUT`], then cancels them (#1861): a process
+    /// the command left running may hold the pipes' write ends. Their
+    /// channels close when this returns.
+    fn finish(self) {
+        match self {
+            Self::Pty(reader) => drop(finish_each([reader], OUTPUT_DRAIN_TIMEOUT)),
+            Self::Pipes(readers) => drop(finish_each(readers, OUTPUT_DRAIN_TIMEOUT)),
+        }
+    }
+}
+
 struct LegacyProcessHandles {
     process: PROCESS_INFORMATION,
     job: Arc<JobObject>,
-    output_join: std::thread::JoinHandle<()>,
+    output_readers: OutputReaders,
     writer_handle: tokio::task::JoinHandle<()>,
     hpc: Option<HANDLE>,
     conpty_owner: Option<ConptyInstance>,
@@ -73,7 +98,7 @@ fn spawn_legacy_process(
     writer_rx: mpsc::Receiver<Vec<u8>>,
     logs_base_dir: Option<&Path>,
 ) -> Result<LegacyProcessHandles> {
-    let (pi, job, output_join, writer_handle, hpc, conpty_owner, desktop) = if tty {
+    let (pi, job, output_readers, writer_handle, hpc, conpty_owner, desktop) = if tty {
         let (pi, mut conpty) = spawn_conpty_process_as_user(
             h_token,
             command,
@@ -86,13 +111,22 @@ fn spawn_legacy_process(
             .job()
             .ok_or_else(|| anyhow::anyhow!("spawned ConPTY is missing its process job"))?;
         let hpc = conpty.raw_handle();
-        let output_join = spawn_output_reader(conpty.take_output_read(), stdout_tx);
+        let output_readers =
+            OutputReaders::Pty(spawn_output_reader(conpty.take_output_read(), stdout_tx));
         let writer_handle = spawn_input_writer(
             Some(conpty.take_input_write()),
             writer_rx,
             /*normalize_newlines*/ true,
         );
-        (pi, job, output_join, writer_handle, hpc, Some(conpty), None)
+        (
+            pi,
+            job,
+            output_readers,
+            writer_handle,
+            hpc,
+            Some(conpty),
+            None,
+        )
     } else {
         let pipe_handles = spawn_process_with_pipes(
             h_token,
@@ -109,18 +143,15 @@ fn spawn_legacy_process(
             use_private_desktop,
             logs_base_dir,
         )?;
-        let stdout_join = spawn_output_reader(pipe_handles.stdout_read, stdout_tx);
+        let stdout_reader = spawn_output_reader(pipe_handles.stdout_read, stdout_tx);
         let Some(stderr_read) = pipe_handles.stderr_read else {
             anyhow::bail!("separate stderr handle should be present");
         };
         let Some(stderr_tx) = stderr_tx else {
             anyhow::bail!("separate stderr channel should be present");
         };
-        let stderr_join = spawn_output_reader(stderr_read, stderr_tx);
-        let output_join = std::thread::spawn(move || {
-            let _ = stdout_join.join();
-            let _ = stderr_join.join();
-        });
+        let stderr_reader = spawn_output_reader(stderr_read, stderr_tx);
+        let output_readers = OutputReaders::Pipes([stdout_reader, stderr_reader]);
         let writer_handle = spawn_input_writer(
             pipe_handles.stdin_write,
             writer_rx,
@@ -129,7 +160,7 @@ fn spawn_legacy_process(
         (
             pipe_handles.process,
             pipe_handles.job(),
-            output_join,
+            output_readers,
             writer_handle,
             None,
             None,
@@ -139,7 +170,7 @@ fn spawn_legacy_process(
     Ok(LegacyProcessHandles {
         process: pi,
         job,
-        output_join,
+        output_readers,
         writer_handle,
         hpc,
         conpty_owner,
@@ -148,11 +179,8 @@ fn spawn_legacy_process(
     })
 }
 
-fn spawn_output_reader(
-    output_read: HANDLE,
-    output_tx: broadcast::Sender<Vec<u8>>,
-) -> std::thread::JoinHandle<()> {
-    read_handle_loop(output_read, move |chunk| {
+fn spawn_output_reader(output_read: HANDLE, output_tx: broadcast::Sender<Vec<u8>>) -> OutputReader {
+    PipeReader::spawn_with(output_read, output_tx, |output_tx, chunk| {
         let _ = output_tx.send(chunk.to_vec());
     })
 }
@@ -239,7 +267,7 @@ fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,
     process_handle: Arc<StdMutex<Option<HANDLE>>>,
     thread_handle: HANDLE,
-    output_join: std::thread::JoinHandle<()>,
+    output_readers: OutputReaders,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
 ) {
@@ -256,7 +284,7 @@ fn finalize_exit(
         raw_exit as i32
     };
 
-    let _ = output_join.join();
+    output_readers.finish();
     let _ = exit_tx.send(exit_code);
 
     unsafe {
@@ -392,7 +420,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let LegacyProcessHandles {
         process: pi,
         job,
-        output_join,
+        output_readers,
         writer_handle,
         hpc,
         mut conpty_owner,
@@ -462,7 +490,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             exit_tx,
             wait_handle,
             pi.hThread,
-            output_join,
+            output_readers,
             wait_logs_base_dir.as_deref(),
             command_for_wait,
         );
