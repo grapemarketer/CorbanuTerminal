@@ -133,6 +133,8 @@ mod setup_error;
 
 #[cfg(target_os = "windows")]
 mod session_temp;
+#[cfg(target_os = "windows")]
+mod session_temp_leftovers;
 
 #[cfg(target_os = "windows")]
 mod spawn_prep;

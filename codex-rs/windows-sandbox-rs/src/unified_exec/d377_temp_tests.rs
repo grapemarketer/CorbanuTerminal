@@ -276,3 +276,147 @@ fn sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link() {
     assert!(!session.exists());
     record_setup(home.path());
 }
+
+/// #1871: what an older version's commands made in the temp folder stays
+/// their accounts' (an owner may change an object's permissions), so taking
+/// back the folder's grant alone leaves a command able to grant itself
+/// access again. The upgrade step makes the user their owner first.
+#[test]
+fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
+    let _guard = legacy_process_test_guard();
+    let Some(home) = elevated_home("d377-left") else {
+        return;
+    };
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let cmd = |script: &Path| {
+        vec![
+            system32_exe("cmd.exe").display().to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            script.display().to_string(),
+        ]
+    };
+    // A temp folder secured like a user's, with the grant older setups left
+    // on it (the sandbox's group exists once its setup ran), and a `CREATOR
+    // OWNER` entry as shared temp folders have (`C:\Temp`): what an account
+    // makes there inherits an entry naming that account.
+    let temp = user_owned_test_root();
+    let creator_owner = std::process::Command::new(system32_exe("icacls.exe"))
+        .arg(temp.path())
+        .args(["/grant", "*S-1-3-0:(OI)(CI)(IO)F"])
+        .output()
+        .expect("icacls");
+    assert!(creator_owner.status.success(), "{creator_owner:?}");
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&system32_exe("hostname.exe")),
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers setup: exit={code} stdout={stdout:?}");
+    let group = crate::winutil::string_from_sid_bytes(
+        &crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP).expect("group"),
+    )
+    .expect("group sid");
+    // SAFETY: the SID is freed below; the folder exists.
+    unsafe {
+        let psid = crate::token::convert_string_sid_to_sid(&group).expect("psid");
+        crate::acl::ensure_allow_write_aces(temp.path(), &[psid]).expect("old grant");
+        windows_sys::Win32::Foundation::LocalFree(psid as _);
+    }
+    let file = temp.path().join("left.txt");
+    let dir = temp.path().join("left-dir");
+    let users = temp.path().join("other-program.txt");
+    fs::write(&users, "other").expect("other program's file");
+    // An older version's command, writing there as when the temp folder was
+    // one of its writable roots.
+    let make = temp.path().join("d377-make.cmd");
+    fs::write(
+        &make,
+        format!(
+            "@echo off\r\n\
+             (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
+             mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n",
+            file = file.display(),
+            dir = dir.display()
+        ),
+    )
+    .expect("write script");
+    let (stdout, code) = runtime.block_on(run_elevated(
+        temp.path(),
+        home.path(),
+        cmd(&make),
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers made: exit={code} stdout={stdout:?}");
+    assert!(
+        stdout.contains("FILE-MADE") && stdout.contains("DIR-MADE"),
+        "{stdout}"
+    );
+    let owner = |path: &Path| {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0x2_0000) // READ_CONTROL
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(path)
+            .expect("open");
+        crate::deny_read_sessions::owner_sid(&file).expect("owner")
+    };
+    let user = crate::deny_read_sessions::current_user_sid().expect("user");
+    assert_ne!(
+        owner(&file),
+        user,
+        "the sandbox's file is the user's already"
+    );
+    // The upgrade step: the first command with this temp folder.
+    let value = temp.path().display().to_string();
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&system32_exe("hostname.exe")),
+        &[("TEMP", value.clone()), ("TMP", value)],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers upgrade: exit={code} stdout={stdout:?}");
+    // A command grants itself access to what its account made, and writes.
+    let tamper = root.path().join("d377-tamper.cmd");
+    fs::write(
+        &tamper,
+        format!(
+            "@echo off\r\n\
+             icacls \"{file}\" /grant \"%USERNAME%:(M)\" >nul 2>nul\r\n\
+             (echo x>>\"{file}\") 2>nul && echo FILE-WRITTEN\r\n\
+             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul\r\n\
+             (echo x>\"{dir}\\new.txt\") 2>nul && echo DIR-WRITTEN\r\n\
+             (echo x>>\"{dir}\\inner.txt\") 2>nul && echo INNER-WRITTEN\r\n",
+            file = file.display(),
+            dir = dir.display()
+        ),
+    )
+    .expect("write script");
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&tamper),
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers tamper: exit={code} stdout={stdout:?}");
+    for written in ["FILE-WRITTEN", "DIR-WRITTEN", "INNER-WRITTEN"] {
+        assert!(!stdout.contains(written), "{written}: {stdout}");
+    }
+    // Taken, not deleted.
+    for path in [&file, &dir, &dir.join("inner.txt"), &users] {
+        assert_eq!(owner(path), user, "{}", path.display());
+    }
+    assert_eq!(fs::read_to_string(&file).expect("read").trim(), "made");
+    assert_eq!(fs::read_to_string(&users).expect("read"), "other");
+    crate::session_temp::end_session_temp_in(temp.path());
+    crate::session_temp::end_session_temp_in(
+        &dunce::canonicalize(std::env::var_os("TEMP").expect("TEMP")).expect("TEMP"),
+    );
+    record_setup(home.path());
+}

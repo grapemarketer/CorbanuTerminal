@@ -448,9 +448,17 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - On native Windows CI, in an administrator's and a normal session, Python
   (temp files, venv and pip), cargo, Node and npm, Windows PowerShell and
   PowerShell 7, git and Git Bash, and MSBuild work as before.
-- Not changed: the non-admin sandbox still uses `%TEMP%` itself. Sandboxed
-  commands can still read (not write) other sessions' temp folders, and
-  files they made in `%TEMP%` before the upgrade stay theirs (they own them).
+- **What older versions' sandboxed commands left in `%TEMP%` becomes yours**
+  (#1871). The sandbox's accounts owned those files and folders, and an
+  owner can always change permissions, so commands could grant themselves
+  access to them again. In the same upgrade step, before the old grant is
+  removed, the session makes you their owner and removes their entries for
+  the sandbox's accounts, as you (no UAC prompt). Nothing is deleted. One
+  whose permissions keep you out stays as it is; the counts are logged in
+  the Corbanu home's `.sandbox` log.
+- Not changed: the non-admin sandbox still uses `%TEMP%` itself, and
+  sandboxed commands can still read (not write) other sessions' temp
+  folders.
 
 ## Windows non-admin sandbox warning
 

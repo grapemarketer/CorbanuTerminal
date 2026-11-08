@@ -390,21 +390,37 @@ fn is_left_behind(path: &Path, user: Option<&str>) -> bool {
 
 /// Takes back the write grant older versions' setup put on the temp folder
 /// itself: the sandbox group's allow entries and this `CODEX_HOME`'s
-/// capability entry for it. Best effort; logged.
+/// capability entry for it. While that grant is there, first takes for the
+/// user what the sandbox's accounts made in the folder (#1871): done again
+/// by the next session if this one stops before the grant is gone. Best
+/// effort; logged.
 fn take_back_old_grant(folder: &Path, codex_home: &Path) {
-    let mut sids: Vec<String> = Vec::new();
+    let mut psids: Vec<*mut std::ffi::c_void> = Vec::new();
     if let Ok(group) = crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP)
         && let Ok(group) = crate::winutil::string_from_sid_bytes(&group)
-    {
-        sids.push(group);
-    }
-    sids.extend(existing_writable_root_cap_sid(codex_home, folder));
-    let psids: Vec<*mut std::ffi::c_void> = sids
-        .iter()
         // SAFETY: freed below.
-        .filter_map(|sid| unsafe { crate::token::convert_string_sid_to_sid(sid) })
-        .collect();
+        && let Some(group) = unsafe { crate::token::convert_string_sid_to_sid(&group) }
+    {
+        psids.push(group);
+    }
+    let group = psids.first().copied();
+    psids.extend(
+        existing_writable_root_cap_sid(codex_home, folder)
+            .iter()
+            // SAFETY: freed below.
+            .filter_map(|sid| unsafe { crate::token::convert_string_sid_to_sid(sid) }),
+    );
     if !psids.is_empty() && folder.is_dir() {
+        // Only the elevated sandbox's accounts own what they make (the
+        // non-admin sandbox's entry is this home's capability SID and its
+        // commands run as the user), so only the group's grant means
+        // leftovers.
+        // SAFETY: a valid SID; the folder exists.
+        if let Some(group) = group
+            && unsafe { crate::acl::has_explicit_allow_aces(folder, &[group]) }.unwrap_or(false)
+        {
+            take_leftovers(folder, codex_home);
+        }
         // SAFETY: valid SIDs; the folder exists.
         match unsafe { crate::acl::remove_explicit_allow_aces(folder, &psids) } {
             Ok(true) => log_note(
@@ -432,6 +448,28 @@ fn take_back_old_grant(folder: &Path, codex_home: &Path) {
             )
         };
     }
+}
+
+fn take_leftovers(folder: &Path, codex_home: &Path) {
+    let note = match crate::session_temp_leftovers::sandbox_account_sids().and_then(|accounts| {
+        crate::session_temp_leftovers::take_sandbox_leftovers(folder, &accounts)
+    }) {
+        Ok(found) => format!(
+            "D377: in {}: looked at {}, sandbox-owned {}, taken for the user {}, not taken {}, unreadable {}, capped {}",
+            folder.display(),
+            found.scanned,
+            found.sandbox_owned,
+            found.taken,
+            found.not_taken,
+            found.unreadable,
+            found.capped
+        ),
+        Err(err) => format!(
+            "D377: could not take the sandbox's leftovers in {}: {err:#}",
+            folder.display()
+        ),
+    };
+    log_note(&note, Some(&codex_home.join(".sandbox")));
 }
 
 #[cfg(test)]

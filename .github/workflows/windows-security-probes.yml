@@ -506,7 +506,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 58
+            Assert-Tests $sandbox 'sec_win_' 59
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }

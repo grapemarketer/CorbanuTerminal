@@ -36,6 +36,7 @@ use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::GetSecurityDescriptorControl;
 use windows_sys::Win32::Security::InitializeAcl;
 use windows_sys::Win32::Security::MapGenericMask;
+use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::SE_DACL_PROTECTED;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
@@ -750,18 +751,86 @@ pub unsafe fn has_deny_delete_child_ace(
 pub unsafe fn remove_explicit_allow_aces(path: &Path, psids: &[*mut c_void]) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let result = remove_aces_from(DaclTarget::Name(path), p_sd, p_dacl, |_, ace| {
-        let hdr = &*(ace as *const ACE_HEADER);
-        if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE || (hdr.AceFlags & INHERITED_ACE) != 0 {
-            return false;
-        }
-        let sid = (ace as usize + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
-            as *mut c_void;
-        psids.iter().any(|psid| EqualSid(sid, *psid) != 0)
+        is_explicit_allow_for(ace, psids)
     });
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
     result
+}
+
+/// Whether `path`'s DACL has an explicit allow entry for one of `psids`.
+///
+/// # Safety
+/// Caller must ensure each pointer in `psids` points to a valid SID.
+pub(crate) unsafe fn has_explicit_allow_aces(path: &Path, psids: &[*mut c_void]) -> Result<bool> {
+    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let mut found = false;
+    if !p_dacl.is_null() {
+        for i in 0..u32::from((*p_dacl).AceCount) {
+            let mut ace: *mut c_void = std::ptr::null_mut();
+            if GetAce(p_dacl as *const ACL, i, &mut ace) != 0 && is_explicit_allow_for(ace, psids) {
+                found = true;
+                break;
+            }
+        }
+    }
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    Ok(found)
+}
+
+unsafe fn is_explicit_allow_for(ace: *const c_void, psids: &[*mut c_void]) -> bool {
+    let hdr = &*(ace as *const ACE_HEADER);
+    (hdr.AceFlags & INHERITED_ACE) == 0 && is_allow_for(ace, psids)
+}
+
+/// Whether `ace` allows one of `psids` anything (explicit or inherited).
+unsafe fn is_allow_for(ace: *const c_void, psids: &[*mut c_void]) -> bool {
+    let hdr = &*(ace as *const ACE_HEADER);
+    if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE {
+        return false;
+    }
+    let sid = (ace as usize + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
+        as *mut c_void;
+    psids.iter().any(|psid| EqualSid(sid, *psid) != 0)
+}
+
+/// D377 (#1871): makes `user` the owner of the object `handle` is open to and
+/// removes its allow entries for `psids`. An inherited one (a `CREATOR
+/// OWNER` entry's copy names the account that made the object) is
+/// recomputed from the parent for the new owner; inherited copies below the
+/// object follow. `handle` needs `READ_CONTROL`, `WRITE_DAC` and
+/// `WRITE_OWNER`.
+///
+/// # Safety
+/// `handle` must be open; `user` and each of `psids` must point to valid SIDs.
+pub(crate) unsafe fn take_for_user(
+    handle: HANDLE,
+    user: *mut c_void,
+    psids: &[*mut c_void],
+) -> Result<()> {
+    let code = SetSecurityInfo(
+        handle,
+        1, // SE_FILE_OBJECT
+        OWNER_SECURITY_INFORMATION,
+        user,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+    if code != ERROR_SUCCESS {
+        return Err(anyhow!("setting the owner failed: {code}"));
+    }
+    let (p_dacl, p_sd) = security_info(handle)?;
+    let result = remove_aces_from(DaclTarget::Handle(handle), p_sd, p_dacl, |_, ace| {
+        is_allow_for(ace, psids)
+    });
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    result.map(|_| ())
 }
 
 /// #1506 item 1 (D261): removes the explicit entry denying `psid` exactly
@@ -1148,7 +1217,7 @@ unsafe fn file_info(handle: HANDLE) -> std::io::Result<BY_HANDLE_FILE_INFORMATIO
 }
 
 /// The path `handle` was opened at, after links, without the `\\?\` prefix.
-unsafe fn final_path(handle: HANDLE) -> std::io::Result<String> {
+pub(crate) unsafe fn final_path(handle: HANDLE) -> std::io::Result<String> {
     let mut buffer = vec![0_u16; 1024];
     loop {
         let len =
