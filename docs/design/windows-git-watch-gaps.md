@@ -59,15 +59,28 @@ and Moderate and Aggressive add read denials. So in practice it only runs
 at Permissive, where no platform covers these cases. Every option below is
 therefore stricter than any other platform at the same level.
 
-## When a warning arrives
+## When and where a warning appears
 
-Today's records are written when a command ends, but the warning and the
-prompt appear only at the next start of Corbanu Terminal. An editor's
-background git can run a planted `core.fsmonitor` within seconds, long
-before that. So every "flag" option below detects after the fact and may
-come too late for editors; only protection (or git's own settings, gap 2 C)
-closes that window. A short notice right after the command ends, as D6
-does on macOS/Linux, would shrink it (decision 6 below).
+**When.** Today's records are written when a command ends, but the warning
+and the prompt appear only at the next start of Corbanu Terminal. An
+editor's background git can run a planted `core.fsmonitor` within seconds,
+long before that. So every "flag" option below detects after the fact and
+may come too late for editors; only protection (or git's own settings, gap
+2 C) closes that window. A short notice right after the command ends, as D6
+does on macOS/Linux, would shrink it.
+
+**Where.** Both the startup warning (`config/src/loader/mod.rs`) and the
+TUI prompt (`windows_sandbox_prompts.rs`) only show entries in the working
+folder or a folder above it. That fits `.codex`/`.agents`, which only load
+from there, but not git: you may run git anywhere. Already today, a D332
+record for a `%TEMP%` root or an extra writable folder is never shown when
+you start in the project. Most new flags below (a nested `sub\.git`, a bare
+repository in a scratch folder, a hooks folder such as `.husky\_`) would be
+recorded but never shown unless this changes, for example to "every
+writable root of the session, and anything below the working folder".
+
+Both are new UI and need a decision (decision 6). Until then, the new
+checks are only worth shipping together with it.
 
 ## Keeping prompts rare (applies to all four gaps)
 
@@ -76,11 +89,16 @@ without looking, which also weakens the `.codex`/`.agents` prompts. Rules
 for any new check:
 
 1. **Compare the end of a command with its start.** A repository a command
-   makes and deletes again (test suites do this) is never shown.
+   makes and deletes again (test suites do this) is never shown. Accepted
+   limit: a command can also plant a repository, wait for an editor's
+   background git to use it, and delete it; only protection or gap 2 C
+   closes that.
 2. **Compare what git would run, not timestamps.** File identity for the
    `.git` entry, plus a content hash of the small files git reads for
    programs (`config`, `config.worktree`, `commondir`, `hooks\*`, a `.git`
-   file's `gitdir:` line) and the other things D6 watches on macOS/Linux:
+   file's `gitdir:` line), the same files in the folders a `gitdir:` line
+   or `commondir` names when those lie in a writable root, and the other
+   things D6 watches on macOS/Linux:
    rebase and sequencer steps (`exec` lines), links and hard links git
    writes through, and the legacy `remotes`/`branches` folders. Rewriting a
    file with the same content is not a change.
@@ -100,8 +118,9 @@ for any new check:
    no `commondir`, no `config.worktree`, no links anywhere inside, no
    rebase or sequencer state, hooks that are only `*.sample` files, and a
    config holding only the keys those commands write (format version, file
-   mode, bare, logallrefupdates, symlinks, ignorecase, `remote.*.url` and
-   `fetch` without an `ext::` URL, `branch.*`). Anything else, an include,
+   mode, bare, logallrefupdates, symlinks, ignorecase, `remote.*.url`,
+   `remote.*.fetch`, `branch.*.remote` and `branch.*.merge`, with no
+   `ext::` URL in any of them). Anything else, an include,
    or anything unreadable makes it not plain. Later changes to it are
    prompted as usual. This is the main lever against prompts for "clone
    this to look at it".
@@ -113,10 +132,11 @@ for any new check:
 by hand) with `core.fsmonitor = <program>`. The next `git status` in `sub`,
 by you or your editor, runs it unsandboxed. Existing nested repositories
 (vendored clones, sub-projects) are just as open: a command can add a hook
-to `sub\.git\hooks` or edit its config. For a submodule, the real git
-folder lives in the parent's `.git\modules`, which is already read-only,
-but the checkout's `.git` file is writable and can be pointed at a planted
-git folder. Today nothing notices any of this, because only the top-level
+to `sub\.git\hooks` or edit its config. A submodule's real git folder
+lives in its parent's `.git\modules`: read-only when the parent is the
+protected top-level repository, writable when the parent is itself nested.
+Either way the checkout's `.git` file is writable and can be pointed at a
+planted git folder. Today nothing notices any of this, because only the top-level
 `.git` is recorded.
 
 **What to flag, and when.** When each command ends, using the walk D283
@@ -125,10 +145,12 @@ already does for nested `.codex`/`.agents`:
 - a nested `.git` (folder, file or link) that is new or replaced;
 - for nested repositories that existed at the start, a change to what rule
   2 lists;
+- in an existing nested `.git`, the folders that hold other repositories
+  (`modules\*`, `worktrees\*`), which the D283 walk doesn't enter today;
 - a folder the walk can't list counts, as in D283.
 
-Shown in the same startup warning and TUI prompt. Like D283, this does not
-cover roots that come only from `%TEMP%`/`%TMP%`.
+Shown wherever decision 6 settles. Like D283, this does not cover roots
+that come only from `%TEMP%`/`%TMP%`.
 
 **Cost.** No new walk: D283's walk already lists every folder below the
 top of each root (it doesn't follow links or descend into `.git` or the
@@ -147,7 +169,8 @@ A `repo` client with thousands of projects is the worst case (see gap 4).
   repositories the way D283 protects nested `.codex`/`.agents`.** Prevents
   instead of detects, so it also covers editors that run git before the
   next start. But it costs permission changes per repository per command
-  (D322: about 0.2 s per protected nested folder even after #1688/#1707),
+  (D322 in the management handoff: three nested folders still add 0.6 s
+  after #1688/#1707),
   and it breaks agent commands that write these files in nested
   repositories (`git config`, or the `pre-commit` tool's hook install).
 
@@ -158,8 +181,9 @@ measurements show it is cheap and the breakage is acceptable.
 
 **The attack.** When git looks for a repository it checks, in each folder
 from the working folder upwards, first `<folder>\.git` and then whether the
-folder itself is a git folder (a `HEAD` file plus `objects` and `refs`
-folders). So a command can write `HEAD`, `objects\`, `refs\` and a `config`
+folder itself is a git folder: a valid `HEAD` file, plus `objects` and
+`refs` folders either there or in the folder a `commondir` file names (git
+then reads `config` and `hooks` from that folder too). So a command can write `HEAD`, `objects\`, `refs\` and a `config`
 with `core.pager = <program>` straight into a writable root that has no
 `.git`, such as a scratch folder or an extra writable folder. The next
 `git log` there, or in any subfolder without its own repository, runs the
@@ -171,14 +195,15 @@ is just as open: its `config` and `hooks` are writable. This is the
 setting exists for; its default still allows it.
 
 **What to flag, and when.** When a command ends: a writable root
-(`%TEMP%` included, as D332) that has become a git folder (three file
-checks per root), and, for a root that already was one, a change to what
-rule 2 lists. For nested bare repositories, the D283 walk can spot the
-`HEAD`/`objects`/`refs` pattern in listings it already has, with no extra
-reads unless it matches.
+(`%TEMP%` included, as D332) that has become a git folder, and, for a root
+that already was one, a change to what rule 2 lists. Any `HEAD` or
+`commondir` file at a root, or in a folder the D283 walk lists, is a
+candidate, checked with git's full rule (including `commondir`), so a
+`HEAD` here with `objects` and `refs` elsewhere is still caught.
 
-**Cost.** Near zero for the root check; the nested check is in-memory on
-the existing walk.
+**Cost.** Near zero: a couple of file checks per root, and the nested
+check works on listings the walk already has, reading more only for a
+candidate.
 
 **Options.**
 
@@ -187,8 +212,8 @@ the existing walk.
 - **B. A, plus nested bare repositories and roots that already were bare
   repositories, with the gap 1 rules.**
 - **C. Docs: recommend setting `safe.bareRepository=explicit` in your
-  global git config.** Git then ignores bare repositories it finds by
-  searching. Use git 2.45 or later: before that, `explicit` also refuses
+  global git config.** Git then refuses to use a bare repository it finds
+  by searching, and stops with an error. Use git 2.45 or later: before that, `explicit` also refuses
   git run inside `.git`, `.git\worktrees\*` and `.git\modules\*`, which
   breaks some hooks and submodule tools. It only covers tools that run the
   git command line with that global config (not libgit2 or JGit based
@@ -213,15 +238,18 @@ program key set to a script in the project.
 **What to flag, and when.** At command start, read `core.hooksPath` and
 the same-class keys from every config git would read for each watched
 repository: its own `config` and `config.worktree`, the global configs
-(`%USERPROFILE%\.gitconfig`, the XDG config), the system config, and the
+(`%USERPROFILE%\.gitconfig`, the XDG config), the system configs
+(including Git for Windows' `%PROGRAMDATA%\Git\config`), and the
 files their `include`/`includeIf` lines name (bounded depth). Nested
 repositories' configs come from the gap 1 walk. If a value resolves inside
 a writable root and outside a protected `.git`, record that folder's or
 file's contents (identity and content hash). When the command ends, flag
-new or changed files there. Scripts that those hooks call elsewhere in the
-project (Husky v9's `_` hooks run the tracked `.husky\pre-commit`) are
-ordinary project files, like a `Makefile`, and show in `git diff`; they are
-out of scope.
+new or changed files there. Husky v9's `_` files are only stubs: each runs
+`.husky\<hook name>`, which is the hook code. So for Husky, also watch the
+files in `.husky` named after git hooks: a new untracked
+`.husky\post-checkout` runs on the next checkout without anyone looking at
+it. Other scripts those hooks call are ordinary project files, like a
+`Makefile`, and show in `git diff`; they are out of scope.
 
 **Keeping prompts rare.** `npm install` reruns Husky, which rewrites
 `.husky\_`, probably with the same content: rule 2 (content hash) keeps
@@ -247,8 +275,8 @@ per command: a few milliseconds.
 link to `.repo\projects\<path>.git` (older clients: a `.git` folder whose
 entries are links; with `--worktree`: a `.git` file). The client root has
 `.repo` but no `.git`. On Windows `repo` needs symbolic links (Developer
-Mode or admin rights), so this is uncommon; the D332 survey (#1682) found
-no `.git` link among 977 `.git` entries on three of our machines.
+Mode or admin rights), so this is uncommon; the survey in #1682 found no
+`.git` link among 977 `.git` entries on three of our machines.
 
 **The problem.** When a writable root is a project, its `.git` link has no
 identity, so D332 records it again after every command: the warning and
@@ -285,30 +313,32 @@ retarget a link without changing what rule 3 records.
 
 ## What fits D332, and what needs a new owner decision
 
-D332 (accepted 11-07 17:45Z) is "flag a `.git` that appears or changes
+D332 (accepted 11-07 17:45Z; management handoff, section 9) is "flag a `.git` that appears or changes
 during a session", shipped for the top-level `.git` as "new or replaced",
 with links always counting. Read conservatively, only the first two rows
 fit it. Everything else is new behaviour, and anything that removes a
 shipped warning or moves the sandbox boundary also needs security sign-off.
 
-| Item                                                                                                                             | Stricter only?                                 | Status                                                      |
-| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
-| Gap 1 A: flag a nested `.git` folder or file that is new or replaced; nested links count every time, as top-level ones do        | Yes                                            | Within D332 (the same rule at a new depth)                  |
-| Gap 2 A: flag a bare repository appearing at the top of a writable root                                                          | Yes                                            | Within D332's intent: git uses it in place of `<root>\.git` |
-| Gap 2 C: recommend `safe.bareRepository=explicit` (git 2.45+) in the docs                                                        | Docs only                                      | No decision needed                                          |
-| Rule 3 for nested links (decision 1)                                                                                             | Yes for nested; same mechanism as gap 4 B      | Decision and security sign-off, after measurement 1         |
-| Gap 4 B: stop flagging an unchanged top-level `.git` link (decision 1)                                                           | No (removes a shipped warning)                 | Decision and security sign-off                              |
-| Gap 1 B and rule 2: watch the contents of existing nested repositories and roots that already are bare repositories (decision 2) | Yes                                            | Decision (wider than "appears or is replaced"; new records) |
-| Rule 6, "plain repository" filter (decision 3)                                                                                   | Yes for new coverage                           | Decision (chooses which new repositories go unasked)        |
-| Gap 2 B: nested bare repositories (decision 2)                                                                                   | Yes                                            | Decision (not a `.git`)                                     |
-| Gap 3 A: watch `core.hooksPath` and same-class targets (decision 4)                                                              | Yes                                            | Decision (ordinary project folders)                         |
-| Gap 1 C, gap 3 B: protect instead of flag (decision 5)                                                                           | Moves the boundary; breaks some agent commands | Decision and security sign-off                              |
-| A notice right after the command ends (decision 6)                                                                               | Yes                                            | Decision (new UI)                                           |
-| The same flags in the elevated sandbox (decision 7)                                                                              | Yes                                            | Decision; it keeps no planted records at all today          |
+| Item                                                                                                                                      | Stricter only?                                 | Status                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gap 1 A: flag a nested `.git` folder or file that is new or replaced; nested links count every time, as top-level ones do                 | Yes                                            | Within D332 (the same rule at a new depth)                                                                                                                             |
+| Gap 2 A: flag a bare repository appearing at the top of a writable root                                                                   | Yes                                            | Within D332's intent: it fills the very slot D332 watches (git uses it in place of `<root>\.git`), whereas a nested bare repository is both a new kind and a new place |
+| Gap 2 C: recommend `safe.bareRepository=explicit` (git 2.45+) in the docs                                                                 | Docs only                                      | No decision needed                                                                                                                                                     |
+| Rule 3 for nested links (decision 1)                                                                                                      | Yes for nested; same mechanism as gap 4 B      | Decision and security sign-off, after measurement 1                                                                                                                    |
+| Gap 4 B: stop flagging an unchanged top-level `.git` link (decision 1)                                                                    | No (removes a shipped warning)                 | Decision and security sign-off                                                                                                                                         |
+| Gap 1 B and rule 2: watch the contents of existing nested repositories and roots that already are bare repositories (decision 2)          | Yes                                            | Decision (wider than "appears or is replaced"; new records)                                                                                                            |
+| Rule 6, "plain repository" filter (decision 3)                                                                                            | Yes for new coverage                           | Decision (chooses which new repositories go unasked)                                                                                                                   |
+| Gap 2 B: nested bare repositories (decision 2)                                                                                            | Yes                                            | Decision (not a `.git`)                                                                                                                                                |
+| Gap 3 A: watch `core.hooksPath` and same-class targets (decision 4)                                                                       | Yes                                            | Decision (ordinary project folders)                                                                                                                                    |
+| Gap 1 C, gap 3 B: protect instead of flag (decision 5)                                                                                    | Moves the boundary; breaks some agent commands | Decision and security sign-off                                                                                                                                         |
+| When and where warnings appear: a notice right after the command, and showing entries outside the working folder's ancestors (decision 6) | Yes                                            | Decision (new UI); the new checks depend on it                                                                                                                         |
+| The same flags in the elevated sandbox (decision 7)                                                                                       | Yes                                            | Decision; it keeps no planted records at all today                                                                                                                     |
 
-Order: gap 1 A can ship now, but in a `repo` client root it would flag
-every project's link at every start until decision 1 is taken. If that is
-unacceptable, hold gap 1 A until decision 1 and ship them together.
+Order: gap 1 A and gap 2 A can be recorded now, but most of what they find
+is only shown once decision 6 is taken. In a `repo` client root, gap 1 A
+would also flag every project's link at every start until decision 1 is
+taken. So the practical order is decision 6 first, then gap 1 A and gap 2 A
+together with decision 1.
 
 ## To measure when the Windows PC is back
 
