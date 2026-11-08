@@ -84,15 +84,10 @@ jobs:
             [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
-            [[ $f == codex-rs/tui/* || $f == codex-rs/core/* || $f == codex-rs/state/* || $f == codex-rs/login/* ]] && windows_native_core=true
-            [[ $f == codex-rs/windows-sandbox-rs/* || $f == codex-rs/network-proxy/* ]] && windows_native_sandbox=true
-            [[ $f == codex-rs/process-hardening/* || $f == codex-rs/exec-server/* ]] && windows_native_other=true
-            if [[ $f == .github/workflows/rust-ci-windows-native-tests.yml ]]; then
-              windows_native_core=true
-              windows_native_sandbox=true
-              windows_native_other=true
-            fi
-            [[ $windows_native_core == true || $windows_native_sandbox == true || $windows_native_other == true ]] && windows_native_tests=true
+            [[ $f == codex-rs/tui/* || $f == codex-rs/core/* || $f == codex-rs/state/* || $f == codex-rs/login/* ]] && windows_native_core=true windows_native_tests=true
+            [[ $f == codex-rs/windows-sandbox-rs/* || $f == codex-rs/network-proxy/* ]] && windows_native_sandbox=true windows_native_tests=true
+            [[ $f == codex-rs/process-hardening/* || $f == codex-rs/exec-server/* ]] && windows_native_other=true windows_native_tests=true
+            [[ $f == .github/workflows/rust-ci-windows-native-tests.yml ]] && windows_native_core=true windows_native_sandbox=true windows_native_other=true windows_native_tests=true
             [[ $f == codex-rs/protocol/* || $f == codex-rs/app-server-protocol/* || $f == .github/workflows/rust-ci.yml ]] && app_server_schema=true
             [[ $f == codex-rs/security-policy/* || $f == codex-rs/utils/absolute-path/* || $f == codex-rs/utils/path-uri/* || $f == codex-rs/ext/items/* ]] && app_server_schema=true
             [[ $f == codex-rs/codex-experimental-api-macros/* || $f == codex-rs/Cargo.toml || $f == codex-rs/Cargo.lock ]] && app_server_schema=true
