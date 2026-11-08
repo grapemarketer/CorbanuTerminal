@@ -12367,3 +12367,57 @@ fn issue1685_eval_trap_alias_text_gets_every_check() {
         }
     }
 }
+
+/// #1845 item 1 (zsh `[[ … ]]` only): in a zsh short loop the command after a
+/// `[[ … ]]` test runs (`if [[ 1 ]] read -A functions`, SHORT_LOOPS). The
+/// code-table writer walk reads it as the writer it is, as without the
+/// test, in bash and zsh. Only adds prompts.
+#[test]
+fn issue1845_short_loop_test_does_not_hide_a_table_writer() {
+    use ProtectedActionKind::UnseenCode;
+    let asks = [
+        "if [[ 1 ]] read -A functions",
+        "while [[ 1 ]] read -A functions",
+        "until [[ 1 ]] read -A functions",
+        "if [[ -n x ]] set -A functions a",
+        "if [[ 1 ]] zparseopts -a functions -- f:",
+        "if [[ 1 ]] noglob read -A functions",
+        "if [[ a == b ]] read -A aliases",
+    ];
+    // Unchanged must-ask lines, and lines that stay quiet.
+    let unchanged = ["read -A functions", "set -A functions a"];
+    let quiet = [
+        "if [[ 1 ]] read -A arr",
+        "if [[ 1 ]] echo functions",
+        "[[ -n functions ]]",
+        "if [[ 1 ]]; then read -A arr; fi",
+        "while [[ 1 ]] read -r line",
+    ];
+    let mut wrong = Vec::new();
+    for shell in ["/bin/bash", "/bin/zsh"] {
+        for command in asks.iter().chain(&unchanged) {
+            if kind(&[shell, "-lc", command]) != Some(UnseenCode) {
+                wrong.push(format!("asks {shell}: {command}"));
+            }
+        }
+        for command in quiet {
+            if kind(&[shell, "-lc", command]).is_some() {
+                wrong.push(format!("quiet {shell}: {command}"));
+            }
+        }
+    }
+    assert_eq!(wrong, Vec::<String>::new());
+}
+
+/// #1845: skipping `[[ … ]]` tests stays linear.
+#[test]
+fn issue1845_short_loop_walk_is_linear() {
+    for (label, unit) in [
+        ("tests", "[[ 1 ]] "),
+        ("long tests", "[[ a == b && c != d ]] "),
+    ] {
+        work::assert_linear(label, |scale| {
+            let _ = script(&format!("if {}read -A arr", unit.repeat(100 * scale)));
+        });
+    }
+}
