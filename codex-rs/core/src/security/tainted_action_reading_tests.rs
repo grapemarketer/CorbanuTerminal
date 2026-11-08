@@ -265,9 +265,30 @@ fn mains_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActio
     .found
 }
 
+/// The verdict of the classifier's own (new) reading alone.
+fn new_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActionKind> {
+    use super::tainted_action_redirect_tests::HOME;
+    use super::tainted_action_redirect_tests::action_in;
+    use super::tainted_action_redirect_tests::workspace;
+    let root = workspace(files);
+    let action = action_in(root.path(), argv);
+    let homes = Homes::new(Path::new(HOME), Some(root.path()));
+    judged(
+        &action, homes, /*as_named*/ false, /*main_reading*/ false,
+    )
+    .found
+}
+
+/// Review lines that main's reading leaves quiet: they ask only through
+/// the new reading. Review 1 item 3's trailing stdout redirection inside a
+/// substitution is unspliced only when `!main_reading` (route 1), so
+/// main's reading still splices `true` in as the command word.
+const REVIEW_QUIET_ON_MAIN: &[&str] = &["review 1 item 3: $(echo true >log) ./x"];
+
 /// PR #1794 review 2: the case lists' claims, on main's reading: each
 /// `ASKS` line is quiet there (it asks only through the new reading), and
-/// each `ASKS_ON_MAIN` and review line asks there.
+/// each `ASKS_ON_MAIN` and review line asks there, except
+/// [`REVIEW_QUIET_ON_MAIN`], which asks on the new reading instead.
 #[cfg(unix)]
 #[test]
 fn issue_1772_case_lists_hold_on_mains_reading() {
@@ -303,9 +324,11 @@ fn issue_1772_case_lists_hold_on_mains_reading() {
             .filter(|(_, files, argv)| mains_verdict(files, argv).is_none())
             .map(|(item, _, argv)| format!("review 2 item {item}: {argv:?}")),
     );
-    assert_eq!(
-        quiet,
-        Vec::<String>::new(),
-        "review lines quiet on main's reading"
+    assert_eq!(quiet, REVIEW_QUIET_ON_MAIN, "review lines quiet on main's reading");
+    let line = "$(echo true >log) ./x";
+    assert!(
+        REVIEW_ASKS.contains(&("3", line))
+            && new_verdict(X_EVIL, &["bash", "-lc", line]).is_some(),
+        "review 1 item 3 asks on the new reading"
     );
 }
