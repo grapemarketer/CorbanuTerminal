@@ -2,23 +2,33 @@ name: rust-ci Windows native tests
 
 # Native Windows Bazel tests for the crates whose Windows-only failures kept
 # breaking nightly (#636, owner decision 2026-10-15): codex-tui, codex-core,
-# codex-state and codex-login. rust-ci.yml runs this on pull requests that
-# change one of those crates; nightly-ci.yml still runs every crate's native
-# Windows tests (bazel.yml, test-windows-native-main).
+# codex-state and codex-login; since #1813 also windows-sandbox-rs,
+# network-proxy, process-hardening, sandboxing and exec-server; since #1839
+# also utils/pty and app-server. rust-ci.yml runs this on pull requests that
+# change one of those crates, passing only the changed groups' targets;
+# nightly-ci.yml still runs every crate's native Windows tests (bazel.yml,
+# test-windows-native-main).
 #
 # Same Bazel setup as test-windows-native-main, limited to those crates' test
 # targets. Restore-only: it reads the repository cache nightly saves on main
 # and saves nothing (#771, #815). With no build cache it compiles cold: about
-# 43 minutes on windows-2022 (probe run 38684269814).
+# 43 minutes on windows-2022 for tui, core, state and login (probe run
+# 38684269814).
 on:
   workflow_call:
+    inputs:
+      targets:
+        description: Space-separated Bazel target patterns to test.
+        required: false
+        type: string
+        default: //codex-rs/tui/... //codex-rs/core/... //codex-rs/state/... //codex-rs/login/...
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Bazel test (tui, core, state, login)
+    name: Bazel test (changed crates)
     runs-on: windows-2022
     timeout-minutes: 90
     environment:
@@ -38,17 +48,18 @@ jobs:
           target: x86_64-pc-windows-gnullvm
           cache-scope: bazel-test-windows-native-main
 
-      - name: bazel test tui, core, state, login
+      - name: bazel test the changed crates
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          TARGETS: ${{ inputs.targets }}
         shell: bash
         run: |
-          bazel_targets=(
-            //codex-rs/tui/...
-            //codex-rs/core/...
-            //codex-rs/state/...
-            //codex-rs/login/...
-          )
+          read -r -a bazel_targets <<< "$TARGETS"
+          if (( ${#bazel_targets[@]} == 0 )); then
+            echo "::error::no Bazel targets to test"
+            exit 1
+          fi
+          echo "Testing: ${bazel_targets[*]}"
 
           # --build_tests_only: skip the crates' binaries and libraries that
           # no test needs. The Windows skip list comes from .bazelrc's

@@ -67,15 +67,63 @@ impl PlantedProjectMetadata {
         match self {
             Self::Unreadable(err) => Some(format!(
                 "{PLANTED_GIT_WARNING_PREFIX}{}. The records of folders that non-admin Windows sandbox commands may have planted can't be read ({err}), so Corbanu Terminal can't tell whether a command planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder; check them first.",
-                git_dir.display()
+                without_following(git_dir).display()
             )),
             Self::Known(_) => self.contains(git_dir).then(|| {
                 format!(
                     "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder. Check its hooks and config, then open Corbanu Terminal in this folder and confirm it.",
-                    git_dir.display()
+                    without_following(git_dir).display()
                 )
             }),
         }
+    }
+
+    /// D424 (#1775): the warnings for the `.git` entries to show at startup
+    /// beyond those between the project root and `cwd` (which the config
+    /// loader warns about): git runs anywhere, so also those at or below one
+    /// of `writable_roots` (canonical: the folders non-admin sandbox commands
+    /// may write to, `%TEMP%` included) or below `cwd`. When the records
+    /// can't be read, the `.git` at the top of each writable root that
+    /// exists.
+    pub fn git_warnings_beyond_project(
+        &self,
+        writable_roots: &[PathBuf],
+        cwd: &Path,
+    ) -> Vec<String> {
+        let candidates: Vec<PathBuf> = match self {
+            Self::Unreadable(_) => writable_roots
+                .iter()
+                .map(|root| root.join(".git"))
+                .filter(|git_dir| std::fs::symlink_metadata(git_dir).is_ok())
+                .collect(),
+            Self::Known(_) => self.git_dirs_to_show(writable_roots, cwd),
+        };
+        candidates
+            .iter()
+            .filter_map(|git_dir| self.git_warning(git_dir))
+            .collect()
+    }
+
+    /// D424 (#1775): the recorded `.git` entries to show: those whose folder
+    /// is `cwd` or above it (as before), or that lie at or below one of
+    /// `writable_roots` (canonical) or below `cwd`. Recorded `.codex`/`.agents`
+    /// folders are left out: Core only loads those from `cwd` and above.
+    pub fn git_dirs_to_show(&self, writable_roots: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
+        let Self::Known(planted) = self else {
+            return Vec::new();
+        };
+        let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        planted
+            .iter()
+            .filter(|path| is_git_dir(path))
+            .filter(|path| {
+                path.parent()
+                    .is_some_and(|parent| is_at_or_below(&cwd, parent))
+                    || is_at_or_below(path, &cwd)
+                    || writable_roots.iter().any(|root| is_at_or_below(path, root))
+            })
+            .cloned()
+            .collect()
     }
 
     /// Why `folder` isn't loaded, and how to load it.
@@ -91,6 +139,44 @@ impl PlantedProjectMetadata {
             ),
         }
     }
+}
+
+/// D424 (#1775): what to tell the person right after a command when
+/// `paths` (canonical) were recorded as possibly planted while it ran: at most
+/// 20 of them, and how many more. `None` when there are none.
+pub fn planted_after_command_notice(paths: &[PathBuf]) -> Option<String> {
+    const SHOWN: usize = 20;
+    if paths.is_empty() {
+        return None;
+    }
+    let (git_dirs, folders): (Vec<&PathBuf>, Vec<&PathBuf>) =
+        paths.iter().partition(|path| is_git_dir(path));
+    let list = |paths: &[&PathBuf]| {
+        let mut list = paths
+            .iter()
+            .take(SHOWN)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if paths.len() > SHOWN {
+            list.push_str(&format!(" and {} more", paths.len() - SHOWN));
+        }
+        list
+    };
+    let mut parts = Vec::new();
+    if !git_dirs.is_empty() {
+        parts.push(format!(
+            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do. Corbanu Terminal asks you to confirm it when it next starts.",
+            list(&git_dirs)
+        ));
+    }
+    if !folders.is_empty() {
+        parts.push(format!(
+            "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Its config, hooks and skills aren't loaded until you confirm it.",
+            list(&folders)
+        ));
+    }
+    Some(parts.join("\n"))
 }
 
 /// The planted folders not confirmed yet. Always empty off Windows.

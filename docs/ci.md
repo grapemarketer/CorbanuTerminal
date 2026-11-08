@@ -24,18 +24,28 @@ red status noise without testing the code.
   status and shared job as the Linux leg. It restores the caches postmerge
   `rust-ci-full` saves for this leg (about 12 minutes warm, 15 cold; 60-minute
   timeout).
-- Native Windows tests on PRs that change `codex-rs/tui`, `codex-rs/core`,
-  `codex-rs/state` or `codex-rs/login`
-  (`rust-ci / Windows native tests / Bazel test (tui, core, state, login)`,
-  #636): the nightly native Windows Bazel tests (`test-windows-native-main`),
-  limited to those four crates' test targets (`--build_tests_only`). Other PRs
-  skip it; a change to its workflow (`rust-ci-windows-native-tests.yml`) also
-  runs it, but changes to `.bazelrc`, other Bazel files or the crates these
-  four depend on don't (nightly covers those). When it runs it is part of `CI results (required)`. It restores the
+- Native Windows tests on PRs that change one of these groups of crates
+  (`rust-ci / Windows native tests / Bazel test (changed crates)`): `tui`,
+  `core`, `state` and `login` (#636); `windows-sandbox-rs`, `network-proxy`,
+  `process-hardening` and `sandboxing`, whose Windows tests use one another
+  (#1813); `exec-server` (#1813); `utils/pty` and `app-server` (#1839). It
+  runs the nightly native Windows Bazel tests (`test-windows-native-main`),
+  limited to the changed groups' test targets (`--build_tests_only`). As in
+  nightly, the native lane runs unit tests only: Bazel skips the crates'
+  integration-test targets (`tests/*.rs`) on native Windows as incompatible
+  (#1856), so the `app-server` group runs app-server's unit-test targets.
+  Other PRs skip it; a change to its workflow
+  (`rust-ci-windows-native-tests.yml`) runs every group, but changes to
+  `.bazelrc`, other Bazel files or the crates these depend on don't (nightly
+  covers those). So a `windows-sandbox-rs` change doesn't run core's Windows
+  tests, which would add core's cold build. When it runs it is part of `CI results (required)`. It restores the
   Bazel repository cache that nightly saves on `main` and saves nothing. With
-  no build cache it compiles cold: about 43 minutes, about as long as the
-  Windows argument comment lint that already runs on PRs (90-minute timeout).
-  Bazel gives the sharded core and tui unit tests its usual three attempts.
+  no build cache it compiles cold: about 43 minutes for the #636 group, about
+  as long as the Windows argument comment lint that already runs on PRs
+  (90-minute timeout); every group together took about 51 minutes on #1852
+  (37 minutes before `utils/pty` and `app-server` were added).
+  Bazel gives the sharded core, tui and app-server unit tests its usual three
+  attempts.
   This job and the nightly one also give `//codex-rs/login:login-unit-tests`
   one re-run (`--flaky_test_attempts`) for the intermittent #691 test. If that
   test fails both attempts again, add it to the skip list in `.bazelrc`'s

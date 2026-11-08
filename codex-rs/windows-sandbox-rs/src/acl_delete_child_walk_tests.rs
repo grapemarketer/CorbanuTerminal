@@ -22,11 +22,15 @@ use crate::integrity::walk::Mutant as LabelMutant;
 use pretty_assertions::assert_eq;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::sync::MutexGuard;
 use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Security::AddMandatoryAce;
 use windows_sys::Win32::Security::GROUP_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::SE_SACL_PROTECTED;
+use windows_sys::Win32::Security::SetSecurityDescriptorSacl;
 use windows_sys::Win32::Storage::FileSystem::ExtendedFileIdType;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
@@ -85,10 +89,94 @@ struct Outcome {
     label_fallbacks: usize,
 }
 
+/// `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`.
+const NO_WRITE_UP: u32 = 0x1;
+
+/// Writes `path`'s label SACL protected (inheriting nothing from above),
+/// with one explicit `level` entry with `flags`, or none. The entries are
+/// written with Windows' walk (so the objects below inherit them), then the
+/// protection on the object alone: `PROTECTED_SACL_SECURITY_INFORMATION`
+/// would need `SeSecurityPrivilege`, which a normal session lacks.
+fn protect_label(path: &Path, label: Option<(&str, u32)>) {
+    let mut buffer = vec![0_u32; 32];
+    let acl = buffer.as_mut_ptr() as *mut ACL;
+    // SAFETY: a buffer of the size given, a valid SID, path and descriptor.
+    unsafe {
+        assert_ne!(InitializeAcl(acl, 128, 2), 0, "InitializeAcl");
+        if let Some((level, flags)) = label {
+            let sid = LocalSid::from_string(level).expect("label SID");
+            assert_ne!(
+                AddMandatoryAce(acl, 2, flags, NO_WRITE_UP, sid.as_ptr()),
+                0,
+                "AddMandatoryAce"
+            );
+        }
+        let code = SetNamedSecurityInfoW(
+            to_wide(path).as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+        );
+        assert_eq!(code, ERROR_SUCCESS, "label {}", path.display());
+        let mut sd: SECURITY_DESCRIPTOR = std::mem::zeroed();
+        let psd = &mut sd as *mut SECURITY_DESCRIPTOR as *mut c_void;
+        assert_ne!(
+            InitializeSecurityDescriptor(psd, SECURITY_DESCRIPTOR_REVISION),
+            0
+        );
+        assert_ne!(SetSecurityDescriptorSacl(psd, 1, acl, 0), 0);
+        assert_ne!(
+            SetSecurityDescriptorControl(psd, SE_SACL_PROTECTED, SE_SACL_PROTECTED),
+            0
+        );
+        assert_ne!(
+            SetFileSecurityW(to_wide(path).as_ptr(), LABEL_SECURITY_INFORMATION, psd),
+            0,
+            "protect the label of {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+    let sddl = full_sddl(path);
+    assert!(
+        sddl.contains("S:P"),
+        "{} is not protected: {sddl}",
+        path.display()
+    );
+}
+
+/// A fresh base folder for a case's trees, holding the legacy sessions'
+/// lock (#1825). A legacy session labels the temporary folder Low and grants
+/// its capability SID there while it runs, and Windows carries both into
+/// every folder below that inherits. One running alongside reaches one side
+/// of a case before the other; the lock keeps out this process's sessions,
+/// and the nextest group `windows_sandbox_legacy_sessions` (which every
+/// `d311_` test is in) other processes'.
+fn serialized_base() -> (MutexGuard<'static, ()>, tempfile::TempDir) {
+    let guard = crate::unified_exec::tests::legacy_process_test_guard();
+    (guard, isolated_base())
+}
+
+/// A fresh base folder that inherits nothing from above. A session can also
+/// leave the temporary folder labelled after it (until a later sweep, when
+/// it left processes running), and an inherited Low label hides a walk that
+/// labels what it should not (`LinksFollowed`). The base's DACL and label
+/// SACL are protected: its inherited entries become explicit, and a label
+/// inherited from above is dropped.
+fn isolated_base() -> tempfile::TempDir {
+    let base = tempfile::tempdir().expect("base dir");
+    protect(base.path());
+    protect_label(base.path(), None);
+    base
+}
+
 /// Runs [`SESSION_B`] on both sides of a fresh base folder after `setup`.
 /// `None` if the setup could not run here.
 fn equality_case(name: &str, setup: Setup) -> Option<Outcome> {
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     equality_case_in(base.path(), name, &setup)
 }
 
@@ -771,7 +859,7 @@ fn step_restore(root: &Path) -> String {
 /// `setup`: Windows' label walk and #1549's deny calls on one, ours (with
 /// `mutant`, if any) on the other. `None` if the setup could not run here.
 fn command_case(name: &str, setup: Setup, mutant: Option<LabelMutant>) -> Option<Outcome> {
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     command_case_in(base.path(), name, &setup, mutant)
 }
 
@@ -945,7 +1033,7 @@ fn d311_cloud_placeholder_folders_match_the_tree_walk() {
         ("src\\cloud", true),
         (".git\\objects\\cloud", false),
     ] {
-        let base = tempfile::tempdir().expect("base dir");
+        let base = isolated_base();
         let sync_roots = std::cell::RefCell::new(Vec::new());
         let setup = |root: &Path, _: &Path| {
             let cloud = root.join(folder);
@@ -992,7 +1080,7 @@ fn d311_label_walk_cloud_placeholder_folders_match_windows_walk() {
     use crate::unified_exec::tests::cloud_placeholder::SyncRoot;
     let _guard = crate::unified_exec::tests::legacy_process_test_guard();
     let _exposed = ExposePlaceholders::new();
-    let base = tempfile::tempdir().expect("base dir");
+    let base = isolated_base();
     let sync_roots = std::cell::RefCell::new(Vec::new());
     let setup = |root: &Path, _: &Path| {
         let cloud = root.join("src\\cloud");
@@ -1039,7 +1127,7 @@ fn d311_label_walk_failing_partway_is_repaired_by_the_fallback() {
 #[test]
 fn d311_label_walk_private_folder_and_earlier_label_match_windows_walk() {
     use crate::integrity::LabelAce;
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     let verbatim = std::fs::canonicalize(base.path())
         .expect("canonical base")
         .join("t");
@@ -1125,7 +1213,7 @@ fn d311_label_walk_private_folder_and_earlier_label_match_windows_walk() {
 /// Windows' walk leaves them.
 #[test]
 fn d311_label_walk_production_order_and_file_roots_match_windows_walk() {
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     let verbatim = std::fs::canonicalize(base.path())
         .expect("canonical base")
         .join("t");

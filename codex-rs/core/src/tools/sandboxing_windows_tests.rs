@@ -381,3 +381,362 @@ async fn sec_win_1506_planted_project_config_is_not_loaded() {
         )
     );
 }
+
+/// How a test folder is reached through a link (#1801).
+#[derive(Clone, Copy, Debug)]
+enum LinkKind {
+    Junction,
+    Symlink,
+    Subst,
+}
+
+/// A link to `target`: a junction or folder symbolic link at `link`, or a
+/// `subst` drive (its root returned). `None` if this account may not make a
+/// symbolic link (a normal session without developer mode) or a `subst`
+/// drive (a normal session on the CI runner gets "Access denied"), unless
+/// `CORBANU_TEST_REQUIRE_SYMLINKS` or `CORBANU_TEST_REQUIRE_SUBST` is set
+/// (the elevated CI run).
+#[allow(clippy::expect_used)] // test fixture setup
+fn make_link(kind: LinkKind, link: &Path, target: &Path) -> Option<AbsolutePathBuf> {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    match kind {
+        LinkKind::Junction => {
+            let status = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("run mklink");
+            assert!(status.status.success(), "mklink /J: {status:?}");
+            Some(absolute(link))
+        }
+        LinkKind::Symlink => match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => Some(absolute(link)),
+            Err(err) => {
+                assert!(
+                    std::env::var_os("CORBANU_TEST_REQUIRE_SYMLINKS").is_none(),
+                    "symlink_dir: {err}"
+                );
+                None
+            }
+        },
+        LinkKind::Subst => {
+            let drive = ('M'..='Z')
+                .rev()
+                .map(|letter| format!("{letter}:"))
+                .find(|drive| !Path::new(&format!("{drive}\\")).exists())
+                .expect("a free drive letter for subst");
+            let made = std::process::Command::new("subst")
+                .arg(&drive)
+                .arg(target)
+                .status()
+                .is_ok_and(|status| status.success());
+            assert!(
+                made || std::env::var_os("CORBANU_TEST_REQUIRE_SUBST").is_none(),
+                "subst {drive} failed"
+            );
+            made.then(|| absolute(Path::new(&format!("{drive}\\"))))
+        }
+    }
+}
+
+/// Removes a `subst` drive when dropped.
+struct SubstGuard(Option<AbsolutePathBuf>);
+
+impl Drop for SubstGuard {
+    fn drop(&mut self) {
+        if let Some(root) = &self.0 {
+            let drive = root.as_path().to_string_lossy();
+            let _ = std::process::Command::new("subst")
+                .args([drive.trim_end_matches('\\'), "/d"])
+                .status();
+        }
+    }
+}
+
+/// #1801: D331's refusal of a writable folder inside a read-only one holds
+/// when the two (or the working folder) are spelled apart by a link, as the
+/// agent's commands launch under the unelevated sandbox: the working folder
+/// given as a junction, and a writable folder reached through a junction, a
+/// folder symbolic link or a `subst` drive into the read-only folder. Nothing
+/// runs and nothing is written in the read-only folder. Not refused: a
+/// writable folder through a link elsewhere, and the read-only folder itself
+/// named writable through a link (read-only wins there, #1780).
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
+    let codex_home_dir = tempfile::tempdir().expect("codex home");
+    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+
+    let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
+        Path::new("<read-only>"),
+        Path::new("<writable>"),
+    );
+    let refusal_start = refusal_start
+        .split("<writable>")
+        .next()
+        .expect("message names the writable folder")
+        .to_string();
+    let mut outcomes = Vec::new();
+    // (label, cwd through a junction, writable through a link of this kind
+    // (the writable folder is `out` otherwise), link target)
+    let cases: [(&str, bool, Option<LinkKind>, &str); 7] = [
+        ("cwd through a junction", true, None, ""),
+        (
+            "out through a junction",
+            false,
+            Some(LinkKind::Junction),
+            "docs",
+        ),
+        (
+            "out through a symbolic link",
+            false,
+            Some(LinkKind::Symlink),
+            "docs",
+        ),
+        ("out through subst", false, Some(LinkKind::Subst), "docs"),
+        (
+            "cwd and out through junctions",
+            true,
+            Some(LinkKind::Junction),
+            "docs",
+        ),
+        (
+            "control: a link elsewhere",
+            false,
+            Some(LinkKind::Junction),
+            "other",
+        ),
+        (
+            "control: docs itself",
+            false,
+            Some(LinkKind::Junction),
+            "docs\\",
+        ),
+    ];
+    for (label, cwd_via_junction, link, target) in cases {
+        let root = tempfile::tempdir().expect("fixture root");
+        let real_root = dunce::canonicalize(root.path()).expect("canonical root");
+        let workspace = real_root.join("workspace");
+        let docs = workspace.join("docs");
+        std::fs::create_dir_all(docs.join("out")).expect("create docs\\out");
+        std::fs::create_dir_all(workspace.join("other")).expect("create other");
+        let real_docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+        let cwd = if cwd_via_junction {
+            make_link(LinkKind::Junction, &real_root.join("cwd-link"), &workspace)
+                .expect("junction")
+        } else {
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace")
+        };
+        // The writable folder, as the profile spells it, and where a write
+        // through it lands.
+        let mut subst = SubstGuard(None);
+        let (writable, lands_in) = match link {
+            None => (real_docs.join("out"), docs.join("out")),
+            Some(kind) => {
+                let real_target = workspace.join(target.trim_end_matches('\\'));
+                let Some(link_root) = make_link(kind, &real_root.join("link"), &real_target) else {
+                    eprintln!("sec-win-1801 {label}: skipped: may not make this link here");
+                    continue;
+                };
+                if matches!(kind, LinkKind::Subst) {
+                    subst.0 = Some(link_root.clone());
+                }
+                if target == "docs" {
+                    (link_root.join("out"), docs.join("out"))
+                } else {
+                    (link_root, real_target)
+                }
+            }
+        };
+        let base = PermissionProfile::workspace_write()
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+        let (mut file_system, _) = base.to_runtime_permissions();
+        for (path, access) in [
+            (&real_docs, FileSystemAccessMode::Read),
+            (&writable, FileSystemAccessMode::Write),
+        ] {
+            file_system.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access,
+                missing_path_behavior: None,
+            });
+        }
+        let profile = PermissionProfile::from_runtime_permissions(
+            &file_system,
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        // Unquoted: `cmd /C` gets the script as one escaped argument, and the
+        // fixture paths have no spaces.
+        let script = format!("echo y> {}", writable.join("y.txt").as_path().display());
+        let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
+            Err(refused) => refused.to_string(),
+            Ok(request) => {
+                match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                    Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                    Err(err) => format!("failed at spawn: {err}"),
+                }
+            }
+        };
+        let written = lands_in.join("y.txt").exists();
+        eprintln!("sec-win-1801 {label}: written={written} {outcome}");
+        // The folders it names are spelled as the resolver has them (a
+        // `subst` drive is already resolved there).
+        let refused = outcome.starts_with(&format!("unsupported operation: {refusal_start}"));
+        outcomes.push((label, refused, written));
+        drop(subst);
+    }
+
+    let expected = [
+        ("cwd through a junction", true, false),
+        ("out through a junction", true, false),
+        ("out through a symbolic link", true, false),
+        ("out through subst", true, false),
+        ("cwd and out through junctions", true, false),
+        ("control: a link elsewhere", false, true),
+        ("control: docs itself", false, false),
+    ];
+    let expected: Vec<_> = expected
+        .into_iter()
+        .filter(|(label, ..)| outcomes.iter().any(|(ran, ..)| ran == label))
+        .collect();
+    assert_eq!(outcomes, expected);
+}
+
+/// #1810: a profile built from a legacy `WorkspaceWrite` policy (as config
+/// does) with a writable folder inside a protected `.git`, `.codex` or
+/// `.agents` folder of the workspace: spelled as such, with the working
+/// folder given as a junction, or through a junction or folder symbolic link
+/// to that protected folder. The agent's commands under the unelevated
+/// sandbox refuse it (D331) and write nothing there. Before #1810 the first
+/// four, which keep the older workspace-write format, ran and wrote there;
+/// the linked ones leave that format and were already refused (#1801). Not
+/// refused: `.git` itself named writable (its explicit rule replaces the
+/// protection) and a plain folder.
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_d331_1810_legacy_format_profile_with_writable_inside_protected_folder() {
+    use codex_protocol::protocol::SandboxPolicy;
+
+    let codex_home_dir = tempfile::tempdir().expect("codex home");
+    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+
+    let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
+        Path::new("<read-only>"),
+        Path::new("<writable>"),
+    );
+    let refusal_start = refusal_start
+        .split("<writable>")
+        .next()
+        .expect("message names the writable folder")
+        .to_string();
+    let mut outcomes = Vec::new();
+    // (label, cwd through a junction, the writable folder's parts below the
+    // workspace; with a link, the first part is reached through that link)
+    let cases: [(&str, bool, Option<LinkKind>, &[&str]); 8] = [
+        (".git\\hooks", false, None, &[".git", "hooks"]),
+        (".codex\\sub", false, None, &[".codex", "sub"]),
+        (".agents\\x", false, None, &[".agents", "x"]),
+        (
+            "cwd through a junction, .git\\hooks",
+            true,
+            None,
+            &[".git", "hooks"],
+        ),
+        (
+            ".git\\hooks through a junction to .git",
+            false,
+            Some(LinkKind::Junction),
+            &[".git", "hooks"],
+        ),
+        (
+            ".git\\hooks through a symbolic link to .git",
+            false,
+            Some(LinkKind::Symlink),
+            &[".git", "hooks"],
+        ),
+        ("control: .git itself", false, None, &[".git"]),
+        ("control: a plain folder", false, None, &["src"]),
+    ];
+    for (label, cwd_via_junction, link, parts) in cases {
+        let root = tempfile::tempdir().expect("fixture root");
+        let real_root = dunce::canonicalize(root.path()).expect("canonical root");
+        let workspace = real_root.join("workspace");
+        for folder in [".git\\hooks", ".codex\\sub", ".agents\\x", "src"] {
+            std::fs::create_dir_all(workspace.join(folder)).expect("create fixture folder");
+        }
+        let cwd = if cwd_via_junction {
+            make_link(LinkKind::Junction, &real_root.join("cwd-link"), &workspace)
+                .expect("junction")
+        } else {
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace")
+        };
+        let lands_in = parts
+            .iter()
+            .fold(workspace.clone(), |path, part| path.join(part));
+        let writable = match link {
+            None => parts.iter().fold(cwd.clone(), |path, part| path.join(part)),
+            Some(kind) => {
+                let Some(link_root) =
+                    make_link(kind, &real_root.join("link"), &workspace.join(parts[0]))
+                else {
+                    eprintln!("sec-win-1810 {label}: skipped: may not make this link here");
+                    continue;
+                };
+                parts[1..]
+                    .iter()
+                    .fold(link_root, |path, part| path.join(part))
+            }
+        };
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![writable.clone()],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, cwd.as_path());
+        let (file_system, network) = profile.to_runtime_permissions();
+        let legacy_format = !file_system.needs_direct_runtime_enforcement(network, cwd.as_path());
+
+        // Unquoted: `cmd /C` gets the script as one escaped argument, and the
+        // fixture paths have no spaces.
+        let script = format!("echo y> {}", writable.join("y.txt").as_path().display());
+        let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
+            Err(refused) => refused.to_string(),
+            Ok(request) => {
+                match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                    Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                    Err(err) => format!("failed at spawn: {err}"),
+                }
+            }
+        };
+        let written = lands_in.join("y.txt").exists();
+        eprintln!(
+            "sec-win-1810 {label}: legacy format={legacy_format} written={written} {outcome}"
+        );
+        let refused = outcome.starts_with(&format!("unsupported operation: {refusal_start}"));
+        outcomes.push((label, legacy_format, refused, written));
+    }
+
+    let expected = [
+        (".git\\hooks", true, true, false),
+        (".codex\\sub", true, true, false),
+        (".agents\\x", true, true, false),
+        ("cwd through a junction, .git\\hooks", true, true, false),
+        (".git\\hooks through a junction to .git", false, true, false),
+        (
+            ".git\\hooks through a symbolic link to .git",
+            false,
+            true,
+            false,
+        ),
+        ("control: .git itself", true, false, true),
+        ("control: a plain folder", false, false, true),
+    ];
+    let expected: Vec<_> = expected
+        .into_iter()
+        .filter(|(label, ..)| outcomes.iter().any(|(ran, ..)| ran == label))
+        .collect();
+    assert_eq!(outcomes, expected);
+}

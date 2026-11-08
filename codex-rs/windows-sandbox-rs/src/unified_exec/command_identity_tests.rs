@@ -686,6 +686,17 @@ async fn run_legacy_with_tty(
     for (key, value) in env {
         env_map.insert((*key).to_string(), value.clone());
     }
+    run_legacy_with_env_map(root, codex_home, argv, env_map, tty).await
+}
+
+/// [`run_legacy`] with the command's whole environment given.
+pub(super) async fn run_legacy_with_env_map(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env_map: HashMap<String, String>,
+    tty: bool,
+) -> (String, i32) {
     let spawned = spawn_windows_sandbox_session_legacy(
         &PermissionProfile::workspace_write(),
         workspace_roots_for(root).as_slice(),

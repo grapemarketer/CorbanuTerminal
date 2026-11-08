@@ -102,6 +102,9 @@ struct Found {
     /// Text it could not read in full: substitutions nested too deeply, a
     /// quote left open, or too many places a command may start.
     unreadable: bool,
+    /// D410: a `stat` would write a table were its builtin loaded
+    /// ([`code_tables::Writes::StatIfLoaded`]).
+    stat_writes: bool,
     /// Files the line writes (`None`: one it cannot name).
     written: Vec<Option<String>>,
     /// A command other than sed writes a file (a copy, move, download or
@@ -284,6 +287,7 @@ impl Classifier {
         if found.unreadable || folders.unfollowed {
             self.note(ProtectedActionKind::UnseenCode);
         }
+        self.stat_pending |= found.stat_writes;
         for kind in std::mem::take(&mut found.git) {
             work::step();
             self.note(kind);
@@ -633,8 +637,14 @@ impl Classifier {
                 });
             // Main's reading stays a floor: the reading with quotes reads
             // some words otherwise (`eval $'getln *.png'`).
-            found.unreadable |= code_tables::writes_table(&texts, &texts, /*seen*/ None)
-                || seen.is_some_and(|seen| code_tables::writes_table(&texts, &texts, Some(&seen)));
+            let writes = [
+                code_tables::writes_table(&texts, &texts, /*seen*/ None),
+                seen.map_or(code_tables::Writes::No, |seen| {
+                    code_tables::writes_table(&texts, &texts, Some(&seen))
+                }),
+            ];
+            found.unreadable |= writes.contains(&code_tables::Writes::Table);
+            found.stat_writes |= writes.contains(&code_tables::Writes::StatIfLoaded);
             'tables: for (at, text) in texts.iter().enumerate() {
                 work::step();
                 let (values, array) = code_table_values(text);
@@ -740,14 +750,41 @@ impl Classifier {
                         // folder; a wrapper before the command moved it
                         // (`sudo -D ~ git config -f .zshenv …`).
                         let moved = elsewhere_from.is_some_and(|from| from < at);
+                        // #1661: and a `submodule foreach` or `bisect run`
+                        // runs its inner git in the submodule or an unknown
+                        // folder, so the inner git's relative outputs ask
+                        // even where the outer git was told a folder (`git
+                        // -C ~/r submodule foreach git log
+                        // --output=../../.zshenv`).
+                        let wrapped = git_helpers::runs_wrapped_git(&texts, at);
                         if files.iter().any(|file| {
-                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                            self.unknown_folder_file(
+                                folders,
+                                moved || wrapped || folders.unchecked,
+                                file,
+                            )
                         }) {
                             note_git(found, ProtectedActionKind::Persistence);
                         }
                         if files.iter().any(|file| self.relative_place(file)) {
                             found.relative_outputs += 1;
                         }
+                    }
+                    // #1661: the script a wrapped git runs (`git submodule
+                    // foreach 'git fetch; git log --output=...'`, `git
+                    // bisect run '...'`): its commands run in a submodule
+                    // or an unknown folder, so push it as a script with
+                    // the folder unknown, as `-execdir` does.
+                    if let Some(operand) = git_helpers::wrapped_git_operand(&texts, at)
+                        && operand < texts.len()
+                    {
+                        push_script(
+                            found,
+                            folders,
+                            texts[operand..].join(" "),
+                            replaced(launches[operand]),
+                            /*unknown*/ true,
+                        );
                     }
                     if WRITERS.contains(&resolved_name.as_str())
                         || outputs.is_some()
@@ -1024,6 +1061,7 @@ impl Classifier {
                     found.shell_commands += counted.shell_commands;
                 }
                 found.unreadable |= counted.unreadable || inner.unfollowed;
+                found.stat_writes |= counted.stat_writes;
             }
         }
         certain_cd::finish(folders);

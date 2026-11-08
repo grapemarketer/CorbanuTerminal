@@ -47,10 +47,13 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// The lock guards nothing but the order of the tests, so a test that
+/// failed holding it doesn't fail the others that share the process (the
+/// D311 walk tests take it too since #1825).
 pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
     LEGACY_PROCESS_TEST_LOCK
         .lock()
-        .expect("legacy Windows sandbox process test lock poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
@@ -690,6 +693,30 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     );
     wait_for_process_exit(&descendant_process, Duration::from_secs(10))
         .expect("sandbox descendant did not exit after release");
+    // #1826: the capture now returns while the descendant runs, so the
+    // session's labels (#158) are put back on a thread of the capture's once
+    // it exits. Wait for that before the test (and maybe its process) ends.
+    let temp_roots = ["TEMP", "TMP"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from);
+    for root in temp_roots.chain([cwd]) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        // SAFETY: an existing folder.
+        while !matches!(
+            unsafe { crate::integrity::effective_label_is_low(&root) },
+            Ok(false)
+        ) {
+            assert!(
+                Instant::now() < deadline,
+                "{} still labelled Low after the descendant exited",
+                root.display()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    // The release goes on (the recorded denies) after the labels.
+    crate::integrity_leases::wait_for_release_in_progress().expect("wait for the release");
 }
 
 /// Observed state after a legacy workspace-write session tries to delete one
@@ -2987,6 +3014,10 @@ mod command_identity;
 /// #1770: a command's own token keeps it out of folders any user may write to.
 #[path = "token_boundary_tests.rs"]
 mod token_boundary;
+
+/// #1805: a command's environment holds each name once, in any case.
+#[path = "env_case_tests.rs"]
+mod env_case;
 
 /// D285: what the per-command ACL work costs on a large workspace.
 #[path = "acl_cost_tests.rs"]

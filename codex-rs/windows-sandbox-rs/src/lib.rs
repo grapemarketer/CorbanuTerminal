@@ -2,6 +2,7 @@
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+mod planted_log;
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
 mod unlabelled_roots;
@@ -55,6 +56,8 @@ mod allow;
 mod audit;
 #[cfg(target_os = "windows")]
 mod cap;
+#[cfg(target_os = "windows")]
+mod capture_pipes;
 #[cfg(target_os = "windows")]
 mod deny_read_acl;
 #[cfg(target_os = "windows")]
@@ -310,6 +313,8 @@ pub use logon_launch::run_logon_launcher;
 pub use logon_launch::run_window_access_reaper;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
+pub use planted_log::planted_records_mark;
+pub use planted_log::planted_records_since;
 #[cfg(target_os = "windows")]
 pub use process::ConsoleMode;
 #[cfg(target_os = "windows")]
@@ -705,50 +710,10 @@ mod windows_impl {
             CloseHandle(err_w);
         }
 
-        let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
-        let (tx_err, rx_err) = std::sync::mpsc::channel::<Vec<u8>>();
-        let t_out = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        out_r,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_out.send(buf);
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        err_r,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_err.send(buf);
-        });
+        let readers = [
+            super::capture_pipes::PipeReader::spawn(out_r),
+            super::capture_pipes::PipeReader::spawn(err_r),
+        ];
 
         let wait_outcome = wait_for_process(pi.hProcess, timeout_ms, cancellation.as_ref());
         let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut);
@@ -800,10 +765,10 @@ mod windows_impl {
             }
             CloseHandle(security.h_token);
         }
-        let _ = t_out.join();
-        let _ = t_err.join();
-        let stdout = rx_out.recv().unwrap_or_default();
-        let stderr = rx_err.recv().unwrap_or_default();
+        // A process left running may hold the pipes open (#1826): read what
+        // is left for a bounded time, not until it exits.
+        let [stdout, stderr] =
+            super::capture_pipes::finish(readers, super::capture_pipes::OUTPUT_DRAIN_TIMEOUT);
         let exit_code = if timed_out {
             128 + 64
         } else {

@@ -107,16 +107,47 @@ fn skipped_words(name: &str, words: &[String]) -> Option<usize> {
 /// text read as shell and aligned with `words`, says which words may be
 /// any or several; with it, such words where a writer reads its options
 /// or before a name ask too ([`Reading`]).
-pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen]>) -> bool {
+/// D410: a `stat` doing so is [`Writes::StatIfLoaded`].
+pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen]>) -> Writes {
+    let mut writes = Writes::No;
+    each_command(words, |at, name| {
+        let args = &words[at + 1..];
+        let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
+        if writer_names_table(name, args)
+            || hides_name(name, args, raw.get(at + 1..).unwrap_or_default(), seen)
+        {
+            writes = if name == "stat" {
+                Writes::StatIfLoaded
+            } else {
+                Writes::Table
+            };
+        }
+        writes != Writes::No
+    });
+    writes
+}
+
+/// What [`writes_table`] found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Writes {
+    No,
+    Table,
+    /// Only zsh's `stat` builtin would (D410, #1704): zsh starts without
+    /// it, so this asks only where the action may load it
+    /// ([`may_load_stat`]); elsewhere `stat` is the external program,
+    /// which writes no variable (`stat -f %m $f` on macOS).
+    StatIfLoaded,
+}
+
+/// Calls `judge` with the position and name of each command `words` run,
+/// past assignments, wrappers, `eval`/`trap` text, `repeat N`, zsh's
+/// modifiers and `coproc`, until it returns true; returns whether it did.
+fn each_command(words: &[String], mut judge: impl FnMut(usize, &str) -> bool) -> bool {
     let mut from = 0;
     while let Some((at, name)) = indirect::command_word(&words[from..]) {
         work::step();
         let at = from + at;
-        let args = &words[at + 1..];
-        let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
-        if writer_names_table(&name, args)
-            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), seen)
-        {
+        if judge(at, &name) {
             return true;
         }
         // `coproc read -A functions`: `coproc` both names an array and runs
@@ -125,6 +156,90 @@ pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen
             Some(skip) => from = (at + skip).min(words.len()),
             None if name == "coproc" => from = at + 1,
             None => return false,
+        }
+    }
+    false
+}
+
+/// D410 (#1704): whether a line (`command`, as written, and `commands`, its
+/// simple commands as lexed) may load a `stat` builtin. zsh starts without
+/// one (start-up files may load it; D410 accepts that). A word, as written
+/// with quotes and backslashes aside (`zmod''load`) or as lexed
+/// (`$'zmo\144load'`, lines joined, comma braces expanded), names a load
+/// ([`names_stat_load`]); a word as written holds a brace range, which the
+/// lexer does not expand (`zmo{d..d}load`); or a command, also one `eval`,
+/// `trap`, `repeat` or a modifier runs, after a redirection or a zsh
+/// `[[ … ]]` test (`>f $a$b`, `if [[ 1 ]] $a$b`), is bash's `enable`
+/// (`enable -f stat stat` loads bash's own), or is named by an expansion
+/// or a pattern (`eval $a$b $c$d`, `$(cat c)`, `zm*`).
+pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand]) -> bool {
+    command.iter().any(|part| {
+        work::step();
+        names_stat_load(part) || brace_range(part)
+    }) || commands.iter().any(|simple| {
+        work::step();
+        simple.words.iter().any(|word| {
+            work::step();
+            names_stat_load(word)
+        }) || each_command(&run_words(simple), |_, name| {
+            name == "enable"
+                || (!matches!(name, "[" | "[[")
+                    && name.contains(['$', '`', '*', '?', '[', '{', '(']))
+                || name.contains(shell::UNSEEN_OUTPUT)
+        })
+    })
+}
+
+/// D410: whether `text`, quotes and backslashes aside, names `zmodload`
+/// (any use, `zmodload -F zsh/stat b:zstat` too) or the module.
+pub(super) fn names_stat_load(text: &str) -> bool {
+    let plain: String = text
+        .chars()
+        .filter(|ch| {
+            work::step();
+            !matches!(ch, '\'' | '"' | '\\')
+        })
+        .collect();
+    plain.contains("modload") || plain.contains("zsh/stat")
+}
+
+/// The words of `simple` the shell may run as commands: without those a
+/// redirection holds (`>f $a$b` runs `$a$b`) or a zsh `[[ … ]]` test spans
+/// (`if [[ 1 ]] $a$b`, a short `if`).
+fn run_words(simple: &shell::SimpleCommand) -> Vec<String> {
+    let mut test = false;
+    let mut words = Vec::with_capacity(simple.words.len());
+    for (at, word) in simple.words.iter().enumerate() {
+        work::step();
+        let held = simple.writes_to.binary_search(&at).is_ok()
+            || simple.redirect_words.binary_search(&at).is_ok()
+            || simple.stdin_from.binary_search(&at).is_ok()
+            || simple.here_string.binary_search(&at).is_ok();
+        match word.as_str() {
+            _ if held => {}
+            "[[" if !test => test = true,
+            "]]" if test => test = false,
+            _ if test => {}
+            _ => words.push(word.clone()),
+        }
+    }
+    words
+}
+
+/// Whether `text` holds a brace range (`{a..z}`, `{1..3}`), read loosely:
+/// a `..` between a `{` and the next `}`.
+fn brace_range(text: &str) -> bool {
+    let mut open = false;
+    let mut dot = false;
+    let mut range = false;
+    for ch in text.chars() {
+        work::step();
+        match ch {
+            '{' => (open, dot, range) = (true, false, false),
+            '}' if open && range => return true,
+            '}' => open = false,
+            '.' if open => (range, dot) = (range || dot, true),
+            _ => dot = false,
         }
     }
     false

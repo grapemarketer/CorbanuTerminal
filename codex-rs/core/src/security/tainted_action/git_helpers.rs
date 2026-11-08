@@ -27,6 +27,89 @@ pub(super) fn git_name(word: &str) -> Option<Option<String>> {
         .map(|subcommand| Some(subcommand.to_string()))
 }
 
+/// #1661: the operand of the git at `at` when it runs a git of its own in
+/// another folder, or `None`: `submodule foreach` or `bisect run`
+/// (`git -C ~/r submodule foreach git log --output=...`, `git bisect run
+/// git log --output=...`). After git's global options, the words
+/// `submodule` + `foreach` or `bisect` + `run`; a dashed helper
+/// (`git-submodule`) already names its subcommand. `git submodule` takes
+/// options before `foreach` (`--quiet`, `-q`, `--cached`).
+pub(super) fn wrapped_git_operand(words: &[String], at: usize) -> Option<usize> {
+    let word = words.get(at)?;
+    // A dashed helper (`git-submodule`, `git-bisect`) already names the
+    // subcommand it runs.
+    if let Some(Some(subcommand)) = git_name(word) {
+        let next = if subcommand == "submodule" {
+            skip_submodule_options(words, at + 1)
+        } else {
+            at + 1
+        };
+        return match (subcommand.as_str(), words.get(next).map(String::as_str)) {
+            ("submodule", Some("foreach")) | ("bisect", Some("run")) => Some(next + 1),
+            _ => None,
+        };
+    }
+    if !shell::basename(word).eq_ignore_ascii_case("git") && git_name(word).is_none() {
+        return None;
+    }
+    // Git's global options, with the value of one that takes it: the
+    // shared list, plus `-c` and `--config-env` (as in
+    // `git_config::config_args`).
+    let mut index = at + 1;
+    while index < words.len() {
+        work::step();
+        let word = &words[index];
+        if word == "--" {
+            index += 1;
+            break;
+        }
+        if word.starts_with('-') && word != "-" {
+            index += 1;
+            if takes_git_value(word) && !word.contains('=') {
+                index += 1;
+            }
+            continue;
+        }
+        break;
+    }
+    let next = if words.get(index).map(String::as_str) == Some("submodule") {
+        skip_submodule_options(words, index + 1)
+    } else {
+        index + 1
+    };
+    match (
+        words.get(index).map(String::as_str),
+        words.get(next).map(String::as_str),
+    ) {
+        (Some("submodule"), Some("foreach")) | (Some("bisect"), Some("run")) => Some(next + 1),
+        _ => None,
+    }
+}
+
+/// #1661: whether the git at `at` runs a git of its own in another folder.
+pub(super) fn runs_wrapped_git(words: &[String], at: usize) -> bool {
+    wrapped_git_operand(words, at).is_some()
+}
+
+/// `git submodule` options before `foreach` (`--quiet`, `-q`, `--cached`).
+fn skip_submodule_options(words: &[String], mut index: usize) -> usize {
+    while matches!(
+        words.get(index).map(String::as_str),
+        Some("-q" | "--quiet" | "--cached")
+    ) {
+        work::step();
+        index += 1;
+    }
+    index
+}
+
+/// A git global option that takes the next word as its value: the shared
+/// list, plus `-c` and `--config-env`.
+fn takes_git_value(word: &str) -> bool {
+    super::code_variables::GIT_VALUE_OPTIONS.contains(&word)
+        || matches!(word, "-c" | "--config-env")
+}
+
 /// D153: whether a git command (`git`, `git.exe`, after any wrapper) gives a
 /// `-c` or `--config-env` setting as text holding a git name
 /// (`git -c 'user.name=a git.exe b' -c core.pager=sh log`). The word lexer
