@@ -797,19 +797,23 @@ unsafe fn is_allow_for(ace: *const c_void, psids: &[*mut c_void]) -> bool {
     psids.iter().any(|psid| EqualSid(sid, *psid) != 0)
 }
 
-/// D377 (#1871): makes `user` the owner of the object `handle` is open to and
-/// removes its allow entries for `psids`. An inherited one (a `CREATOR
-/// OWNER` entry's copy names the account that made the object) is
-/// recomputed from the parent for the new owner; inherited copies below the
-/// object follow. `handle` needs `READ_CONTROL`, `WRITE_DAC` and
-/// `WRITE_OWNER`.
+/// D377 (#1871): makes `user` the owner of the object `handle` is open to (one
+/// a sandbox account owned, so whoever wrote its entries could have been that
+/// account) and removes from its DACL every explicit allow entry except
+/// those for `trusted`, and the inherited allow entries for `accounts` (a
+/// `CREATOR OWNER` copy names the account that made the object; the system
+/// recomputes inherited entries for the new owner). Deny entries stay.
+/// Inherited copies below the object follow. `handle` needs `READ_CONTROL`,
+/// `WRITE_DAC` and `WRITE_OWNER`.
 ///
 /// # Safety
-/// `handle` must be open; `user` and each of `psids` must point to valid SIDs.
+/// `handle` must be open; `user` and each of `trusted` and `accounts` must
+/// point to valid SIDs.
 pub(crate) unsafe fn take_for_user(
     handle: HANDLE,
     user: *mut c_void,
-    psids: &[*mut c_void],
+    trusted: &[*mut c_void],
+    accounts: &[*mut c_void],
 ) -> Result<()> {
     let code = SetSecurityInfo(
         handle,
@@ -825,7 +829,17 @@ pub(crate) unsafe fn take_for_user(
     }
     let (p_dacl, p_sd) = security_info(handle)?;
     let result = remove_aces_from(DaclTarget::Handle(handle), p_sd, p_dacl, |_, ace| {
-        is_allow_for(ace, psids)
+        let hdr = &*(ace as *const ACE_HEADER);
+        // ACCESS_DENIED, _OBJECT, _CALLBACK and _CALLBACK_OBJECT.
+        if matches!(hdr.AceType, 1 | 6 | 10 | 12) {
+            return false;
+        }
+        if (hdr.AceFlags & INHERITED_ACE) != 0 {
+            return is_allow_for(ace, accounts);
+        }
+        // Object, compound and callback allow entries are dropped whatever
+        // they name.
+        hdr.AceType != ACCESS_ALLOWED_ACE_TYPE || !is_allow_for(ace, trusted)
     });
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);

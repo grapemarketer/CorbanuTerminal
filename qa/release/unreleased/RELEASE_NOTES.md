@@ -454,8 +454,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   its workspace entries there that later commands in that workspace carry,
   and keep changing them after the upgrade (shown on native Windows CI). In
   the same upgrade step, before the old grant is removed, the session makes
-  you their owner and removes their entries for the sandbox's accounts, as
-  you (no UAC prompt). Nothing is deleted. One whose permissions keep you
+  you their owner and removes every entry the sandbox could have added
+  (any explicit one other than yours, SYSTEM's and Administrators'), as you
+  (no UAC prompt). Nothing is deleted. One whose permissions keep you
   out stays as it is; the counts are logged in the Corbanu home's
   `.sandbox` log. A typical session leaves several hundred (Node's
   `node-compile-cache`, `MSBuildTemp`, temp files tools kept); on CI all

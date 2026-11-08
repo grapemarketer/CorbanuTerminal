@@ -7,9 +7,11 @@
 //! able to change those: grant itself access again, and, in a folder it
 //! owns, replace what the user's own programs later put there. At the same
 //! upgrade step, before that grant goes, the user takes them: becomes their
-//! owner and removes their explicit allow entries for the sandbox accounts.
-//! Nothing is deleted. An object the user may not take (its DACL keeps the
-//! user out) is left as it is and counted.
+//! owner and removes every allow entry the sandbox could have put there
+//! (any explicit one except the user's, SYSTEM's and Administrators'), so
+//! what they allow comes from the folder they are in. Nothing is deleted.
+//! An object the user may not take (its DACL keeps the user out) is left as
+//! it is and counted.
 
 use crate::acl::file_identity;
 use crate::acl::final_path;
@@ -56,7 +58,7 @@ pub(crate) struct Leftovers {
 }
 
 /// The SIDs (as strings) of the sandbox's accounts: the members of its
-/// users group.
+/// users group that are local or domain accounts.
 pub(crate) fn sandbox_account_sids() -> Result<Vec<String>> {
     use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_0;
     use windows_sys::Win32::NetworkManagement::NetManagement::MAX_PREFERRED_LENGTH;
@@ -95,7 +97,9 @@ pub(crate) fn sandbox_account_sids() -> Result<Vec<String>> {
             let len = GetLengthSid(entry.lgrmi0_sid) as usize;
             std::slice::from_raw_parts(entry.lgrmi0_sid as *const u8, len).to_vec()
         };
-        if let Ok(sid) = crate::winutil::string_from_sid_bytes(&sid) {
+        if let Ok(sid) = crate::winutil::string_from_sid_bytes(&sid)
+            && sid.starts_with("S-1-5-21-")
+        {
             sids.push(sid);
         }
     }
@@ -115,12 +119,25 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
         return Ok(found);
     }
     let user = current_user_sid()?;
+    // A group that named this user would make the user's own objects look
+    // like the sandbox's.
+    let accounts: Vec<&String> = accounts
+        .iter()
+        .filter(|sid| !sid.eq_ignore_ascii_case(&user))
+        .collect();
     let user_sid = LocalSid::from_string(&user)?;
     let account_sids = accounts
         .iter()
         .map(|sid| LocalSid::from_string(sid))
         .collect::<Result<Vec<_>>>()?;
     let psids: Vec<_> = account_sids.iter().map(LocalSid::as_ptr).collect();
+    // The user, SYSTEM, Administrators and OWNER RIGHTS (the user, once the
+    // owner).
+    let trusted_sids = [user.as_str(), "S-1-5-18", "S-1-5-32-544", "S-1-3-4"]
+        .into_iter()
+        .map(LocalSid::from_string)
+        .collect::<Result<Vec<_>>>()?;
+    let trusted: Vec<_> = trusted_sids.iter().map(LocalSid::as_ptr).collect();
     let base_dir = open(base, FILE_READ_ATTRIBUTES)?;
     // SAFETY: the handle is open.
     let base_key = comparable(&unsafe { final_path(base_dir.as_raw_handle() as _) }?);
@@ -136,15 +153,12 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
             }
             found.scanned += 1;
             let path = entry.path();
-            if dir == base
+            let session_folder = dir == base
                 && entry
                     .file_name()
                     .to_string_lossy()
                     .to_ascii_lowercase()
-                    .starts_with(SESSION_TEMP_PREFIX)
-            {
-                continue;
-            }
+                    .starts_with(SESSION_TEMP_PREFIX);
             let Ok(look) = open(&path, READ_CONTROL | FILE_READ_ATTRIBUTES) else {
                 found.unreadable += 1;
                 continue;
@@ -157,12 +171,17 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
                 found.unreadable += 1;
                 continue;
             };
+            // A session's folder (the user's, as sessions make them) is its
+            // session's to clean up.
+            if session_folder && owner.eq_ignore_ascii_case(&user) {
+                continue;
+            }
             if accounts
                 .iter()
                 .any(|account| account.eq_ignore_ascii_case(&owner))
             {
                 found.sandbox_owned += 1;
-                if take_one(&path, &look, &base_key, user_sid.as_ptr(), &psids) {
+                if take_one(&path, &look, &base_key, user_sid.as_ptr(), &trusted, &psids) {
                     found.taken += 1;
                 } else {
                     found.not_taken += 1;
@@ -186,7 +205,8 @@ fn take_one(
     look: &File,
     base_key: &str,
     user: *mut std::ffi::c_void,
-    psids: &[*mut std::ffi::c_void],
+    trusted: &[*mut std::ffi::c_void],
+    accounts: &[*mut std::ffi::c_void],
 ) -> bool {
     let Ok(take) = open(
         path,
@@ -210,7 +230,8 @@ fn take_one(
         .is_ok_and(|found| comparable(&found).starts_with(&format!("{base_key}\\")));
     // SAFETY: the handle is open with the rights `take_for_user` needs; the
     // SIDs are valid.
-    same && inside && unsafe { take_for_user(take.as_raw_handle() as _, user, psids) }.is_ok()
+    same && inside
+        && unsafe { take_for_user(take.as_raw_handle() as _, user, trusted, accounts) }.is_ok()
 }
 
 fn open(path: &Path, access: u32) -> std::io::Result<File> {

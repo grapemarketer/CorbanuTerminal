@@ -335,9 +335,10 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     let users = temp.path().join("other-program.txt");
     fs::write(&users, "other").expect("other program's file");
     // An older version's command in the workspace, with the temp folder one
-    // of its writable roots, as older versions made it. It also gives itself
-    // entries on what it made there: its account's, and its workspace's
-    // capability SID, which later commands in that workspace carry too.
+    // of its writable roots, as older versions made it. It also gives entries
+    // on what it made there to its account, the sandbox's group and its
+    // workspace's capability SID, which later commands in that workspace
+    // carry too.
     let workspace_sid =
         crate::cap::workspace_cap_sid_for_cwd(home.path(), root.path()).expect("workspace sid");
     // `icacls` cannot name a SID no account has; PowerShell can.
@@ -347,6 +348,7 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         format!(
             "$ErrorActionPreference = 'Stop'\r\n\
              $sids = @([Security.Principal.WindowsIdentity]::GetCurrent().User, \
+             (New-Object Security.Principal.SecurityIdentifier('{group}')), \
              (New-Object Security.Principal.SecurityIdentifier('{workspace_sid}')))\r\n\
              foreach ($p in @('{file}', '{dir}')) {{\r\n\
                $item = Get-Item -LiteralPath $p\r\n\
