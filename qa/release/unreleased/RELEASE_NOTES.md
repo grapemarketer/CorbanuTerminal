@@ -764,6 +764,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   project to look at it doesn't ask; later changes to it are. Nothing is
   refused: agents can still commit and run `git config` there. Going back
   to an older build drops these records the next time it saves its own.
+- **Non-admin sandbox: `.codex`/`.agents` below a folder whose name isn't
+  valid Unicode count as planted** (#1877). The folder holding a folder with
+  such a name is flagged after every command, so what lies below it isn't
+  loaded until you confirm it; before, nested folders below it weren't
+  recorded at all. (When that is the workspace itself, its own
+  `.codex`/`.agents` count too until the folder is renamed or removed.) Such a
+  folder now gets one "isn't valid Unicode" note, not one per entry, so many
+  such names no longer push earlier warnings out of the post-command notice.
 - **Non-admin sandbox: hooks folders a git config names are watched** (D422,
   #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
   included config file, or a script a program key names, when it lies in a

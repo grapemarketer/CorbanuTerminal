@@ -123,6 +123,46 @@ fn find_reports_folded_names_and_unlistable_folders() {
     );
 }
 
+/// #1877 item 2: a folder holding a folder whose name isn't valid Unicode
+/// (not walked) is unlistable, so what is below it counts as planted; one
+/// holding only such a file isn't. Either gets one note, however many such
+/// names it holds.
+#[test]
+fn find_reports_folders_holding_names_that_are_not_unicode() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    // Lone surrogates: valid on NTFS, not valid Unicode.
+    let odd = |n: u8| std::ffi::OsString::from_wide(&[0xD800, u16::from(n)]);
+    let (folders, files) = (root.join("folders"), root.join("files"));
+    for n in *b"xy" {
+        std::fs::create_dir_all(folders.join(odd(n)).join("a\\.codex")).expect("odd folder");
+        std::fs::create_dir_all(&files).expect("files");
+        std::fs::write(files.join(odd(n)), "x").expect("odd file");
+    }
+
+    let mut found = find(std::slice::from_ref(&root));
+    found.notes.sort();
+
+    assert_eq!(
+        (found.entries, found.unlistable, found.notes),
+        (
+            Vec::new(),
+            vec![folders.clone()],
+            vec![files, folders]
+                .into_iter()
+                .map(|folder| {
+                    (
+                        folder,
+                        "holds an entry whose name isn't valid Unicode, so it isn't checked"
+                            .to_string(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    );
+}
+
 /// D332: a root's top-level `.git` is reported when it exists, a folder or
 /// file with its identity and a junction without one; a missing one isn't.
 /// One counts as appeared in a session unless it is there, as the same

@@ -130,6 +130,7 @@ env:
     nested_metadata::legacy_nested_project_metadata_survives_a_crash
     nested_metadata::legacy_workspace_write_cannot_change_nested_project_metadata
     nested_metadata::legacy_unlistable_folder_counts_as_planted
+    nested_metadata::legacy_metadata_below_names_that_are_not_unicode_counts_as_planted
     nested_metadata::legacy_temp_root_is_not_watched_for_nested_metadata
     nested_metadata::legacy_workspace_stays_watched_when_temp_resolves_to_it
     nested_metadata::legacy_configured_project_metadata_the_sandbox_makes_is_not_planted
@@ -184,7 +185,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
-          grep -q "test result: ok. 4 passed" d283-1541.log
+          grep -q "test result: ok. 5 passed" d283-1541.log
           rm d283-1541.log
       - name: Configured read-only paths the legacy backend makes (#1686, #1708, #1780)
         if: ${{ !cancelled() }}
