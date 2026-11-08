@@ -1508,6 +1508,11 @@ mod tests {
     async fn http_connect_accept_blocks_hooked_host_in_full_mode_without_mitm_state() {
         let mut policy = NetworkProxyConfig {
             mitm: true,
+            // Skip the local/private-address DNS check (#1883): it resolves
+            // api.github.com live with a 2s timeout, and a failed or slow lookup
+            // blocks the host as blocked-by-allowlist before the MITM-required
+            // check this test is about. allow_local_binding only gates that check.
+            allow_local_binding: true,
             mitm_hooks: vec![crate::mitm_hook::MitmHookConfig {
                 host: "api.github.com".to_string(),
                 matcher: crate::mitm_hook::MitmHookMatchConfig {
