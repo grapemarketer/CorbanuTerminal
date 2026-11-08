@@ -1126,6 +1126,30 @@ fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    // D377: the session's own temp folder is the temp root, never the user's
+    // whole `%TEMP%` (a no-op where the command's environment already has it).
+    let mut env_map = request.env_map.clone();
+    if (overrides.write_roots.is_none() || overrides.read_roots.is_none())
+        && let Err(err) = crate::session_temp::use_session_temp(
+            request.permissions,
+            &mut env_map,
+            request.codex_home,
+        )
+    {
+        // Without it, no temp folder is granted at all.
+        log_note(
+            &format!("D377: no session temp folder: {err:#}"),
+            Some(&sandbox_dir(request.codex_home)),
+        );
+        for key in ["TEMP", "TMP"] {
+            env_map.insert(key.to_string(), String::new());
+        }
+    }
+    let request = SandboxSetupRequest {
+        env_map: &env_map,
+        ..*request
+    };
+    let request = &request;
     let write_roots = effective_write_roots_for_setup(
         request.permissions,
         request.command_cwd,

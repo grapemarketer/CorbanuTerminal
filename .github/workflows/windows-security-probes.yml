@@ -244,7 +244,7 @@ jobs:
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bin codex-windows-sandbox-setup -- sandbox_users::tests:: --nocapture 2>&1 | tee pw-1776.log
           grep -q 'test result: ok. 3 passed' pw-1776.log
-      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819, D429)
+      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819, D429, D377)
         if: ${{ !cancelled() }}
         shell: bash
         # Elevated: the #341/#345 tests must not skip. #345 runs a command in
@@ -506,7 +506,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 55
+            Assert-Tests $sandbox 'sec_win_' 57
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
@@ -570,6 +570,22 @@ jobs:
             $out
             if ($code -ne 0) { throw "#1819 failed in a normal session" }
             if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1819 did not run in a normal session" }
+            # D377 (#304): from a normal session too, an elevated command gets
+            # a temp folder of its session's own in this step's TEMP (secured
+            # like a user's), and the grant older setups left is taken back.
+            foreach ($t in @('sec_win_d377_elevated_command_gets_its_own_temp_folder', 'sec_win_d377_old_temp_folder_grant_is_taken_back')) {
+              $t = "unified_exec::tests::command_identity::elevated::d377::$t"
+              Assert-Tests $sandbox $t 1
+              & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+              $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "$t failed in a normal session" }
+              if (-not ($out -match 'test result: ok\. 1 passed')) { throw "$t did not run in a normal session" }
+            }
             # D429 (#1803): an elevated command can't read a legacy command's
             # memory or thread contexts (the legacy tests ran above).
             $tD429 = 'unified_exec::tests::command_identity::elevated::d429::sec_win_d429_elevated_command_cannot_read_a_legacy_command'

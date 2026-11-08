@@ -1134,6 +1134,13 @@ impl ThreadManager {
         for thread_id in &report.completed {
             tracked_threads.remove(thread_id);
         }
+        // D377: with every thread shut down, no sandboxed command uses the
+        // session's temp folders any more.
+        #[cfg(windows)]
+        if tracked_threads.is_empty() {
+            let _ =
+                tokio::task::spawn_blocking(codex_windows_sandbox::end_session_temp_folders).await;
+        }
 
         report
             .completed

@@ -120,6 +120,38 @@ pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<
     Ok(sid)
 }
 
+/// The capability SID recorded for the writable root `root`, if any; never
+/// makes one.
+pub(crate) fn existing_writable_root_cap_sid(codex_home: &Path, root: &Path) -> Option<String> {
+    if !cap_sid_file(codex_home).exists() {
+        return None;
+    }
+    load_or_create_cap_sids(codex_home)
+        .ok()?
+        .writable_root_by_path
+        .get(&canonical_path_key(root))
+        .cloned()
+}
+
+/// Forgets the writable-root capability SIDs whose key `forget` picks (D377:
+/// session temp folders that are gone).
+pub(crate) fn forget_writable_root_cap_sids(
+    codex_home: &Path,
+    forget: impl Fn(&str) -> bool,
+) -> Result<()> {
+    let path = cap_sid_file(codex_home);
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let before = caps.writable_root_by_path.len();
+    caps.writable_root_by_path.retain(|key, _| !forget(key));
+    if caps.writable_root_by_path.len() != before {
+        persist_caps(&path, &caps)?;
+    }
+    Ok(())
+}
+
 pub fn workspace_write_cap_sid_for_root(
     codex_home: &Path,
     cwd: &Path,

@@ -232,10 +232,10 @@ fn ensure_dir(dir: &Path, sddl: &str) -> Result<()> {
 }
 
 /// A parsed security descriptor.
-struct Descriptor(*mut c_void);
+pub(crate) struct Descriptor(*mut c_void);
 
 impl Descriptor {
-    fn parse(sddl: &str) -> Result<Self> {
+    pub(crate) fn parse(sddl: &str) -> Result<Self> {
         use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
         let sddl = to_wide(sddl);
         let mut descriptor: *mut c_void = std::ptr::null_mut();
@@ -254,7 +254,7 @@ impl Descriptor {
         Ok(Self(descriptor))
     }
 
-    fn create_dir(&self, dir: &Path) -> Result<()> {
+    pub(crate) fn create_dir(&self, dir: &Path) -> Result<()> {
         use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
         use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
         let attributes = SECURITY_ATTRIBUTES {
@@ -335,7 +335,7 @@ fn open_no_follow(path: &Path, access: u32, flags: u32) -> std::io::Result<File>
         .open(path)
 }
 
-fn is_link(file: &File) -> Result<bool> {
+pub(crate) fn is_link(file: &File) -> Result<bool> {
     Ok(file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
@@ -354,7 +354,7 @@ fn owner_is_trusted(file: &File, trust_this_user: bool) -> Result<bool> {
 }
 
 /// The owner of `file` (open with `READ_CONTROL`), as a SID string.
-fn owner_sid(file: &File) -> Result<String> {
+pub(crate) fn owner_sid(file: &File) -> Result<String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
     use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
@@ -389,7 +389,7 @@ fn owner_sid(file: &File) -> Result<String> {
     owner.context("no owner")?.map_err(anyhow::Error::msg)
 }
 
-fn current_user_sid() -> Result<String> {
+pub(crate) fn current_user_sid() -> Result<String> {
     use windows_sys::Win32::Foundation::CloseHandle;
     // SAFETY: the token is closed right after reading its user.
     let sid = unsafe {

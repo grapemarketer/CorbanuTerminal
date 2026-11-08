@@ -1,0 +1,178 @@
+//! D377 (#304): an elevated workspace-write command writes to a temp folder
+//! of its session's own, not to the user's whole temp folder, and the grant
+//! older setups put on the temp folder itself is taken back.
+
+use super::*;
+
+fn unique_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    format!("{:x}-{}", nanos as u64, std::process::id())
+}
+
+/// A script that prints the command's temp folders and tries to write
+/// `existing` (appending), make `new` and write in its own temp folder.
+fn write_probe_script(dir: &Path, existing: &Path, new: &Path) -> Vec<String> {
+    let script = dir.join("d377.cmd");
+    fs::write(
+        &script,
+        format!(
+            "@echo off\r\n\
+             echo TEMP=%TEMP%\r\n\
+             echo TMP=%TMP%\r\n\
+             (echo x>>\"{}\") 2>nul && echo EXISTING-WRITTEN\r\n\
+             (echo x>\"{}\") 2>nul && echo NEW-WRITTEN\r\n\
+             (echo x>\"%TEMP%\\own.txt\") 2>nul && echo OWN-WRITTEN\r\n",
+            existing.display(),
+            new.display()
+        ),
+    )
+    .expect("write script");
+    vec![
+        system32_exe("cmd.exe").display().to_string(),
+        "/d".to_string(),
+        "/c".to_string(),
+        script.display().to_string(),
+    ]
+}
+
+fn printed(stdout: &str, key: &str) -> PathBuf {
+    let line = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(key))
+        .unwrap_or_else(|| panic!("no {key} in {stdout:?}"));
+    PathBuf::from(line)
+}
+
+/// The command's temp folder (`TEMP` and `TMP`): a session folder in `base`.
+fn assert_session_temp_in(stdout: &str, base: &Path) {
+    let temp = printed(stdout, "TEMP=");
+    assert_eq!(printed(stdout, "TMP="), temp, "{stdout}");
+    let key = |path: &Path| {
+        dunce::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_ascii_lowercase()
+    };
+    assert_eq!(
+        temp.parent().map(key),
+        Some(key(base)),
+        "the command's TEMP is not a folder in {}: {stdout}",
+        base.display()
+    );
+    let name = temp
+        .file_name()
+        .expect("name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        name.starts_with(crate::session_temp::SESSION_TEMP_PREFIX),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn sec_win_d377_elevated_command_gets_its_own_temp_folder() {
+    let _guard = legacy_process_test_guard();
+    let Some(home) = elevated_home("d377") else {
+        return;
+    };
+    let root = user_owned_test_root();
+    let temp = dunce::canonicalize(std::env::var_os("TEMP").expect("TEMP")).expect("TEMP");
+    let id = unique_id();
+    // Another program's temp file, and one a command would make.
+    let existing = temp.join(format!("d377-other-program-{id}.txt"));
+    fs::write(&existing, "other").expect("other program's file");
+    let new = temp.join(format!("d377-new-{id}.txt"));
+    let argv = write_probe_script(root.path(), &existing, &new);
+    let (stdout, code) = current_thread_runtime().block_on(run_elevated(
+        root.path(),
+        home.path(),
+        argv,
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 own temp: exit={code} stdout={stdout:?}");
+    assert_session_temp_in(&stdout, &temp);
+    assert!(stdout.contains("OWN-WRITTEN"), "{stdout}");
+    assert!(!stdout.contains("EXISTING-WRITTEN"), "{stdout}");
+    assert!(!stdout.contains("NEW-WRITTEN"), "{stdout}");
+    assert_eq!(fs::read_to_string(&existing).expect("read"), "other");
+    assert!(!new.exists());
+    let _ = fs::remove_file(&existing);
+    record_setup(home.path());
+}
+
+#[test]
+fn sec_win_d377_old_temp_folder_grant_is_taken_back() {
+    let _guard = legacy_process_test_guard();
+    let Some(home) = elevated_home("d377-old") else {
+        return;
+    };
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    // The sandbox's group exists once its setup ran.
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        vec![
+            system32_exe("cmd.exe").display().to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo d377-ready".to_string(),
+        ],
+        &[],
+        /*tty*/ false,
+    ));
+    assert!(stdout.contains("d377-ready"), "exit={code} {stdout:?}");
+    // A temp folder secured like a user's, with the grant older setups left
+    // on it: the sandbox group may write it and what it holds.
+    let temp = user_owned_test_root();
+    let group = crate::winutil::string_from_sid_bytes(
+        &crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP).expect("group"),
+    )
+    .expect("group sid");
+    // SAFETY: the SID is freed below; the folder exists.
+    let has_group_write = |path: &Path| unsafe {
+        let psid = crate::token::convert_string_sid_to_sid(&group).expect("psid");
+        let (dacl, descriptor) = crate::acl::fetch_dacl_handle(path).expect("dacl");
+        let has = crate::acl::dacl_has_write_allow_for_sid(dacl, psid);
+        windows_sys::Win32::Foundation::LocalFree(descriptor as _);
+        windows_sys::Win32::Foundation::LocalFree(psid as _);
+        has
+    };
+    // SAFETY: as above.
+    unsafe {
+        let psid = crate::token::convert_string_sid_to_sid(&group).expect("psid");
+        crate::acl::ensure_allow_write_aces(temp.path(), &[psid]).expect("old grant");
+        windows_sys::Win32::Foundation::LocalFree(psid as _);
+    }
+    let existing = temp.path().join("other-program.txt");
+    fs::write(&existing, "other").expect("other program's file");
+    assert!(has_group_write(temp.path()) && has_group_write(&existing));
+    let new = temp.path().join("new.txt");
+    let argv = write_probe_script(root.path(), &existing, &new);
+    let value = temp.path().display().to_string();
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        argv,
+        &[("TEMP", value.clone()), ("TMP", value)],
+        /*tty*/ false,
+    ));
+    println!("d377 old grant: exit={code} stdout={stdout:?}");
+    assert!(
+        !has_group_write(temp.path()),
+        "the old grant is still there"
+    );
+    assert!(!has_group_write(&existing));
+    assert_session_temp_in(&stdout, temp.path());
+    assert!(stdout.contains("OWN-WRITTEN"), "{stdout}");
+    assert!(!stdout.contains("EXISTING-WRITTEN"), "{stdout}");
+    assert!(!stdout.contains("NEW-WRITTEN"), "{stdout}");
+    assert!(!new.exists());
+    crate::session_temp::end_session_temp_in(temp.path());
+    record_setup(home.path());
+}
