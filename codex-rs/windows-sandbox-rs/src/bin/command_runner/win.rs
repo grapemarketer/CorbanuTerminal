@@ -22,7 +22,9 @@ use codex_windows_sandbox::FramedMessage;
 use codex_windows_sandbox::IPC_PROTOCOL_VERSION;
 use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
+use codex_windows_sandbox::OUTPUT_DRAIN_TIMEOUT;
 use codex_windows_sandbox::OutputPayload;
+use codex_windows_sandbox::OutputPipeReader;
 use codex_windows_sandbox::OutputStream;
 use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::ResizePayload;
@@ -36,11 +38,11 @@ use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
+use codex_windows_sandbox::finish_output_readers;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
-use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::restrict_current_default_dacl;
 use codex_windows_sandbox::restrict_current_token_access;
 use codex_windows_sandbox::spawn_process_with_pipes;
@@ -56,6 +58,7 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::mpsc::SyncSender;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -434,31 +437,58 @@ fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpa
     })
 }
 
-/// Stream stdout/stderr from the child into Output frames.
-fn spawn_output_reader(
+/// Chunks the output readers have read, waiting for [`spawn_output_writer`].
+/// Bounded, so a parent that reads slowly slows the command down rather than
+/// the runner's memory growing. The drain after the command exits counts
+/// time a reader waits here, so a parent more than about 2 s behind could
+/// miss the command's last output; Core reads the frames as they come.
+const OUTPUT_CHUNKS_IN_FLIGHT: usize = 8;
+
+/// Writes the chunks the output readers send as Output frames. #1830: only
+/// this thread writes them, so cancelling a reader's read never cuts a frame
+/// short; it ends once every reader has ended.
+fn spawn_output_writer(
     writer: Arc<StdMutex<File>>,
+    log_dir: Option<PathBuf>,
+) -> (
+    SyncSender<(OutputStream, Vec<u8>)>,
+    std::thread::JoinHandle<()>,
+) {
+    let (chunks_tx, chunks_rx) =
+        std::sync::mpsc::sync_channel::<(OutputStream, Vec<u8>)>(OUTPUT_CHUNKS_IN_FLIGHT);
+    let thread = std::thread::spawn(move || {
+        for (stream, chunk) in chunks_rx {
+            let msg = FramedMessage {
+                version: IPC_PROTOCOL_VERSION,
+                message: Message::Output {
+                    payload: OutputPayload {
+                        data_b64: encode_bytes(&chunk),
+                        stream,
+                    },
+                },
+            };
+            if let Ok(mut guard) = writer.lock()
+                && let Err(err) = write_frame(&mut *guard, &msg)
+            {
+                log_note(
+                    &format!("runner output write failed: {err}"),
+                    log_dir.as_deref(),
+                );
+            }
+        }
+    });
+    (chunks_tx, thread)
+}
+
+/// Reads one of the child's output pipes, handing each chunk to the writer.
+fn spawn_output_reader(
+    chunks_tx: SyncSender<(OutputStream, Vec<u8>)>,
     handle: HANDLE,
     stream: OutputStream,
-    log_dir: Option<PathBuf>,
-) -> std::thread::JoinHandle<()> {
-    read_handle_loop(handle, move |chunk| {
-        let msg = FramedMessage {
-            version: IPC_PROTOCOL_VERSION,
-            message: Message::Output {
-                payload: OutputPayload {
-                    data_b64: encode_bytes(chunk),
-                    stream,
-                },
-            },
-        };
-        if let Ok(mut guard) = writer.lock()
-            && let Err(err) = write_frame(&mut *guard, &msg)
-        {
-            log_note(
-                &format!("runner output write failed: {err}"),
-                log_dir.as_deref(),
-            );
-        }
+) -> OutputPipeReader<()> {
+    OutputPipeReader::spawn_with(handle, (), move |_, chunk| {
+        // The writer only ends after every reader has.
+        let _ = chunks_tx.send((stream, chunk.to_vec()));
     })
 }
 
@@ -693,22 +723,19 @@ pub fn main() -> Result<()> {
         return Err(err);
     }
     let log_dir_owned = log_dir.map(Path::to_path_buf);
-    let out_thread = spawn_output_reader(
-        Arc::clone(&pipe_write),
-        stdout_handle,
-        OutputStream::Stdout,
-        log_dir_owned.clone(),
-    );
+    let (chunks_tx, output_writer) =
+        spawn_output_writer(Arc::clone(&pipe_write), log_dir_owned.clone());
+    let out_thread = spawn_output_reader(chunks_tx.clone(), stdout_handle, OutputStream::Stdout);
     let err_thread = if stderr_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
         Some(spawn_output_reader(
-            Arc::clone(&pipe_write),
+            chunks_tx.clone(),
             stderr_handle,
             OutputStream::Stderr,
-            log_dir_owned.clone(),
         ))
     } else {
         None
     };
+    drop(chunks_tx);
 
     let _input_thread = spawn_input_loop(
         pipe_read,
@@ -767,13 +794,26 @@ pub fn main() -> Result<()> {
     drop(conpty_owner.take());
 
     if child_stopped {
-        if out_thread.join().is_err() {
+        // #1830: a process the command left running may hold the output
+        // pipes; read what is left for a bounded time, not until it exits.
+        let [out, err] = match err_thread {
+            Some(err_thread) => {
+                finish_output_readers([out_thread, err_thread], OUTPUT_DRAIN_TIMEOUT)
+            }
+            None => {
+                let [out] = finish_output_readers([out_thread], OUTPUT_DRAIN_TIMEOUT);
+                [out, Ok(())]
+            }
+        };
+        if out.is_err() {
             log_note("runner stdout reader thread panicked", log_dir);
         }
-        if let Some(thread) = err_thread
-            && thread.join().is_err()
-        {
+        if err.is_err() {
             log_note("runner stderr reader thread panicked", log_dir);
+        }
+        // The readers have ended: write what they sent before the Exit frame.
+        if output_writer.join().is_err() {
+            log_note("runner output writer thread panicked", log_dir);
         }
     }
 
