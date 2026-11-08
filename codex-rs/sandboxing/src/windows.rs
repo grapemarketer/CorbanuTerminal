@@ -151,15 +151,17 @@ pub fn refuse_unenforceable_windows_restricted_token_profile(
         return Ok(());
     }
     refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
-    let (mut file_system_sandbox_policy, network_sandbox_policy) =
-        permission_profile.to_runtime_permissions();
-    // As the resolver: only where it gets that far.
-    if permission_profile_supports_windows_restricted_token_sandbox(permission_profile)
-        && !file_system_sandbox_policy
-            .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
-    {
-        return Ok(());
-    }
+    let (file_system_sandbox_policy, _) = permission_profile.to_runtime_permissions();
+    refuse_writable_inside_read_only(file_system_sandbox_policy, sandbox_policy_cwd)
+}
+
+/// D331 for any profile, including one in the older workspace-write format
+/// that needs no direct enforcement (#1810): its protected `.git`, `.codex`
+/// and `.agents` folders can hold a writable folder too.
+fn refuse_writable_inside_read_only(
+    mut file_system_sandbox_policy: FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &AbsolutePathBuf,
+) -> std::result::Result<(), String> {
     file_system_sandbox_policy.remove_skip_missing_path_entries();
     let split_writable_roots =
         file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
@@ -199,6 +201,8 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     if permission_profile_supports_windows_restricted_token_sandbox(permission_profile)
         && !needs_direct_runtime_enforcement
     {
+        // #1810: D331 holds for these too.
+        refuse_writable_inside_read_only(file_system_sandbox_policy, sandbox_policy_cwd)?;
         return Ok(None);
     }
 
