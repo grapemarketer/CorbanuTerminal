@@ -267,11 +267,12 @@ fn mains_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActio
 
 /// PR #1794 review 2: the case lists' claims, on main's reading: each
 /// `ASKS` line is quiet there (it asks only through the new reading), and
-/// each review line asks there.
+/// each `ASKS_ON_MAIN` and review line asks there.
 #[cfg(unix)]
 #[test]
 fn issue_1772_case_lists_hold_on_mains_reading() {
     use super::tainted_action_redirect_tests::ASKS;
+    use super::tainted_action_redirect_tests::ASKS_ON_MAIN;
     use super::tainted_action_redirect_tests::REVIEW_2_ASKS;
     use super::tainted_action_redirect_tests::REVIEW_ASKS;
     use super::tainted_action_redirect_tests::X_EVIL;
@@ -285,11 +286,17 @@ fn issue_1772_case_lists_hold_on_mains_reading() {
         Vec::<String>::new(),
         "ASKS lines asking on main's reading"
     );
-    let mut quiet: Vec<String> = REVIEW_ASKS
+    let mut quiet: Vec<String> = ASKS_ON_MAIN
         .iter()
-        .filter(|(_, line)| mains_verdict(X_EVIL, &["bash", "-lc", line]).is_none())
-        .map(|(item, line)| format!("review 1 item {item}: {line}"))
+        .filter(|(_, files, line)| mains_verdict(files, &["bash", "-lc", line]).is_none())
+        .map(|(item, _, line)| format!("item {item}: {line}"))
         .collect();
+    quiet.extend(
+        REVIEW_ASKS
+            .iter()
+            .filter(|(_, line)| mains_verdict(X_EVIL, &["bash", "-lc", line]).is_none())
+            .map(|(item, line)| format!("review 1 item {item}: {line}")),
+    );
     quiet.extend(
         REVIEW_2_ASKS
             .iter()

@@ -183,9 +183,10 @@ pub(super) fn simple_commands_read(command: &[String], main_reading: bool) -> Le
         lexer.flush();
     }
     let too_deep = lexer.too_deep;
-    let read_newly = lexer.read_newly;
+    // #1772 review 2: after `finish`, which reorders the last command.
+    let (commands, read_newly) = lexer.finish();
     Lexed {
-        commands: lexer.finish(),
+        commands,
         incomplete,
         too_deep,
         read_newly,
@@ -981,13 +982,15 @@ impl Lexer {
         }
     }
 
-    fn finish(mut self) -> Vec<SimpleCommand> {
+    /// The commands, and whether any text was read newly
+    /// (`Lexed::read_newly`).
+    fn finish(mut self) -> (Vec<SimpleCommand>, bool) {
         while !self.open.is_empty() {
             work::step();
             self.close_substitution(/*arithmetic_close*/ false);
         }
         self.finish_current();
-        self.done
+        (self.done, self.read_newly)
     }
 
     fn arg(&mut self, arg: &str) {

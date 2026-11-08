@@ -1,7 +1,7 @@
 //! #1772: redirection follow-ups to #1719. Each `ASKS` line was quiet on
 //! main (judged with the classifier test harness, `bash -lc <line>` in a
 //! workspace whose `./x` and `sub/run.sh` are harmful); each `QUIET` line
-//! stays quiet. `REVIEW_ASKS` and `REVIEW_2_ASKS` (PR #1794 reviews) ask on
+//! stays quiet. `ASKS_ON_MAIN`, `REVIEW_ASKS` and `REVIEW_2_ASKS` ask on
 //! main and keep asking. `tainted_action_reading_tests.rs` checks both
 //! claims against main's reading. In its own file:
 //! `tainted_action_tests.rs` is at the repository's blob size limit.
@@ -89,7 +89,6 @@ pub(super) const ASKS: &[(&str, Files, &str)] = &[
     ("1", X_EVIL, ">log PATH=.:$PATH x"),
     ("1", X_EVIL, ">log export PATH=.:$PATH && x"),
     ("1", X_EVIL, "2>/dev/null find . -exec ./x \\;"),
-    ("1", X_EVIL, ">log git -c core.pager=./x log"),
     // Item 2: a redirect file name with a quoted or escaped space.
     ("2", X_EVIL, ">'a b' ./x"),
     ("2", X_EVIL, ">\"a b\" ./x"),
@@ -102,10 +101,18 @@ pub(super) const ASKS: &[(&str, Files, &str)] = &[
     ("3", X_OK, "sudo 3<a <b -A true"),
     ("3", X_OK, "sudo <<<a <<<b -A true"),
     // Item 4: `&>` read as `&` and `>`.
+    ("4", SUB_EVIL, "&>log cd sub && ./run.sh"),
+];
+
+/// PR #1794 review 2: lines #1772 lists that already ask on main in this
+/// harness (`./x` is harmful; `&>` is read as `&` and `>log ./x`, which
+/// #1719 asks for). They keep asking.
+#[cfg(unix)]
+pub(super) const ASKS_ON_MAIN: &[(&str, Files, &str)] = &[
+    ("1", X_EVIL, ">log git -c core.pager=./x log"),
     ("4", X_EVIL, "&>log ./x"),
     ("4", X_EVIL, "sudo &>log -u root ./x"),
     ("4", X_EVIL, "&>log sh x"),
-    ("4", SUB_EVIL, "&>log cd sub && ./run.sh"),
     ("4", X_EVIL, "&>>log ./x"),
 ];
 
@@ -130,6 +137,7 @@ pub(super) const QUIET: &[&str] = &[
 fn issue_1772_redirection_cases_ask() {
     let quiet: Vec<String> = ASKS
         .iter()
+        .chain(ASKS_ON_MAIN)
         .filter(|(_, files, line)| in_workspace(files, line).is_none())
         .map(|(item, _, line)| format!("item {item}: {line}"))
         .collect();
