@@ -141,11 +141,12 @@ fn sec_win_1780_legacy_link_inside_the_root_above_a_read_only_path_stops_the_com
     let _guard = legacy_process_test_guard();
     // (cwd via the link, read-only paths: their base via the link, and the
     // folders below it)
-    let cases: [(bool, &[(bool, &str)]); 4] = [
+    let cases: [(bool, &[(bool, &str)]); 5] = [
         (true, &[(false, "hop")]),
         (false, &[(true, "hop")]),
         (true, &[(false, "target"), (false, "hop")]),
         (true, &[(false, "hop"), (false, "target")]),
+        (false, &[(false, "target"), (true, "hop")]),
     ];
     for (cwd_via_link, read_only) in cases {
         let test_root = user_owned_test_root();

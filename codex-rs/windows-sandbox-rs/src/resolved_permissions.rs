@@ -272,24 +272,48 @@ fn strictly_inside(path: &Path, root: &Path) -> bool {
 /// must be denied there too. Each is kept as configured, as `listed` keeps
 /// its paths, even where another reaches the same folder: the backends
 /// resolve them where it matters, and D293 (#1542, #1667) must still see
-/// every replaceable link on the way. Paths spelled inside `root` are
-/// `listed`'s own and left to it.
+/// every replaceable link on the way. Left out: paths spelled inside `root`
+/// (`listed`'s own), and a path with no link on the way that `listed`
+/// already names by another spelling (letter case, say), as nothing on its
+/// way could be replaced.
 fn inside_only_by_real_path(paths: &[PathBuf], root: &Path, listed: &[PathBuf]) -> Vec<PathBuf> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
     let Ok(real_root) = dunce::canonicalize(root) else {
         return Vec::new();
     };
+    let listed_real: Vec<PathBuf> = listed
+        .iter()
+        .filter_map(|path| canonicalize_allowing_missing(path))
+        .collect();
     let mut missed: Vec<PathBuf> = Vec::new();
     for path in paths {
         if path.starts_with(root) || listed.contains(path) || missed.contains(path) {
             continue;
         }
-        if canonicalize_allowing_missing(path)
-            .is_some_and(|real| real != real_root && real.starts_with(&real_root))
-        {
-            missed.push(path.clone());
+        let Some(real) = canonicalize_allowing_missing(path) else {
+            continue;
+        };
+        if real == real_root || !real.starts_with(&real_root) {
+            continue;
         }
+        if listed_real.contains(&real) && !passes_through_a_link(path) {
+            continue;
+        }
+        missed.push(path.clone());
     }
     missed
+}
+
+/// Whether a folder of `path` that exists, or `path` itself, is a link (one
+/// that can't be inspected counts).
+fn passes_through_a_link(path: &Path) -> bool {
+    path.ancestors()
+        .any(|folder| match std::fs::symlink_metadata(folder) {
+            Ok(metadata) => metadata.file_type().is_symlink(),
+            Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+        })
 }
 
 /// `path` with links followed: its nearest existing ancestor canonicalized,
