@@ -19,6 +19,7 @@ use windows_sys::Win32::System::Memory::PAGE_GUARD;
 use windows_sys::Win32::System::Memory::PAGE_NOACCESS;
 use windows_sys::Win32::System::Memory::VirtualQueryEx;
 use windows_sys::Win32::System::Threading::OpenThread;
+use windows_sys::Win32::System::Threading::THREAD_GET_CONTEXT;
 
 const READ_PROBE: &str =
     "unified_exec::tests::command_identity::elevated::d429::d429_read_probe_entry";
@@ -151,7 +152,7 @@ fn threads_report(threads: &[u32]) -> String {
         // SAFETY: the handle is closed right away; the context is aligned
         // by its type.
         unsafe {
-            let handle = OpenThread(/*THREAD_GET_CONTEXT*/ 0x0008, 0, *thread);
+            let handle = OpenThread(THREAD_GET_CONTEXT, 0, *thread);
             if handle == 0 {
                 continue;
             }
@@ -172,6 +173,15 @@ fn threads_report(threads: &[u32]) -> String {
         threads.len()
     )
 }
+
+/// (name, argv, extra environment, expected output, required)
+type Workload<'a> = (
+    &'a str,
+    Vec<String>,
+    &'a [(&'a str, String)],
+    &'a [&'a str],
+    bool,
+);
 
 #[derive(Clone, Copy, Debug)]
 enum Reader {
@@ -415,8 +425,7 @@ fn sec_win_d429_legacy_workloads_still_work() {
             sysroot.join("bin").join("rustc.exe").display().to_string(),
         ),
     ];
-    // (name, argv, extra environment, expected output, required)
-    let cases: Vec<(&str, Vec<String>, &[(&str, String)], &[&str], bool)> = vec![
+    let mut cases: Vec<Workload> = vec![
         (
             "python venv and a child",
             cmd_c(format!(
@@ -491,7 +500,6 @@ fn sec_win_d429_legacy_workloads_still_work() {
             false,
         ),
     ];
-    let mut cases = cases;
     if let Some(bash) = bash {
         cases.push((
             "git bash",
