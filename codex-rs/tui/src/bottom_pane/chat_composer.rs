@@ -3053,10 +3053,8 @@ impl ChatComposer {
             return result;
         }
 
-        if should_queue {
-            if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
-            }
+        if should_queue && let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
+            self.handle_paste(pasted);
         }
         // D390: `/quit` and `/exit` don't wait for startup; they run below.
         if should_queue && !self.startup_exit_command() {
