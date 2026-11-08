@@ -16,7 +16,7 @@ to, except in places marked low-integrity: `AppData\LocalLow`, anything you
 or a program labelled Low, and folders another non-admin sandbox session is
 using at that moment.
 
-Windows ships with one such folder: `C:\ProgramData\Microsoft\DeviceSync` is
+Windows itself creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` is
 labelled Low and lets everyone write to it, so non-admin sandbox commands can
 create, change and delete files there (#1770; measured on Windows Server
 2022). We accept this: it is one Windows folder, and a normal user can't

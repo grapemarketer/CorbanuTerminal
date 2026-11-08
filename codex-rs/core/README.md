@@ -145,10 +145,11 @@ sign-off by Travis on 2026-10-13):
 - Commands can no longer write outside writable roots to objects that grant
   Everyone or the logon SID write access, or open other programs' named pipes
   and other IPC endpoints for writing, unless those are labelled Low. Windows
-  ships one such folder: `C:\ProgramData\Microsoft\DeviceSync` grants
+  creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` grants
   Everyone write access and is labelled Low, so legacy commands can create,
-  change and delete files there (measured on the windows-2022 runner,
-  #1770). Accepted and documented in `docs/sandbox.md` (D401): it is one
+  change and delete files there (found by a scan of the windows-2022 runner;
+  Low folders granting Everyone Modify were measured writable by legacy
+  commands, #1770). Accepted and documented in `docs/sandbox.md` (D401): it is one
   folder, and a normal user can't change its permissions. The elevated
   backend's admin setup can deny it, with the other Everyone-writable
   folders (D400, draft #1798, awaiting security sign-off).
@@ -251,7 +252,7 @@ admin and normal sessions): an elevated command in one workspace can read
 the memory of another workspace's concurrent elevated command (51 MB, with
 its typed input and its output) and of that command's ConPTY console host
 (27 MB, same markers; its threads' contexts too), but can't open either for
-writing or duplicating handles, nor open its runner. Owner decisions
+writing or duplicating handles, nor read its runner. Owner decisions
 (2026-11-08): #1800 closes the command-memory read (its commands' default
 DACL lets the sandbox users' group and Everyone only read the security
 descriptor, wait and query limited information); a stop-gap
