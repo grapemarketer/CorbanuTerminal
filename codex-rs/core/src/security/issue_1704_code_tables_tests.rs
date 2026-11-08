@@ -80,7 +80,7 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "print -r $(cat f)",
             "zstat $o functions x",
             "zstat \"$o\" \"$n\" x",
-            "stat -f %m $(cat f)",
+            "zmodload zsh/stat; stat -f %m $(cat f)",
             "zformat $o $n x",
             "pcre_match $o $n x",
             "compadd -X $(cat f) x",
@@ -172,6 +172,60 @@ fn issue1704_option_checks_are_linear() {
     work::assert_linear("many zstyles", |scale| {
         let _ = kind(&["zsh", "-lc", &"zstyle -a :x y z; ".repeat(200 * scale)]);
     });
+    work::assert_linear("stat after a long load", |scale| {
+        let line = format!("zmod''load {}; stat -A $n x", "'z' ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+}
+
+/// D410 (#1704): zsh has a `stat` builtin (zsh/stat, which writes arrays
+/// by name with `-A`/`-H`) only once loaded; zsh starts without it. Its
+/// table checks run only when the command line, or a line judged before it
+/// in the same action, may load it: names `zmodload` (any use, quotes
+/// aside) or `zsh/stat`. A separate command on the same line (`zmodload
+/// zsh/stat; stat …`, or a later line of the same text) counts, as a line's
+/// aliases do (#1422); so does a load after the `stat`, which keeps main's
+/// prompt. Elsewhere `stat` is the external program (`stat -f %m $f` on
+/// macOS) and only its table checks are skipped; `zstat` is always judged.
+#[test]
+fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // The same command list.
+            "zmodload zsh/stat && stat -A functions x",
+            "zmodload -F zsh/stat b:zstat && stat -f %m $v",
+            // A separate command on the same line.
+            "zmodload zsh/stat; stat -f %m $v",
+            "zmodload zsh/stat\nstat -H aliases x",
+            "zmodload -a zsh/stat stat; stat -A $n x",
+            "m=zsh/stat; zmodload $m; stat -f %m $(cat f)",
+            "zmod''load zsh/stat; stat -A functions x",
+            "z$'m'odload zsh/stat; stat -A functions x",
+            "eval 'zmodload zsh/stat'; stat -A functions x",
+            "zsh -c 'zmodload zsh/stat; stat -A functions x'",
+            // A load the classifier cannot read asks as on main.
+            "zmo{d,}load zsh/stat; stat -A functions x",
+            "z=zmod; ${z}load zsh/st${a}at; stat -A functions x",
+            // A load after it keeps main's prompt.
+            "stat -A functions x; zmodload zsh/stat",
+            // zstat needs no `stat` load.
+            "zstat -A functions x",
+            "zstat -f %m $v",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        // Not loaded on this line: the external `stat`.
+        for script in [
+            "stat -f %m $v",
+            "stat -f %m $(cat f)",
+            "for f in *.log; do stat -f '%m %N' $f; done",
+            "stat -c %Y $f | sort -n",
+            "stat -A functions x",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+    }
 }
 
 /// #1704: a command writing variables named by its operands (zparseopts,

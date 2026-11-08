@@ -107,15 +107,24 @@ fn skipped_words(name: &str, words: &[String]) -> Option<usize> {
 /// text read as shell and aligned with `words`, says which words may be
 /// any or several; with it, such words where a writer reads its options
 /// or before a name ask too ([`Reading`]).
-pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen]>) -> bool {
+/// D410: zsh's `stat` is judged only when `stat_builtin` ([`may_load_stat`]);
+/// elsewhere it is the external program, which writes no variable (`stat
+/// -f %m $f` on macOS).
+pub(super) fn writes_table(
+    words: &[String],
+    raw: &[String],
+    seen: Option<&[Seen]>,
+    stat_builtin: bool,
+) -> bool {
     let mut from = 0;
     while let Some((at, name)) = indirect::command_word(&words[from..]) {
         work::step();
         let at = from + at;
         let args = &words[at + 1..];
         let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
-        if writer_names_table(&name, args)
-            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), seen)
+        if (stat_builtin || name != "stat")
+            && (writer_names_table(&name, args)
+                || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), seen))
         {
             return true;
         }
@@ -128,6 +137,22 @@ pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen
         }
     }
     false
+}
+
+/// D410 (#1704): whether a line's `text` may load zsh's `stat` builtin:
+/// it names `zmodload` (any use, `zmodload -F zsh/stat b:zstat` too) or
+/// the module, quotes and backslashes aside (`zmod''load`, `z$'m'odload`).
+/// zsh starts without the module (start-up files may load it; D410 accepts
+/// that).
+pub(super) fn may_load_stat(text: &str) -> bool {
+    let plain: String = text
+        .chars()
+        .filter(|ch| {
+            work::step();
+            !matches!(ch, '\'' | '"' | '\\')
+        })
+        .collect();
+    plain.contains("modload") || plain.contains("zsh/stat")
 }
 
 /// What the quote-aware reading shows of a word ([`writes_table`]).

@@ -630,6 +630,7 @@ impl Classifier {
             unknown_folder: 0,
             unseen_folder: false,
             sudo_redefined: false,
+            stat_builtin: false,
             quoted_text: false,
             brace_unsure: false,
             launched: launched_git::Launch::default(),
@@ -1455,6 +1456,10 @@ struct Classifier {
     /// D85: the action's own command line never reaches zsh
     /// ([`named_shell::avoids_zsh`]); nested lines are not covered.
     avoids_zsh: bool,
+    /// D410 (#1704): a line judged so far may load zsh's `stat` builtin
+    /// ([`code_tables::may_load_stat`]); until one does, `stat` is the
+    /// external program.
+    stat_builtin: bool,
     /// #932: comparisons left with the grammar.
     compared: shadow::Budget,
     /// #1240: PowerShell encoded commands the Windows view judged, with
@@ -1775,6 +1780,7 @@ impl Classifier {
         self.sudo_redefined |= command
             .iter()
             .any(|part| unknown_folder::may_redefine_sudo(part));
+        self.stat_builtin |= command.iter().any(|part| code_tables::may_load_stat(part));
         // #841: this line's own sed programs (nested lines have theirs).
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
         let lexed = shell::simple_commands(command);
@@ -2007,7 +2013,12 @@ impl Classifier {
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
             if aliases.read(&words)
-                || code_tables::writes_table(&words, &simple.words, /*seen*/ None)
+                || code_tables::writes_table(
+                    &words,
+                    &simple.words,
+                    /*seen*/ None,
+                    self.stat_builtin,
+                )
             {
                 self.note(ProtectedActionKind::UnseenCode);
             }
