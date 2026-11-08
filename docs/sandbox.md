@@ -139,10 +139,10 @@ when it lies in a folder commands may write to. A path a config or a
 `\\?\`, `CON` ...) is never opened (a link in the project is still
 followed; a device name written with a superscript digit, such as `COM¹`,
 isn't recognized as one). For the same reason, in a writable folder that is
-itself on a network share or written with a `\\?\` prefix, a repository's
-own config isn't read and the paths relative to that folder aren't
-recorded, and no warning says so; only a path another config names by drive
-letter, or through a link, is. A global or system
+itself on a network share or written with a `\\?\` prefix, the config of
+a repository whose git folder lies there isn't read and paths relative to
+that folder aren't recorded, and no warning says so; only a path a config
+names by drive letter, or through a link, is. A global or system
 git config that lies in such a folder is recorded too. A new, changed or
 removed file there is flagged like a changed repository, and so is one
 that appears where a config points (a new repository's `.githooks`, say).
