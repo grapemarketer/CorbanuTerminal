@@ -778,6 +778,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `.codex`/`.agents` count too until the folder is renamed or removed.) Such a
   folder now gets one "isn't valid Unicode" note, not one per entry, so many
   such names no longer push earlier warnings out of the post-command notice.
+- **Non-admin sandbox: the repository checks cost about half as much**
+  (#1877). The checks for planted `.codex`/`.agents` folders and nested
+  repositories that run at each command's start and end now use several
+  threads. On a 38,000-file tree with 100 repositories (native Windows CI,
+  4 CPUs) each side went from about 80-90 ms to about 40 ms. They find
+  exactly the same things, in the same order.
 - **Non-admin sandbox: hooks folders a git config names are watched** (D422,
   #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
   included config file, or a script a program key names, when it lies in a

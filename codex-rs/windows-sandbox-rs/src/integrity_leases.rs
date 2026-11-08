@@ -788,13 +788,16 @@ fn repo_paths(
     repos.extend(behind);
     notes.extend(behind_notes);
     repos.extend(crate::nested_metadata::bare_roots(roots));
+    // #1877: the same path both ways by `is_at_or_below`, looked up rather
+    // than compared with each.
+    let key = crate::git_config_targets::path_key;
+    let mut listed: std::collections::HashSet<Vec<String>> =
+        repos.iter().map(|path| key(path)).collect();
     for state in before {
-        let listed = repos.iter().any(|path| {
-            crate::git_watch::is_at_or_below(path, &state.path)
-                && crate::git_watch::is_at_or_below(&state.path, path)
-        });
-        if !listed && std::fs::symlink_metadata(&state.path).is_ok() {
+        let state_key = key(&state.path);
+        if !listed.contains(&state_key) && std::fs::symlink_metadata(&state.path).is_ok() {
             repos.push(state.path.clone());
+            listed.insert(state_key);
         }
     }
     (repos, notes)
