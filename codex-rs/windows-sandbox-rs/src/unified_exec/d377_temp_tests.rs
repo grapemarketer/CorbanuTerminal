@@ -340,6 +340,29 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     // capability SID, which later commands in that workspace carry too.
     let workspace_sid =
         crate::cap::workspace_cap_sid_for_cwd(home.path(), root.path()).expect("workspace sid");
+    // `icacls` cannot name a SID no account has; PowerShell can.
+    let keep = root.path().join("d377-keep.ps1");
+    fs::write(
+        &keep,
+        format!(
+            "$ErrorActionPreference = 'Stop'\r\n\
+             $sids = @([Security.Principal.WindowsIdentity]::GetCurrent().User, \
+             (New-Object Security.Principal.SecurityIdentifier('{workspace_sid}')))\r\n\
+             foreach ($p in @('{file}', '{dir}')) {{\r\n\
+               $item = Get-Item -LiteralPath $p\r\n\
+               $inherit = if ($item.PSIsContainer) {{ 'ContainerInherit, ObjectInherit' }} else {{ 'None' }}\r\n\
+               $acl = $item.GetAccessControl('Access')\r\n\
+               foreach ($sid in $sids) {{\r\n\
+                 $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Modify', $inherit, 'None', 'Allow')))\r\n\
+               }}\r\n\
+               $item.SetAccessControl($acl)\r\n\
+             }}\r\n\
+             'KEPT'\r\n",
+            file = file.display(),
+            dir = dir.display()
+        ),
+    )
+    .expect("write script");
     let make = root.path().join("d377-make.cmd");
     fs::write(
         &make,
@@ -347,10 +370,11 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
             "@echo off\r\n\
              (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
              mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
-             icacls \"{file}\" /grant \"%USERNAME%:(M)\" \"*{workspace_sid}:(M)\" >nul 2>nul && echo FILE-KEPT\r\n\
-             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" \"*{workspace_sid}:(OI)(CI)(M)\" >nul 2>nul && echo DIR-KEPT\r\n",
+             \"{powershell}\" -NoProfile -ExecutionPolicy Bypass -File \"{keep}\" 2>&1\r\n",
             file = file.display(),
-            dir = dir.display()
+            dir = dir.display(),
+            powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe").display(),
+            keep = keep.display()
         ),
     )
     .expect("write script");
@@ -383,7 +407,7 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         (String::from_utf8_lossy(&stdout).into_owned(), code)
     });
     println!("d377 leftovers made: exit={code} stdout={stdout:?}");
-    for done in ["FILE-MADE", "DIR-MADE", "FILE-KEPT", "DIR-KEPT"] {
+    for done in ["FILE-MADE", "DIR-MADE", "KEPT"] {
         assert!(stdout.contains(done), "{done}: {stdout}");
     }
     let owner = |path: &Path| {
