@@ -32,7 +32,7 @@ const MAX_ENTRIES: usize = 1024;
 
 /// Keys whose value is a command git runs (`section.key`, or
 /// `section.*.key` for any sub-section), lower-cased.
-const PROGRAM_KEYS: [&str; 39] = [
+const PROGRAM_KEYS: [&str; 44] = [
     "core.fsmonitor",
     "core.pager",
     "core.editor",
@@ -72,11 +72,42 @@ const PROGRAM_KEYS: [&str; 39] = [
     "man.*.cmd",
     "man.*.path",
     "hook.*.command",
+    "submodule.*.update",
+    "sendemail.sendmailcmd",
+    "sendemail.headercmd",
+    "guitool.*.cmd",
+    "instaweb.httpd",
 ];
 
-/// Sections all of whose keys name commands (`pager.log`, `alias.x` with
-/// `!`).
-const PROGRAM_SECTIONS: [&str; 1] = ["pager"];
+/// Sections all of whose keys name commands or their arguments
+/// (`pager.log`, `alias.x`).
+const PROGRAM_SECTIONS: [&str; 2] = ["pager", "alias"];
+
+/// Limits on what one look at the configs reads: past them the look counts
+/// as changed after every session.
+const MAX_CONFIG_FILES: usize = 4_096;
+const MAX_CONFIG_BYTES: u64 = 1 << 20;
+const MAX_CONFIG_ENTRIES: usize = 100_000;
+const MAX_BASES: usize = 8;
+const MAX_TARGETS: usize = 4_096;
+
+/// How much one look at the configs may still read, the files it read, and
+/// where it stopped.
+#[derive(Default)]
+pub(crate) struct ConfigBudget {
+    files: usize,
+    entries: usize,
+    /// The first config file past a limit.
+    pub(crate) overflow: Option<PathBuf>,
+}
+
+impl ConfigBudget {
+    fn over(&mut self, at: &Path) {
+        if self.overflow.is_none() {
+            self.overflow = Some(at.to_path_buf());
+        }
+    }
+}
 
 /// The names of git's hooks (`githooks(5)`).
 const HOOK_NAMES: [&str; 28] = [
@@ -177,36 +208,55 @@ pub(crate) fn outside_configs(homes: &[PathBuf]) -> Vec<PathBuf> {
     configs
 }
 
-/// The home folders git may use: `HOME` (Git for Windows prefers it) and
-/// the user profile.
+/// The home folders git may use: `HOME` (Git for Windows prefers it), the
+/// user profile, and `HOMEDRIVE` + `HOMEPATH`.
 fn homes() -> Vec<PathBuf> {
     let mut homes: Vec<PathBuf> = std::env::var_os("HOME")
         .map(PathBuf::from)
         .into_iter()
         .collect();
-    if let Some(profile) = dirs_next::home_dir()
-        && !homes.contains(&profile)
-    {
-        homes.push(profile);
+    let drive_path = match (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH")) {
+        (Some(drive), Some(path)) => {
+            let mut joined = drive;
+            joined.push(path);
+            Some(PathBuf::from(joined))
+        }
+        _ => None,
+    };
+    for home in dirs_next::home_dir().into_iter().chain(drive_path) {
+        if !homes.contains(&home) {
+            homes.push(home);
+        }
     }
     homes
 }
 
-/// The entries of the configs at `paths` (and the files they include), each
-/// with the file it came from; and the files read (includes too).
+/// The entries of the configs at `paths` (and the files they include, each
+/// once), each with the file it came from; and the files read (includes
+/// too). Counts against `budget`.
 pub(crate) fn read_configs(
     paths: &[PathBuf],
     homes: &[PathBuf],
+    budget: &mut ConfigBudget,
 ) -> (Vec<(Entry, PathBuf)>, Vec<PathBuf>) {
     let mut entries = Vec::new();
     let mut files = Vec::new();
+    // Each file once per look (an include cycle).
+    let mut visited = std::collections::HashSet::new();
     for path in paths {
-        read_config(path, homes, MAX_INCLUDE_DEPTH, &mut |entry, from| {
-            if !files.iter().any(|file: &PathBuf| file == from) {
-                files.push(from.to_path_buf());
-            }
-            entries.push((entry, from.to_path_buf()));
-        });
+        read_config(
+            path,
+            homes,
+            MAX_INCLUDE_DEPTH,
+            budget,
+            &mut visited,
+            &mut |entry, from| {
+                if !files.iter().any(|file: &PathBuf| file == from) {
+                    files.push(from.to_path_buf());
+                }
+                entries.push((entry, from.to_path_buf()));
+            },
+        );
     }
     (entries, files)
 }
@@ -216,12 +266,14 @@ pub(crate) fn read_configs(
 /// and `outside` (the system and global entries, from [`read_configs`]),
 /// kept when they lie in one of `roots` (canonical) by name or after links,
 /// and not inside a root's own (protected) `.git`. `homes` expand `~/`.
+/// Counts against `budget`.
 pub(crate) fn targets(
     git_dir: &Path,
     work_tree: Option<&Path>,
     outside: &[(Entry, PathBuf)],
     homes: &[PathBuf],
     roots: &[PathBuf],
+    budget: &mut ConfigBudget,
 ) -> Vec<Target> {
     let common = std::fs::read(git_dir.join("commondir")).ok().map(|bytes| {
         // As git reads it: only trailing line ends go.
@@ -237,12 +289,16 @@ pub(crate) fn targets(
         common.as_deref().unwrap_or(git_dir).join("config"),
         git_dir.join("config.worktree"),
     ];
-    let (own_entries, _) = read_configs(&own, homes);
+    let (own_entries, _) = read_configs(&own, homes, budget);
     // Hooks and program paths are relative to the work tree (the git folder
     // for a bare repository), or to `core.worktree` when set.
     let mut bases: Vec<PathBuf> = vec![work_tree.unwrap_or(git_dir).to_path_buf()];
-    for (entry, _) in outside.iter().chain(&own_entries) {
+    for (entry, from) in outside.iter().chain(&own_entries) {
         if entry.name == "core.worktree" {
+            if bases.len() >= MAX_BASES {
+                budget.over(from);
+                break;
+            }
             bases.push(resolve(git_dir, &entry.value, homes));
         }
     }
@@ -251,20 +307,34 @@ pub(crate) fn targets(
         for base in &bases {
             target_of(entry, from, base, homes, &mut found);
         }
-    }
-    let mut unique: Vec<Target> = Vec::new();
-    for mut target in found {
-        target.path = crate::git_watch::normalize(&target.path);
-        if in_roots(&target.path, roots) && !unique.contains(&target) {
-            unique.push(target);
+        if found.len() > MAX_TARGETS {
+            budget.over(from);
+            break;
         }
     }
-    unique
+    keep_in_roots(found, roots)
+}
+
+/// `found`, normalized, each once, those in `roots`.
+fn keep_in_roots(found: Vec<Target>, roots: &[PathBuf]) -> Vec<Target> {
+    let mut seen = std::collections::HashSet::new();
+    let mut kept = Vec::new();
+    for mut target in found {
+        target.path = crate::git_watch::normalize(&target.path);
+        if seen.insert(target.path.clone()) && in_roots(&target.path, roots) {
+            kept.push(target);
+        }
+    }
+    kept
 }
 
 /// `path` lies in one of `roots`, by name or after links, and not inside a
-/// root's own `.git` (protected, and D332's).
+/// root's own `.git` (protected, and D332's). A network or device path is
+/// never resolved (a command may have written it).
 fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    if crate::git_watch::is_remote_or_device(path) {
+        return false;
+    }
     let canonical = dunce::canonicalize(path).ok();
     [Some(path), canonical.as_deref()]
         .into_iter()
@@ -279,19 +349,57 @@ fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
 
 /// Calls `each` with every entry of the config file at `path` and the file
 /// it came from, following `include.path` and `includeIf.*.path` (whatever
-/// the condition).
-fn read_config(path: &Path, homes: &[PathBuf], depth: usize, each: &mut dyn FnMut(Entry, &Path)) {
-    let Ok(bytes) = std::fs::read(path) else {
+/// the condition). Each file is read once per look; never a network or device path
+/// (a command may have written it); past `budget`'s limits it stops and
+/// records where.
+fn read_config(
+    path: &Path,
+    homes: &[PathBuf],
+    depth: usize,
+    budget: &mut ConfigBudget,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    each: &mut dyn FnMut(Entry, &Path),
+) {
+    use std::io::Read as _;
+    if crate::git_watch::is_remote_or_device(path) {
+        return;
+    }
+    if !visited.insert(crate::git_watch::normalize(path)) {
+        return;
+    }
+    budget.files += 1;
+    if budget.files > MAX_CONFIG_FILES {
+        budget.over(path);
+        return;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
         return;
     };
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return;
+    }
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        budget.over(path);
+        return;
+    }
     for entry in parse(&String::from_utf8_lossy(&bytes)) {
+        budget.entries += 1;
+        if budget.entries > MAX_CONFIG_ENTRIES {
+            budget.over(path);
+            return;
+        }
         let included = is_include(&entry.name)
             .then(|| resolve(path.parent().unwrap_or(Path::new("")), &entry.value, homes));
         each(entry, path);
         if let Some(included) = included
             && depth > 0
         {
-            read_config(&included, homes, depth - 1, each);
+            read_config(&included, homes, depth - 1, budget, visited, each);
         }
     }
 }
@@ -308,7 +416,7 @@ fn target_of(entry: &Entry, from: &Path, base: &Path, homes: &[PathBuf], found: 
         let path = resolve(base, &entry.value, homes);
         let why = || "core.hooksPath".to_string();
         // Husky v9 (`husky <folder>` sets `<folder>\_`): its stubs run
-        // `<folder>\<hook>`.
+        // `<folder>\<hook>`, and `~/.config/husky/init.sh` first.
         if path.file_name().is_some_and(|name| name == "_")
             && let Some(parent) = path.parent()
         {
@@ -317,6 +425,13 @@ fn target_of(entry: &Entry, from: &Path, base: &Path, homes: &[PathBuf], found: 
                 why: why(),
                 kind: TargetKind::HuskyHooks,
             });
+            for home in homes {
+                found.push(Target {
+                    path: home.join(".config").join("husky").join("init.sh"),
+                    why: why(),
+                    kind: TargetKind::File,
+                });
+            }
         }
         // Husky v5 to v8: each hook sources `<folder>\_\husky.sh`.
         found.push(Target {
@@ -349,23 +464,28 @@ fn target_of(entry: &Entry, from: &Path, base: &Path, homes: &[PathBuf], found: 
     }
     let section = name.split('.').next().unwrap_or_default();
     let program = PROGRAM_KEYS.iter().any(|key| key_matches(key, name))
-        || PROGRAM_SECTIONS.contains(&section)
-        || (section == "alias" && entry.value.trim_ascii_start().starts_with('!'));
+        || PROGRAM_SECTIONS.contains(&section);
     if !program {
         return;
     }
-    // Every word that looks like a path names a file (`!sh ./x.sh`,
-    // `node scripts/cred.js`, `!f() { ./x.sh; }; f`); a bare program name is
-    // looked up on PATH.
-    for word in words(&entry.value) {
+    // A command's first word is a file when it looks like a path (a bare
+    // name is looked up on PATH); every later word may be a file it runs or
+    // reads (`!sh x.sh`, `node scripts/cred.js`, `rebase -x ./t.sh`,
+    // `-oProxyCommand=./x`).
+    for (index, word) in words(&entry.value).into_iter().enumerate() {
         let word = word.trim_start_matches('!');
-        let path_like = (word.contains('/') || word.contains('\\') || word.starts_with('.'))
-            && !word.contains("://")
-            && !word.starts_with('-')
-            && !word.starts_with('$');
-        if path_like {
+        let path_like = word.contains('/') || word.contains('\\') || word.starts_with('.');
+        let skipped = word.is_empty()
+            || word.contains("://")
+            || word.starts_with('-')
+            || (word.starts_with('$') && !word.starts_with("$HOME"))
+            || (index == 0 && !path_like);
+        if skipped {
+            continue;
+        }
+        for path in resolve_all(base, word, homes) {
             found.push(Target {
-                path: resolve(base, word, homes),
+                path,
                 why: entry.name.clone(),
                 kind: TargetKind::File,
             });
@@ -386,7 +506,8 @@ fn key_matches(pattern: &str, name: &str) -> bool {
 }
 
 /// The shell words of `command`, unquoted, split also at `;`, `&`, `|`,
-/// `(`, `)`, `{` and `}`.
+/// `(`, `)`, `{`, `}`, `<`, `>` and `=` (`-oProxyCommand=./x` names
+/// `./x`).
 fn words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -395,7 +516,7 @@ fn words(command: &str) -> Vec<String> {
         match (quote, c) {
             (None, '"' | '\'') => quote = Some(c),
             (Some(q), c) if c == q => quote = None,
-            (None, c) if c.is_ascii_whitespace() || ";&|(){}".contains(c) => {
+            (None, c) if c.is_ascii_whitespace() || ";&|(){}<>=".contains(c) => {
                 if !word.is_empty() {
                     words.push(std::mem::take(&mut word));
                 }
@@ -409,23 +530,32 @@ fn words(command: &str) -> Vec<String> {
     words
 }
 
-/// `value` (a path in a config) relative to `base`; `~/` is each home
-/// folder's (the first).
+/// `value` (a path in a config) relative to `base`; `~/` and `$HOME/` in
+/// the first home folder (see [`resolve_all`]).
 fn resolve(base: &Path, value: &str, homes: &[PathBuf]) -> PathBuf {
+    resolve_all(base, value, homes)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| base.to_path_buf())
+}
+
+/// `value` relative to `base`, or in each home folder for `~/` and
+/// `$HOME/`.
+fn resolve_all(base: &Path, value: &str, homes: &[PathBuf]) -> Vec<PathBuf> {
     let value = value.trim_ascii();
-    if let (Some(rest), Some(home)) = (
-        value
-            .strip_prefix("~/")
-            .or_else(|| value.strip_prefix("~\\")),
-        homes.first(),
-    ) {
-        return home.join(rest);
+    let in_home = ["~/", "~\\", "$HOME/", "$HOME\\"]
+        .iter()
+        .find_map(|prefix| value.strip_prefix(prefix));
+    if let Some(rest) = in_home
+        && !homes.is_empty()
+    {
+        return homes.iter().map(|home| home.join(rest)).collect();
     }
     let path = Path::new(value);
     if path.is_absolute() || value.starts_with('/') || value.starts_with('\\') {
-        path.to_path_buf()
+        vec![path.to_path_buf()]
     } else {
-        base.join(path)
+        vec![base.join(path)]
     }
 }
 
@@ -662,17 +792,28 @@ pub(crate) fn target_states_with(
     outside_paths: &[PathBuf],
     homes: &[PathBuf],
 ) -> Vec<TargetState> {
+    let mut budget = ConfigBudget::default();
     // Read once for all repositories.
-    let (outside, outside_files) = read_configs(outside_paths, homes);
+    let (outside, outside_files) = read_configs(outside_paths, homes, &mut budget);
     let mut found: Vec<Target> = outside_files
         .into_iter()
         .map(|path| Target {
-            path: crate::git_watch::normalize(&path),
+            path,
             why: "git config".to_string(),
             kind: TargetKind::File,
         })
-        .filter(|target| in_roots(&target.path, roots))
         .collect();
+    // What the system and global configs name absolutely (or in a home
+    // folder) counts with no repository in the roots too.
+    let mut absolute = Vec::new();
+    for (entry, from) in &outside {
+        target_of(entry, from, Path::new(""), homes, &mut absolute);
+    }
+    found.extend(
+        absolute
+            .into_iter()
+            .filter(|target| target.path.is_absolute()),
+    );
     for (git_dir, work_tree) in repos {
         found.extend(targets(
             git_dir,
@@ -680,18 +821,30 @@ pub(crate) fn target_states_with(
             &outside,
             homes,
             roots,
+            &mut budget,
         ));
-    }
-    let mut states: Vec<TargetState> = Vec::new();
-    for target in found {
-        if states.iter().any(|state| state.path == target.path) {
-            continue;
+        if budget.overflow.is_some() {
+            break;
         }
-        states.push(TargetState {
+    }
+    let mut states: Vec<TargetState> = keep_in_roots(found, roots)
+        .into_iter()
+        .map(|target| TargetState {
             prints: target_prints(&target),
             path: target.path,
             why: target.why,
             kind: target.kind,
+        })
+        .collect();
+    // Past a limit, the configs count as changed after every session.
+    if let Some(at) = budget.overflow {
+        let mut prints = Prints::new();
+        prints.insert(String::new(), crate::git_watch::truncated());
+        states.push(TargetState {
+            path: at,
+            why: "git config too large to check".to_string(),
+            kind: TargetKind::File,
+            prints,
         });
     }
     states

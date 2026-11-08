@@ -118,20 +118,23 @@ top.
 but that folder is ordinary project content, so a command could add a hook
 there for your next `git commit`. The non-admin sandbox reads the configs
 git would read for each repository it watches (the top-level `.git`
-included, plus every global and system git config git might use and the
-files their `include` lines name) and records, by content, each such hooks
+included, plus the global and system git configs in their usual places and
+the files their `include` lines name; a repository the writable folder is
+inside of isn't read) and records, by content, each such hooks
 folder, each included config file, and each file a program setting names
-by path (such as `core.fsmonitor`, a credential helper or an `!` alias set
-to a script in the project; every word of the value that looks like a path
-counts), when it lies in a folder commands may write to. A global or system
+(such as `core.fsmonitor`, a credential helper or an alias set to a script
+in the project: a first word that looks like a path, and every later word),
+when it lies in a folder commands may write to. Paths on network shares or
+devices are never opened. A global or system
 git config that lies in such a folder is recorded too. A new, changed or
 removed file there is flagged like a changed repository, and so is one
 that appears where a config points (a new repository's `.githooks`, say).
 For Husky, the files named after git hooks in the folder above `_` count,
 and so does the `_` folder below any hooks folder. Rewriting a file with
 the same content (as `npm install` does when it reruns Husky) isn't a
-change. A hooks folder with more than 1,024 entries counts as changed after
-every command. Other scripts those hooks call are ordinary project files
+change. A hooks folder with more than 1,024 entries, or configs too large to
+read (over 1 MB in one file, 100,000 entries or 4,096 files), count as
+changed after every command. Other scripts those hooks call are ordinary project files
 and aren't checked, and program settings outside the list the sandbox knows
 aren't either.
 

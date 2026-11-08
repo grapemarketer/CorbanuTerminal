@@ -92,7 +92,14 @@ fn targets_are_what_configs_name_inside_the_roots() {
         "[sequence]\n\teditor = ./seq-editor\n",
     )
     .expect("include");
-    let found = targets(&git, Some(&work), &[], &[], std::slice::from_ref(&base));
+    let found = targets(
+        &git,
+        Some(&work),
+        &[],
+        &[],
+        std::slice::from_ref(&base),
+        &mut ConfigBudget::default(),
+    );
     let file = |path: &str, why: &str| (PathBuf::from(path), why.to_string(), TargetKind::File);
     assert_eq!(
         shown(found, &work),
@@ -116,7 +123,11 @@ fn targets_are_what_configs_name_inside_the_roots() {
             file("team.gitconfig", "include.path"),
             file("seq-editor", "sequence.editor"),
             file("tools/st.sh", "alias.st"),
+            // Every later word may be a file (`sh` and `f` here aren't).
+            file("sh", "alias.f"),
             file("x.sh", "alias.f"),
+            file("f", "alias.f"),
+            file("smudge", "filter.lfs.smudge"),
             file("scripts/cred.js", "credential.helper"),
             file(".git/conv", "diff.x.textconv"),
         ]
@@ -208,7 +219,14 @@ fn global_configs_new_repositories_and_husky_layouts() {
         "[core]\n\thooksPath = .config/husky\n",
     )
     .expect("v8 config");
-    let v8_targets = targets(&v8.join(".git"), Some(&v8), &[], &[], &roots);
+    let v8_targets = targets(
+        &v8.join(".git"),
+        Some(&v8),
+        &[],
+        &[],
+        &roots,
+        &mut ConfigBudget::default(),
+    );
     let big = base.join("big");
     fs::create_dir_all(big.join(".git")).expect("big repo");
     fs::create_dir_all(big.join("hooks")).expect("big hooks");
@@ -276,5 +294,64 @@ fn repo_dirs_follow_git_files() {
             ),
             (bare, None),
         ]
+    );
+}
+
+/// D422 review 2: an include cycle is read once and a config past the
+/// limits counts every time; a value naming a network or device path is
+/// never opened; an absolute target a global config names counts with no
+/// repository.
+#[test]
+fn includes_are_bounded_and_never_remote() {
+    let (_dir, base) = tempdir();
+    let roots = [base.clone()];
+    let home = base.join("home");
+    fs::create_dir_all(&home).expect("home");
+    let tools = base.join("tools");
+    fs::create_dir_all(&tools).expect("tools");
+    fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[include]\n\tpath = .gitconfig\n\tpath = //server/share/x\n\tpath = \\\\\\\\.\\\\CONIN$\n[credential]\n\thelper = {}\n",
+            tools.join("cred.sh").display().to_string().replace('\\', "/")
+        ),
+    )
+    .expect("global");
+    let outside = [home.join(".gitconfig")];
+    let mut budget = ConfigBudget::default();
+    let (entries, files) = read_configs(&outside, &[], &mut budget);
+    let states = target_states_with(&[], &roots, &outside, &[]);
+    fs::write(tools.join("cred.sh"), "evil").expect("helper");
+    let changed = target_changes(&states, target_states_with(&[], &roots, &outside, &[]));
+
+    let big = base.join("big.cfg");
+    fs::write(&big, "[alias]\n\tx = !./x\n".repeat(60_000)).expect("big config");
+    let big_states = target_states_with(&[], &roots, std::slice::from_ref(&big), &[]);
+    let big_again = target_changes(
+        &big_states,
+        target_states_with(&[], &roots, &[big.clone()], &[]),
+    );
+    assert_eq!(
+        (
+            entries.len(),
+            files,
+            changed,
+            big_again.iter().any(|(path, _)| *path == big),
+            crate::git_watch::is_remote_or_device(Path::new("//server/share")),
+            crate::git_watch::is_remote_or_device(Path::new(r"\\.\CONIN$")),
+            crate::git_watch::is_remote_or_device(&base),
+        ),
+        (
+            4,
+            vec![home.join(".gitconfig")],
+            vec![(
+                tools.join("cred.sh"),
+                vec!["credential.helper: added".to_string()]
+            )],
+            true,
+            true,
+            true,
+            false,
+        )
     );
 }

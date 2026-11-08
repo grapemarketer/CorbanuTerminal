@@ -349,7 +349,7 @@ impl IntegrityLease {
         let git_now = crate::nested_metadata::top_level_git(&self.roots);
         let repos_changed = session_repo_changes(
             &self.repos,
-            &self.config_targets,
+            Some(self.config_targets.as_slice()),
             take_repo_walk(&mut nested_now),
             &self.roots,
             &self.nested_roots,
@@ -509,7 +509,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 });
                 let changed = session_repo_changes(
                     repos,
-                    record.config_targets.as_deref().unwrap_or_default(),
+                    record.config_targets.as_deref(),
                     walk,
                     &record.roots,
                     &record.nested_roots,
@@ -805,7 +805,7 @@ fn repo_paths(
 /// `before_targets`, and the notes (which count every time).
 fn session_repo_changes(
     before: &[RepoState],
-    before_targets: &[TargetState],
+    before_targets: Option<&[TargetState]>,
     walk: RepoWalk,
     roots: &[PathBuf],
     nested_roots: &[PathBuf],
@@ -815,11 +815,14 @@ fn session_repo_changes(
         before,
         crate::nested_metadata::repo_states(&entries, roots),
     );
-    // D422: what their configs name.
-    changed.extend(crate::git_config_targets::target_changes(
-        before_targets,
-        config_target_states(&entries, roots),
-    ));
+    // D422: what their configs name (not for a session from a build before
+    // D422, which didn't record them).
+    if let Some(before_targets) = before_targets {
+        changed.extend(crate::git_config_targets::target_changes(
+            before_targets,
+            config_target_states(&entries, roots),
+        ));
+    }
     changed.extend(notes.into_iter().map(|(path, note)| (path, vec![note])));
     changed
 }
