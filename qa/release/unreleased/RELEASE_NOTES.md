@@ -410,6 +410,25 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   example a patch that was applied) was reported to the model as aborted. Its
   real output is now recorded instead.
 
+## Windows sandbox: commands get a temp folder of their own (D377, #304)
+
+- **The default (elevated) Windows sandbox no longer lets sandboxed commands
+  write anywhere in your `%TEMP%`.** Each Corbanu session makes a folder of
+  its own there (`corbanu-sandbox-tmp-…`), open only to you, SYSTEM and
+  Administrators, and its sandboxed commands get it as `TEMP` and `TMP` (and
+  as `TMPDIR` when that named `%TEMP%`). Only that folder is granted to the
+  sandbox. Before, the sandbox's accounts kept lasting write access to all of
+  `%TEMP%`: other programs' temp files, and other sessions'.
+- **Upgrading needs no setup rerun.** The first time a session uses
+  `%TEMP%`, it removes the grant older versions left there, as you (no UAC
+  prompt).
+- **Cleanup.** The folder is removed when the session ends; one a crashed
+  session left behind is removed by a later session.
+- On native Windows CI, in an administrator's and a normal session, Python
+  (temp files, venv and pip), cargo, Node and npm, Windows PowerShell and
+  PowerShell 7, git and Git Bash, and MSBuild work as before.
+- Not changed: the non-admin sandbox still uses `%TEMP%` itself.
+
 ## Windows non-admin sandbox warning
 
 - **The warning now matches what the non-admin sandbox does** (#1506, D264). It
