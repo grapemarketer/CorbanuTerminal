@@ -24,6 +24,8 @@ class PrChangedPathsTest(unittest.TestCase):
         "windows_native_core",
         "windows_native_sandbox",
         "windows_native_other",
+        "windows_native_pty",
+        "windows_native_app_server",
         "workflows",
     )
     NAMES = (
@@ -153,6 +155,18 @@ class PrChangedPathsTest(unittest.TestCase):
                 "windows_native_tests",
                 "windows_native_other",
             ),
+            "codex-rs/utils/pty/src": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_pty",
+            ),
+            "codex-rs/app-server/tests": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_app_server",
+            ),
             "codex-rs/protocol/src": (
                 "codex",
                 "argument_comment_lint",
@@ -215,10 +229,14 @@ class PrChangedPathsTest(unittest.TestCase):
                 "windows_native_core",
                 "windows_native_sandbox",
                 "windows_native_other",
+                "windows_native_pty",
+                "windows_native_app_server",
             ),
         )
 
-    def targets(self, core: bool, sandbox: bool, other: bool) -> str:
+    GROUPS = ("core", "sandbox", "other", "pty", "app_server")
+
+    def targets(self, *groups: str) -> str:
         workflow = (REPO_ROOT / ".github/workflows/rust-ci.yml").read_text()
         match = re.search(
             r'(?ms)^          windows_native_targets=""\n.*?^          windows_native_targets="\$\{windows_native_targets# \}"$',
@@ -226,9 +244,8 @@ class PrChangedPathsTest(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         program = "set -euo pipefail\n"
-        program += f"windows_native_core={str(core).lower()}\n"
-        program += f"windows_native_sandbox={str(sandbox).lower()}\n"
-        program += f"windows_native_other={str(other).lower()}\n"
+        for group in self.GROUPS:
+            program += f"windows_native_{group}={str(group in groups).lower()}\n"
         program += textwrap.dedent(match.group(0))
         program += '\nprintf "%s" "$windows_native_targets"'
         return subprocess.run(
@@ -246,11 +263,18 @@ class PrChangedPathsTest(unittest.TestCase):
             "//codex-rs/process-hardening/... //codex-rs/sandboxing/..."
         )
         other = "//codex-rs/exec-server/..."
-        self.assertEqual(self.targets(False, False, False), "")
-        self.assertEqual(self.targets(True, False, False), core)
-        self.assertEqual(self.targets(False, True, False), sandbox)
-        self.assertEqual(self.targets(False, False, True), other)
-        self.assertEqual(self.targets(True, True, True), f"{core} {sandbox} {other}")
+        pty = "//codex-rs/utils/pty/..."
+        app_server = "//codex-rs/app-server/..."
+        self.assertEqual(self.targets(), "")
+        self.assertEqual(self.targets("core"), core)
+        self.assertEqual(self.targets("sandbox"), sandbox)
+        self.assertEqual(self.targets("other"), other)
+        self.assertEqual(self.targets("pty"), pty)
+        self.assertEqual(self.targets("app_server"), app_server)
+        self.assertEqual(
+            self.targets(*self.GROUPS),
+            f"{core} {sandbox} {other} {pty} {app_server}",
+        )
 
 
 if __name__ == "__main__":

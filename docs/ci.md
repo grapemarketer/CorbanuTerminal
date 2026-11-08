@@ -28,7 +28,8 @@ red status noise without testing the code.
   (`rust-ci / Windows native tests / Bazel test (changed crates)`): `tui`,
   `core`, `state` and `login` (#636); `windows-sandbox-rs`, `network-proxy`,
   `process-hardening` and `sandboxing`, whose Windows tests use one another
-  (#1813); `exec-server` (#1813). It runs the nightly native Windows Bazel
+  (#1813); `exec-server` (#1813); `utils/pty` (#1839); `app-server`
+  (#1839). It runs the nightly native Windows Bazel
   tests (`test-windows-native-main`), limited to the changed groups' test
   targets (`--build_tests_only`). Other PRs skip it; a change to its workflow
   (`rust-ci-windows-native-tests.yml`) runs every group, but changes to
