@@ -11,4 +11,12 @@ codex_rust_crate(
         ":codex-command-runner",
         ":codex-windows-sandbox-setup",
     ],
+    # #1786: the legacy-session tests share one in-process lock (they must not
+    # overlap, so Bazel sharding, which runs shards as parallel processes,
+    # would break them), and several probes wait up to 30 s by design for a
+    # report that a contained launch never writes. With the tests added on
+    # 11-06 and 11-07 the target needs more than the default 300 s on hosted
+    # windows-2022 runners (about 190 s on the 11-04..11-06 nightlies, which
+    # ran 10-29's code; over 300 s on 11-07).
+    unit_test_timeout = "long",
 )
