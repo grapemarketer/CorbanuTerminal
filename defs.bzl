@@ -254,11 +254,13 @@ def codex_rust_crate(
         unit_test_alone: Full names of library unit tests that bound wall-clock
             time. The unit-test target skips them, and a `<name>-unit-tests-alone`
             target runs them one at a time, tagged `exclusive`: Bazel runs it
-            after every build action and every other test, so nothing else on
-            the machine takes their cores. Both targets then pass libtest args,
-            which the launcher runs as given: `--test_filter` and
-            `CODEX_BAZEL_TEST_SKIP_FILTERS` no longer apply to them, and sharding
-            is refused.
+            after every build action and every other test, so no other action
+            of the same Bazel run takes their cores. Exclusive tests never run
+            remotely; a configuration that allows only remote test execution
+            must also allow `TestRunner=local`. Both targets then pass libtest
+            args, which the launcher runs as given: `--test_filter` and
+            `CODEX_BAZEL_TEST_SKIP_FILTERS` no longer apply to them, and
+            sharding is refused.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
