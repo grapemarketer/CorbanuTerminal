@@ -231,7 +231,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
 
 /// D424 (#1775): the startup warnings for possibly planted `.git` entries
 /// beyond the project root's way down to `cwd` (which the config loader
-/// covers): those in the folders non-admin sandbox commands may write to
+/// covers): those in the folders Windows sandbox commands may write to
 /// under `policy` (`%TEMP%` included) and those below `cwd`; and (D420) for
 /// the repositories there (or in `cwd` or above it) that appeared or changed.
 /// Empty off Windows.
