@@ -629,13 +629,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   profile marks the same folder read-only under one spelling and writable
   under another, read-only wins.
 - **A writable folder inside a read-only one is refused through links too**
-  (#1801, D331). The refusal above compared folders by spelling, so a
-  writable folder that lay inside a read-only one only through a junction,
-  folder symbolic link or `subst` drive (on either folder, or on the working
-  folder) wasn't refused, and the non-admin sandbox let commands write
-  there. It now compares real paths too, for the agent's commands in both
-  sandboxes and for `command/exec`. The same folder marked read-only and
-  writable under two spellings is still not refused: read-only wins.
+  (#1801, D331). D331's refusal compared folders by spelling, so a
+  writable folder that lay inside a read-only one only through a junction
+  or folder symbolic link (on either folder, or on the working folder)
+  wasn't refused, and the non-admin sandbox let commands write there. It
+  now compares real paths too (`subst` drives included), for the agent's
+  commands in both sandboxes and for `command/exec`. The same folder marked read-only and
+  writable under two spellings is still not refused; in the non-admin
+  sandbox read-only wins (#1780).
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
