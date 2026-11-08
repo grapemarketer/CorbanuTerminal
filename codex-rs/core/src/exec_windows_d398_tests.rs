@@ -38,6 +38,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Writes `ok.txt` in the working folder, `docs\x.txt` and `.git\g.txt`.
+const WRITE_SCRIPT: &str = "echo ok> ok.txt & echo x> docs\\x.txt & echo g> .git\\g.txt";
 const SPLIT_ROOTS_REFUSAL: &str = "cannot enforce split writable root sets directly";
 
 struct EnvGuard {
@@ -318,6 +320,7 @@ async fn run_command_exec(
     profile: &PermissionProfile,
     cwd: &Path,
     real: &Path,
+    script: &str,
 ) -> (Outcome, String) {
     let cwd = AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd");
     let written = |name: &str| real.join(name).exists();
@@ -333,7 +336,7 @@ async fn run_command_exec(
                 "cmd.exe".to_string(),
                 "/D".to_string(),
                 "/C".to_string(),
-                "echo ok> ok.txt & echo x> docs\\x.txt & echo g> .git\\g.txt".to_string(),
+                script.to_string(),
             ],
             cwd: cwd.clone(),
             expiration: ExecExpiration::from(120_000),
@@ -385,6 +388,7 @@ async fn run_command_exec(
 /// that lead out of it. Each spelling: (form, cwd or why it couldn't be
 /// made, the real folder). The drives it makes are removed with `guards`.
 struct Fixture {
+    base: PathBuf,
     workspace: PathBuf,
     leading_in: Vec<(&'static str, Result<PathBuf, String>, PathBuf)>,
     leading_out: Vec<(&'static str, Result<PathBuf, String>, PathBuf)>,
@@ -482,6 +486,7 @@ fn fixture() -> Fixture {
     });
     leading_out.push(("subst drive at a different folder", other_subst, outside));
     Fixture {
+        base,
         workspace,
         leading_in,
         leading_out,
@@ -554,7 +559,8 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
                     .into_iter()
                     .nth(index)
                     .expect("profile");
-                let (outcome, output) = run_command_exec(level, &profile, cwd, real).await;
+                let (outcome, output) =
+                    run_command_exec(level, &profile, cwd, real, WRITE_SCRIPT).await;
                 eprintln!(
                     "| {sandbox} | {form} `{}` | {profile_name} | {outcome:?} | {} |",
                     cwd.display(),
@@ -592,6 +598,21 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
         }
     }
 
+    // Now that a `subst` working folder runs, a command must not be able to
+    // point a drive somewhere else for a later `command/exec`: it may
+    // neither add a `subst` drive nor remove the one it runs from.
+    match subst_redefinition_probe().await {
+        Some((added, removed, output)) => {
+            eprintln!(
+                "| non-admin | command running `subst` from a subst working folder | `:project_roots` write | added a drive: {added}, removed its own: {removed} | {output} |"
+            );
+            assert!(!added && !removed, "a sandboxed command redefined a drive");
+        }
+        None => {
+            eprintln!("| non-admin | command running `subst` | | not made here: no subst drive | |")
+        }
+    }
+
     assert_eq!(
         outcomes, expected,
         "non-admin: every spelling of the workspace runs as the real path; read-only docs and .git stay unwritten; a working folder leading out is refused"
@@ -601,6 +622,49 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
             assert!(!git && !(docs_read_only && docs), "{label}: {outcome:?}");
         }
     }
+}
+
+/// From a `subst` working folder, a non-admin sandboxed command runs
+/// `subst <new> <elsewhere>` and `subst <its drive> /d`: whether it added a
+/// drive, whether it removed its own, and its output. `None` if no `subst`
+/// drive can be made here.
+async fn subst_redefinition_probe() -> Option<(bool, bool, String)> {
+    let fixture = fixture();
+    let (_, Ok(cwd), real) = fixture
+        .leading_in
+        .iter()
+        .find(|(form, ..)| *form == "subst drive")?
+    else {
+        return None;
+    };
+    let own_drive = cwd.display().to_string()[..2].to_string();
+    // No spaces: `cmd /C` gets the script as one escaped argument.
+    let elsewhere = fixture.base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create elsewhere");
+    let new_drive = free_drive();
+    let script = format!(
+        "subst {new_drive} {} & subst {own_drive} /d",
+        elsewhere.display()
+    );
+    let (profile_name, profile, _) = profiles(cwd, &real.join("docs"))
+        .into_iter()
+        .next()
+        .expect("profile");
+    let (outcome, output) = run_command_exec(
+        WindowsSandboxLevel::RestrictedToken,
+        &profile,
+        cwd,
+        real,
+        &script,
+    )
+    .await;
+    eprintln!("subst probe ({profile_name}): {outcome:?} {output}");
+    let added = Path::new(&format!("{new_drive}\\")).exists();
+    if added {
+        let _ = Command::new("subst").args([&new_drive, "/d"]).output();
+    }
+    let removed = !cwd.is_dir();
+    Some((added, removed, output))
 }
 
 /// Copies the elevated sandbox helpers next to this test binary, where the
