@@ -34,7 +34,7 @@ pub(crate) fn par_map<T: Sync, R: Send>(items: &[T], map: impl Fn(&T) -> R + Syn
     let mut results: Vec<(usize, R)> = std::thread::scope(|scope| {
         // A thread that can't start just leaves more for the others.
         let others: Vec<_> = (1..threads)
-            .filter_map(|_| std::thread::Builder::new().spawn_scoped(scope, &work).ok())
+            .filter_map(|_| std::thread::Builder::new().spawn_scoped(scope, work).ok())
             .collect();
         let mut results = work();
         for other in others {
