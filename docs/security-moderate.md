@@ -43,10 +43,12 @@ without them Corbanu refuses every model request under Moderate, so
   approval: the vault, credentials (a project's `.env` files included),
   Corbanu's own files and security settings, disclosure, value transfer, code
   you haven't seen, MCP calls that change or send data, starting an agent or
-  restarting a finished one (resuming it, or a follow-up task to an agent that
-  isn't running), and tools Corbanu hasn't classified. Waiting on an agent,
-  closing it, or sending it a message (`send_input`, `send_message`) never
-  asks, under any of the agent tools' names.
+  restarting a finished one (resuming it, or a follow-up task or
+  `send_input` to an agent that isn't running), and tools Corbanu hasn't
+  classified. Waiting on an agent, closing it, `send_message`, and
+  `send_input` to a running agent never ask, under any of the agent tools'
+  names. Interrupting an agent that isn't running only reports its status,
+  at every level; it never starts it (D404).
   Where approving can't unlock a file, the prompt names it and says what it
   is: under `secretless_agent_launch`, Corbanu's own
   files (such as its sign-in, vault, config and history), CLI tokens (`~/.aws/credentials`, `~/.netrc`,
@@ -364,6 +366,11 @@ The kill switch (`/security` → `g`) works under every level.
   command's output; it never changes what runs.
 - A remote app server can't enforce a level chosen here; Corbanu refuses to
   start against one until you choose Permissive.
+- A follow-up task, `send_input` or interrupt goes ahead without asking
+  when the agent is running at the moment of the check. If that agent's turn
+  ends just before the message arrives, the message starts a new turn
+  without asking (D389). The agent still carries the untrusted-content mark
+  and runs at the same level.
 
 See [Aggressive security level: protected files](security-aggressive.md) for
 the protected-file rules both levels share.

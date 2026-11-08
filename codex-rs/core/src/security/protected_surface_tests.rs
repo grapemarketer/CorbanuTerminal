@@ -122,7 +122,8 @@ async fn d334_agent_tool_aliases_are_classified_without_namespace_tools() {
 /// or Aggressive with approvals off, waiting on, messaging and closing an
 /// agent go ahead on every route; starting one is refused as an agent launch
 /// and resuming one as a restart, never as a tool the security level has not
-/// classified.
+/// classified. D388: V1 `send_input` to an agent that isn't running (here an
+/// unknown one) is refused as a restart on every route.
 #[tokio::test]
 async fn d334_agent_tools_after_untrusted_content_on_every_route() {
     use crate::tools::context::ToolInvocation;
@@ -201,7 +202,7 @@ async fn d334_agent_tools_after_untrusted_content_on_every_route() {
                 ToolName::namespaced("collaboration", name),
             ]
         };
-        let mut go_ahead: Vec<ToolName> = ["wait_agent", "send_input", "close_agent"]
+        let mut go_ahead: Vec<ToolName> = ["wait_agent", "close_agent"]
             .into_iter()
             .flat_map(routes)
             .collect();
@@ -229,6 +230,7 @@ async fn d334_agent_tools_after_untrusted_content_on_every_route() {
         asks.extend(
             routes("resume_agent")
                 .into_iter()
+                .chain(routes("send_input"))
                 .map(|name| (name, restart.as_str())),
         );
         for (name, expected) in asks {
@@ -277,6 +279,8 @@ async fn d334_agent_restart_does_not_ask_before_untrusted_content() {
         "resume_agent_v1",
         "followup_task",
         "followup_task_plaintext",
+        "send_input",
+        "send_input_v1",
     ] {
         let invocation = ToolInvocation {
             session: Arc::clone(&session),
@@ -351,7 +355,12 @@ fn pf_23_s01_route_matrix() {
         (
             ToolOrigin::Builtin,
             plain("send_input_v1"),
-            Coverage::ChildAgent,
+            Coverage::AgentFollowup,
+        ),
+        (
+            ToolOrigin::Builtin,
+            ToolName::namespaced("multi_agent_v1", "send_input"),
+            Coverage::AgentFollowup,
         ),
         (
             ToolOrigin::Builtin,

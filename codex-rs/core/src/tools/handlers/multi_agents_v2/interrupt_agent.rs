@@ -8,6 +8,10 @@ use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
+/// What an interrupt does to an agent that isn't running (D404).
+const NOT_RUNNING_EFFECT: &str =
+    "not running: nothing was interrupted and the agent was not started";
+
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("interrupt_agent")
@@ -112,68 +116,65 @@ async fn handle_interrupt_agent(
         (Some(nickname), None) => format!("{nickname} · {receiver_agent_path}"),
         (None, _) => receiver_agent_path.to_string(),
     };
+    let not_running = InterruptAgentResult {
+        previous_status: status.clone(),
+        actor: actor.clone(),
+        target: target.clone(),
+        reason: reason.to_string(),
+        superseding_task: superseding_task.clone(),
+        process_effect: NOT_RUNNING_EFFECT.to_string(),
+    };
+    // D404 (#1796): an agent without a running turn is neither interrupted
+    // nor woken (the audit message below would start a turn): the call only
+    // reports its status, at every security level.
+    if status != AgentStatus::Running {
+        return Ok(not_running);
+    }
     let process_effect = "model turn aborted; active turn-owned tool processes receive SIGTERM cleanup before abort; durable unified-exec background processes are preserved and remain inspectable in /ps".to_string();
     let audit_copy = format!(
         "Actor: {actor}\nTarget: {target}\nReason: {reason}\nSuperseding task/dispatch: {}\nProcess effect: {process_effect}",
         superseding_task.as_deref().unwrap_or("none")
     );
-    // A shutdown V2 worker remains a durable graph identity that can be reloaded later. Sending
-    // an interrupt to its dead runtime reports `InternalAgentDied`, whose generic cleanup path
-    // removes that identity. Treat the already-terminal interrupt as idempotent instead.
-    let interrupt_result = if matches!(status, AgentStatus::Shutdown) {
-        Ok(String::new())
-    } else {
-        session
-            .services
-            .agent_control
-            .interrupt_agent(agent_id)
-            .await
-    };
-    let result = match interrupt_result {
-        Ok(_) => Ok(()),
+    match session
+        .services
+        .agent_control
+        .interrupt_agent(agent_id)
+        .await
+    {
+        Ok(_) => {}
+        // Its runtime is gone, so it no longer runs: don't wake it either.
         Err(err)
             if matches!(
                 err.details(),
                 CodexErrorDetails::ThreadNotFound(_) | CodexErrorDetails::InternalAgentDied
             ) =>
         {
-            Ok(())
+            return Ok(not_running);
         }
-        Err(err) => Err(collab_agent_error(agent_id, err)),
-    };
-    result?;
-    if !matches!(
-        status,
-        AgentStatus::NotFound | AgentStatus::Unloaded | AgentStatus::Shutdown
-    ) {
-        // The runtime owns this plaintext audit record. Keep it typed as a control request so the
-        // target pane and durable mailbox retain the full actor/reason/process tuple.
-        let mut communication = InterAgentCommunication::new(
-            actor_path,
-            receiver_agent_path.clone(),
-            Vec::new(),
-            format!("CONTROL EVENT — INTERRUPT\n{audit_copy}"),
-            /*trigger_turn*/ true,
-        )
-        .with_kind(codex_protocol::protocol::AgentMessageKind::ControlRequest);
-        communication
-            .metadata
-            .get_or_insert_with(ResponseItemMetadata::default)
-            .source_call_id = Some(call_id.clone());
-        let context =
-            AgentCommunicationContext::new(AgentCommunicationKind::Message, session.thread_id);
-        session
-            .services
-            .agent_control
-            .send_inter_agent_communication(
-                agent_id,
-                communication,
-                context,
-                Some(turn.sub_id.clone()),
-            )
-            .await
-            .map_err(|err| collab_agent_error(agent_id, err))?;
+        Err(err) => return Err(collab_agent_error(agent_id, err)),
     }
+    // The runtime owns this plaintext audit record. Keep it typed as a control request so the
+    // target pane and durable mailbox retain the full actor/reason/process tuple.
+    let mut communication = InterAgentCommunication::new(
+        actor_path,
+        receiver_agent_path.clone(),
+        Vec::new(),
+        format!("CONTROL EVENT — INTERRUPT\n{audit_copy}"),
+        /*trigger_turn*/ true,
+    )
+    .with_kind(codex_protocol::protocol::AgentMessageKind::ControlRequest);
+    communication
+        .metadata
+        .get_or_insert_with(ResponseItemMetadata::default)
+        .source_call_id = Some(call_id.clone());
+    let context =
+        AgentCommunicationContext::new(AgentCommunicationKind::Message, session.thread_id);
+    session
+        .services
+        .agent_control
+        .send_inter_agent_communication(agent_id, communication, context, Some(turn.sub_id.clone()))
+        .await
+        .map_err(|err| collab_agent_error(agent_id, err))?;
     emit_sub_agent_activity(
         &session,
         &turn,

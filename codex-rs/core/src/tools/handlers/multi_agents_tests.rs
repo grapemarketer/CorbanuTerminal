@@ -548,6 +548,35 @@ struct ListedAgentResult {
 #[derive(Debug, Deserialize)]
 struct InterruptAgentResult {
     previous_status: AgentStatus,
+    process_effect: String,
+}
+
+/// Starts a turn on `agent_id` as its runtime reports one, so the agent
+/// reads `Running`; returns the turn so the caller can finish it.
+async fn start_agent_turn(manager: &ThreadManager, agent_id: ThreadId) -> Arc<TurnContext> {
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("agent thread should exist");
+    let turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn.sub_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+    assert_eq!(
+        manager.agent_control().get_status(agent_id).await,
+        AgentStatus::Running
+    );
+    turn
 }
 
 #[tokio::test]
@@ -6059,6 +6088,115 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     );
 }
 
+/// D404 (#1796): interrupting an agent that isn't running, whether it hasn't
+/// started a turn yet or has finished one, only reports its status: no
+/// interrupt reaches it and no message wakes it with a new turn.
+#[tokio::test]
+async fn d404_interrupting_an_agent_that_is_not_running_only_reports_its_status() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let reaches_agent = || {
+        manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(thread_id, op)| {
+                *thread_id == agent_id
+                    && matches!(op, Op::Interrupt | Op::InterAgentCommunication { .. })
+            })
+            .count()
+    };
+    let interrupt = || async {
+        let output = InterruptAgentHandler
+            .handle(invocation(
+                session.clone(),
+                turn.clone(),
+                "interrupt_agent",
+                function_payload(json!({"target": "worker", "reason": "Reply with exactly ok-i"})),
+            ))
+            .await
+            .expect("interrupt_agent should report the status");
+        let (content, success) = expect_text_output(output);
+        assert_eq!(success, Some(true));
+        serde_json::from_str::<InterruptAgentResult>(&content).expect("result should be json")
+    };
+
+    let before = reaches_agent();
+    let result = interrupt().await;
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(reaches_agent(), before, "nothing reaches a pending agent");
+
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let first_turn = start_agent_turn(&manager, agent_id).await;
+    thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: first_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("first done".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    let finished = manager.agent_control().get_status(agent_id).await;
+    assert!(
+        matches!(finished, AgentStatus::Completed(_)),
+        "{finished:?}"
+    );
+
+    let result = interrupt().await;
+    assert_eq!(result.previous_status, finished);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(reaches_agent(), before, "nothing reaches a finished agent");
+    assert_eq!(manager.agent_control().get_status(agent_id).await, finished);
+
+    // A running agent is still interrupted and told why.
+    let _second_turn = start_agent_turn(&manager, agent_id).await;
+    let result = interrupt().await;
+    assert_eq!(result.previous_status, AgentStatus::Running);
+    assert_eq!(reaches_agent(), before + 2, "interrupt and its notice");
+}
+
 #[tokio::test]
 async fn multi_agent_v2_interrupt_shutdown_agent_is_idempotent_and_preserves_identity() {
     let (mut session, mut turn) = make_session_and_context().await;
@@ -6213,6 +6351,8 @@ async fn multi_agent_v2_interrupt_agent_accepts_canonical_child_path() {
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker/child")
         .await
         .expect("child path should resolve");
+    // D404: only a running agent is interrupted.
+    let _child_turn = start_agent_turn(&manager, child_id).await;
 
     let output = InterruptAgentHandler
         .handle(invocation(
@@ -6342,6 +6482,8 @@ async fn multi_agent_v2_interrupt_target_receives_full_control_and_process_tuple
         .expect("worker metadata")
         .agent_nickname
         .expect("spawned worker nickname");
+    // D404: only a running agent is interrupted and told why.
+    let _worker_turn = start_agent_turn(&manager, worker_id).await;
 
     InterruptAgentHandler
         .handle(invocation(
@@ -7715,7 +7857,8 @@ async fn spawned_children_inherit_the_parent_account_even_with_a_role() {
 /// D334 (#1702), D335: after untrusted content under Moderate or Aggressive
 /// with approvals off, a follow-up task to a running agent goes ahead; once
 /// the agent has finished, a follow-up would start a new turn, so it is
-/// refused as a restart, through both follow-up tool names.
+/// refused as a restart, through both follow-up tool names. D388: V1
+/// `send_input` (and its `_v1` alias) is checked the same way.
 #[test]
 fn d334_followup_task_to_a_finished_agent_asks_like_a_restart() {
     use codex_security_policy::SecurityLevel;
@@ -7798,8 +7941,18 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
         );
         async move { check_dispatch(&invocation, ToolOrigin::Builtin).await }
     };
-    let tools = ["followup_task", "followup_task_plaintext"];
-    let targets = [format!("thread:{agent_id}"), "worker".to_string()];
+    let tools = [
+        "followup_task",
+        "followup_task_plaintext",
+        "send_input",
+        "send_input_v1",
+    ];
+    // V1 names its target by the bare thread id.
+    let targets = [
+        format!("thread:{agent_id}"),
+        "worker".to_string(),
+        agent_id.to_string(),
+    ];
 
     let restart = format!(
         "Not run: Security level {level:?}: this is a request to restart a finished agent \
