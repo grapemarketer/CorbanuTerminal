@@ -105,7 +105,7 @@ async fn spawn_elevated_with_env_map(
     argv: Vec<String>,
     env_map: HashMap<String, String>,
     tty: bool,
-) -> codex_utils_pty::SpawnedProcess {
+) -> anyhow::Result<codex_utils_pty::SpawnedProcess> {
     spawn_windows_sandbox_session_elevated_for_permission_profile(
         &PermissionProfile::workspace_write(),
         workspace_roots_for(root).as_slice(),
@@ -152,7 +152,14 @@ pub(in crate::unified_exec::tests) async fn run_elevated_with_env_map(
     argv: Vec<String>,
     env_map: HashMap<String, String>,
 ) -> (String, i32) {
-    let spawned = spawn_elevated_with_env_map(root, codex_home, argv, env_map, /*tty*/ false).await;
+    let spawned = spawn_elevated_with_env_map(root, codex_home, argv, env_map, /*tty*/ false)
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        });
     let (stdout, exit_code) =
         collect_stdout_and_exit(spawned, codex_home, Duration::from_secs(/*secs*/ 120)).await;
     (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
