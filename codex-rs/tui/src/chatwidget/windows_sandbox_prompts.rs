@@ -592,8 +592,12 @@ impl ChatWidget {
             lines.push(line![
                 "These git folders appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
             ]);
-            for item in &git_dirs {
+            // At most 20, as the startup warning (rule 4).
+            for item in git_dirs.iter().take(20) {
                 lines.push(line![format!("  {item}").cyan()]);
+            }
+            if git_dirs.len() > 20 {
+                lines.push(line![format!("  and {} more", git_dirs.len() - 20).cyan()]);
             }
         }
         let git_only = folders.is_empty();

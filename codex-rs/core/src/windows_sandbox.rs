@@ -250,11 +250,9 @@ pub fn planted_git_startup_warnings(
     }
     let writable = codex_windows_sandbox::legacy_writable_roots(policy, workspace_roots, cwd);
     let mut warnings = planted.git_warnings_beyond_project(&writable, cwd);
-    warnings.extend(
-        codex_config::git_changes_to_show(git_changes, &writable, cwd)
-            .iter()
-            .map(codex_config::PlantedGitChange::warning),
-    );
+    warnings.extend(codex_config::git_changes_warning(
+        &codex_config::git_changes_to_show(git_changes, &writable, cwd),
+    ));
     warnings
 }
 

@@ -481,17 +481,16 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
         // appeared deeper in its roots, before its file goes. A live one (or
         // one that can't be told apart from a live one) records that when it
         // ends, so its file stays.
+        // D420 reuses the walk's repositories.
+        let mut walked_repos: Option<Vec<PathBuf>> = None;
         if let Some(record) = &record
             && let Some(nested) = &record.nested_metadata
         {
-            let recorded = session_file_is_closed(&path)
-                && record_nested_planted(
-                    registry,
-                    nested,
-                    crate::nested_metadata::find(&record.nested_roots),
-                    log_dir,
-                )
-                .is_ok();
+            let recorded = session_file_is_closed(&path) && {
+                let mut found = crate::nested_metadata::find(&record.nested_roots);
+                walked_repos = Some(std::mem::take(&mut found.repos));
+                record_nested_planted(registry, nested, found, log_dir).is_ok()
+            };
             if !recorded {
                 live.extend(record.roots.iter().cloned());
                 continue;
@@ -507,7 +506,9 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                     repos,
                     crate::nested_metadata::repo_states(
                         &repo_paths(
-                            crate::nested_metadata::find(&record.nested_roots).repos,
+                            walked_repos.take().unwrap_or_else(|| {
+                                crate::nested_metadata::find(&record.nested_roots).repos
+                            }),
                             &record.roots,
                         ),
                         &record.roots,

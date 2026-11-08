@@ -707,7 +707,8 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   included). The warning says what changed. A new repository with exactly
   the shape `git init` or `git clone` leave isn't reported, so cloning a
   project to look at it doesn't ask; later changes to it are. Nothing is
-  refused: agents can still commit and run `git config` there.
+  refused: agents can still commit and run `git config` there. Going back
+  to an older build drops these records the next time it saves its own.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only

@@ -51,8 +51,10 @@ fn legacy_repositories_are_watched() {
     let root = canonical(&root);
     let kept = root.join("kept\\.git");
     let untouched = root.join("untouched\\.git");
+    let replaced = root.join("replaced\\.git");
     init_shape(&kept, INIT_CONFIG);
     init_shape(&untouched, INIT_CONFIG);
+    init_shape(&replaced, INIT_CONFIG);
     let plain = root.join("cloned\\.git");
     let planted = root.join("planted\\.git");
     let bare = root.join("scratch");
@@ -75,6 +77,9 @@ fn legacy_repositories_are_watched() {
     .expect("config");
     fs::write(untouched.join("config"), INIT_CONFIG).expect("same config");
     fs::write(untouched.join("HEAD"), "ref: refs/heads/other\n").expect("bookkeeping");
+    // A repository replaced by a plain one: only new ones pass as plain.
+    fs::remove_dir_all(&replaced).expect("remove");
+    init_shape(&replaced, INIT_CONFIG);
     // A bare repository planted in a plain folder (gap 2).
     init_shape(&bare, &format!("{INIT_CONFIG}\tpager = evil.exe\r\n"));
     // Can't be confirmed while the session runs.
@@ -87,6 +92,7 @@ fn legacy_repositories_are_watched() {
         changes(&kept),
         changes(&untouched),
         changes(&bare),
+        changes(&replaced),
     );
     let told: Vec<PathBuf> = crate::planted_records_since(mark)
         .into_iter()
@@ -126,6 +132,7 @@ fn legacy_repositories_are_watched() {
                 Some(vec!["config changed".to_string()]),
                 None,
                 Some(vec!["new repository".to_string()]),
+                Some(vec!["replaced".to_string()]),
             ),
             true,
             true,

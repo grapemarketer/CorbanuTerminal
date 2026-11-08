@@ -174,14 +174,28 @@ impl PlantedGitChange {
         }
         format!("{} ({changes})", self.path.display())
     }
+}
 
-    /// The startup warning for it.
-    pub fn warning(&self) -> String {
-        format!(
-            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted it. Git runs a repository's hooks and config outside the sandbox whenever you run git there. Check them, then confirm it when Corbanu Terminal asks.",
-            self.describe()
-        )
+/// D420 (#1775): one startup warning for all of `changes` (rule 4 of the
+/// design note: batched, at most 20 named and how many more); `None` when
+/// there are none.
+pub fn git_changes_warning(changes: &[PlantedGitChange]) -> Option<String> {
+    const SHOWN: usize = 20;
+    if changes.is_empty() {
+        return None;
     }
+    let mut list = changes
+        .iter()
+        .take(SHOWN)
+        .map(PlantedGitChange::describe)
+        .collect::<Vec<_>>()
+        .join("; ");
+    if changes.len() > SHOWN {
+        list.push_str(&format!(" and {} more", changes.len() - SHOWN));
+    }
+    Some(format!(
+        "{PLANTED_GIT_WARNING_PREFIX}{list}. These appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs a repository's hooks and config outside the sandbox whenever you run git there. Check them, then confirm them when Corbanu Terminal asks."
+    ))
 }
 
 /// D420 (#1775): the repositories that appeared or changed and aren't

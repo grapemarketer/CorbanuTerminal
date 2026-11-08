@@ -312,9 +312,9 @@ pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState
 }
 
 /// D420/D421 (#1775): what changed in each repository of `now` since
-/// `before`, for the person. A new or replaced one counts unless it has
-/// exactly the shape `git init` or `git clone` leave (D421); a link, or one
-/// that can't be inspected, counts every time.
+/// `before`, for the person. A replaced one counts, and so does a new one
+/// unless it has exactly the shape `git init` or `git clone` leave (D421); a
+/// link, or one that can't be inspected, counts every time.
 pub(crate) fn repo_changes(
     before: &[RepoState],
     now: Vec<RepoState>,
@@ -331,10 +331,12 @@ pub(crate) fn repo_changes(
                     .find(|old| same_path(&old.path, &state.path) && old.identity == state.identity)
                 {
                     Some(old) => crate::git_watch::changes(&old.prints, &state.prints),
-                    None if crate::git_watch::is_plain(&state.path) => Vec::new(),
+                    // Only a new one may pass as plain (D421), not one that
+                    // replaced a repository.
                     None if before.iter().any(|old| same_path(&old.path, &state.path)) => {
                         vec!["replaced".to_string()]
                     }
+                    None if crate::git_watch::is_plain(&state.path) => Vec::new(),
                     None => vec!["new repository".to_string()],
                 }
             };
