@@ -732,3 +732,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   and Python `multiprocessing` fail there. This is not new in this release.
   The default (elevated) sandbox runs all of them; see "Known limitations"
   in `docs/sandbox.md`.
+- **A default (elevated) sandbox command now starts while a non-admin
+  sandbox command is running** (#1819). Before, when the non-admin command's
+  writable folders held the Corbanu home (for example `%TEMP%`, or a project
+  folder above it), the elevated command failed after 15 seconds with
+  `timed out after 15000ms connecting runner pipe-out`. The folder with the
+  sandbox's helper programs now keeps its normal (Medium) integrity level.

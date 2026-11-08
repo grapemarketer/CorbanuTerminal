@@ -66,6 +66,7 @@ pub(crate) fn resolve_helper_for_launch(
 ) -> PathBuf {
     match copy_helper_if_needed(kind, codex_home, log_dir) {
         Ok(path) => {
+            keep_helper_bin_dir_medium(codex_home, log_dir);
             log_note(
                 &format!(
                     "helper launch resolution: using copied {} path {}",
@@ -88,6 +89,27 @@ pub(crate) fn resolve_helper_for_launch(
             );
             fallback
         }
+    }
+}
+
+/// #1819: an executable starts at the lower of its token's and its file's
+/// integrity. While a legacy session uses a writable root holding this codex
+/// home (`%TEMP%`, or a workspace above it), the root's inheritable Low label
+/// reaches the copied helpers, so the runner started at Low and could not
+/// open the parent's pipe for writing. An explicit Medium label (what an
+/// unlabelled file has anyway) keeps the root's Low label off them, and Low
+/// programs out of them.
+fn keep_helper_bin_dir_medium(codex_home: &Path, log_dir: Option<&Path>) {
+    let dir = helper_bin_dir(codex_home);
+    // SAFETY: Win32 security calls on a folder of this codex home.
+    if let Err(err) = unsafe { crate::integrity::label_protected_path_medium(&dir) } {
+        log_note(
+            &format!(
+                "helper copy: could not label {} Medium; a legacy session's Low label may reach it: {err:#}",
+                dir.display()
+            ),
+            log_dir,
+        );
     }
 }
 
