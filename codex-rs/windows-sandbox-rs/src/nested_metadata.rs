@@ -67,7 +67,8 @@ pub(crate) struct Found {
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
 /// name never matches a snapshot.
 pub(crate) fn find(roots: &[PathBuf]) -> Found {
-    find_bounded(roots, &mut usize::MAX)
+    let mut budget = usize::MAX;
+    find_bounded(roots, &mut budget)
 }
 
 /// [`find`], looking at no more than `budget` entries (it counts down).
