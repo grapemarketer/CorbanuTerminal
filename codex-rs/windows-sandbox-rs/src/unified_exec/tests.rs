@@ -777,6 +777,19 @@ fn check_elevated_command_returns_while_descendant_runs(
     release.expect("release descendant after root exit");
     println!("elevated {backend} pwsh returned after {took:?}");
     println!("elevated {backend} pwsh exit_code={exit_code}");
+    let survived = wait_for_path(&survival_marker, Duration::from_secs(10));
+    // The root is in the repository: remove it once the descendant has let
+    // go of its files (its redirected output), which it may hold a moment
+    // after writing the marker.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while let Err(err) = fs::remove_dir_all(root.path()) {
+        assert!(
+            Instant::now() < deadline,
+            "remove {}: {err}",
+            root.path().display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     assert_eq!(
         exit_code,
         0,
@@ -788,7 +801,7 @@ fn check_elevated_command_returns_while_descendant_runs(
         "stdout={stdout:?}"
     );
     assert!(
-        wait_for_path(&survival_marker, Duration::from_secs(10)),
+        survived,
         "#1830: the elevated {backend} descendant did not survive the command's exit; \
          the command returned after {took:?}"
     );
