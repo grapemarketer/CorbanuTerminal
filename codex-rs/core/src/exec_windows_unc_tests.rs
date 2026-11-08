@@ -4,9 +4,9 @@
 //! an error, and the command doesn't run, under both Windows sandboxes.
 //!
 //! The working folder is the workspace through the administrative share
-//! `\\localhost\<drive>$` (an elevated session), or through the share named
-//! by `CODEX_TEST_UNC_SHARE` over `CODEX_TEST_UNC_SHARE_DIR` (a normal
-//! session, where administrative shares are refused).
+//! `\\localhost\<drive>$` (an elevated session), or through the share
+//! `\\localhost\<CODEX_TEST_UNC_SHARE>` over `CODEX_TEST_UNC_SHARE_DIR` (a
+//! normal session, where administrative shares are refused).
 
 // The probe's output is the evidence of the measured runs (`--nocapture`).
 #![allow(clippy::print_stderr)]
@@ -19,8 +19,10 @@ use crate::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use futures::FutureExt;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -51,9 +53,9 @@ impl Drop for EnvGuard {
     }
 }
 
-/// `real` through `\\localhost`: the share from the environment, else the
+/// `real` through `\\<host>`: the share from the environment, else the
 /// administrative share of its drive.
-fn localhost_unc(real: &Path) -> PathBuf {
+fn unc(host: &str, real: &Path) -> PathBuf {
     let real_text = real.display().to_string();
     match (
         std::env::var("CODEX_TEST_UNC_SHARE"),
@@ -62,10 +64,10 @@ fn localhost_unc(real: &Path) -> PathBuf {
         (Ok(share), Ok(dir)) => {
             let dir = dunce::canonicalize(&dir).expect("canonical share folder");
             let rest = real.strip_prefix(&dir).expect("workspace under the share");
-            PathBuf::from(format!("{share}\\{}", rest.display()))
+            PathBuf::from(format!("\\\\{host}\\{share}\\{}", rest.display()))
         }
         _ => PathBuf::from(format!(
-            "\\\\localhost\\{}$\\{}",
+            "\\\\{host}\\{}$\\{}",
             &real_text[..1],
             &real_text[3..]
         )),
@@ -93,8 +95,8 @@ fn stage_windows_sandbox_helpers() {
 /// the error it returned, or what it printed.
 async fn command_exec(
     level: WindowsSandboxLevel,
-    cwd: AbsolutePathBuf,
-    profile: PermissionProfile,
+    cwd: &AbsolutePathBuf,
+    profile: &PermissionProfile,
 ) -> Result<String, String> {
     let request = build_exec_request(
         ExecParams {
@@ -116,9 +118,9 @@ async fn command_exec(
             justification: None,
             arg0: None,
         },
-        &profile,
-        &cwd,
-        std::slice::from_ref(&cwd),
+        profile,
+        cwd,
+        std::slice::from_ref(cwd),
         &None,
         /*use_legacy_landlock*/ false,
     )
@@ -152,29 +154,38 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
         .expect("canonical workspace parent")
         .join("Workspace Folder");
     std::fs::create_dir_all(&real).expect("workspace");
-    let unc = localhost_unc(&real);
-    assert!(unc.is_dir(), "{} can't be reached here", unc.display());
-    let cwd = AbsolutePathBuf::from_absolute_path(&unc).expect("absolute UNC cwd");
-    let profile = PermissionProfile::workspace_write()
-        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
-
+    // `\\localhost` is the case #1863 found. `\\127.0.0.1` is the same
+    // folder through another server name, for comparison: measured only.
     let mut outcomes = Vec::new();
-    for (sandbox, level) in levels {
-        // A panic would take the probe down: run each case in its own task.
-        let outcome = match tokio::spawn(command_exec(level, cwd.clone(), profile.clone())).await {
-            Ok(Ok(output)) => format!("ran: {}", output.trim()),
-            Ok(Err(err)) => err,
-            Err(join) if join.is_panic() => "panicked".to_string(),
-            Err(join) => format!("task failed: {join}"),
-        };
-        let written = real.join("ran.txt").exists();
-        eprintln!(
-            "sec-win-1863 {sandbox}, cwd {}: {outcome} (ran.txt written: {written})",
-            unc.display()
-        );
-        outcomes.push((sandbox, outcome, written));
+    for host in ["localhost", "127.0.0.1"] {
+        let unc = unc(host, &real);
+        assert!(unc.is_dir(), "{} can't be reached here", unc.display());
+        let cwd = AbsolutePathBuf::from_absolute_path(&unc).expect("absolute UNC cwd");
+        let profile = PermissionProfile::workspace_write()
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+        for (sandbox, level) in &levels {
+            let _ = std::fs::remove_file(real.join("ran.txt"));
+            // Record a panic as an outcome rather than end the probe.
+            let outcome = match AssertUnwindSafe(command_exec(*level, &cwd, &profile))
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(output)) => format!("ran: {}", output.trim()),
+                Ok(Err(err)) => err,
+                Err(_) => "panicked".to_string(),
+            };
+            let written = real.join("ran.txt").exists();
+            eprintln!(
+                "sec-win-1863 {sandbox}, cwd {}: {outcome} (ran.txt written: {written})",
+                unc.display()
+            );
+            outcomes.push((host, *sandbox, outcome, written));
+        }
     }
-    for (sandbox, outcome, written) in outcomes {
+    for (host, sandbox, outcome, written) in outcomes {
+        if host != "localhost" {
+            continue;
+        }
         assert!(
             outcome.starts_with("refused: ") && outcome.contains("network (UNC) working folder"),
             "{sandbox}: {outcome}"
