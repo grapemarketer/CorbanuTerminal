@@ -160,7 +160,7 @@ unsafe fn set_object_dacl(handle: HANDLE, grants: &[(*mut c_void, u32)]) -> Resu
 
 /// The elevated sandbox's users' group (setup creates it and adds both
 /// sandbox accounts).
-const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
+pub(crate) const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 
 /// Whether `token` holds `sid` as an enabled group. Needs `TOKEN_QUERY`
 /// only (unlike `CheckTokenMembership`, which duplicates the token: the

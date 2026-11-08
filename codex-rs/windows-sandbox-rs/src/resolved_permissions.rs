@@ -226,7 +226,7 @@ impl ResolvedWindowsSandboxPermissions {
             .collect()
     }
 
-    fn has_writable_tmpdir_entry(&self) -> bool {
+    pub(crate) fn has_writable_tmpdir_entry(&self) -> bool {
         self.file_system
             .entries
             .iter()

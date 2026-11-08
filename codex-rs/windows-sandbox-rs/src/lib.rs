@@ -132,6 +132,9 @@ mod setup;
 mod setup_error;
 
 #[cfg(target_os = "windows")]
+mod session_temp;
+
+#[cfg(target_os = "windows")]
 mod spawn_prep;
 
 #[cfg(target_os = "windows")]
@@ -335,6 +338,8 @@ pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::token_mode_for_permission_profile;
+#[cfg(target_os = "windows")]
+pub use session_temp::end_session_temp_folders;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]

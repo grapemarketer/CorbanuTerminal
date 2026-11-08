@@ -196,6 +196,8 @@ fn sec_win_1770_elevated_command_cannot_write_to_a_shared_folder() {
         &command_temp(temp.path()),
         /*tty*/ false,
     ));
+    // D377: the session's folder in `temp` is held until ended.
+    crate::session_temp::end_session_temp_in(temp.path());
     assert_refused(
         "elevated",
         root.path(),
