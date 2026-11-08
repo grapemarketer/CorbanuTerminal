@@ -77,9 +77,8 @@ impl Found {
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
 /// name never matches a snapshot.
 ///
-/// #1877: the folders in the top [`SPLIT_DEPTH`] levels are listed on
-/// several threads, each deeper subtree by one thread as [`find_bounded`]
-/// walks it. Each part is put back in its place, so the result is the same,
+/// #1877: the folders down to [`SPLIT_DEPTH`] are listed on several
+/// threads, each deeper subtree by one thread as [`find_bounded`] walks it. Each part is put back in its place, so the result is the same,
 /// in the same order, as one walk.
 pub(crate) fn find(roots: &[PathBuf]) -> Found {
     // A folder's place: its root, then for each level its position counted
@@ -141,7 +140,8 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
     found
 }
 
-/// Levels below a root that [`find`] lists on several threads.
+/// [`find`] lists each folder down to this depth (a root is 1) as its own
+/// piece of work; each deeper subtree is walked whole by one thread.
 const SPLIT_DEPTH: usize = 4;
 
 /// [`find`], looking at no more than `budget` entries (it counts down).
