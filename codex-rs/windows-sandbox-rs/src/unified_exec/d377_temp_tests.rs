@@ -334,29 +334,54 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     let dir = temp.path().join("left-dir");
     let users = temp.path().join("other-program.txt");
     fs::write(&users, "other").expect("other program's file");
-    // An older version's command, writing there as when the temp folder was
-    // one of its writable roots.
-    let make = temp.path().join("d377-make.cmd");
+    // An older version's command in the workspace, with the temp folder one
+    // of its writable roots, as older versions made it. It also gives itself
+    // entries on what it made there: its account's, and its workspace's
+    // capability SID, which later commands in that workspace carry too.
+    let workspace_sid =
+        crate::cap::workspace_cap_sid_for_cwd(home.path(), root.path()).expect("workspace sid");
+    let make = root.path().join("d377-make.cmd");
     fs::write(
         &make,
         format!(
             "@echo off\r\n\
              (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
              mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
-             icacls \"{file}\" /grant \"%USERNAME%:(M)\" >nul 2>nul && echo FILE-KEPT\r\n\
-             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul && echo DIR-KEPT\r\n",
+             icacls \"{file}\" /grant \"%USERNAME%:(M)\" \"*{workspace_sid}:(M)\" >nul 2>nul && echo FILE-KEPT\r\n\
+             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" \"*{workspace_sid}:(OI)(CI)(M)\" >nul 2>nul && echo DIR-KEPT\r\n",
             file = file.display(),
             dir = dir.display()
         ),
     )
     .expect("write script");
-    let (stdout, code) = runtime.block_on(run_elevated(
-        temp.path(),
-        home.path(),
-        cmd(&make),
-        &[],
-        /*tty*/ false,
-    ));
+    let write_roots = [root.path().to_path_buf(), temp.path().to_path_buf()];
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let (stdout, code) = runtime.block_on(async {
+        let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(root.path()).as_slice(),
+            home.path(),
+            cmd(&make),
+            root.path(),
+            env_map,
+            /*proxy_enforced*/ false,
+            /*network_proxy_restricting_sid*/ None,
+            Some(90_000),
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ true,
+            Some(&write_roots),
+            &crate::DenyReadTargets::default(),
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn the older version's command");
+        let (stdout, code) =
+            collect_stdout_and_exit(spawned, home.path(), Duration::from_secs(120)).await;
+        (String::from_utf8_lossy(&stdout).into_owned(), code)
+    });
     println!("d377 leftovers made: exit={code} stdout={stdout:?}");
     for done in ["FILE-MADE", "DIR-MADE", "FILE-KEPT", "DIR-KEPT"] {
         assert!(stdout.contains(done), "{done}: {stdout}");
