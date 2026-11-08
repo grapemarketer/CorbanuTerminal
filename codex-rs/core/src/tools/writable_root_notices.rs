@@ -75,8 +75,11 @@ pub(crate) fn unlabelled_writable_root_warnings(
 
 /// D424 (#1775): per thread, the planted-records mark taken before its first
 /// non-admin sandboxed run, and the records it was told about since.
-static PLANTED_TOLD: LazyLock<Mutex<HashMap<ThreadId, (u64, HashSet<u64>)>>> =
+static PLANTED_TOLD: LazyLock<Mutex<HashMap<ThreadId, PlantedTold>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The mark before a thread's first run, and the records it was told about.
+type PlantedTold = (u64, HashSet<u64>);
 
 /// D424 (#1775): the notice for the folders recorded as possibly planted
 /// since `mark` (taken before a run in the non-admin Windows sandbox), or
