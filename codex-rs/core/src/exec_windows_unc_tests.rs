@@ -9,7 +9,7 @@
 //! normal session, where administrative shares are refused).
 
 // The probe's output is the evidence of the measured runs (`--nocapture`).
-#![allow(clippy::print_stderr)]
+#![allow(clippy::print_stderr, clippy::expect_used)]
 
 use super::ExecCapturePolicy;
 use super::ExecExpiration;

@@ -442,6 +442,10 @@ fn record_resolution(
 #[path = "approvals_tests.rs"]
 mod tests;
 
+#[cfg(all(test, windows))]
+#[path = "approvals_windows_tests.rs"]
+mod windows_tests;
+
 #[cfg(test)]
 #[path = "refusal_diagnostics_tests.rs"]
 mod refusal_diagnostics_tests;
