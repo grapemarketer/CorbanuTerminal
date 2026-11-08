@@ -1001,14 +1001,11 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
                 .repos
                 .as_ref()
                 .is_some_and(|repos| repo_changed_in_session(&record.roots, repos, path))
+            // D422: a target that session watches and that differs now.
             || record.config_targets.as_ref().is_some_and(|targets| {
-                let walk = take_repo_walk(&mut crate::nested_metadata::find(&record.nested_roots));
-                let before = record.repos.as_deref().unwrap_or_default();
-                let (repos, _notes) = repo_paths(walk, &record.roots, &record.nested_roots, before);
-                let now = config_target_states(&repos, &record.roots);
-                crate::git_config_targets::target_changes(targets, now)
+                targets
                     .iter()
-                    .any(|(changed, _)| changed == path)
+                    .any(|target| target.path == path && target.now() != target.prints)
             })
         {
             anyhow::bail!(
@@ -1032,7 +1029,9 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
 /// is new counts unless it is plain).
 fn repo_changed_in_session(roots: &[PathBuf], before: &[RepoState], path: &Path) -> bool {
     // A repository: a `.git` entry or a git folder (not a folder a config
-    // names, which D422 checks).
+    // names, which D422 checks). A recorded bare repository that is briefly
+    // not a git folder while its session runs can be confirmed; that
+    // session records it again when it ends if it changed.
     let repo = path
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case(".git"))

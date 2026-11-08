@@ -220,7 +220,7 @@ pub(crate) fn is_at_or_below(path: &Path, base: &Path) -> bool {
 
 /// A marker that differs every time: a folder too big to look through
 /// counts as changed after every session.
-fn truncated() -> String {
+pub(crate) fn truncated() -> String {
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
         "truncated at {:?} #{}",
