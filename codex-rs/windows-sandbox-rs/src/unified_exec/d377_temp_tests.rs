@@ -333,6 +333,9 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     let file = temp.path().join("left.txt");
     let dir = temp.path().join("left-dir");
     let open_to_all = temp.path().join("open-to-all.txt");
+    // One whose owner keeps the user from taking it: set aside, not taken.
+    let refused = temp.path().join("refused.txt");
+    let user = crate::deny_read_sessions::current_user_sid().expect("user");
     let users = temp.path().join("other-program.txt");
     fs::write(&users, "other").expect("other program's file");
     // An older version's command in the workspace, with the temp folder one
@@ -360,9 +363,15 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
                }}\r\n\
                $item.SetAccessControl($acl)\r\n\
              }}\r\n\
+             $item = Get-Item -LiteralPath '{refused}'\r\n\
+             $acl = $item.GetAccessControl('Access')\r\n\
+             $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(\
+             (New-Object Security.Principal.SecurityIdentifier('{user}')), 'ChangePermissions, TakeOwnership', 'Deny')))\r\n\
+             $item.SetAccessControl($acl)\r\n\
              'KEPT'\r\n",
             file = file.display(),
-            dir = dir.display()
+            dir = dir.display(),
+            refused = refused.display()
         ),
     )
     .expect("write script");
@@ -373,11 +382,13 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
             "@echo off\r\n\
              (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
              (echo made>\"{open_to_all}\") 2>nul && echo OPEN-MADE\r\n\
+             (echo made>\"{refused}\") 2>nul && echo REFUSED-MADE\r\n\
              mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
              \"{powershell}\" -NoProfile -ExecutionPolicy Bypass -File \"{keep}\" 2>&1\r\n",
             file = file.display(),
             dir = dir.display(),
             open_to_all = open_to_all.display(),
+            refused = refused.display(),
             powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe").display(),
             keep = keep.display()
         ),
@@ -412,7 +423,7 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         (String::from_utf8_lossy(&stdout).into_owned(), code)
     });
     println!("d377 leftovers made: exit={code} stdout={stdout:?}");
-    for done in ["FILE-MADE", "OPEN-MADE", "DIR-MADE", "KEPT"] {
+    for done in ["FILE-MADE", "OPEN-MADE", "REFUSED-MADE", "DIR-MADE", "KEPT"] {
         assert!(stdout.contains(done), "{done}: {stdout}");
     }
     // What its owner may also do: a NULL DACL (everyone may do anything).
@@ -440,7 +451,6 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
             .expect("open");
         crate::deny_read_sessions::owner_sid(&file).expect("owner")
     };
-    let user = crate::deny_read_sessions::current_user_sid().expect("user");
     assert_ne!(
         owner(&file),
         user,
@@ -498,6 +508,19 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         assert_eq!(owner(path), user, "{}", path.display());
     }
     assert_eq!(fs::read_to_string(&file).expect("read").trim(), "made");
+    // Renamed in place, not deleted.
+    assert!(!refused.exists(), "{} was not set aside", refused.display());
+    let aside: Vec<_> = fs::read_dir(temp.path())
+        .expect("list")
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("refused.txt.corbanu-sandbox-leftover-")
+        })
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
     assert_eq!(fs::read_to_string(&users).expect("read"), "other");
     crate::session_temp::end_session_temp_in(temp.path());
     crate::session_temp::end_session_temp_in(

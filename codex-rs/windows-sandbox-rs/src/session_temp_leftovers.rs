@@ -36,6 +36,7 @@ use std::path::PathBuf;
 const MAX_ENTRIES: usize = 500_000;
 /// What a leftover the user may not take is renamed to end with.
 const SET_ASIDE: &str = "corbanu-sandbox-leftover";
+const DELETE: u32 = 0x1_0000;
 const READ_CONTROL: u32 = 0x2_0000;
 const WRITE_DAC: u32 = 0x4_0000;
 const WRITE_OWNER: u32 = 0x8_0000;
@@ -190,8 +191,7 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
                     Take::Changed => found.not_taken += 1,
                     Take::Refused => {
                         found.not_taken += 1;
-                        drop(look);
-                        if set_aside(&path) {
+                        if set_aside(&path, &look, &base_key) {
                             found.set_aside += 1;
                         }
                         // Not walked: not the user's.
@@ -258,18 +258,66 @@ fn take_one(
     }
 }
 
-/// Renames `path` in its folder (the user may: the folder is the user's or
-/// was taken first), so what would use it by name makes a new one.
-fn set_aside(path: &Path) -> bool {
-    let Some(name) = path.file_name() else {
+/// Renames `path` in its folder if it still is the object `look` is open to
+/// and lies in the temp folder whose final path is `base_key` (the user may:
+/// the folder is the user's or was taken first). While the rename's handle
+/// is open, no folder on the way can be renamed or replaced.
+fn set_aside(path: &Path, look: &File, base_key: &str) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO;
+    use windows_sys::Win32::Storage::FileSystem::FileRenameInfo;
+    use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+    let Ok(moving) = open(path, DELETE | FILE_READ_ATTRIBUTES) else {
         return false;
     };
-    let mut aside = name.to_os_string();
-    aside.push(format!(
-        ".{SET_ASIDE}-{:08x}",
+    // SAFETY: both handles are open.
+    let same = unsafe {
+        matches!(
+            (
+                file_identity(look.as_raw_handle() as _),
+                file_identity(moving.as_raw_handle() as _),
+            ),
+            (Ok(a), Ok(b)) if a == b
+        )
+    };
+    // SAFETY: the handle is open.
+    let Ok(found) = (unsafe { final_path(moving.as_raw_handle() as _) }) else {
+        return false;
+    };
+    if !same || !comparable(&found).starts_with(&format!("{base_key}\\")) {
+        return false;
+    }
+    // A full path, in the form that takes no length limit.
+    let verbatim = match found.strip_prefix(r"\\") {
+        Some(unc) => format!(r"\\?\UNC\{unc}"),
+        None => format!(r"\\?\{found}"),
+    };
+    let target: Vec<u16> = format!(
+        "{verbatim}.{SET_ASIDE}-{:08x}",
         SmallRng::from_entropy().next_u32()
-    ));
-    std::fs::rename(path, path.with_file_name(aside)).is_ok()
+    )
+    .encode_utf16()
+    .collect();
+    let name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = name_offset + (target.len() + 1) * std::mem::size_of::<u16>();
+    // u64 storage keeps the structure aligned.
+    let mut buffer = vec![0_u64; size.div_ceil(8)];
+    let info = buffer.as_mut_ptr() as *mut FILE_RENAME_INFO;
+    // SAFETY: `buffer` holds the structure and the name after it; the
+    // handle is open with `DELETE`.
+    unsafe {
+        (*info).FileNameLength = (target.len() * std::mem::size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(
+            target.as_ptr(),
+            (info as *mut u8).add(name_offset) as *mut u16,
+            target.len(),
+        );
+        SetFileInformationByHandle(
+            moving.as_raw_handle() as _,
+            FileRenameInfo,
+            info as *const std::ffi::c_void,
+            size as u32,
+        ) != 0
+    }
 }
 
 fn open(path: &Path, access: u32) -> std::io::Result<File> {
