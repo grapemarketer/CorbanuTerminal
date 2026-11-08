@@ -686,7 +686,7 @@ fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Optio
 pub(super) fn sudo_runs_helper(command: &SimpleCommand, words: &[String], from: usize) -> bool {
     let runs_helper =
         |runs: &[String]| sudo_in_words_runs_helper(runs) || sudo_in_words_runs_legacy_helper(runs);
-    words.get(from..).is_some_and(|runs| runs_helper(runs))
+    words.get(from..).is_some_and(runs_helper)
         || unredirected(command, words, from).is_some_and(|runs| runs_helper(&runs))
 }
 
