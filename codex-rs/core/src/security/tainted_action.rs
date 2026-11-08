@@ -1494,6 +1494,22 @@ impl SedScope {
     /// command there has a text-only program, and the line's other words
     /// carry no backslash or brace.
     fn of(command: &[String]) -> Option<Self> {
+        // #1774: a scope needs a command named `sed` or `gsed`, and the
+        // parse takes a command's name as written (a plain word, never a
+        // quoted one), so a script without `sed` has none. Skipping the parse
+        // then gives the same answer without its cost, which grows faster
+        // than the text for some inputs (long runs of `<<E`).
+        let (_, script) = codex_shell_command::bash::extract_bash_command(command)?;
+        if !script.contains("sed") {
+            return None;
+        }
+        // The bash grammar takes time growing with the square of the
+        // here-documents left open (`sed 1d f <<E <<E …`), and the parse
+        // finds no plain line in a here-document anyway: past
+        // `MAX_SED_SCOPE_HEREDOCS` `<<`, no word is sed's data (stricter).
+        if script.matches("<<").count() > MAX_SED_SCOPE_HEREDOCS {
+            return None;
+        }
         work::parse();
         let commands = codex_shell_command::bash::parse_shell_lc_plain_commands(command)?;
         let piped = codex_shell_command::bash::extract_bash_command(command)
@@ -2833,9 +2849,19 @@ impl Classifier {
         let mut other_bases = std::borrow::Cow::Borrowed(folders.others.as_slice());
         // D217: sudo's `-C N` names no folder.
         let closes = unknown_folder::sudo_close_from(words, self.sudo_unsure());
+        // #1774: which words are written to (`>file`), marked once: looking
+        // each word up in `writes_to`, which holds one index per output
+        // redirection, made a long run of them (`>a >a … ./x`) quadratic.
+        let mut written_at = vec![false; words.len()];
+        for at in &simple.writes_to {
+            work::step();
+            if let Some(written) = written_at.get_mut(*at) {
+                *written = true;
+            }
+        }
         for (position, word) in words.iter().enumerate() {
             work::step();
-            let written = work::contains(&simple.writes_to, &position)
+            let written = written_at[position]
                 || writer.is_some_and(|(index, writes)| writes && position > index);
             // A folder flag's value is where the command runs, not what it reads.
             let mut folder_value = false;
@@ -2865,7 +2891,7 @@ impl Classifier {
             previous = Some(word.as_str());
             // #1159: a file written whose name holds output the classifier
             // cannot see (`tee "$(cat f)"`, `> $(cat f)`) may be any file.
-            if (work::contains(&simple.writes_to, &position)
+            if (written_at[position]
                 || (path_writer.is_some_and(|index| position > index)
                     && simple.stdin_from != Some(position)
                     && simple.here_string != Some(position)))

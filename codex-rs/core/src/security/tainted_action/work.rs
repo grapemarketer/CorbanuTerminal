@@ -59,14 +59,6 @@ pub(super) fn parses(run: impl FnOnce()) -> u64 {
     PARSES.with(Cell::get) - before
 }
 
-/// #1774: `list.contains(value)`, charging the elements it looks at.
-#[inline(always)]
-pub(super) fn contains(list: &[usize], value: &usize) -> bool {
-    let found = list.iter().position(|item| item == value);
-    scanned(found.map_or(list.len(), |at| at + 1));
-    found.is_some()
-}
-
 /// A reverse substring search whose scan is visible to the work counter.
 #[inline(always)]
 pub(super) fn rfind(text: &str, pattern: &str) -> Option<usize> {

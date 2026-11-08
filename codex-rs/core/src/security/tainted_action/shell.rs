@@ -90,6 +90,12 @@ pub(super) struct SimpleCommand {
     pub(super) operated: Vec<usize>,
     /// D194: what joins it to the command before it.
     pub(super) after: Joint,
+    /// #1774: how many of `words` `simple_commands` has checked for a shell
+    /// name, and whether one was. Words are only appended, and the count
+    /// travels with the command when a substitution sets it aside, so each
+    /// word is checked once.
+    pub(super) shells_checked: usize,
+    pub(super) shell_seen: bool,
 }
 
 /// Lexed simple commands, in the order they finish (a substitution comes
@@ -128,11 +134,14 @@ pub(super) fn simple_commands(command: &[String]) -> Lexed {
     for arg in command {
         work::step();
         // The script after a shell's `-c`/`-lc` is its own command line.
-        let in_shell = lexer
-            .current
-            .words
-            .iter()
-            .any(|word| SHELLS.contains(&basename(&word.to_lowercase())));
+        // #1774: only the words added since the last argument are checked.
+        let current = &mut lexer.current;
+        for word in &current.words[current.shells_checked..] {
+            work::step();
+            current.shell_seen |= SHELLS.contains(&basename(&word.to_lowercase()));
+        }
+        current.shells_checked = current.words.len();
+        let in_shell = current.shell_seen;
         if in_shell
             && previous.is_some_and(|flag| {
                 flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c')
