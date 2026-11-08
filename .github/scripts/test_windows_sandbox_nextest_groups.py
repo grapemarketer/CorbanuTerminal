@@ -143,6 +143,9 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
     uses = [item for _, items in scanned.values() for item in items]
     spans = {path: fn_spans(code) for path, code in files.items()}
     trait_impls = {path: trait_impl_spans(code) for path, code in files.items()}
+    for item in uses:
+        if re.search(rf"\b{LOCK}\b", item):
+            raise ScanError(f"{LOCK} is imported: {item!r}")
     for path, code in files.items():
         for match in re.finditer(rf"\b{LOCK}\b", code):
             inside = [span for span in spans[path] if span[3] < match.start() < span[2]]
@@ -385,6 +388,7 @@ fn through_an_extern_helper() {
             "macro": "macro_rules! m { () => { legacy_process_test_guard() }; }",
             "lock": "static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());\n"
             "#[test]\nfn t() { let _g = super::LEGACY_PROCESS_TEST_LOCK.lock(); }",
+            "imported lock": "use super::LEGACY_PROCESS_TEST_LOCK as L;\n#[test]\nfn t() { let _g = L.lock(); }",
             "renamed guard": "use super::legacy_process_test_guard as lock;\n#[test]\nfn t() { let _g = lock(); }",
             "renamed helper": "fn h() { let _g = legacy_process_test_guard(); }\n#[test]\nfn a() { h(); }\n"
             "use self::{h as other};\n#[test]\nfn b() { other(); }",
