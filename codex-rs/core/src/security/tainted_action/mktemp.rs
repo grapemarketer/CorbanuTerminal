@@ -701,11 +701,12 @@ pub(super) fn temp_place(word: &str) -> bool {
 fn file_operands_ok(simple: &SimpleCommand, words: &[String]) -> bool {
     // A here-string passes the path itself (`cat <<< "$tmp" | xargs …`).
     let writes_to: std::collections::HashSet<usize> = simple.writes_to.iter().copied().collect();
-    let redirected = |at: usize| writes_to.contains(&at) || simple.stdin_from == Some(at);
+    let redirected =
+        |at: usize| writes_to.contains(&at) || simple.stdin_from.binary_search(&at).is_ok();
     let mut used = false;
     for (at, word) in words.iter().enumerate() {
         work::step();
-        if word.contains(TEMP_FILE) && simple.here_string == Some(at) {
+        if word.contains(TEMP_FILE) && simple.here_string.binary_search(&at).is_ok() {
             return false;
         }
         if word.contains(TEMP_FILE) && !redirected(at) {

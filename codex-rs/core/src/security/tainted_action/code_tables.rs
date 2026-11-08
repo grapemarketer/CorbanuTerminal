@@ -213,8 +213,8 @@ fn run_words(simple: &shell::SimpleCommand) -> Vec<String> {
         work::step();
         let held = simple.writes_to.binary_search(&at).is_ok()
             || simple.redirect_words.binary_search(&at).is_ok()
-            || simple.stdin_from == Some(at)
-            || simple.here_string == Some(at);
+            || simple.stdin_from.binary_search(&at).is_ok()
+            || simple.here_string.binary_search(&at).is_ok();
         match word.as_str() {
             _ if held => {}
             "[[" if !test => test = true,

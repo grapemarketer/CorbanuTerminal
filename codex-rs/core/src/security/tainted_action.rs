@@ -463,9 +463,9 @@ fn classified(
     user_home: Option<&Path>,
     as_named: bool,
 ) -> Classifier {
-    let mut classifier = judged(action, Homes::new(codex_home, user_home), as_named);
+    let mut classifier = judged_both(action, || Homes::new(codex_home, user_home), as_named);
     if cfg!(windows) {
-        let windows = judged(action, Homes::windows(codex_home, user_home), as_named);
+        let windows = judged_both(action, || Homes::windows(codex_home, user_home), as_named);
         if let Some(kind) = windows.found {
             classifier.note(kind);
         }
@@ -541,8 +541,28 @@ pub(super) fn classify_as_windows(
     classifier.found
 }
 
+/// #1772 review 1: [`judged`], and when it read some text where main reads
+/// it otherwise (`shell::simple_commands_read`), the action judged again
+/// with main's reading: the stronger finding is kept, so the new reading
+/// only adds findings (`echo '>"'; ./x; echo '"'`, `sh -c 'true &>f ./x'`).
+/// #1772 review 2: the second judgment is main's reading exactly (every
+/// change of reading sets `read_newly`, and the helper lexers read as
+/// main), so the verdict is never quieter than main's.
+fn judged_both(action: &ApprovalAction, homes: impl Fn() -> Homes, as_named: bool) -> Classifier {
+    let mut classifier = judged(action, homes(), as_named, /*main_reading*/ false);
+    if classifier.read_newly {
+        let main = judged(action, homes(), as_named, /*main_reading*/ true);
+        if let Some(kind) = main.found {
+            classifier.note(kind);
+        }
+    }
+    classifier
+}
+
 /// One judgment of the action, under the path rules of `homes`.
-fn judged(action: &ApprovalAction, homes: Homes, as_named: bool) -> Classifier {
+/// `main_reading`: redirections are lexed as on main
+/// (`shell::simple_commands_read`).
+fn judged(action: &ApprovalAction, homes: Homes, as_named: bool, main_reading: bool) -> Classifier {
     let avoids_zsh = as_named
         && match action {
             ApprovalAction::Shell { command, .. } | ApprovalAction::ExecCommand { command, .. } => {
@@ -550,13 +570,39 @@ fn judged(action: &ApprovalAction, homes: Homes, as_named: bool) -> Classifier {
             }
             ApprovalAction::ApplyPatch { .. } => false,
         };
-    judged_avoiding(action, homes, avoids_zsh)
+    judged_avoiding_read(action, homes, avoids_zsh, main_reading)
 }
 
 /// [`judged`] with the zsh-only checks skipped at the top level when
-/// `avoids_zsh` (#932's measuring harness also judges with it forced).
-fn judged_avoiding(action: &ApprovalAction, homes: Homes, avoids_zsh: bool) -> Classifier {
+/// `avoids_zsh` (#932's measuring harness also judges with it forced), and
+/// judged again with main's reading as [`judged_both`] does.
+#[cfg(test)]
+fn judged_avoiding(
+    action: &ApprovalAction,
+    homes: impl Fn() -> Homes,
+    avoids_zsh: bool,
+) -> Classifier {
+    let mut classifier =
+        judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ false);
+    if classifier.read_newly {
+        let main = judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ true);
+        if let Some(kind) = main.found {
+            classifier.note(kind);
+        }
+    }
+    classifier
+}
+
+/// One judgment, with the zsh-only checks skipped at the top level when
+/// `avoids_zsh`, and `main_reading` (see [`judged`]).
+fn judged_avoiding_read(
+    action: &ApprovalAction,
+    homes: Homes,
+    avoids_zsh: bool,
+    main_reading: bool,
+) -> Classifier {
     let mut classifier = Classifier::new(homes, avoids_zsh);
+    classifier.main_reading = main_reading;
     match action {
         ApprovalAction::Shell { command, cwd, .. }
         | ApprovalAction::ExecCommand { command, cwd, .. } => {
@@ -622,6 +668,8 @@ impl Classifier {
             avoids_zsh,
             homes,
             found: None,
+            main_reading: false,
+            read_newly: false,
             scripts_read: 0,
             rebuilt: 0,
             not_shell: 0,
@@ -1369,6 +1417,11 @@ struct Folders {
 struct Classifier {
     homes: Homes,
     found: Option<ProtectedActionKind>,
+    /// #1772 review 1: lex redirections as on main (`judged`).
+    main_reading: bool,
+    /// #1772 review 1: some lexed text was read where main reads it
+    /// otherwise (`shell::Lexed::read_newly`).
+    read_newly: bool,
     scripts_read: usize,
     /// #1261: under Windows path rules, whether the first judgment lexed
     /// text holding a backslash. Its POSIX lexer drops every backslash
@@ -1789,7 +1842,8 @@ impl Classifier {
             .any(|part| unknown_folder::may_redefine_sudo(part));
         // #841: this line's own sed programs (nested lines have theirs).
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
-        let lexed = shell::simple_commands(command);
+        let lexed = shell::simple_commands_read(command, self.main_reading);
+        self.read_newly |= lexed.read_newly;
         if !self.stat_builtin {
             self.stat_builtin = code_tables::may_load_stat(command, &lexed.commands);
         }
@@ -2013,8 +2067,8 @@ impl Classifier {
                     simple.after
                 },
                 &simple.words,
-                simple.stdin_from.is_some()
-                    || simple.here_string.is_some()
+                !simple.stdin_from.is_empty()
+                    || !simple.here_string.is_empty()
                     || !simple.writes_to.is_empty(),
             );
             // #1422: an alias the line defines runs text neither reading
@@ -2698,8 +2752,9 @@ impl Classifier {
                 }
             }
         }
-        let stdin_fed =
-            simple.pipe_from.is_some() || simple.stdin_from.is_some() || simple.reads_outer_output;
+        let stdin_fed = simple.pipe_from.is_some()
+            || !simple.stdin_from.is_empty()
+            || simple.reads_outer_output;
         // #1685: and the command `eval` or `trap` text runs.
         for (index, _) in command.iter().chain(&carried) {
             work::step();
@@ -2779,8 +2834,8 @@ impl Classifier {
         }
         if !self.interactive_shell {
             let fed = simple.pipe_from.is_some()
-                || simple.stdin_from.is_some()
-                || simple.here_string.is_some()
+                || !simple.stdin_from.is_empty()
+                || !simple.here_string.is_empty()
                 || simple.reads_outer_output;
             self.interactive_shell = loader_variables::starts_interactive_shell(&lower, fed);
         }
@@ -2886,8 +2941,8 @@ impl Classifier {
             // cannot see (`tee "$(cat f)"`, `> $(cat f)`) may be any file.
             if (simple.writes_to.contains(&position)
                 || (path_writer.is_some_and(|index| position > index)
-                    && simple.stdin_from != Some(position)
-                    && simple.here_string != Some(position)))
+                    && simple.stdin_from.binary_search(&position).is_err()
+                    && simple.here_string.binary_search(&position).is_err()))
                 && outputs::unseen_place(word)
             {
                 self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(word));
@@ -3297,13 +3352,14 @@ impl Classifier {
                 }
             }
             Code::Stdin => {
-                // #1436: the file the shell opens, in its folder.
-                if let Some(at) = simple.stdin_from
+                // #1436: the file the shell opens, in its folder (the
+                // last `<` is its stdin: `bash <a <b` reads `b`).
+                if let Some(&at) = simple.stdin_from.last()
                     && !self.runs_elsewhere(/*from*/ None, at, &words[at])
                 {
                     self.required_script(&words[at], cwd, depth, shell);
                 }
-                if simple.here_string.is_some_and(|at| unseen[at]) {
+                if simple.here_string.iter().any(|at| unseen[*at]) {
                     self.note(ProtectedActionKind::UnseenCode);
                 }
             }
@@ -3774,3 +3830,11 @@ mod tests;
 #[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
 mod tainted_action_refusal_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_redirect_tests.rs"]
+mod tainted_action_redirect_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_reading_tests.rs"]
+mod tainted_action_reading_tests;

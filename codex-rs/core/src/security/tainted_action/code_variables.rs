@@ -333,8 +333,8 @@ pub(super) fn sets_code_variable(
             .iter()
             .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('n'));
     let redirect = |at: usize| {
-        simple.stdin_from == Some(at)
-            || simple.here_string == Some(at)
+        simple.stdin_from.binary_search(&at).is_ok()
+            || simple.here_string.binary_search(&at).is_ok()
             || simple.writes_to.contains(&at)
     };
     // A name the classifier cannot see, or one in any case when it came
