@@ -248,6 +248,49 @@ async fn startup_slash_command_runs_after_startup_whatever_the_keystroke_timing(
     }
 }
 
+/// D390: `/quit` and `/exit` typed during startup exit at once instead of
+/// waiting in the startup queue, however fast they are typed.
+#[tokio::test]
+async fn startup_exit_commands_run_at_once() {
+    for (typed, slow) in [
+        ("/quit", false),
+        ("/quit", true),
+        ("/exit", false),
+        ("/exit", true),
+    ] {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.pending_startup_thread_start = true;
+        app.chat_widget
+            .set_queue_submissions_until_session_configured(/*queue*/ true);
+        for ch in typed.chars() {
+            app.chat_widget
+                .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            if slow {
+                std::thread::sleep(
+                    crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+                );
+                let _ = app
+                    .chat_widget
+                    .handle_paste_burst_tick(crate::tui::FrameRequester::test_dummy());
+            }
+        }
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(
+            app.chat_widget.queued_user_message_texts().is_empty(),
+            "{typed} slow={slow}: not queued"
+        );
+        let mut exits = 0;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if matches!(event, AppEvent::Exit(_)) {
+                exits += 1;
+            }
+        }
+        assert_eq!(exits, 1, "{typed} slow={slow}");
+    }
+}
+
 #[tokio::test]
 async fn startup_thread_start_failure_returns_error() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;

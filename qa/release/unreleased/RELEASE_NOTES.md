@@ -87,6 +87,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   a little more slowly (so the command list opened before Enter), it ran at
   once and was refused with "Model selection is disabled until startup
   completes."
+- **`/quit` and `/exit` don't wait** (D390, #1833). Typed during startup,
+  they exit at once instead of joining the queue, so a startup that hangs can
+  still be left without Ctrl+C. Every other command still waits.
 
 ## `/cost`
 
