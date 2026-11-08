@@ -292,11 +292,15 @@ jobs:
           # the end if any did.
           set +e -uo pipefail
           failed=()
-          # check NAME CARGO_ARGS... -- then each line of stdin must appear in the output.
+          # check NAME CARGO_ARGS...: cargo test must pass and print each line of stdin.
           check() {
             local name="$1"; shift
             local expected; expected="$(cat)"
-            cargo test --locked --manifest-path codex-rs/Cargo.toml "$@" 2>&1 | tee env-1805.log
+            if ! cargo test --locked --manifest-path codex-rs/Cargo.toml "$@" 2>&1 | tee env-1805.log; then
+              echo "::error::#1805 ${name}: cargo test failed"
+              failed+=("$name")
+              return
+            fi
             while IFS= read -r line; do
               if ! grep -qF -- "$line" env-1805.log; then
                 echo "::error::#1805 ${name}: missing '${line}'"

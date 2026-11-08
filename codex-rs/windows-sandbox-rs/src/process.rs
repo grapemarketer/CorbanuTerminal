@@ -58,7 +58,10 @@ pub enum ConsoleMode {
 /// before `Path` before `path`); the block was already in that order, and
 /// only the later spellings go. The product spells the variables it sets in
 /// capitals, so its own values win, and it replaces the other spellings of
-/// `PATH` and `PATHEXT` when it changes them (`env.rs`).
+/// `PATH` and `PATHEXT` when it changes them (`env.rs`). Lower-case twins
+/// the product sets on purpose (the managed proxy's `http_proxy`, say) go
+/// too: Windows programs read the capitals, but a program that reads only
+/// the lower-case name (MSYS2 `curl`) no longer sees it.
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
         env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

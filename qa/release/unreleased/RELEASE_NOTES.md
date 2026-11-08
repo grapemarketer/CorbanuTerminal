@@ -669,3 +669,11 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `multiprocessing` fail there. This is not new in this release. The default
   (elevated) sandbox runs all of them; see "Known limitations" in
   `docs/sandbox.md`.
+- **Windows PowerShell's `Start-Process` works in both sandboxes** (#1805).
+  Corbanu passes commands your environment, where Windows spells the search
+  path `Path`, and both sandboxes added a second copy spelled `PATH`. Windows
+  PowerShell 5.1's `Start-Process` then failed with "Item has already been
+  added", and the copy that counted could miss folders added by
+  `shell_environment_policy.set`. Each variable now reaches a command once,
+  and a value you set wins over the inherited spelling. Which folders are on
+  the path is unchanged.
