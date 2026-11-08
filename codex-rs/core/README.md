@@ -144,7 +144,15 @@ sign-off by Travis on 2026-10-13):
   for example), are left alone.
 - Commands can no longer write outside writable roots to objects that grant
   Everyone or the logon SID write access, or open other programs' named pipes
-  and other IPC endpoints for writing, unless those are labelled Low.
+  and other IPC endpoints for writing, unless those are labelled Low. Windows
+  creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` grants
+  Everyone write access and is labelled Low, so legacy commands can create,
+  change and delete files there (found by a scan of the windows-2022 runner;
+  Low folders granting Everyone Modify were measured writable by legacy
+  commands, #1770). Accepted and documented in `docs/sandbox.md` (D401): it is one
+  folder, and a normal user can't change its permissions. The elevated
+  backend's admin setup can deny it, with the other Everyone-writable
+  folders (D400, draft #1798, awaiting security sign-off).
 - The desktop commands start on is labelled Low: the per-command private
   desktop, or Core's own desktop when Core runs off the interactive window
   station with `sandbox_private_desktop = false`.
@@ -247,6 +255,21 @@ outside the command's job: the COM servers `ShellBrowserWindow` (the child
 runs at Low integrity but with an unrestricted token) and
 `MMC20.Application` (Low, restricted). Closing them waits on a measurement
 on a real desktop (D260); their tests are ignored until then.
+
+Reads between elevated commands (#1803), measured on CI (run 42446494973,
+admin and normal sessions): an elevated command in one workspace can read
+the memory of another workspace's concurrent elevated command (51 MB, with
+its typed input and its output) and of that command's ConPTY console host
+(27 MB, same markers; its threads' contexts too), but can't open either for
+writing or duplicating handles, nor read its runner. Owner decisions
+(2026-11-08): #1800 closes the command-memory read (its commands' default
+DACL lets the sandbox users' group and Everyone only read the security
+descriptor, wait and query limited information); a stop-gap
+on main, which needs security sign-off, is made only if #1800 is delayed by
+days. #1800 leaves the console-host read, since the runner's default DACL
+still gives the group read access; a follow-up on top of #1800 narrows the
+group to query and synchronize rights there, gated by a test built from the
+win-1803m probe (D417).
 
 Protected paths that already exist inside writable roots when a session
 starts, such as `.git`, `.codex`, and `.agents`, also get an Everyone deny of
