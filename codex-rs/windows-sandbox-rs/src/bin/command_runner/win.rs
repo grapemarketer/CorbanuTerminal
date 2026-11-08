@@ -22,7 +22,9 @@ use codex_windows_sandbox::FramedMessage;
 use codex_windows_sandbox::IPC_PROTOCOL_VERSION;
 use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
+use codex_windows_sandbox::OUTPUT_DRAIN_TIMEOUT;
 use codex_windows_sandbox::OutputPayload;
+use codex_windows_sandbox::OutputPipeReader;
 use codex_windows_sandbox::OutputStream;
 use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::ResizePayload;
@@ -36,11 +38,11 @@ use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
+use codex_windows_sandbox::finish_output_readers;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
-use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::restrict_current_default_dacl;
 use codex_windows_sandbox::restrict_current_token_access;
 use codex_windows_sandbox::spawn_process_with_pipes;
@@ -440,8 +442,8 @@ fn spawn_output_reader(
     handle: HANDLE,
     stream: OutputStream,
     log_dir: Option<PathBuf>,
-) -> std::thread::JoinHandle<()> {
-    read_handle_loop(handle, move |chunk| {
+) -> OutputPipeReader<()> {
+    OutputPipeReader::spawn_with(handle, (), move |_, chunk| {
         let msg = FramedMessage {
             version: IPC_PROTOCOL_VERSION,
             message: Message::Output {
@@ -767,12 +769,21 @@ pub fn main() -> Result<()> {
     drop(conpty_owner.take());
 
     if child_stopped {
-        if out_thread.join().is_err() {
+        // #1830: a process the command left running may hold the output
+        // pipes; read what is left for a bounded time, not until it exits.
+        let [out, err] = match err_thread {
+            Some(err_thread) => {
+                finish_output_readers([out_thread, err_thread], OUTPUT_DRAIN_TIMEOUT)
+            }
+            None => {
+                let [out] = finish_output_readers([out_thread], OUTPUT_DRAIN_TIMEOUT);
+                [out, Ok(())]
+            }
+        };
+        if out.is_err() {
             log_note("runner stdout reader thread panicked", log_dir);
         }
-        if let Some(thread) = err_thread
-            && thread.join().is_err()
-        {
+        if err.is_err() {
             log_note("runner stderr reader thread panicked", log_dir);
         }
     }

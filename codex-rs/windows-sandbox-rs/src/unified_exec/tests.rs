@@ -719,6 +719,93 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     crate::integrity_leases::wait_for_release_in_progress().expect("wait for the release");
 }
 
+/// #1830: the elevated runner, like the legacy capture (#1826), returns once
+/// the command exits while a descendant it left running holds the output
+/// pipes, and leaves that descendant running.
+#[test]
+fn elevated_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+    let Some(pwsh) = pwsh_path() else {
+        return;
+    };
+    let Some(codex_home) = command_identity::elevated::elevated_home("elevated-capture-pwsh")
+    else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    // The sandbox account may write here, not in its codex home.
+    let root = user_owned_test_root();
+    let ready_marker = root.path().join("descendant-started");
+    let release_marker = root.path().join("release-descendant");
+    let survival_marker = root.path().join("descendant-survived");
+    let descendant_command = format!(
+        "$deadline=(Get-Date).AddSeconds(30); Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
+        powershell_literal(&ready_marker),
+        powershell_literal(&release_marker),
+        powershell_literal(&survival_marker),
+    );
+    let parent_tail = format!(
+        "while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}",
+        powershell_literal(&ready_marker),
+    );
+    let parent_command = format!(
+        "Write-Output ELEVATED-CAPTURE-DIRECT; {}",
+        start_powershell_child(&pwsh, root.path(), &descendant_command, &parent_tail),
+    );
+    let permission_profile = PermissionProfile::workspace_write();
+    let workspace_roots = workspace_roots_for(root.path());
+    let started = Instant::now();
+    let result = crate::run_windows_sandbox_capture_for_permission_profile_elevated(
+        crate::ElevatedSandboxProfileCaptureRequest {
+            permission_profile: &permission_profile,
+            workspace_roots: workspace_roots.as_slice(),
+            codex_home: codex_home.path(),
+            command: vec![
+                pwsh.display().to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                parent_command,
+            ],
+            cwd: root.path(),
+            // Core passes its environment on; PowerShell needs it.
+            env_map: std::env::vars().collect(),
+            timeout_ms: Some(10_000),
+            cancellation: None,
+            use_private_desktop: true,
+            proxy_enforced: false,
+            network_proxy_restricting_sid: None,
+            read_roots_override: None,
+            read_roots_include_platform_defaults: true,
+            write_roots_override: None,
+            deny_read_override: &crate::DenyReadTargets::default(),
+            deny_write_paths_override: &[],
+        },
+    );
+    let took = started.elapsed();
+    let release = fs::write(&release_marker, "release");
+    let result = result.unwrap_or_else(|err| {
+        panic!(
+            "run elevated capture powershell: {err:#}\n{}",
+            sandbox_log(codex_home.path())
+        )
+    });
+    release.expect("release descendant after root exit");
+    println!("elevated capture pwsh returned after {took:?}");
+    println!("elevated capture pwsh exit_code={}", result.exit_code);
+    println!("elevated capture pwsh timed_out={}", result.timed_out);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert_eq!(result.exit_code, 0, "stdout={stdout:?} stderr={stderr:?}");
+    assert!(
+        stdout.contains("ELEVATED-CAPTURE-DIRECT"),
+        "stdout={stdout:?}"
+    );
+    assert!(
+        wait_for_path(&survival_marker, Duration::from_secs(10)),
+        "#1830: the elevated descendant did not survive the command's exit; \
+         the capture returned after {took:?}"
+    );
+}
+
 /// Observed state after a legacy workspace-write session tries to delete one
 /// fixture inside each writable root (workspace, TEMP, TMP), one outside every
 /// writable root, and the protected `.git` directory.
