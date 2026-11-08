@@ -20,6 +20,14 @@ codex_rust_crate(
     # sessions on a 4-worker runtime. With compiles beside it on the 4-core
     # Windows runner, that test went past its bound (#905). Reserve 4 cores.
     unit_test_tags = ["cpu:4"],
+    # Two of those bounds still failed with the four cores reserved, because
+    # libtest ran three other state tests beside them (#905, #1881). These
+    # run in `state-unit-tests-alone`, one at a time, and are skipped here.
+    # Their cores are still reserved (`cpu:4`), so no compile runs beside them.
+    unit_test_alone = [
+        "runtime::accounting::store::tests::expiry_at_the_detail_horizon_never_holds_up_another_writer",
+        "runtime::accounting::store::writer::tests::ten_sessions_on_one_home_wait_briefly_and_lose_no_record",
+    ],
     # The accounting suites take ~210s on a 4-core Windows runner on their
     # own, so the default 300s budget times out when Bazel runs tests in parallel.
     unit_test_timeout = "long",

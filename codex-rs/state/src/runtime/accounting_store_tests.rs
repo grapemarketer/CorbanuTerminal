@@ -3193,6 +3193,11 @@ async fn accounting_rows(runtime: &StateRuntime) -> anyhow::Result<Vec<Vec<Strin
 /// batches. Another process writing all the while gets in between batches -
 /// it sees the ledger part-way through the expiry, which the full sweep's one
 /// transaction never let it - and never waits a second.
+///
+/// The bound holds when no other test shares the cores: Bazel runs this test
+/// alone (`unit_test_alone` in state's BUILD.bazel) and nextest gives it the
+/// cores (`threads-required`). Beside three other state tests on a 4-core
+/// Windows runner, the writer once waited 1.03 s (#1881).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn expiry_at_the_detail_horizon_never_holds_up_another_writer() -> anyhow::Result<()> {
     const ATTEMPTS: i64 = 600;
