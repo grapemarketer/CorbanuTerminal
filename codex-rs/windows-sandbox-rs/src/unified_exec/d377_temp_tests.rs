@@ -177,3 +177,98 @@ fn sec_win_d377_old_temp_folder_grant_is_taken_back() {
     crate::session_temp::end_session_temp_in(temp.path());
     record_setup(home.path());
 }
+
+/// Round-1 review: a command must not be able to turn its temp folder into
+/// a link, which the next setup would follow and grant the sandbox the
+/// link's target.
+#[test]
+fn sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link() {
+    let _guard = legacy_process_test_guard();
+    let Some(home) = elevated_home("d377-link") else {
+        return;
+    };
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let temp = user_owned_test_root();
+    let target = user_owned_test_root();
+    let script = root.path().join("d377-link.cmd");
+    fs::write(
+        &script,
+        format!(
+            "@echo off\r\n\
+             echo TEMP=%TEMP%\r\n\
+             echo TMP=%TMP%\r\n\
+             del /f /q \"%TEMP%\\{marker}\" >nul 2>nul\r\n\
+             if exist \"%TEMP%\\{marker}\" echo MARKER-KEPT\r\n\
+             ren \"%TEMP%\" d377-moved >nul 2>nul && echo RENAMED\r\n\
+             rd /s /q \"%TEMP%\" >nul 2>nul\r\n\
+             if exist \"%TEMP%\\\" echo FOLDER-KEPT\r\n\
+             mklink /J \"%TEMP%\" \"{target}\" >nul 2>nul && echo LINKED\r\n",
+            marker = ".corbanu-session",
+            target = target.path().display()
+        ),
+    )
+    .expect("write script");
+    let argv = vec![
+        system32_exe("cmd.exe").display().to_string(),
+        "/d".to_string(),
+        "/c".to_string(),
+        script.display().to_string(),
+    ];
+    let value = temp.path().display().to_string();
+    let env = [("TEMP", value.clone()), ("TMP", value)];
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        argv.clone(),
+        &env,
+        /*tty*/ false,
+    ));
+    println!("d377 link attempt: exit={code} stdout={stdout:?}");
+    assert_session_temp_in(&stdout, temp.path());
+    for kept in ["MARKER-KEPT", "FOLDER-KEPT"] {
+        assert!(stdout.contains(kept), "{kept}: {stdout}");
+    }
+    for done in ["RENAMED", "LINKED"] {
+        assert!(!stdout.contains(done), "{done}: {stdout}");
+    }
+    let session = printed(&stdout, "TEMP=");
+    let is_reparse_point = |path: &Path| {
+        use std::os::windows::fs::MetadataExt as _;
+        fs::symlink_metadata(path)
+            .expect("metadata")
+            .file_attributes()
+            & 0x400
+            != 0
+    };
+    assert!(session.is_dir() && !is_reparse_point(&session));
+    // The next command (and its setup) gets the same, intact folder; the
+    // would-be target gains no grant.
+    let (again, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        argv,
+        &env,
+        /*tty*/ false,
+    ));
+    println!("d377 link attempt again: exit={code} stdout={again:?}");
+    assert_eq!(printed(&again, "TEMP="), session, "{again}");
+    assert!(!again.contains("LINKED"), "{again}");
+    let group = crate::winutil::string_from_sid_bytes(
+        &crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP).expect("group"),
+    )
+    .expect("group sid");
+    // SAFETY: the SID and descriptor are freed below; the folder exists.
+    let target_granted = unsafe {
+        let psid = crate::token::convert_string_sid_to_sid(&group).expect("psid");
+        let (dacl, descriptor) = crate::acl::fetch_dacl_handle(target.path()).expect("dacl");
+        let has = crate::acl::dacl_has_write_allow_for_sid(dacl, psid);
+        windows_sys::Win32::Foundation::LocalFree(descriptor as _);
+        windows_sys::Win32::Foundation::LocalFree(psid as _);
+        has
+    };
+    assert!(!target_granted, "the link's target was granted");
+    crate::session_temp::end_session_temp_in(temp.path());
+    assert!(!session.exists());
+    record_setup(home.path());
+}

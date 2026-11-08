@@ -421,13 +421,22 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   `%TEMP%`: other programs' temp files, and other sessions'.
 - **Upgrading needs no setup rerun.** The first time a session uses
   `%TEMP%`, it removes the grant older versions left there, as you (no UAC
-  prompt).
+  prompt). This also removes the non-admin sandbox's entry for that Corbanu
+  home from `%TEMP%` itself (it adds it back when it next runs). Where you
+  cannot change `%TEMP%`'s permissions, the old grant stays and is logged.
+  Running an older version again puts it back.
+- **A sandboxed command cannot turn its temp folder into a link** to make
+  a later setup grant the sandbox somewhere else: the session keeps a file in
+  the folder open, so it cannot be emptied or renamed, and checks the folder
+  is still the one it made before each command.
 - **Cleanup.** The folder is removed when the session ends; one a crashed
   session left behind is removed by a later session.
 - On native Windows CI, in an administrator's and a normal session, Python
   (temp files, venv and pip), cargo, Node and npm, Windows PowerShell and
   PowerShell 7, git and Git Bash, and MSBuild work as before.
-- Not changed: the non-admin sandbox still uses `%TEMP%` itself.
+- Not changed: the non-admin sandbox still uses `%TEMP%` itself. Sandboxed
+  commands can still read (not write) other sessions' temp folders, and
+  files they made in `%TEMP%` before the upgrade stay theirs (they own them).
 
 ## Windows non-admin sandbox warning
 

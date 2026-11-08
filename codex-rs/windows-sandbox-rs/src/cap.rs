@@ -57,7 +57,20 @@ fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("create cap sid dir {}", dir.display()))?;
     }
     let json = serde_json::to_string(caps)?;
-    fs::write(path, json).with_context(|| format!("write cap sid file {}", path.display()))?;
+    // Whole or not at all: a reader never sees a half-written file.
+    let mut staging = path.as_os_str().to_os_string();
+    staging.push(format!(
+        ".{}-{:08x}.tmp",
+        std::process::id(),
+        SmallRng::from_entropy().next_u32()
+    ));
+    let staging = PathBuf::from(staging);
+    fs::write(&staging, json)
+        .with_context(|| format!("write cap sid file {}", staging.display()))?;
+    fs::rename(&staging, path).map_err(|err| {
+        let _ = fs::remove_file(&staging);
+        anyhow::Error::new(err).context(format!("replace cap sid file {}", path.display()))
+    })?;
     Ok(())
 }
 

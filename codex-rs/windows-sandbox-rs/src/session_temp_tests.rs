@@ -97,6 +97,18 @@ fn temp_points_at_a_private_folder_of_the_session() {
     // Held: not removed as left behind, nor deletable meanwhile.
     assert!(!is_left_behind(&dir, current_user_sid().ok().as_deref()));
     assert!(std::fs::remove_dir(&dir).is_err());
+    // Its marker can be neither deleted nor written, so the folder cannot be
+    // emptied (and made a link).
+    let marker = dir.join(MARKER);
+    assert!(dacl_is_protected(&marker));
+    assert!(std::fs::remove_file(&marker).is_err());
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .is_err()
+    );
+    assert!(marker.is_file());
 
     // One folder per temp folder and session, however the environment names it.
     let mut again = env_for(base.path());
@@ -204,4 +216,110 @@ fn the_old_grant_on_the_temp_folder_is_taken_back() {
 
     assert!(!has_write_allow(base.path(), &sid));
     assert!(!has_write_allow(&child, &sid));
+}
+
+#[test]
+fn a_folder_that_is_no_longer_the_one_made_is_not_intact() {
+    let base = TempDir::new().expect("base");
+    let (dir, hold) = make_session_temp(base.path()).expect("session folder");
+    let (other, other_hold) = make_session_temp(base.path()).expect("other folder");
+    assert!(is_intact(&dir, &hold));
+    assert!(!is_intact(&dir, &other_hold));
+    assert!(!is_intact(&base.path().join("missing"), &hold));
+    // A junction to the folder resolves to it, but is not it.
+    let link = base.path().join("link");
+    let status = std::process::Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&dir)
+        .status()
+        .expect("mklink");
+    assert!(status.success(), "mklink /J failed");
+    assert!(!is_intact(&link, &hold));
+    let _ = std::fs::remove_dir(&link);
+    drop((hold, other_hold));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+/// Tries to make `dir` a mount point (a junction) to `target` the way a
+/// sandboxed command with write access to it could: through a handle with
+/// attribute rights only, which no sharing stops.
+fn try_make_mount_point(dir: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    let substitute: Vec<u16> = format!(r"\??\{}", target.display())
+        .encode_utf16()
+        .collect();
+    let print: Vec<u16> = target.display().to_string().encode_utf16().collect();
+    let mut names: Vec<u16> = Vec::new();
+    names.extend(&substitute);
+    names.push(0);
+    names.extend(&print);
+    names.push(0);
+    let header = [
+        0_u16,
+        (substitute.len() * 2) as u16,
+        ((substitute.len() + 1) * 2) as u16,
+        (print.len() * 2) as u16,
+    ];
+    let data_len = (header.len() + names.len()) * 2;
+    let mut buffer: Vec<u8> = Vec::new();
+    buffer.extend(IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    buffer.extend((data_len as u16).to_le_bytes());
+    buffer.extend(0_u16.to_le_bytes());
+    for word in header.iter().chain(names.iter()) {
+        buffer.extend(word.to_le_bytes());
+    }
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(dir)?;
+    let mut returned = 0_u32;
+    // SAFETY: a valid handle and buffer.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle.as_raw_handle() as _,
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[test]
+fn a_held_session_folder_cannot_be_made_a_mount_point() {
+    let base = TempDir::new().expect("base");
+    let target = TempDir::new().expect("target");
+    let (dir, hold) = make_session_temp(base.path()).expect("session folder");
+    // Held, with its marker in it: refused even to its owner.
+    let err = try_make_mount_point(&dir, target.path()).expect_err("made a mount point");
+    // ERROR_DIR_NOT_EMPTY
+    assert_eq!(err.raw_os_error(), Some(145), "{err}");
+    assert!(is_intact(&dir, &hold));
+
+    // Control: without the marker, holding the folder alone does not stop it.
+    use std::os::windows::fs::MetadataExt as _;
+    let Hold {
+        dir: dir_hold,
+        _marker: marker,
+    } = hold;
+    drop(marker);
+    std::fs::remove_file(dir.join(MARKER)).expect("remove the marker");
+    try_make_mount_point(&dir, target.path()).expect("an empty folder becomes a mount point");
+    let attributes = std::fs::symlink_metadata(&dir).expect("metadata");
+    assert_ne!(attributes.file_attributes() & 0x400, 0);
+    drop(dir_hold);
+    let _ = std::fs::remove_dir(&dir);
 }

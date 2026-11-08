@@ -1122,29 +1122,37 @@ pub fn run_elevated_provisioning_setup(
     run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
 }
 
-fn build_payload_roots(
-    request: &SandboxSetupRequest<'_>,
-    overrides: &SetupRootOverrides,
-) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    // D377: the session's own temp folder is the temp root, never the user's
-    // whole `%TEMP%` (a no-op where the command's environment already has it).
+/// D377: the request's environment with the session's own temp folder as
+/// the temp folder, never the user's whole `%TEMP%` (unchanged where the
+/// command's environment already has it). Where the folder cannot be made
+/// (logged), with no temp folder, so none is granted: unlike a command's
+/// launch, which then fails, a setup refresh goes on without it.
+fn env_with_session_temp(request: &SandboxSetupRequest<'_>) -> HashMap<String, String> {
     let mut env_map = request.env_map.clone();
-    if (overrides.write_roots.is_none() || overrides.read_roots.is_none())
-        && let Err(err) = crate::session_temp::use_session_temp(
-            request.permissions,
-            &mut env_map,
-            request.codex_home,
-        )
+    if let Err(err) =
+        crate::session_temp::use_session_temp(request.permissions, &mut env_map, request.codex_home)
     {
-        // Without it, no temp folder is granted at all.
         log_note(
             &format!("D377: no session temp folder: {err:#}"),
             Some(&sandbox_dir(request.codex_home)),
         );
         for key in ["TEMP", "TMP"] {
+            env_map.retain(|name, _| !name.eq_ignore_ascii_case(key));
             env_map.insert(key.to_string(), String::new());
         }
     }
+    env_map
+}
+
+fn build_payload_roots(
+    request: &SandboxSetupRequest<'_>,
+    overrides: &SetupRootOverrides,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let env_map = if overrides.write_roots.is_none() || overrides.read_roots.is_none() {
+        env_with_session_temp(request)
+    } else {
+        request.env_map.clone()
+    };
     let request = SandboxSetupRequest {
         env_map: &env_map,
         ..*request
@@ -1191,11 +1199,9 @@ fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
     explicit_deny_write_paths: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
-    let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
-        request.permissions,
-        request.command_cwd,
-        request.env_map,
-    );
+    let env_map = env_with_session_temp(request);
+    let allow_deny_paths: AllowDenyPaths =
+        compute_allow_paths_for_permissions(request.permissions, request.command_cwd, &env_map);
     let deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()

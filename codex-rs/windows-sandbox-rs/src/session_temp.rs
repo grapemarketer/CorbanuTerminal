@@ -12,7 +12,14 @@
 //! The folder is made by the user with a protected DACL (the user, SYSTEM and
 //! Administrators), so it inherits nothing from the temp folder, and the
 //! session holds it open without delete sharing while it lives, so no one can
-//! remove or rename it meanwhile. It is removed when the session ends
+//! remove or rename it meanwhile. It also holds a file in it (the marker)
+//! open without delete or write sharing: a sandboxed command can neither
+//! delete it nor so empty the folder, and Windows makes only an empty folder
+//! a junction or mount point. So the folder setup grants stays the folder
+//! the session made, which [`use_session_temp`] also checks each time before
+//! a command gets it (a sandboxed command that turned it into a link would
+//! otherwise have the next setup grant the sandbox the link's target).
+//! It is removed when the session ends
 //! ([`end_session_temp_folders`]); one a session left behind (it crashed or
 //! was killed) is removed by the next session that uses the same temp folder.
 //!
@@ -49,10 +56,13 @@ pub(crate) const SESSION_TEMP_PREFIX: &str = "corbanu-sandbox-tmp-";
 /// A folder younger than this is never removed as left behind: its session
 /// may be between making it and opening it.
 const STALE_AFTER: Duration = Duration::from_secs(120);
+/// The file each session folder holds open while its session lives.
+const MARKER: &str = ".corbanu-session";
 const TEMP_KEYS: [&str; 2] = ["TMP", "TEMP"];
 const DELETE: u32 = 0x1_0000;
 const READ_CONTROL: u32 = 0x2_0000;
 const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_READ_DATA: u32 = 0x1;
 const FILE_LIST_DIRECTORY: u32 = 0x1;
 const FILE_SHARE_READ: u32 = 0x1;
 const FILE_SHARE_WRITE: u32 = 0x2;
@@ -60,10 +70,17 @@ const FILE_SHARE_DELETE: u32 = 0x4;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
+/// What keeps a session folder the session's while it lives.
+pub(crate) struct Hold {
+    /// The folder, open without delete sharing.
+    dir: File,
+    /// The marker in it, open without delete or write sharing.
+    _marker: File,
+}
+
 struct SessionTemp {
     dir: PathBuf,
-    /// Open without delete sharing for the session's lifetime.
-    _hold: File,
+    hold: Hold,
     /// The `CODEX_HOME`s that recorded a capability SID for `dir`.
     homes: BTreeSet<PathBuf>,
 }
@@ -130,17 +147,42 @@ fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, SessionTemp
 }
 
 fn remove_session_temp(session: SessionTemp) {
-    let SessionTemp {
-        dir,
-        _hold: hold,
-        homes,
-    } = session;
-    let key = canonical_path_key(&dir);
+    let intact = is_intact(&session.dir, &session.hold);
+    forget_session_cap_sids(&session);
+    let SessionTemp { dir, hold, .. } = session;
     drop(hold);
-    let _ = std::fs::remove_dir_all(&dir);
-    for home in homes {
-        let _ = forget_writable_root_cap_sids(&home, |recorded| recorded == key);
+    if intact {
+        let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+fn forget_session_cap_sids(session: &SessionTemp) {
+    let key = canonical_path_key(&session.dir);
+    for home in &session.homes {
+        let _ = forget_writable_root_cap_sids(home, |recorded| recorded == key);
+    }
+}
+
+/// Whether `dir` still is the folder `hold` holds: a folder, not a link or
+/// other reparse point, with the same file ID.
+pub(crate) fn is_intact(dir: &Path, hold: &Hold) -> bool {
+    use std::os::windows::io::AsRawHandle as _;
+    // Attribute rights only: not stopped by the hold's sharing.
+    let Ok(now) = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(dir)
+    else {
+        return false;
+    };
+    // SAFETY: both handles are open.
+    let same = unsafe {
+        let held = crate::acl::file_identity(hold.dir.as_raw_handle() as _);
+        let found = crate::acl::file_identity(now.as_raw_handle() as _);
+        matches!((held, found), (Ok(held), Ok(found)) if held == found)
+    };
+    same && now.metadata().is_ok_and(|meta| meta.is_dir()) && is_link(&now).is_ok_and(|link| !link)
 }
 
 fn env_value(env_map: &HashMap<String, String>, key: &str) -> Option<String> {
@@ -180,13 +222,33 @@ fn session_temp_for(base: &Path, configured: &[PathBuf], codex_home: &Path) -> R
         .values_mut()
         .find(|session| same_path(&session.dir, base))
     {
+        if !is_intact(&session.dir, &session.hold) {
+            anyhow::bail!(
+                "the sandbox's temp folder {} is no longer the folder this session made",
+                session.dir.display()
+            );
+        }
         session.homes.insert(codex_home.to_path_buf());
         return Ok(session.dir.clone());
     }
     let key = canonical_path_key(base);
     if let Some(session) = sessions.get_mut(&key) {
-        session.homes.insert(codex_home.to_path_buf());
-        return Ok(session.dir.clone());
+        if is_intact(&session.dir, &session.hold) {
+            session.homes.insert(codex_home.to_path_buf());
+            return Ok(session.dir.clone());
+        }
+        // Not ours any more: forget it (without removing what is there now)
+        // and make a new one.
+        log_note(
+            &format!(
+                "D377: the sandbox's temp folder {} is no longer the folder this session made; making a new one",
+                session.dir.display()
+            ),
+            Some(&codex_home.join(".sandbox")),
+        );
+        if let Some(session) = sessions.remove(&key) {
+            forget_session_cap_sids(&session);
+        }
     }
     for folder in configured {
         take_back_old_grant(folder, codex_home);
@@ -195,7 +257,7 @@ fn session_temp_for(base: &Path, configured: &[PathBuf], codex_home: &Path) -> R
     let (dir, hold) = make_session_temp(base)?;
     let session = SessionTemp {
         dir: dir.clone(),
-        _hold: hold,
+        hold,
         homes: BTreeSet::from([codex_home.to_path_buf()]),
     };
     sessions.insert(key, session);
@@ -203,8 +265,8 @@ fn session_temp_for(base: &Path, configured: &[PathBuf], codex_home: &Path) -> R
 }
 
 /// Makes a new folder in `base` that only the user, SYSTEM and Administrators
-/// may use, and opens it without delete sharing.
-fn make_session_temp(base: &Path) -> Result<(PathBuf, File)> {
+/// may use, with the marker in it, and holds both.
+fn make_session_temp(base: &Path) -> Result<(PathBuf, Hold)> {
     let user = current_user_sid()?;
     let descriptor = Descriptor::parse(&format!(
         "O:{user}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})"
@@ -226,7 +288,28 @@ fn make_session_temp(base: &Path) -> Result<(PathBuf, File)> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&dir)
         .with_context(|| format!("open {}", dir.display()))?;
-    Ok((dir, hold))
+    // Protected and the user's only, so no grant setup puts on the folder
+    // reaches it; the sharing keeps anyone from deleting, renaming or
+    // writing it while the session lives.
+    let marker = match Descriptor::parse(&format!(
+        "O:{user}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{user})"
+    ))
+    .and_then(|marker| marker.create_new_file(&dir.join(MARKER), FILE_READ_DATA, FILE_SHARE_READ))
+    {
+        Ok(marker) => marker,
+        Err(err) => {
+            drop(hold);
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(err);
+        }
+    };
+    Ok((
+        dir,
+        Hold {
+            dir: hold,
+            _marker: marker,
+        },
+    ))
 }
 
 /// Removes the session temp folders in `base` that no live session holds,
@@ -260,19 +343,18 @@ fn remove_left_behind(base: &Path, codex_home: &Path) {
 }
 
 fn is_left_behind(path: &Path, user: Option<&str>) -> bool {
-    // A live session holds it open without delete sharing: this fails.
-    let probe = match std::fs::OpenOptions::new()
-        .access_mode(DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES)
+    // First without `DELETE` (rights that share checks skip), so a new
+    // session's folder, between being made and held, is never opened in a
+    // way that would keep its session from holding it.
+    let Ok(look) = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
-    {
-        Ok(probe) => probe,
-        // `ERROR_SHARING_VIOLATION` when a session holds it; anything else
-        // also keeps it.
-        Err(_) => return false,
+    else {
+        return false;
     };
-    let Ok(meta) = probe.metadata() else {
+    let Ok(meta) = look.metadata() else {
         return false;
     };
     let old = meta
@@ -280,10 +362,21 @@ fn is_left_behind(path: &Path, user: Option<&str>) -> bool {
         .ok()
         .and_then(|created| created.elapsed().ok())
         .is_some_and(|age| age >= STALE_AFTER);
-    meta.is_dir()
+    if !(meta.is_dir()
         && old
-        && !is_link(&probe).unwrap_or(true)
-        && user.is_some_and(|user| owner_sid(&probe).is_ok_and(|owner| owner == user))
+        && !is_link(&look).unwrap_or(true)
+        && user.is_some_and(|user| owner_sid(&look).is_ok_and(|owner| owner == user)))
+    {
+        return false;
+    }
+    // A live session holds it open without delete sharing: this fails
+    // (`ERROR_SHARING_VIOLATION`; anything else also keeps it).
+    std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .is_ok()
 }
 
 /// Takes back the write grant older versions' setup put on the temp folder

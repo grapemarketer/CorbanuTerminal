@@ -1130,17 +1130,22 @@ impl ThreadManager {
             }
         }
 
-        let mut tracked_threads = self.state.threads.write().await;
-        for thread_id in &report.completed {
-            tracked_threads.remove(thread_id);
-        }
+        let no_threads_left = {
+            let mut tracked_threads = self.state.threads.write().await;
+            for thread_id in &report.completed {
+                tracked_threads.remove(thread_id);
+            }
+            tracked_threads.is_empty()
+        };
         // D377: with every thread shut down, no sandboxed command uses the
         // session's temp folders any more.
         #[cfg(windows)]
-        if tracked_threads.is_empty() {
+        if no_threads_left {
             let _ =
                 tokio::task::spawn_blocking(codex_windows_sandbox::end_session_temp_folders).await;
         }
+        #[cfg(not(windows))]
+        let _ = no_threads_left;
 
         report
             .completed

@@ -271,6 +271,41 @@ impl Descriptor {
         Ok(())
     }
 
+    /// Makes the new file `path` with this descriptor and returns it open
+    /// with `access` and `share`.
+    pub(crate) fn create_new_file(&self, path: &Path, access: u32, share: u32) -> Result<File> {
+        use std::os::windows::io::FromRawHandle as _;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::CREATE_NEW;
+        use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        };
+        let wide = to_wide(path);
+        // SAFETY: valid path and attributes; the handle is owned by the file.
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                access,
+                share,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                0,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("create {}", path.display()));
+        }
+        // SAFETY: a new handle owned by nothing else.
+        Ok(unsafe { File::from_raw_handle(handle as _) })
+    }
+
     /// Sets this descriptor's owner, DACL (protected) and label on `dir`.
     fn apply_to(&self, dir: &Path) -> Result<()> {
         use windows_sys::Win32::Foundation::ERROR_SUCCESS;
