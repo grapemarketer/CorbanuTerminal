@@ -573,14 +573,15 @@ asking and now ask first:
   can write code into those tables still reads its options:
   `o=$(cat f); zstyle $o :x y functions`, `zstyle -a $(cat f)`,
   `zselect -t 0 -r 0 -A $n`, `zsystem flock -t 0 -f $n file` (#1704).
-  `print -v`, `printf -v` and `getopts` count as such commands now too. So
-  an unquoted variable or `$(…)` where `print`, `printf`, `set`, `stat`,
-  `read`, `mapfile`, `vared` or `getopts` read their options or the name
-  they write can now ask (`print -r $(cat f)`, `stat -f %m $(cat f)`,
-  `read -d $(cat f)`, `getopts $(cat f)`), and so can a quoted one with
-  more words after it (`printf "$fmt" x`). `print -r -- $x`,
-  `set -- $(cat f)`, `stat -f %m "$f"`, `printf "$fmt"` and `wait $pid`
-  stay quiet.
+  `print`, `printf` and `getopts` are now read this way too. So an
+  unquoted variable, `$(…)` or pattern where `print`, `printf`, `set`,
+  `stat`, `read`, `mapfile`, `vared` or `getopts` read their options or the
+  name they write can now ask (`print -r $(cat f)`,
+  `set ?A commands ls ./x`, `stat -f %m $(cat f)`, `read -d $(cat f)`,
+  `getopts $(cat f)`), and so can a quoted one with more words after it
+  (`printf "$fmt" x`). `print -r -- $x`, `set -- $(cat f)`,
+  `stat -f %m "$f"`, `printf "$fmt"`, `print -l *.png` and `wait $pid` stay
+  quiet.
 - A program named by a path, or a shell or interpreter, run after a leading
   redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
   `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
