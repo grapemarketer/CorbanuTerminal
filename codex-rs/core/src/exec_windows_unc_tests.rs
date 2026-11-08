@@ -155,7 +155,7 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
         .join("Workspace Folder");
     std::fs::create_dir_all(&real).expect("workspace");
     // `\\localhost` is the case #1863 found. `\\127.0.0.1` is the same
-    // folder through another server name, for comparison: measured only.
+    // folder through another server name, for comparison.
     let mut outcomes = Vec::new();
     for host in ["localhost", "127.0.0.1"] {
         let unc = unc(host, &real);
@@ -183,13 +183,21 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
         }
     }
     for (host, sandbox, outcome, written) in outcomes {
-        if host != "localhost" {
-            continue;
+        if host == "localhost" {
+            // Refused before any sandbox runs, as release builds already did
+            // (with an unclear error), instead of a panic in debug builds.
+            assert!(
+                outcome.starts_with("refused: ") && outcome.contains("network (UNC) path"),
+                "{sandbox}: {outcome}"
+            );
+        } else {
+            // Unchanged: the command starts sandboxed (cmd falls back to the
+            // Windows folder) and can't write.
+            assert!(outcome.starts_with("ran: "), "{host}, {sandbox}: {outcome}");
         }
         assert!(
-            outcome.starts_with("refused: ") && outcome.contains("network (UNC) working folder"),
-            "{sandbox}: {outcome}"
+            !written,
+            "{host}, {sandbox}: the command wrote in the workspace"
         );
-        assert!(!written, "{sandbox}: the command ran");
     }
 }

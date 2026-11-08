@@ -712,6 +712,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   to writable folders by their real (link-resolved) path too. When one
   profile marks the same folder read-only under one spelling and writable
   under another, read-only wins.
+- **A `\\localhost` network working folder gets a clear error** (#1863).
+  `command/exec` refused a working folder given as a `\\localhost\...`
+  network (UNC) path with an unclear "not valid on this host" error (debug
+  builds crashed). It still refuses it, in both sandboxes, now saying to use
+  the folder's local path instead. Other network paths are unchanged: the
+  command starts but can't write there.
 - **A writable folder inside a read-only one is refused through links too**
   (#1801, D331). D331's refusal compared folders by spelling, so a
   writable folder that lay inside a read-only one only through a junction
