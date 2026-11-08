@@ -870,3 +870,111 @@ fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// #1780 (the bug was in the non-admin sandbox): the elevated sandbox keeps a
+/// read-only `docs` read-only when it or the working folder is spelled
+/// through a junction and the other by its real path, with nothing passed
+/// beyond the profile (Core's resolvers pass no deny path for these). With
+/// both spelled by the real path, the command writes its workspace and not
+/// `docs`, also with `docs` spelled through the junction. With the cwd
+/// spelled through it the command may not start at all here (the sandbox
+/// account can't pass the user-owned test root at the link), which is fine;
+/// it just mustn't write `docs`.
+#[test]
+fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only() {
+    let Some(codex_home) = elevated_home("sec-1780") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let base = dunce::canonicalize(root.path()).expect("canonical test root");
+    let real = base.join("real");
+    fs::create_dir_all(real.join("docs")).expect("create docs");
+    let linked = base.join("linked");
+    assert!(
+        super::super::real_path_read_only::make_link("/J", &linked, &real),
+        "mklink /J failed"
+    );
+    let probe = real.join("docs").join("probe.txt");
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    let runtime = current_thread_runtime();
+    let mut outcomes = Vec::new();
+    for (cwd, docs) in [
+        (&real, real.join("docs")),
+        (&linked, real.join("docs")),
+        (&real, linked.join("docs")),
+    ] {
+        let (mut file_system, network) =
+            PermissionProfile::workspace_write().to_runtime_permissions();
+        file_system
+            .entries
+            .push(codex_protocol::permissions::FileSystemSandboxEntry::new(
+                codex_protocol::permissions::FileSystemPath::Path {
+                    path: AbsolutePathBuf::from_absolute_path(&docs).expect("absolute"),
+                },
+                codex_protocol::permissions::FileSystemAccessMode::Read,
+            ));
+        let profile = PermissionProfile::from_runtime_permissions(&file_system, network);
+        // Relative to the cwd (no quotes, see #1758's test); `docs` there is
+        // `real\docs` either way.
+        let script = "(echo x> docs\\probe.txt) & (echo y> ok.txt)".to_string();
+        let env_map: HashMap<String, String> = std::env::vars().collect();
+        let exit = runtime.block_on(async {
+            match spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &profile,
+                workspace_roots_for(cwd).as_slice(),
+                codex_home.path(),
+                vec![cmd.clone(), "/d".to_string(), "/c".to_string(), script],
+                cwd,
+                env_map,
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(90_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                /*tty*/ false,
+                /*stdin_open*/ false,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            {
+                Ok(spawned) => Some(
+                    collect_stdout_and_exit(
+                        spawned,
+                        codex_home.path(),
+                        Duration::from_secs(/*secs*/ 120),
+                    )
+                    .await
+                    .1,
+                ),
+                Err(err) => {
+                    println!("sec-win-1780 elevated: start error: {err:#}");
+                    None
+                }
+            }
+        });
+        let outcome = (exit, probe.exists(), real.join("ok.txt").exists());
+        println!(
+            "sec-win-1780 elevated: cwd {}, docs {}: (exit, docs written, workspace written)={outcome:?}",
+            cwd.display(),
+            docs.display()
+        );
+        let _ = fs::remove_file(&probe);
+        let _ = fs::remove_file(real.join("ok.txt"));
+        outcomes.push(outcome);
+    }
+    record_setup(codex_home.path());
+    let _ = fs::remove_dir(&linked);
+
+    // The cwd by its real path starts either way; through the junction, only
+    // `docs` staying unwritten is required.
+    pretty_assertions::assert_eq!(
+        (outcomes[0], outcomes[1].1, outcomes[2]),
+        ((Some(0), false, true), false, (Some(0), false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
