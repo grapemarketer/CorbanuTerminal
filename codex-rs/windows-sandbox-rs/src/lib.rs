@@ -2,6 +2,8 @@
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod git_watch;
 mod planted_log;
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
@@ -253,6 +255,8 @@ pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::confirm_planted_project_metadata;
 #[cfg(target_os = "windows")]
+pub use integrity_leases::planted_git_changes;
+#[cfg(target_os = "windows")]
 pub use integrity_leases::planted_project_metadata;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::project_metadata_counts_as_planted;
@@ -316,6 +320,7 @@ pub use logon_launch::run_logon_launcher;
 pub use logon_launch::run_window_access_reaper;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
+pub use planted_log::PlantedRecord;
 pub use planted_log::planted_records_mark;
 pub use planted_log::planted_records_since;
 #[cfg(target_os = "windows")]

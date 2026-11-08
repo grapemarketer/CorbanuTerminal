@@ -112,16 +112,9 @@ impl PlantedProjectMetadata {
         let Self::Known(planted) = self else {
             return Vec::new();
         };
-        let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
         planted
             .iter()
-            .filter(|path| is_git_dir(path))
-            .filter(|path| {
-                path.parent()
-                    .is_some_and(|parent| is_at_or_below(&cwd, parent))
-                    || is_at_or_below(path, &cwd)
-                    || writable_roots.iter().any(|root| is_at_or_below(path, root))
-            })
+            .filter(|path| is_git_dir(path) && in_git_scope(path, writable_roots, cwd))
             .cloned()
             .collect()
     }
@@ -141,32 +134,146 @@ impl PlantedProjectMetadata {
     }
 }
 
-/// D424 (#1775): what to tell the person right after a command when
-/// `paths` (canonical) were recorded as possibly planted while it ran: at most
-/// 20 of them, and how many more. `None` when there are none.
-pub fn planted_after_command_notice(paths: &[PathBuf]) -> Option<String> {
+/// D424 (#1775): whether a recorded git folder at `path` is shown: its folder
+/// is `cwd` or above it, or it lies below `cwd` or at or below one of
+/// `writable_roots` (canonical).
+fn in_git_scope(path: &Path, writable_roots: &[PathBuf], cwd: &Path) -> bool {
+    let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    path.parent()
+        .is_some_and(|parent| is_at_or_below(&cwd, parent))
+        || is_at_or_below(path, &cwd)
+        || writable_roots.iter().any(|root| is_at_or_below(path, root))
+}
+
+/// D420 (#1775): a repository below the top of a writable root (or a
+/// writable root that is a bare repository) that appeared, or whose config,
+/// hooks or other files git runs programs from changed, while a non-admin
+/// sandbox command ran; and what changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlantedGitChange {
+    /// Its `.git` entry, or a bare repository's folder.
+    pub path: PathBuf,
+    /// For the person: `new repository`, `config changed`,
+    /// `hooks/post-checkout added` ...
+    pub changes: Vec<String>,
+}
+
+impl PlantedGitChange {
+    /// `path (what changed)`, at most five changes and how many more.
+    pub fn describe(&self) -> String {
+        const SHOWN: usize = 5;
+        let mut changes = self
+            .changes
+            .iter()
+            .take(SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if self.changes.len() > SHOWN {
+            changes.push_str(&format!(" and {} more", self.changes.len() - SHOWN));
+        }
+        format!("{} ({changes})", self.path.display())
+    }
+}
+
+/// D420 (#1775): one startup warning for all of `changes` (rule 4 of the
+/// design note: batched, at most 20 named and how many more); `None` when
+/// there are none.
+pub fn git_changes_warning(changes: &[PlantedGitChange]) -> Option<String> {
     const SHOWN: usize = 20;
-    if paths.is_empty() {
+    if changes.is_empty() {
+        return None;
+    }
+    let mut list = changes
+        .iter()
+        .take(SHOWN)
+        .map(PlantedGitChange::describe)
+        .collect::<Vec<_>>()
+        .join("; ");
+    if changes.len() > SHOWN {
+        list.push_str(&format!(" and {} more", changes.len() - SHOWN));
+    }
+    Some(format!(
+        "{PLANTED_GIT_WARNING_PREFIX}{list}. These appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs a repository's hooks and config outside the sandbox whenever you run git there. Check them, then confirm them when Corbanu Terminal asks."
+    ))
+}
+
+/// D420 (#1775): the repositories that appeared or changed and aren't
+/// confirmed yet. Always empty off Windows; empty too when the records
+/// can't be read ([`planted_project_metadata`] reports that).
+pub fn planted_git_changes() -> Vec<PlantedGitChange> {
+    #[cfg(target_os = "windows")]
+    {
+        match codex_windows_sandbox::planted_git_changes() {
+            Ok(changes) => changes
+                .into_iter()
+                .map(|(path, changes)| PlantedGitChange { path, changes })
+                .collect(),
+            Err(err) => {
+                tracing::warn!("could not read the planted repository records: {err:#}");
+                Vec::new()
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+/// D420/D424 (#1775): those of `changes` to show at startup: in a folder
+/// non-admin sandbox commands may write to (`writable_roots`, canonical),
+/// below `cwd`, or in `cwd` or a folder above it.
+pub fn git_changes_to_show(
+    changes: Vec<PlantedGitChange>,
+    writable_roots: &[PathBuf],
+    cwd: &Path,
+) -> Vec<PlantedGitChange> {
+    changes
+        .into_iter()
+        .filter(|change| in_git_scope(&change.path, writable_roots, cwd))
+        .collect()
+}
+
+/// D424 (#1775): what to tell the person right after a command when
+/// `paths` (canonical) were recorded as possibly planted while it ran, and
+/// (D420) `git_changes`: at most 20 of each kind, and how many more. `None`
+/// when there are none.
+pub fn planted_after_command_notice(
+    paths: &[PathBuf],
+    git_changes: &[PlantedGitChange],
+) -> Option<String> {
+    const SHOWN: usize = 20;
+    if paths.is_empty() && git_changes.is_empty() {
         return None;
     }
     let (git_dirs, folders): (Vec<&PathBuf>, Vec<&PathBuf>) =
         paths.iter().partition(|path| is_git_dir(path));
-    let list = |paths: &[&PathBuf]| {
-        let mut list = paths
+    let git_dirs: Vec<String> = git_dirs
+        .iter()
+        .map(|path| path.display().to_string())
+        .chain(git_changes.iter().map(PlantedGitChange::describe))
+        .collect();
+    let folders: Vec<String> = folders
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let list = |items: &[String]| {
+        let mut list = items
             .iter()
             .take(SHOWN)
-            .map(|path| path.display().to_string())
+            .cloned()
             .collect::<Vec<_>>()
             .join(", ");
-        if paths.len() > SHOWN {
-            list.push_str(&format!(" and {} more", paths.len() - SHOWN));
+        if items.len() > SHOWN {
+            list.push_str(&format!(" and {} more", items.len() - SHOWN));
         }
         list
     };
     let mut parts = Vec::new();
     if !git_dirs.is_empty() {
         parts.push(format!(
-            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do. Corbanu Terminal asks you to confirm it when it next starts.",
+            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do, then confirm it when the TUI asks at startup.",
             list(&git_dirs)
         ));
     }

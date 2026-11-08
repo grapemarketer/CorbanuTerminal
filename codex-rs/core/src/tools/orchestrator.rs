@@ -2014,6 +2014,13 @@ async fn warn_planted_after_run<Rq, Out, T>(
     {
         return;
     }
+    // Usually nothing was recorded: then the writable roots aren't needed.
+    if !crate::tools::writable_root_notices::planted_notice_pending(
+        tool_ctx.session.thread_id(),
+        mark,
+    ) {
+        return;
+    }
     let Ok(cwd) = attempt.sandbox_cwd.to_abs_path() else {
         return;
     };

@@ -13,11 +13,20 @@ use std::sync::MutexGuard;
 /// The newest records kept; older ones are only in the records file.
 const KEEP: usize = 1024;
 
+/// One record: its number in this process, the folder, and (D420) for a
+/// repository whose contents changed, what changed (empty otherwise).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlantedRecord {
+    pub seq: u64,
+    pub path: PathBuf,
+    pub git_changes: Vec<String>,
+}
+
 #[derive(Default)]
 struct Log {
     /// Counts records in this process.
     seq: u64,
-    entries: VecDeque<(u64, PathBuf)>,
+    entries: VecDeque<PlantedRecord>,
 }
 
 static LOG: LazyLock<Mutex<Log>> = LazyLock::new(Default::default);
@@ -32,11 +41,30 @@ fn log() -> MutexGuard<'static, Log> {
 pub(crate) fn record<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) {
     let mut log = log();
     for path in paths {
-        log.seq += 1;
-        let seq = log.seq;
-        log.entries.push_back((seq, path.clone()));
-        if log.entries.len() > KEEP {
-            log.entries.pop_front();
+        log.push(path.clone(), Vec::new());
+    }
+}
+
+/// D420: notes that these repositories were just recorded as changed, with
+/// what changed.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn record_git(changed: &[(PathBuf, Vec<String>)]) {
+    let mut log = log();
+    for (path, changes) in changed {
+        log.push(path.clone(), changes.clone());
+    }
+}
+
+impl Log {
+    fn push(&mut self, path: PathBuf, git_changes: Vec<String>) {
+        self.seq += 1;
+        self.entries.push_back(PlantedRecord {
+            seq: self.seq,
+            path,
+            git_changes,
+        });
+        if self.entries.len() > KEEP {
+            self.entries.pop_front();
         }
     }
 }
@@ -46,13 +74,12 @@ pub fn planted_records_mark() -> u64 {
     log().seq
 }
 
-/// The folders recorded as possibly planted after `mark`, with each
-/// record's number, oldest first (always none off Windows).
-pub fn planted_records_since(mark: u64) -> Vec<(u64, PathBuf)> {
+/// The records made after `mark`, oldest first (always none off Windows).
+pub fn planted_records_since(mark: u64) -> Vec<PlantedRecord> {
     log()
         .entries
         .iter()
-        .filter(|(seq, _)| *seq > mark)
+        .filter(|record| record.seq > mark)
         .cloned()
         .collect()
 }

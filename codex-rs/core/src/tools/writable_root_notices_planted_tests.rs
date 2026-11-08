@@ -1,5 +1,6 @@
 use super::planted_notice_from;
 use codex_protocol::ThreadId;
+use codex_windows_sandbox::PlantedRecord;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -15,16 +16,25 @@ fn planted_records_in_the_runs_roots_are_told_once() {
     let git = root.join("sub").join(".git");
     let codex = PathBuf::from("/PLANTED-TESTS/ROOT/.codex");
     let elsewhere = other.join(".git");
-    let log = &[(1, elsewhere.clone()), (2, git.clone()), (3, codex.clone())];
+    let log = &[
+        (1, elsewhere.clone(), Vec::new()),
+        (2, git.clone(), Vec::new()),
+        (3, codex.clone(), Vec::new()),
+        (4, root.clone(), vec!["config changed".to_string()]),
+    ];
     let since_until = |until: u64| {
-        move |from: u64| -> Vec<(u64, PathBuf)> {
+        move |from: u64| -> Vec<PlantedRecord> {
             log.iter()
-                .filter(|(seq, _)| *seq > from && *seq <= until)
-                .cloned()
+                .filter(|(seq, _, _)| *seq > from && *seq <= until)
+                .map(|(seq, path, git_changes)| PlantedRecord {
+                    seq: *seq,
+                    path: path.clone(),
+                    git_changes: git_changes.clone(),
+                })
                 .collect()
         }
     };
-    let only_root = [root];
+    let only_root = [root.clone()];
     let thread = ThreadId::new();
 
     // The thread's first run (mark 0) ends when only 1 and 2 are recorded.
@@ -34,14 +44,23 @@ fn planted_records_in_the_runs_roots_are_told_once() {
     let again = planted_notice_from(thread, /*mark*/ 3, &only_root, since_until(3));
     // A run with the other root tells 1, skipped so far.
     let other_root = planted_notice_from(thread, /*mark*/ 3, &[other], since_until(3));
+    // D420: a repository whose contents changed, with what changed.
+    let repo = planted_notice_from(thread, /*mark*/ 3, &only_root, since_until(4));
 
     assert_eq!(
-        (first.clone(), later, again, other_root),
+        (first.clone(), later, again, other_root, repo),
         (
-            codex_config::planted_after_command_notice(&[git]),
-            codex_config::planted_after_command_notice(&[codex]),
+            codex_config::planted_after_command_notice(&[git], &[]),
+            codex_config::planted_after_command_notice(&[codex], &[]),
             None,
-            codex_config::planted_after_command_notice(&[elsewhere]),
+            codex_config::planted_after_command_notice(&[elsewhere], &[]),
+            codex_config::planted_after_command_notice(
+                &[],
+                &[codex_config::PlantedGitChange {
+                    path: root,
+                    changes: vec!["config changed".to_string()],
+                }],
+            ),
         )
     );
     assert!(first.is_some_and(|notice| notice.contains("Possibly planted git folder: ")));

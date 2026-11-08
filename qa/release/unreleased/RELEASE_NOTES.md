@@ -753,6 +753,17 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   asks about it) when it lies in any folder commands may write to,
   `%TEMP%` included, or below the working folder; before, only one in the
   working folder or a folder above it was.
+- **Non-admin sandbox: nested and bare repositories are watched** (D420,
+  D421, #1775). Repositories deeper in a writable folder (a nested `.git`,
+  or a folder that is a bare repository), and a writable folder that is
+  itself a bare repository, are reported like the top-level `.git` when they
+  are new or replaced, or when their config, hooks or other files git runs
+  programs from change (compared by content, submodules and worktrees
+  included). The warning says what changed. A new repository with exactly
+  the shape `git init` or `git clone` leave isn't reported, so cloning a
+  project to look at it doesn't ask; later changes to it are. Nothing is
+  refused: agents can still commit and run `git config` there. Going back
+  to an older build drops these records the next time it saves its own.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only

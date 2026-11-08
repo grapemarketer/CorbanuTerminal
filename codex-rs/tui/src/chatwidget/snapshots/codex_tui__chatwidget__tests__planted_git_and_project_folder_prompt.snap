@@ -8,7 +8,7 @@ expression: "render_bottom_popup(&chat, 100)"
   planted them. Corbanu Terminal isn't loading their config, hooks or skills:
     project/.codex
 
-  These .git folders appeared or changed while a non-admin Windows sandbox command ran, so a
+  These git folders appeared or changed while a non-admin Windows sandbox command ran, so a
   command may have planted them. Git runs their hooks and config outside the sandbox whenever you
   run git there:
     project/.git

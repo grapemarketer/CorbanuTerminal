@@ -3027,6 +3027,10 @@ mod acl_cost;
 #[path = "nested_metadata_tests.rs"]
 mod nested_metadata;
 
+/// D420/D421 (#1775): repositories below the top of the writable roots.
+#[path = "repo_watch_tests.rs"]
+mod repo_watch;
+
 /// D293 (#1542 items 1 and 2): links above explicit read-only paths.
 #[path = "carve_out_link_tests.rs"]
 mod carve_out_link;

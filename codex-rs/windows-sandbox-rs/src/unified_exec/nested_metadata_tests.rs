@@ -636,7 +636,7 @@ fn legacy_command_creating_git_is_recorded_as_planted() {
             planted(&git),
             crate::planted_records_since(mark)
                 .iter()
-                .any(|(_, path)| *path == git),
+                .any(|record| record.path == git),
         ),
         (0, true, true, true)
     );
