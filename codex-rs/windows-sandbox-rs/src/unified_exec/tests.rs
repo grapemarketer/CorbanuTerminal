@@ -702,7 +702,7 @@ fn check_legacy_command_returns_while_descendant_runs(
     );
     assert!(
         wait_for_path(&survival_marker, Duration::from_secs(10)),
-        "the legacy {label} descendant did not survive the command's exit; \
+        "the {label} descendant did not survive the command's exit; \
          the command returned after {took:?}"
     );
     let descendant_process = descendant_process.expect("open descendant after normal legacy exit");
