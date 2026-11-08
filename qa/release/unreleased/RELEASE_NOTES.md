@@ -152,6 +152,20 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   turn running goes ahead. Before, `resume_agent` and `followup_task` went
   ahead on every route that offers them, and `resume_agent_v1` asked as an
   unclassified tool.
+- **`send_input` to an agent that isn't running asks too** (D388, #1832).
+  After untrusted content, V1 `send_input` (and `send_input_v1`) to a
+  finished or idle agent starts a new turn there, so it now asks like
+  `followup_task`; with approvals off it is refused. To a running agent it
+  still goes ahead.
+- **Interrupting an agent that isn't running no longer wakes it** (D404,
+  #1796), at every security level. `interrupt_agent` on a finished or idle
+  agent only reports its status; before, the interrupt notice started a new
+  turn there, with the caller's reason as its message.
+- **Known limit** (D389): a follow-up or `send_input` to an agent that is
+  running when checked goes ahead; if that turn ends just before the message
+  arrives, the message starts a new turn without asking. Likewise, at any
+  level, if an agent's turn ends just before an interrupt reaches it, the
+  interrupt notice can start a new turn.
 - **The same rules apply under Aggressive** (D335).
 
 ## Agent tools act only on the caller's own agents

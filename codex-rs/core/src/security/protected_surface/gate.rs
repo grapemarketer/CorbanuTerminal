@@ -299,8 +299,10 @@ fn is_tainted(session: &Session) -> bool {
         .is_some_and(|state| state.taint_generation > 0)
 }
 
-/// D334 (#1702): a follow-up task to an agent with a turn running joins its
-/// work; to any other agent it starts a new turn, so it asks like a restart.
+/// D334 (#1702), D388: a follow-up task or V1 `send_input` to an agent with
+/// a turn running joins its work; to any other agent it starts a new turn, so
+/// it asks like a restart. The turn can still end between this check and the
+/// message arriving; that race is a known limitation (D389).
 /// `PendingInit` is not running: a finished agent reloaded without a turn
 /// (by `send_message`, say) reads `PendingInit` too (#1768 review). A target
 /// that cannot be read or found counts as not running. This reads the target

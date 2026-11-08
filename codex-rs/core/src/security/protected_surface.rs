@@ -77,9 +77,9 @@ pub(crate) enum Coverage {
     /// Restarts a finished agent: asks the human after untrusted content,
     /// the same way as starting one (D334, #1702).
     AgentRestart,
-    /// Wakes an agent with a follow-up task: goes ahead while the agent is
-    /// running, and asks like [`Coverage::AgentRestart`] otherwise, since it
-    /// then starts a new turn (D334, #1702).
+    /// Wakes an agent with a follow-up task or V1 input: goes ahead while the
+    /// agent is running, and asks like [`Coverage::AgentRestart`] otherwise,
+    /// since it then starts a new turn (D334, #1702; D388).
     AgentFollowup,
     /// Changes what the agent may do (permissions, plugins): asks the human
     /// itself unless an automatic reviewer would answer.
@@ -105,12 +105,17 @@ const AGENT_LAUNCH: &[&str] = &["spawn_agent", "spawn_agent_plaintext", "spawn_a
 /// D334 (#1702): resuming a closed agent asks like starting one, on every
 /// route.
 const AGENT_RESTART: &[&str] = &["resume_agent", "resume_agent_v1"];
-const AGENT_FOLLOWUP: &[&str] = &["followup_task", "followup_task_plaintext"];
+/// D388: V1 `send_input` to an agent that isn't running starts a new turn,
+/// so it is checked like a follow-up task.
+const AGENT_FOLLOWUP: &[&str] = &[
+    "followup_task",
+    "followup_task_plaintext",
+    "send_input",
+    "send_input_v1",
+];
 /// The `_v1` names are the plain-function aliases of the Responses names
 /// (D320, D334): each is treated like the name it stands for.
 const CHILD_AGENT: &[&str] = &[
-    "send_input",
-    "send_input_v1",
     "send_message",
     "send_message_plaintext",
     "close_agent",
