@@ -140,6 +140,7 @@ pub use planted_project_metadata::PLANTED_GIT_WARNING_PREFIX;
 pub use planted_project_metadata::PLANTED_PROJECT_METADATA_WARNING_PREFIX;
 pub use planted_project_metadata::PlantedProjectMetadata;
 pub use planted_project_metadata::is_git_dir;
+pub use planted_project_metadata::planted_after_command_notice;
 pub use planted_project_metadata::planted_project_metadata;
 pub use plugin_edit::PluginConfigEdit;
 pub use plugin_edit::apply_user_plugin_config_edits;

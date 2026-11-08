@@ -528,17 +528,7 @@ impl ChatWidget {
         else {
             return;
         };
-        let cwd = self.config.cwd.as_path();
-        let here: Vec<PathBuf> = planted
-            .into_iter()
-            .filter(|path| {
-                path.parent().is_some_and(|parent| {
-                    let parent = dunce::canonicalize(parent).unwrap_or_else(|_| parent.into());
-                    let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.into());
-                    cwd.starts_with(&parent)
-                })
-            })
-            .collect();
+        let here = planted_to_ask_about(planted, &self.config);
         if !here.is_empty() {
             self.open_planted_project_metadata_prompt(here);
         }
@@ -643,6 +633,32 @@ impl ChatWidget {
             ..Default::default()
         });
     }
+}
+
+/// The recorded folders the startup prompt asks about: those in the working
+/// folder or a folder above it (where Core loads `.codex`/`.agents` from),
+/// and (D424, #1775) any `.git` below the working folder or in a folder
+/// non-admin sandbox commands may write to, since git runs anywhere.
+pub(super) fn planted_to_ask_about(planted: Vec<PathBuf>, config: &Config) -> Vec<PathBuf> {
+    let cwd = config.cwd.as_path();
+    let writable = codex_windows_sandbox::legacy_writable_roots(
+        &config.permissions.file_system_sandbox_policy(),
+        config.permissions.workspace_roots(),
+        cwd,
+    );
+    let git_dirs = codex_config::PlantedProjectMetadata::Known(planted.clone())
+        .git_dirs_to_show(&writable, cwd);
+    let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.into());
+    planted
+        .into_iter()
+        .filter(|path| {
+            git_dirs.contains(path)
+                || path.parent().is_some_and(|parent| {
+                    let parent = dunce::canonicalize(parent).unwrap_or_else(|_| parent.into());
+                    cwd.starts_with(&parent)
+                })
+        })
+        .collect()
 }
 
 #[cfg(target_os = "windows")]

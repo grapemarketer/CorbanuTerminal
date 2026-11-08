@@ -589,6 +589,7 @@ fn legacy_command_creating_git_is_recorded_as_planted() {
         "echo planted> \"%WORKSPACE%\\.git\\hooks\\post-checkout\"\r\n",
     );
     let runtime = current_thread_runtime();
+    let mark = crate::planted_records_mark();
     let exit_code = runtime.block_on(async {
         let codex_home = sandbox_home("legacy-top-level-git");
         let script_path = codex_home.path().join("top-level-git.cmd");
@@ -626,12 +627,15 @@ fn legacy_command_creating_git_is_recorded_as_planted() {
     });
     let git = canonical(&workspace).join(".git");
 
+    // D424 (#1775): recorded by the time the command's result is back, so
+    // Core can tell the person right after it.
     assert_eq!(
         (
             exit_code,
             git.join("hooks\\post-checkout").is_file(),
             planted(&git),
+            crate::planted_records_since(mark).contains(&git),
         ),
-        (0, true, true)
+        (0, true, true, true)
     );
 }

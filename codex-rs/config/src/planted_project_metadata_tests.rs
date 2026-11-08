@@ -92,3 +92,100 @@ fn planted_git_gets_a_warning() {
         (Some(true), None, true, true, true, false)
     );
 }
+
+/// D424 (#1775): a recorded `.git` is shown when it is at or above the
+/// working folder (as before), below it, or in a writable root (such as
+/// `%TEMP%`); not elsewhere, and recorded `.codex`/`.agents` folders aren't
+/// (Core only loads those from the working folder and above).
+#[test]
+fn git_dirs_to_show_cover_writable_roots_and_below_cwd() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dunce::canonicalize(dir.path()).expect("canonical");
+    let project = base.join("project");
+    let cwd = project.join("app");
+    let temp = base.join("temp");
+    for folder in [&cwd, &temp, &base.join("elsewhere")] {
+        std::fs::create_dir_all(folder).expect("create folder");
+    }
+    let above = project.join(".git");
+    let below = cwd.join("vendor").join("lib").join(".git");
+    let in_temp = temp.join(".git");
+    let nested_in_temp = temp.join("scratch").join(".git");
+    let elsewhere = base.join("elsewhere").join(".git");
+    let codex_below = cwd.join("sub").join(".codex");
+    let planted = PlantedProjectMetadata::Known(vec![
+        above.clone(),
+        below.clone(),
+        in_temp.clone(),
+        nested_in_temp.clone(),
+        elsewhere,
+        codex_below,
+    ]);
+    assert_eq!(
+        (
+            planted.git_dirs_to_show(std::slice::from_ref(&temp), &cwd),
+            planted.git_dirs_to_show(&[], &cwd),
+        ),
+        (
+            vec![above.clone(), below.clone(), in_temp, nested_in_temp],
+            vec![above, below],
+        )
+    );
+}
+
+/// D424: the startup warnings beyond the project are those entries'
+/// warnings; with unreadable records, one for each writable root's `.git`
+/// that exists.
+#[test]
+fn git_warnings_beyond_project_name_each_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dunce::canonicalize(dir.path()).expect("canonical");
+    let temp = base.join("temp");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(temp.join(".git")).expect("create .git");
+    std::fs::create_dir_all(&empty).expect("create root");
+    let roots = [temp.clone(), empty];
+    let known = PlantedProjectMetadata::Known(vec![temp.join(".git")])
+        .git_warnings_beyond_project(&roots, &base);
+    let unreadable = PlantedProjectMetadata::Unreadable("damaged".to_string())
+        .git_warnings_beyond_project(&roots, &base);
+    let named = |warnings: &[String]| {
+        warnings
+            .iter()
+            .map(|warning| {
+                warning.starts_with(&format!(
+                    "{PLANTED_GIT_WARNING_PREFIX}{}.",
+                    temp.join(".git").display()
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (named(&known), named(&unreadable)),
+        (vec![true], vec![true])
+    );
+}
+
+/// D424: the notice after a command names what was recorded, by kind, at
+/// most 20 of each.
+#[test]
+fn notice_after_a_command_names_the_recorded_folders() {
+    let git: Vec<PathBuf> = (0..22)
+        .map(|n| PathBuf::from(format!("/w/r{n}/.git")))
+        .collect();
+    let notice = planted_after_command_notice(&[git, vec![PathBuf::from("/w/r0/.codex")]].concat())
+        .expect("notice");
+    assert_eq!(
+        (
+            notice.starts_with(&format!(
+                "{PLANTED_GIT_WARNING_PREFIX}/w/r0/.git, /w/r1/.git"
+            )),
+            notice.contains("/w/r19/.git and 2 more."),
+            notice.contains(&format!(
+                "\n{PLANTED_PROJECT_METADATA_WARNING_PREFIX}/w/r0/.codex."
+            )),
+            planted_after_command_notice(&[]),
+        ),
+        (true, true, true, None)
+    );
+}

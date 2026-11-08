@@ -7,6 +7,7 @@
 //! Issue #734: likewise, after a run in the non-admin Windows sandbox, a
 //! writable root it couldn't label Low, so left read-only to its commands.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -72,6 +73,63 @@ pub(crate) fn unlabelled_writable_root_warnings(
         .collect()
 }
 
+/// D424 (#1775): per thread, the planted-records mark up to which it was
+/// told.
+static PLANTED_TOLD: LazyLock<Mutex<HashMap<ThreadId, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// D424 (#1775): the notice for the folders recorded as possibly planted
+/// since `mark` (taken before a run in the non-admin Windows sandbox), or
+/// since this thread was last told if that is earlier (a command it left
+/// running may have ended meanwhile), that lie at or below one of the run's
+/// own `writable` roots (canonical). Each record is told once per thread.
+pub(crate) fn planted_after_run_notice(
+    thread_id: ThreadId,
+    mark: u64,
+    writable: &[PathBuf],
+) -> Option<String> {
+    planted_notice_from(
+        thread_id,
+        mark,
+        writable,
+        codex_windows_sandbox::planted_records_mark,
+        codex_windows_sandbox::planted_records_since,
+    )
+}
+
+/// [`planted_after_run_notice`] with the planted-records log passed in.
+fn planted_notice_from(
+    thread_id: ThreadId,
+    mark: u64,
+    writable: &[PathBuf],
+    records_mark: impl FnOnce() -> u64,
+    records_since: impl FnOnce(u64) -> Vec<PathBuf>,
+) -> Option<String> {
+    let mut told = PLANTED_TOLD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let from = told.get(&thread_id).map_or(mark, |last| (*last).min(mark));
+    told.insert(thread_id, records_mark());
+    let paths: Vec<PathBuf> = records_since(from)
+        .into_iter()
+        .filter(|path| writable.iter().any(|root| is_at_or_below(path, root)))
+        .collect();
+    codex_config::planted_after_command_notice(&paths)
+}
+
+/// `path` is `base` or below it, ignoring ASCII case (Windows paths).
+fn is_at_or_below(path: &Path, base: &Path) -> bool {
+    let mut parts = path.components();
+    base.components().all(|part| {
+        parts.next().is_some_and(|other| {
+            other
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&part.as_os_str().to_string_lossy())
+        })
+    })
+}
+
 // The link test needs symlinks (unix).
 #[cfg(all(test, unix))]
 #[path = "writable_root_notices_tests.rs"]
@@ -80,3 +138,7 @@ mod tests;
 #[cfg(test)]
 #[path = "writable_root_notices_unlabelled_tests.rs"]
 mod unlabelled_tests;
+
+#[cfg(test)]
+#[path = "writable_root_notices_planted_tests.rs"]
+mod planted_tests;

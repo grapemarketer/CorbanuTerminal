@@ -558,16 +558,19 @@ fn record_planted(registry: &Path, absent: &[PathBuf], log_dir: Option<&Path>) -
     }
     let result = load_planted(registry).and_then(|mut planted| {
         let before = planted.entries.len();
-        planted.entries.extend(
-            appeared
-                .iter()
-                .filter(|path| !planted.confirmed.contains(**path))
-                .map(|path| (*path).clone()),
-        );
+        let new: Vec<PathBuf> = appeared
+            .iter()
+            .filter(|path| !planted.confirmed.contains(**path))
+            .map(|path| (*path).clone())
+            .collect();
+        planted.entries.extend(new.iter().cloned());
         if planted.entries.len() == before {
             return Ok(());
         }
-        save_json(registry, PLANTED_FILE, &planted)
+        save_json(registry, PLANTED_FILE, &planted)?;
+        // D424: told right after the command too.
+        crate::planted_log::record(&new);
+        Ok(())
     });
     let paths = appeared
         .iter()
@@ -610,7 +613,10 @@ fn record_nested_planted(
             planted.confirmed.remove(path);
             planted.entries.insert(path.clone());
         }
-        save_json(registry, PLANTED_FILE, &planted)
+        save_json(registry, PLANTED_FILE, &planted)?;
+        // D424: told right after the command too.
+        crate::planted_log::record(&appeared);
+        Ok(())
     });
     let paths = appeared
         .iter()
@@ -651,7 +657,10 @@ fn record_git_planted(
             planted.confirmed.remove(path);
             planted.entries.insert(path.clone());
         }
-        save_json(registry, PLANTED_FILE, &planted)
+        save_json(registry, PLANTED_FILE, &planted)?;
+        // D424: told right after the command too.
+        crate::planted_log::record(&appeared);
+        Ok(())
     });
     let paths = appeared
         .iter()

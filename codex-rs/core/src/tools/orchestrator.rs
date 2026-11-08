@@ -133,10 +133,12 @@ impl ToolOrchestrator {
                 .map(ActiveNetworkApproval::execution_proxy),
         };
         let unlabelled_mark = codex_windows_sandbox::unlabelled_roots_mark();
+        let planted_mark = codex_windows_sandbox::planted_records_mark();
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
             .await;
         warn_unlabelled_writable_roots(tool, req, tool_ctx, attempt, unlabelled_mark).await;
+        warn_planted_after_run(tool, req, tool_ctx, attempt, planted_mark).await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);
@@ -1987,6 +1989,51 @@ async fn warn_unlabelled_writable_roots<Rq, Out, T>(
     for message in crate::tools::writable_root_notices::unlabelled_writable_root_warnings(
         tool_ctx.session.thread_id(),
         &failed,
+        &writable,
+    ) {
+        warn(tool_ctx, &message).await;
+    }
+}
+
+/// D424 (#1775): after a run in the non-admin Windows sandbox, tells the
+/// person right away about the folders recorded as possibly planted in the
+/// run's writable roots (a `.git` git would run hooks from, a `.codex` or
+/// `.agents`), rather than only at the next start. Display only.
+async fn warn_planted_after_run<Rq, Out, T>(
+    tool: &T,
+    req: &Rq,
+    tool_ctx: &ToolCtx,
+    attempt: &SandboxAttempt<'_>,
+    mark: u64,
+) where
+    T: ToolRuntime<Rq, Out>,
+{
+    // Only non-admin sessions record them.
+    if attempt.sandbox != SandboxType::WindowsRestrictedToken
+        || attempt.windows_sandbox_level != WindowsSandboxLevel::RestrictedToken
+    {
+        return;
+    }
+    let Ok(cwd) = attempt.sandbox_cwd.to_abs_path() else {
+        return;
+    };
+    let Ok(workspace_roots) = attempt
+        .workspace_roots
+        .iter()
+        .map(PathUri::to_abs_path)
+        .collect::<std::io::Result<Vec<_>>>()
+    else {
+        return;
+    };
+    let effective = codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy(
+        &attempt.permissions.file_system_sandbox_policy(),
+        tool.additional_permissions(req),
+    );
+    let writable =
+        codex_windows_sandbox::legacy_writable_roots(&effective, &workspace_roots, cwd.as_path());
+    if let Some(message) = crate::tools::writable_root_notices::planted_after_run_notice(
+        tool_ctx.session.thread_id(),
+        mark,
         &writable,
     ) {
         warn(tool_ctx, &message).await;
