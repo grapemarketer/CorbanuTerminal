@@ -290,3 +290,37 @@ fn links_and_empty_modules_count() {
         )
     );
 }
+
+/// #1849 review 2: a module named with a slash (`modules\vendor\foo`) is
+/// watched, a `commondir` loop is looked at once, and a quoted `ext::` URL
+/// isn't plain.
+#[test]
+fn slashed_modules_loops_and_quoted_urls() {
+    let (_dir, base) = tempdir();
+    let roots = [base.clone()];
+    let git = base.join("repo").join(".git");
+    init_shape(&git, INIT_CONFIG);
+    let module = git.join("modules").join("vendor").join("foo");
+    init_shape(&module, INIT_CONFIG);
+    // Modules whose `commondir` leads back to the repository.
+    for n in 0..50 {
+        let looped = git.join("modules").join(format!("loop{n}"));
+        fs::create_dir_all(&looped).expect("loop module");
+        fs::write(looped.join("commondir"), "../..").expect("commondir");
+    }
+    let before = fingerprint(&git, &roots);
+    fs::write(module.join("hooks").join("post-checkout"), "evil").expect("hook");
+    let changed = changes(&before, &fingerprint(&git, &roots));
+    assert_eq!(
+        (
+            changed,
+            before.len() < 2_000,
+            plain_config(&CLONE_CONFIG.replace("https://example.com/a.git", "\"e\"xt::sh -c evil")),
+        ),
+        (
+            vec!["modules/vendor/foo/hooks/post-checkout added".to_string()],
+            true,
+            false
+        )
+    );
+}

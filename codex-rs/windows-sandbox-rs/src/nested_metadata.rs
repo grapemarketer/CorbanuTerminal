@@ -93,7 +93,8 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                     name.eq_ignore_ascii_case("HEAD") || name.eq_ignore_ascii_case("commondir");
                 // D420: a nested `.git` of any kind (the top-level one is
                 // D332's).
-                if !top && name.eq_ignore_ascii_case(".git") {
+                // Names fold as NTFS compares them (`.gıt` opens as `.git`).
+                if !top && (name.eq_ignore_ascii_case(".git") || folds_to(&name, ".git")) {
                     found.repos.push(dir.join(".git"));
                 }
                 // Not followed if it is a link. A listing that shows a
