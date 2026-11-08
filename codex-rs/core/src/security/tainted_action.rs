@@ -2095,7 +2095,13 @@ impl Classifier {
             // reads as the shell does (`alias b=bash` then `b run.sh`).
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
-            let tables = code_tables::writes_table(&words, &simple.words, /*seen*/ None);
+            // #1845: command walks skip redirection operands and zsh `[[ … ]]`
+            // tests; only the remaining words can name a table writer.
+            let tables = code_tables::writes_table(
+                &code_tables::run_words(&words, simple),
+                &code_tables::run_words(&simple.words, simple),
+                /*seen*/ None,
+            );
             self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
             // D410: with known values substituted (`a=zmod b=load; $a$b`).
             if !self.stat_builtin {
