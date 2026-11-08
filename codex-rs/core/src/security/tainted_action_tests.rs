@@ -7358,6 +7358,55 @@ fn issue_1159_code_variables_and_git_programs_are_unseen_code() {
     assert_eq!(wrong, Vec::<&str>::new());
 }
 
+/// Git's `ext::` smart transport runs an arbitrary command as the remote
+/// helper (`git fetch ext::sh -c id` runs `sh -c id`), which the host cannot
+/// read before it runs. Git refuses `ext` by default, but config the
+/// classifier cannot see may allow it, so a remote naming it asks like git's
+/// other program-running forms, also as a long option's `=` value
+/// (`git archive --remote=ext::…`).
+#[test]
+fn git_ext_transport_remote_is_unseen_code() {
+    use ProtectedActionKind::UnseenCode;
+    let mut wrong = Vec::new();
+    for command in [
+        "git fetch ext::sh -c id",
+        "git pull ext::sh -c id",
+        "git ls-remote ext::sh -c id",
+        "git remote add o ext::sh -c id",
+        "git fetch 'ext::sh -c \"touch pwned\"'",
+        "git -C sub fetch ext::sh -c id",
+        "git fetch EXT::sh -c id",
+        "git archive --remote=ext::sh -c id HEAD",
+        "git archive --rem=ext::sh -c id HEAD",
+        "git push --repo=ext::sh -c id",
+        "git clone ext::sh -c id",
+        "git submodule add ext::sh -c id",
+        "git remote set-url o ext::sh -c id",
+        "git-fetch ext::sh -c id",
+        "sudo git fetch ext::sh -c id",
+    ] {
+        if script(command) != Some(UnseenCode) {
+            wrong.push(command);
+        }
+    }
+    // A git command with an ordinary remote or no remote stays quiet.
+    for command in [
+        "git fetch origin",
+        "git pull origin main",
+        "git ls-remote https://x.example/r",
+        "git fetch git://x.example/r",
+        "git remote add o https://x.example/r",
+        "git archive --remote=origin HEAD",
+        "git fetch git@host:ext::x",
+        "git grep 'crate::ext::Foo'",
+    ] {
+        if script(command).is_some() {
+            wrong.push(command);
+        }
+    }
+    assert_eq!(wrong, Vec::<&str>::new());
+}
+
 /// #1516: `git grep -O<pager>` / `--open-files-in-pager[=<pager>]` runs the
 /// pager with the matching files as its arguments (`-O sh` runs them as
 /// scripts). It asks like git's other program-running options, in every

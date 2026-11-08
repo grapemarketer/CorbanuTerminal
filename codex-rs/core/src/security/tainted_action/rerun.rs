@@ -668,6 +668,17 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
         let name = word.split_once('=').map_or(word, |(name, _)| name);
         name.len() >= shortest && option.starts_with(name)
     };
+    // Git's `ext::` smart transport runs an arbitrary command as the remote
+    // helper (`git fetch ext::sh -c id` runs `sh -c id`), code the host cannot
+    // read. Git refuses `ext` by default, but config the classifier cannot see
+    // may allow it, so a remote naming it asks like git's other
+    // program-running forms.
+    if args.iter().any(|word| {
+        work::step();
+        ext_remote_scheme(word)
+    }) {
+        return true;
+    }
     args.iter().enumerate().any(|(at, word)| {
         work::step();
         if word.starts_with("--") {
@@ -687,6 +698,22 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
             })
         }
     })
+}
+
+/// Whether `word` names a git remote using the `ext::` smart transport, whose
+/// operand git runs as a command: the word itself, or a long option's value
+/// after its first `=` (`--remote=ext::…`, `--repo=ext::…`), which git passes
+/// to the transport too. The scheme is matched case-insensitively at the
+/// start of the remote, so text holding `ext::` later (`git@host:ext::x`,
+/// `crate::ext::Foo`) is left alone.
+fn ext_remote_scheme(word: &str) -> bool {
+    let is_ext = |remote: &str| {
+        remote
+            .split_once("::")
+            .is_some_and(|(scheme, rest)| scheme.eq_ignore_ascii_case("ext") && !rest.is_empty())
+    };
+    is_ext(word)
+        || (word.starts_with("--") && word.split_once('=').is_some_and(|(_, value)| is_ext(value)))
 }
 
 /// #1528: git's built-in commands (`git --list-cmds=builtins`; list from
