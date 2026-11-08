@@ -3,6 +3,7 @@
 //! older setups put on the temp folder itself is taken back.
 
 use super::*;
+use pretty_assertions::assert_eq;
 
 fn unique_id() -> String {
     let nanos = std::time::SystemTime::now()

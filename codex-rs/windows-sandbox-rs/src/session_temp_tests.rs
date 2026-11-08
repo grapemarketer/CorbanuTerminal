@@ -2,7 +2,6 @@ use super::*;
 use codex_protocol::models::PermissionProfile;
 use pretty_assertions::assert_eq;
 use std::os::windows::fs::FileTimesExt as _;
-use std::os::windows::fs::OpenOptionsExt as _;
 use std::time::SystemTime;
 use tempfile::TempDir;
 
