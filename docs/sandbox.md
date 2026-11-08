@@ -107,11 +107,13 @@ to a profile that limits which folders commands may read. Switch to the
 default sandbox, as below, to run it. Profiles without such entries are not
 affected.
 
-**Known limitations: tools that use named pipes** (#1797). A command in the
+**Known limitations: tools that use named pipes.** (#1797) A command in the
 non-admin sandbox can't open a named pipe it created for writing when the pipe
-has Windows' default permissions, so connecting to such a pipe fails with
-"access denied" (Windows error 5). Those default permissions don't let the
-non-admin sandbox's write restriction write through. So these fail there:
+has Windows' default permissions. By default Windows lets only the pipe's
+owner, SYSTEM and Administrators write to a pipe, and the non-admin sandbox's
+write restriction doesn't count the command as the owner. So opening such a
+pipe for writing, as most programs do to connect to it, fails with "access
+denied" (Windows error 5). These fail there:
 
 - Node.js starting a child process with piped input or output (`execSync`,
   `spawnSync`): `EPERM`. A child started with `stdio: 'inherit'` or
