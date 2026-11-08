@@ -135,8 +135,8 @@ fn target_changes_compare_contents() {
     fs::create_dir_all(work.join(".husky").join("_")).expect("husky");
     fs::write(git.join("config"), "[core]\n\thooksPath = .husky/_\n").expect("config");
     fs::write(work.join(".husky/_/pre-commit"), "stub").expect("stub");
-    let repos = [(git.clone(), Some(work.clone()))];
-    let roots = [base.clone()];
+    let repos = [(git, Some(work.clone()))];
+    let roots = [base];
     let before = target_states(&repos, &roots);
     fs::write(work.join(".husky/_/pre-commit"), "stub").expect("same stub");
     fs::write(work.join(".husky/README.md"), "notes").expect("not a hook");
