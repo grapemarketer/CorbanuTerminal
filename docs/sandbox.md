@@ -118,8 +118,8 @@ denied" (Windows error 5). These fail there:
 - Node.js starting a child process with piped input or output (`execSync`,
   `spawnSync`): `EPERM`. A child started with `stdio: 'inherit'` or
   `'ignore'` works.
-- Git Bash (`bash.exe`) crashes on start with `couldn't create signal pipe,
-  Win32 error 5`.
+- Git Bash (`bash.exe`) crashes on start with
+  `couldn't create signal pipe, Win32 error 5`.
 - A local `git clone` (from a folder on your computer) fails with the same
   crash, from Git's own `sh.exe`.
 - Python `multiprocessing` (for example `multiprocessing.Pool`):
