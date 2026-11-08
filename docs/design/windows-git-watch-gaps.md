@@ -69,9 +69,10 @@ may come too late for editors; only protection (or git's own settings, gap
 2 C) closes that window. A short notice right after the command ends, as D6
 does on macOS/Linux, would shrink it.
 
-**Where.** Both the startup warning (`config/src/loader/mod.rs`) and the
-TUI prompt (`windows_sandbox_prompts.rs`) only show entries in the working
-folder or a folder above it. That fits `.codex`/`.agents`, which only load
+**Where.** The startup warning (`config/src/loader/mod.rs`) only shows
+entries from the project root down to the working folder, and the TUI
+prompt (`windows_sandbox_prompts.rs`) only entries in the working folder or
+a folder above it. That fits `.codex`/`.agents`, which only load
 from there, but not git: you may run git anywhere. Already today, a D332
 record for a `%TEMP%` root or an extra writable folder is never shown when
 you start in the project. Most new flags below (a nested `sub\.git`, a bare
@@ -136,8 +137,8 @@ to `sub\.git\hooks` or edit its config. A submodule's real git folder
 lives in its parent's `.git\modules`: read-only when the parent is the
 protected top-level repository, writable when the parent is itself nested.
 Either way the checkout's `.git` file is writable and can be pointed at a
-planted git folder. Today nothing notices any of this, because only the top-level
-`.git` is recorded.
+planted git folder. Today nothing notices any of this, because only the
+top-level `.git` is recorded.
 
 **What to flag, and when.** When each command ends, using the walk D283
 already does for nested `.codex`/`.agents`:
@@ -183,8 +184,9 @@ measurements show it is cheap and the breakage is acceptable.
 from the working folder upwards, first `<folder>\.git` and then whether the
 folder itself is a git folder: a valid `HEAD` file, plus `objects` and
 `refs` folders either there or in the folder a `commondir` file names (git
-then reads `config` and `hooks` from that folder too). So a command can write `HEAD`, `objects\`, `refs\` and a `config`
-with `core.pager = <program>` straight into a writable root that has no
+then reads `config` and `hooks` from that folder too). So a command can
+write `HEAD`, `objects\`, `refs\` and a `config` with
+`core.pager = <program>` straight into a writable root that has no
 `.git`, such as a scratch folder or an extra writable folder. The next
 `git log` there, or in any subfolder without its own repository, runs the
 program. The same trick works one level down even where the root has a
@@ -199,7 +201,9 @@ setting exists for; its default still allows it.
 that already was one, a change to what rule 2 lists. Any `HEAD` or
 `commondir` file at a root, or in a folder the D283 walk lists, is a
 candidate, checked with git's full rule (including `commondir`), so a
-`HEAD` here with `objects` and `refs` elsewhere is still caught.
+`HEAD` here with `objects` and `refs` elsewhere is still caught. Like
+D283, the nested part does not cover roots that come only from
+`%TEMP%`/`%TMP%`.
 
 **Cost.** Near zero: a couple of file checks per root, and the nested
 check works on listings the walk already has, reading more only for a
@@ -213,13 +217,14 @@ candidate.
   repositories, with the gap 1 rules.**
 - **C. Docs: recommend setting `safe.bareRepository=explicit` in your
   global git config.** Git then refuses to use a bare repository it finds
-  by searching, and stops with an error. Use git 2.45 or later: before that, `explicit` also refuses
-  git run inside `.git`, `.git\worktrees\*` and `.git\modules\*`, which
-  breaks some hooks and submodule tools. It only covers tools that run the
-  git command line with that global config (not libgit2 or JGit based
-  tools, nor a git with another home folder, such as WSL's). It breaks
-  workflows that run git inside a bare repository without `--git-dir`,
-  including some bare-repository-plus-worktrees setups.
+  by searching, and stops with an error. Use git 2.45 or later: in 2.38
+  to 2.44, `explicit` also refuses git run inside `.git`,
+  `.git\worktrees\*` and `.git\modules\*`, which breaks some hooks and
+  submodule tools, and versions before 2.38 ignore it. It only covers tools
+  that run the git command line with that global config (not libgit2 or
+  JGit based tools, nor a git with another home folder, such as WSL's). It
+  breaks workflows that run git inside a bare repository without
+  `--git-dir`, including some bare-repository-plus-worktrees setups.
 
 **Recommendation: A now, C in `docs/sandbox.md` now, B together with gap 1's
 B.** C is the only option that also covers editors before the next start.
@@ -313,11 +318,12 @@ retarget a link without changing what rule 3 records.
 
 ## What fits D332, and what needs a new owner decision
 
-D332 (accepted 11-07 17:45Z; management handoff, section 9) is "flag a `.git` that appears or changes
-during a session", shipped for the top-level `.git` as "new or replaced",
-with links always counting. Read conservatively, only the first two rows
-fit it. Everything else is new behaviour, and anything that removes a
-shipped warning or moves the sandbox boundary also needs security sign-off.
+D332 (accepted 11-07 17:45Z; management handoff, section 9) is "flag a
+`.git` that appears or changes during a session", shipped for the
+top-level `.git` as "new or replaced", with links always counting. Read
+conservatively, only the first two rows fit it. Everything else is new
+behaviour, and anything that removes a shipped warning or moves the
+sandbox boundary also needs security sign-off.
 
 | Item                                                                                                                                      | Stricter only?                                 | Status                                                                                                                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
