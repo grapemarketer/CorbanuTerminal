@@ -76,6 +76,25 @@ asks in the TUI whether you have checked it. Commands can still create a
 link) is flagged after every command. Only that top-level `.git` is checked,
 not `.git` folders deeper inside.
 
+**Bare repositories a command plants.** Git also uses a folder that holds
+`HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
+its config and hooks. A sandboxed command can make one in any folder it may
+write to, and git run there or in a folder below it later runs whatever
+that config names. Corbanu Terminal doesn't check for these (#1775), on
+Windows or elsewhere. We recommend making git refuse a bare repository it
+finds by searching:
+
+```shell
+git config --global safe.bareRepository explicit
+```
+
+Use git 2.45 or later: 2.38 to 2.44 also refuse git run inside `.git`,
+which breaks some hooks and submodule tools, and versions before 2.38 ignore
+the setting. It covers the git command line
+with your global config, not tools built on libgit2 or JGit, nor a git with
+another home folder (such as WSL's). Where you do work in a bare repository,
+name it with `--git-dir` or `GIT_DIR`.
+
 **Read-only paths that don't exist yet.** If your permission profile marks a
 path inside a writable folder read-only and that path doesn't exist when a
 sandboxed command starts, Corbanu Terminal creates it as an empty folder and
@@ -89,13 +108,14 @@ sandboxes do this. It has two side effects:
   create the file.
 - A read-only path inside `.git`, such as `.git\hooks`, in a folder that
   isn't a git repository yet creates a `.git` there that holds only an empty
-  `hooks` folder. The non-admin sandbox protects that `.git` at once. The
-  default sandbox protects only `hooks` for the command that made it, and the
-  whole `.git` from the next command on (#1758). Git doesn't treat such a
-  `.git` as a repository, so git commands in that folder report "not a git
-  repository" or use a repository in a folder above it. Run `git init` there
-  yourself, or remove the entry and then delete that `.git` folder while no
-  session is running.
+  `hooks` folder. When that `.git` is at the top of a folder commands may
+  write to (other than `%TEMP%`), both sandboxes protect the whole of it at
+  once, starting with the command that made it (#1758); a deeper one, such
+  as `sub\.git` for `sub\.git\hooks`, has only `hooks` protected. Git
+  doesn't treat such a `.git` as a repository, so git commands in that
+  folder report "not a git repository" or use a repository in a folder
+  above it. Run `git init` there yourself, or remove the entry and then
+  delete that `.git` folder while no session is running.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some

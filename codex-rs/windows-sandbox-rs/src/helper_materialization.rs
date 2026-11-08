@@ -66,6 +66,7 @@ pub(crate) fn resolve_helper_for_launch(
 ) -> PathBuf {
     match copy_helper_if_needed(kind, codex_home, log_dir) {
         Ok(path) => {
+            keep_helper_bin_dir_medium(codex_home, log_dir);
             log_note(
                 &format!(
                     "helper launch resolution: using copied {} path {}",
@@ -86,9 +87,85 @@ pub(crate) fn resolve_helper_for_launch(
                 ),
                 log_dir,
             );
+            keep_fallback_helper_medium(&fallback, log_dir);
             fallback
         }
     }
+}
+
+/// #1819: an executable starts at the lower of its token's and its file's
+/// integrity. While a legacy session uses a writable root holding this codex
+/// home (`%TEMP%`, or a workspace above it), the root's inheritable Low label
+/// reaches the copied helpers, so the runner started at Low and could not
+/// open the parent's pipe for writing. An explicit Medium label (what an
+/// unlabelled file has anyway) keeps the root's Low label off them, and Low
+/// programs out of them. A link is skipped: its label would land on the link
+/// itself, not on the folder it points at.
+fn keep_helper_bin_dir_medium(codex_home: &Path, log_dir: Option<&Path>) {
+    let dir = helper_bin_dir(codex_home);
+    if crate::workspace_acl::is_link(&dir) {
+        log_note(
+            &format!(
+                "helper copy: {} is a link (or can't be inspected); not labelling it Medium, so a legacy session's Low label may reach the runner (#1819)",
+                dir.display()
+            ),
+            log_dir,
+        );
+        return;
+    }
+    // SAFETY: Win32 security calls on a folder of this codex home.
+    if let Err(err) = unsafe { crate::integrity::label_protected_path_medium(&dir) } {
+        log_note(
+            &format!(
+                "helper copy: could not label {} Medium; a legacy session's Low label may reach it: {err:#}",
+                dir.display()
+            ),
+            log_dir,
+        );
+    }
+}
+
+/// #1819, for the runner next to `codex.exe` used when copying failed (say a
+/// dev build inside a legacy workspace): if its label is Low, most likely
+/// inherited from a folder a legacy session made writable, it would start at
+/// Low and time out opening the parent's pipes. Only that file (not its
+/// folder) gets an explicit Medium label; a link is left alone.
+fn keep_fallback_helper_medium(fallback: &Path, log_dir: Option<&Path>) {
+    // A bare name is found on `PATH` at launch; only a file is labelled.
+    if !fallback.is_absolute() || !fallback.is_file() {
+        return;
+    }
+    let cause = "the likely cause is a Low label inherited from a folder a legacy session made writable (#1819)";
+    if crate::workspace_acl::is_link(fallback) {
+        log_note(
+            &format!(
+                "helper fallback: {} is a link; not checking its label. If the runner times out connecting its pipes, {cause}",
+                fallback.display()
+            ),
+            log_dir,
+        );
+        return;
+    }
+    // SAFETY: reads the label of the fallback runner file.
+    let note = match unsafe { crate::integrity::effective_label_is_low(fallback) } {
+        Ok(false) => return,
+        // SAFETY: labels only the fallback runner file, which is no link.
+        Ok(true) => match unsafe { crate::integrity::label_protected_path_medium(fallback) } {
+            Ok(()) => format!(
+                "helper fallback: {} was labelled Low; labelled it Medium so the runner can open its pipes ({cause})",
+                fallback.display()
+            ),
+            Err(err) => format!(
+                "helper fallback: {} is labelled Low and could not be labelled Medium ({err:#}); the runner will start at Low and time out connecting its pipes ({cause})",
+                fallback.display()
+            ),
+        },
+        Err(err) => format!(
+            "helper fallback: could not read the label of {} ({err:#}); if the runner times out connecting its pipes, {cause}",
+            fallback.display()
+        ),
+    };
+    log_note(&note, log_dir);
 }
 
 pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
@@ -371,6 +448,8 @@ mod tests {
     use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
+    use super::keep_fallback_helper_medium;
+    use super::keep_helper_bin_dir_medium;
     use super::materialized_file_name;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -562,5 +641,116 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    fn read_logs(dir: &Path) -> String {
+        fs::read_dir(dir)
+            .expect("read log dir")
+            .map(|entry| fs::read_to_string(entry.expect("log entry").path()).expect("read log"))
+            .collect()
+    }
+
+    /// #1819 follow-up: a `.sandbox-bin` that is a junction is not labelled
+    /// (Windows would label the link itself, not its target, so the fix
+    /// would silently not apply); the log says so.
+    #[test]
+    fn sec_win_1819_helper_bin_dir_link_is_not_labelled() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("home");
+        let target = tmp.path().join("elsewhere");
+        let logs = tmp.path().join("logs");
+        fs::create_dir_all(&codex_home).expect("home");
+        fs::create_dir_all(&target).expect("target");
+        fs::create_dir_all(&logs).expect("logs");
+        let link = helper_bin_dir(&codex_home);
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .expect("mklink");
+        assert!(output.status.success(), "mklink: {output:?}");
+        // SAFETY: reads labels of folders this test made.
+        let (before, link_before) = unsafe {
+            (
+                crate::integrity::read_explicit_labels(&target).expect("labels"),
+                crate::integrity::read_own_explicit_labels(&link).expect("link labels"),
+            )
+        };
+
+        keep_helper_bin_dir_medium(&codex_home, Some(&logs));
+
+        let log = read_logs(&logs);
+        assert!(
+            log.contains("is a link (or can't be inspected); not labelling it Medium"),
+            "{log}"
+        );
+        assert!(!log.contains("could not label"), "{log}");
+        assert!(crate::workspace_acl::is_link(&link));
+        // SAFETY: reads labels of folders this test made. Before the fix,
+        // Windows' walk wrote the Medium label on the junction itself.
+        unsafe {
+            assert_eq!(
+                crate::integrity::read_explicit_labels(&target).expect("labels"),
+                before
+            );
+            assert_eq!(
+                crate::integrity::read_own_explicit_labels(&link).expect("link labels"),
+                link_before
+            );
+        }
+    }
+
+    /// #1819 follow-up: the runner next to `codex.exe`, used when copying it
+    /// failed, gets a Medium label when it inherited a legacy root's Low
+    /// label, and the log names that cause; one that isn't Low is left alone.
+    #[test]
+    fn sec_win_1819_low_fallback_runner_is_labelled_medium() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("legacy-root");
+        let logs = tmp.path().join("logs");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&logs).expect("logs");
+        // SAFETY: labels a folder this test made, as a legacy session does.
+        unsafe { crate::integrity::label_writable_root_low(&root) }.expect("label root Low");
+        let runner = root.join("codex-command-runner.exe");
+        fs::write(&runner, b"runner").expect("write runner");
+        let plain = tmp.path().join("plain-runner.exe");
+        fs::write(&plain, b"runner").expect("write plain runner");
+        // SAFETY: reads labels of files this test made.
+        unsafe {
+            assert!(crate::integrity::effective_label_is_low(&runner).expect("label"));
+            assert!(!crate::integrity::effective_label_is_low(&plain).expect("label"));
+        }
+        // SAFETY: reads the label of a file this test made.
+        let plain_before =
+            unsafe { crate::integrity::read_explicit_labels(&plain) }.expect("labels");
+
+        keep_fallback_helper_medium(&plain, Some(&logs));
+        keep_fallback_helper_medium(&runner, Some(&logs));
+
+        let log = read_logs(&logs);
+        assert!(
+            log.contains("was labelled Low; labelled it Medium")
+                && log.contains("inherited from a folder a legacy session made writable"),
+            "{log}"
+        );
+        assert!(!log.contains("plain-runner"), "{log}");
+        // SAFETY: reads labels of files this test made.
+        unsafe {
+            assert!(!crate::integrity::effective_label_is_low(&runner).expect("label"));
+            assert_eq!(
+                crate::integrity::read_explicit_labels(&runner).expect("labels"),
+                vec![crate::integrity::LabelAce {
+                    flags: 0,
+                    mask: 1,
+                    sid: "S-1-16-8192".to_string(),
+                }]
+            );
+            assert_eq!(
+                crate::integrity::read_explicit_labels(&plain).expect("labels"),
+                plain_before
+            );
+        }
     }
 }

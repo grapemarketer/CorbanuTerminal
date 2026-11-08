@@ -21,6 +21,9 @@ class PrChangedPathsTest(unittest.TestCase):
         "app_server_schema",
         "codex",
         "windows_native_tests",
+        "windows_native_core",
+        "windows_native_sandbox",
+        "windows_native_other",
         "workflows",
     )
     NAMES = (
@@ -118,6 +121,37 @@ class PrChangedPathsTest(unittest.TestCase):
                 "codex",
                 "argument_comment_lint",
                 "windows_native_tests",
+                "windows_native_core",
+            ),
+            "codex-rs/windows-sandbox-rs/src": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_sandbox",
+            ),
+            "codex-rs/network-proxy/tests": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_sandbox",
+            ),
+            "codex-rs/process-hardening/src": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_sandbox",
+            ),
+            "codex-rs/sandboxing/src": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_sandbox",
+            ),
+            "codex-rs/exec-server/tests": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_other",
             ),
             "codex-rs/protocol/src": (
                 "codex",
@@ -153,7 +187,10 @@ class PrChangedPathsTest(unittest.TestCase):
     def test_deleted_and_renamed_paths_keep_the_old_area(self) -> None:
         base = self.commit(['codex-rs/core/src/old"name.rs'])
         expected = self.expected(
-            "codex", "argument_comment_lint", "windows_native_tests"
+            "codex",
+            "argument_comment_lint",
+            "windows_native_tests",
+            "windows_native_core",
         )
         self.assertEqual(self.detect([], base=base), expected)
         self.assertEqual(self.detect(["docs/renamed.rs"], base=base), expected)
@@ -168,6 +205,52 @@ class PrChangedPathsTest(unittest.TestCase):
                 "workflows",
             ),
         )
+
+    def test_windows_native_workflow_change_runs_every_group(self) -> None:
+        self.assertEqual(
+            self.detect([".github/workflows/rust-ci-windows-native-tests.yml"]),
+            self.expected(
+                "workflows",
+                "windows_native_tests",
+                "windows_native_core",
+                "windows_native_sandbox",
+                "windows_native_other",
+            ),
+        )
+
+    def targets(self, core: bool, sandbox: bool, other: bool) -> str:
+        workflow = (REPO_ROOT / ".github/workflows/rust-ci.yml").read_text()
+        match = re.search(
+            r'(?ms)^          windows_native_targets=""\n.*?^          windows_native_targets="\$\{windows_native_targets# \}"$',
+            workflow,
+        )
+        self.assertIsNotNone(match)
+        program = "set -euo pipefail\n"
+        program += f"windows_native_core={str(core).lower()}\n"
+        program += f"windows_native_sandbox={str(sandbox).lower()}\n"
+        program += f"windows_native_other={str(other).lower()}\n"
+        program += textwrap.dedent(match.group(0))
+        program += '\nprintf "%s" "$windows_native_targets"'
+        return subprocess.run(
+            ["bash", "-c", program],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    def test_windows_native_targets_follow_the_changed_groups(self) -> None:
+        core = "//codex-rs/tui/... //codex-rs/core/... //codex-rs/state/... //codex-rs/login/..."
+        sandbox = (
+            "//codex-rs/windows-sandbox-rs/... //codex-rs/network-proxy/... "
+            "//codex-rs/process-hardening/... //codex-rs/sandboxing/..."
+        )
+        other = "//codex-rs/exec-server/..."
+        self.assertEqual(self.targets(False, False, False), "")
+        self.assertEqual(self.targets(True, False, False), core)
+        self.assertEqual(self.targets(False, True, False), sandbox)
+        self.assertEqual(self.targets(False, False, True), other)
+        self.assertEqual(self.targets(True, True, True), f"{core} {sandbox} {other}")
 
 
 if __name__ == "__main__":

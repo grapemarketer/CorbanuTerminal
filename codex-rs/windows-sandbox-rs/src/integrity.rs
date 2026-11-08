@@ -211,21 +211,57 @@ pub(crate) unsafe fn label_private_dir_medium(path: &Path) -> Result<()> {
 /// Calls Win32 security APIs on `path`.
 pub(crate) unsafe fn read_explicit_labels(path: &Path) -> Result<Vec<LabelAce>> {
     let mut out = Vec::new();
-    with_label_sacl(path, |p_sacl| {
-        for_each_label_ace(p_sacl, |ace_flags, mask, sid| {
-            if ace_flags & INHERITED_ACE == 0 {
-                let len = GetLengthSid(sid) as usize;
-                let bytes = std::slice::from_raw_parts(sid as *const u8, len);
-                let sid = string_from_sid_bytes(bytes).map_err(|err| anyhow!(err))?;
-                out.push(LabelAce {
-                    flags: ace_flags as u8,
-                    mask,
-                    sid,
-                });
-            }
-            Ok(true)
-        })
-    })?;
+    with_label_sacl(path, |p_sacl| explicit_labels_in(p_sacl, &mut out))?;
+    Ok(out)
+}
+
+unsafe fn explicit_labels_in(p_sacl: *mut ACL, out: &mut Vec<LabelAce>) -> Result<()> {
+    for_each_label_ace(p_sacl, |ace_flags, mask, sid| {
+        if ace_flags & INHERITED_ACE == 0 {
+            let len = GetLengthSid(sid) as usize;
+            let bytes = std::slice::from_raw_parts(sid as *const u8, len);
+            let sid = string_from_sid_bytes(bytes).map_err(|err| anyhow!(err))?;
+            out.push(LabelAce {
+                flags: ace_flags as u8,
+                mask,
+                sid,
+            });
+        }
+        Ok(true)
+    })
+}
+
+/// The explicit label entries of `path` itself: a link is not followed.
+///
+/// # Safety
+/// Calls Win32 security APIs on `path`.
+#[cfg(test)]
+pub(crate) unsafe fn read_own_explicit_labels(path: &Path) -> Result<Vec<LabelAce>> {
+    let handle = crate::acl::walk::Handle::open(path, READ_CONTROL)?;
+    let mut p_sd: *mut c_void = std::ptr::null_mut();
+    let mut p_sacl: *mut ACL = std::ptr::null_mut();
+    let code = windows_sys::Win32::Security::Authorization::GetSecurityInfo(
+        handle.0,
+        SE_FILE_OBJECT,
+        LABEL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut p_sacl,
+        &mut p_sd,
+    );
+    if code != ERROR_SUCCESS {
+        return Err(anyhow!(
+            "GetSecurityInfo(label) failed for {}: {code}",
+            path.display()
+        ));
+    }
+    let mut out = Vec::new();
+    let result = explicit_labels_in(p_sacl, &mut out);
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    result?;
     Ok(out)
 }
 
@@ -324,9 +360,15 @@ unsafe fn for_each_label_ace(
     Ok(())
 }
 
-/// Gives a protected path inside a writable root (and everything below it)
-/// an explicit Medium label, so it does not inherit the root's Low label: no
-/// other Low-integrity program may write `.git`, `.codex` or `.agents` there.
+/// Gives `path` (and everything below it) an explicit Medium label, so it
+/// does not inherit a legacy writable root's Low label, and no Low-integrity
+/// program may write it. Used for the protected `.git`, `.codex` and
+/// `.agents` inside a writable root, and (#1819) for the elevated runner's
+/// `.sandbox-bin` folder or, when copying it there failed, the runner file
+/// itself: a program starts at no higher integrity than its file, so a Low
+/// runner can't open the parent's pipes. Medium is what an unlabelled file
+/// has anyway. Callers skip links: a link's label lands on the link, not on
+/// what it points at.
 ///
 /// # Safety
 /// Calls Win32 security APIs on `path`.
