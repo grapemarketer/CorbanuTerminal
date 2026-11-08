@@ -978,3 +978,72 @@ fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only()
         sandbox_log(codex_home.path())
     );
 }
+
+/// #1819: an elevated command starts while a legacy command runs. The legacy
+/// session labels its writable roots (here `%TEMP%`, which holds this codex
+/// home) Low; a runner copied below them inherited that label and so started
+/// at Low integrity, where it may not open the parent's pipe for writing.
+#[test]
+fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
+    let Some(codex_home) = elevated_home("sec-1819") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let legacy_home = sandbox_home("sec-1819-legacy");
+    let holder_root = user_owned_test_root();
+    let root = user_owned_test_root();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    let argv = || {
+        vec![
+            cmd.clone(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo ok".to_string(),
+        ]
+    };
+    let runtime = current_thread_runtime();
+    // Control: the backend works with no legacy command running.
+    let alone = runtime.block_on(run_elevated(
+        root.path(),
+        codex_home.path(),
+        argv(),
+        &[],
+        /*tty*/ false,
+    ));
+    record_setup(codex_home.path());
+    let bin_dir = crate::sandbox_bin_dir(codex_home.path());
+    let (home_low, during, bin_low) = runtime.block_on(with_holder(
+        holder_root.path(),
+        legacy_home.path(),
+        async |_holder_pid| {
+            // SAFETY: reads labels only.
+            let home_low = unsafe { crate::integrity::effective_label_is_low(codex_home.path()) };
+            let during = run_elevated(
+                root.path(),
+                codex_home.path(),
+                argv(),
+                &[],
+                /*tty*/ false,
+            )
+            .await;
+            let bin_low = unsafe { crate::integrity::effective_label_is_low(&bin_dir) };
+            (home_low.ok(), during, bin_low.ok())
+        },
+    ));
+    println!(
+        "\nsec-win-1819: alone={alone:?} during legacy={during:?} home Low={home_low:?} .sandbox-bin Low={bin_low:?}"
+    );
+    // Otherwise the legacy session never covered this home and the test
+    // proves nothing.
+    assert_eq!(
+        home_low,
+        Some(true),
+        "the legacy session did not label this codex home Low"
+    );
+    pretty_assertions::assert_eq!(
+        (alone.1, alone.0.trim(), during.1, during.0.trim(), bin_low),
+        (0, "ok", 0, "ok", Some(false)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
