@@ -23,9 +23,10 @@ GUARD = "legacy_process_test_guard"
 
 FN_RE = re.compile(
     r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
-    r"(?:extern\s+\"\"\s+)?fn\s+([A-Za-z_]\w*)",
+    r"(?:extern\s+)?fn\s+([A-Za-z_]\w*)",
     re.MULTILINE,
 )
+IMPL_RE = re.compile(r"^[ \t]*(?:unsafe\s+)?impl\b", re.MULTILINE)
 TEST_ATTR_RE = re.compile(r"#\[\s*(?:\w+::)*test\s*[\](]")
 RAW_STRING_RE = re.compile(r'(?:b|c)?r(#*)"')
 CHAR_RE = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^\\'\n])'")
@@ -46,9 +47,10 @@ def blank(text: str) -> str:
     return re.sub(r"[^\n]", " ", text)
 
 
-def code_only(source: str) -> str:
+def code_only(source: str) -> tuple[str, list[str]]:
     """Blanks comments, string and char literals and `use` items, keeping
-    every other character (and so every line and column) in place."""
+    every other character (and so every line and column) in place. Also
+    returns the `use` items."""
     out = []
     i = 0
     n = len(source)
@@ -84,7 +86,19 @@ def code_only(source: str) -> str:
             continue
         out.append(blank(source[i:j]))
         i = j
-    return USE_RE.sub(lambda m: blank(m.group(0)), "".join(out))
+    code = "".join(out)
+    uses = [match.group(0) for match in USE_RE.finditer(code)]
+    return USE_RE.sub(lambda match: blank(match.group(0)), code), uses
+
+
+def block_end(code: str, open_brace: int) -> int:
+    depth, j = 0, open_brace
+    while j < len(code):
+        depth += {"{": 1, "}": -1}.get(code[j], 0)
+        if depth == 0:
+            break
+        j += 1
+    return j
 
 
 def fn_spans(code: str) -> list[tuple[str, int, int, int]]:
@@ -94,13 +108,18 @@ def fn_spans(code: str) -> list[tuple[str, int, int, int]]:
         body = re.compile(r"[{;]").search(code, match.end())
         if body is None or code[body.start()] == ";":
             continue
-        depth, j = 0, body.start()
-        while j < len(code):
-            depth += {"{": 1, "}": -1}.get(code[j], 0)
-            if depth == 0:
-                break
-            j += 1
-        spans.append((match.group(1), match.start(), j, body.start()))
+        spans.append((match.group(1), match.start(), block_end(code, body.start()), body.start()))
+    return spans
+
+
+def trait_impl_spans(code: str) -> list[tuple[int, int]]:
+    """Bodies of `impl Trait for Type` blocks, whose methods (`drop`,
+    `deref`, ...) can run without a call the scan could see."""
+    spans = []
+    for match in IMPL_RE.finditer(code):
+        body = code.find("{", match.end())
+        if body >= 0 and re.search(r"\bfor\b", code[match.end() : body]):
+            spans.append((body, block_end(code, body)))
     return spans
 
 
@@ -116,8 +135,11 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
     its file. Helpers are followed by name. Raises ScanError for a use it
     cannot follow: a mention that is not a call, a call outside a function,
     or a helper that nothing calls."""
-    files = {path: code_only(text) for path, text in sources.items()}
+    scanned = {path: code_only(text) for path, text in sources.items()}
+    files = {path: code for path, (code, _) in scanned.items()}
+    uses = [item for _, items in scanned.values() for item in items]
     spans = {path: fn_spans(code) for path, code in files.items()}
+    trait_impls = {path: trait_impl_spans(code) for path, code in files.items()}
     tests: dict[str, str] = {}
     seen: set[str] = set()
     pending = [GUARD]
@@ -127,6 +149,10 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
             continue
         seen.add(callee)
         mention = re.compile(rf"\b{re.escape(callee)}\b")
+        alias = re.compile(rf"\b{re.escape(callee)}\s+as\b")
+        for item in uses:
+            if alias.search(item):
+                raise ScanError(f"{callee} is imported under another name: {item!r}")
         callers = 0
         for path, code in files.items():
             for match in mention.finditer(code):
@@ -144,6 +170,8 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
                 if not inside:
                     raise ScanError(f"{where} is called outside a function body")
                 name, fn_start, _, _ = max(inside, key=lambda span: span[1])
+                if any(start < fn_start < end for start, end in trait_impls[path]):
+                    raise ScanError(f"{where} is called in a trait method, {name}")
                 callers += 1
                 if is_test_fn(code, fn_start):
                     tests[name] = path
@@ -241,6 +269,7 @@ class WindowsSandboxNextestGroupTest(unittest.TestCase):
     def test_every_guard_user_is_in_the_legacy_sessions_group(self) -> None:
         tests = guard_users(crate_sources())
         config = tomllib.loads(NEXTEST_TOML.read_text(encoding="utf-8"))
+        self.assertEqual(config["test-groups"][GROUP]["max-threads"], 1)
         self.assertEqual(other_groups_claiming_the_crate(config), [])
         terms = group_terms(config)
         self.assertEqual(
@@ -307,10 +336,19 @@ fn through_a_nested_helper() {
     fn inner() { let _guard = legacy_process_test_guard(); }
     inner();
 }
+
+extern "C" fn callback() {
+    let _guard = legacy_process_test_guard();
+}
+
+#[test]
+fn through_an_extern_helper() {
+    callback();
+}
 """
         self.assertEqual(
             sorted(guard_users({"x.rs": source})),
-            ["split_attribute", "through_a_nested_helper"],
+            ["split_attribute", "through_a_nested_helper", "through_an_extern_helper"],
         )
 
     def test_scan_fails_on_uses_it_cannot_follow(self) -> None:
@@ -319,6 +357,11 @@ fn through_a_nested_helper() {
             "binding": "#[test]\nfn t() { let lock = legacy_process_test_guard; let _g = lock(); }",
             "uncalled helper": "fn h() { let _g = legacy_process_test_guard(); }",
             "macro": "macro_rules! m { () => { legacy_process_test_guard() }; }",
+            "renamed guard": "use super::legacy_process_test_guard as lock;\n#[test]\nfn t() { let _g = lock(); }",
+            "renamed helper": "fn h() { let _g = legacy_process_test_guard(); }\n#[test]\nfn a() { h(); }\n"
+            "use self::{h as other};\n#[test]\nfn b() { other(); }",
+            "trait method": "struct S;\nimpl Drop for S {\n    fn drop(&mut self) {\n"
+            "        let _g = legacy_process_test_guard();\n    }\n}\n#[test]\nfn t() { drop(S); }",
         }.items():
             with self.subTest(case=case), self.assertRaises(ScanError):
                 guard_users({"x.rs": source})
