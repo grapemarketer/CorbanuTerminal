@@ -240,7 +240,7 @@ jobs:
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bin codex-windows-sandbox-setup -- sandbox_users::tests:: --nocapture 2>&1 | tee pw-1776.log
           grep -q 'test result: ok. 3 passed' pw-1776.log
-      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345)
+      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819)
         if: ${{ !cancelled() }}
         shell: bash
         # Elevated: the #341/#345 tests must not skip. #345 runs a command in
@@ -434,7 +434,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 49
+            Assert-Tests $sandbox 'sec_win_' 50
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
@@ -484,6 +484,20 @@ jobs:
             $out
             if ($code -ne 0) { throw "#1780 elevated failed in a normal session" }
             if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1780 elevated did not run in a normal session" }
+            # #1819: an elevated command starts while a legacy command runs
+            # (the legacy session labels this step's TEMP, which holds the
+            # elevated codex home, Low).
+            $t1819 = 'unified_exec::tests::command_identity::elevated::sec_win_1819_elevated_command_starts_while_a_legacy_command_runs'
+            Assert-Tests $sandbox $t1819 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for #1819 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $t1819, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "#1819 failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1819 did not run in a normal session" }
             # #1770: a command of each backend may not write into a fresh
             # folder in the runner's D:\tmp (not this step's TEMP) that any
             # signed-in account may write to; only its restricted token keeps
