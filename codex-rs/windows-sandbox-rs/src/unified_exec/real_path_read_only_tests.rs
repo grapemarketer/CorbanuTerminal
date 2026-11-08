@@ -24,27 +24,35 @@ pub(super) fn make_link(flag: &str, link: &Path, target: &Path) -> bool {
 /// The issue's profile: the root readable, the project roots writable,
 /// `docs` read-only.
 fn profile_with_read_only(docs: &Path) -> PermissionProfile {
+    profile_with_read_only_paths(&[docs.to_path_buf()])
+}
+
+/// As [`profile_with_read_only`], with each of `paths` read-only, in order.
+fn profile_with_read_only_paths(paths: &[PathBuf]) -> PermissionProfile {
+    let mut entries = vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            FileSystemAccessMode::Write,
+        ),
+    ];
+    entries.extend(paths.iter().map(|path| {
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(path).expect("absolute"),
+            },
+            FileSystemAccessMode::Read,
+        )
+    }));
     PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                FileSystemAccessMode::Read,
-            ),
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-                },
-                FileSystemAccessMode::Write,
-            ),
-            FileSystemSandboxEntry::new(
-                FileSystemPath::Path {
-                    path: AbsolutePathBuf::from_absolute_path(docs).expect("absolute"),
-                },
-                FileSystemAccessMode::Read,
-            ),
-        ]),
+        &FileSystemSandboxPolicy::restricted(entries),
         NetworkSandboxPolicy::Restricted,
     )
 }
@@ -126,11 +134,20 @@ fn sec_win_1780_legacy_read_only_path_stays_read_only_through_links() {
 /// As with matching spellings (#1542), a junction inside the writable root
 /// on the way to the read-only path stops the command (it could replace the
 /// junction and recreate the path behind it), whichever of the two is spelled
-/// through the junction to the working folder.
+/// through the junction to the working folder, and also when another
+/// read-only path, listed before or after it, names the same folder directly.
 #[test]
 fn sec_win_1780_legacy_link_inside_the_root_above_a_read_only_path_stops_the_command() {
     let _guard = legacy_process_test_guard();
-    for (cwd_via_link, docs_via_link) in [(true, false), (false, true)] {
+    // (cwd via the link, read-only paths: their base via the link, and the
+    // folders below it)
+    let cases: [(bool, &[(bool, &str)]); 4] = [
+        (true, &[(false, "hop")]),
+        (false, &[(true, "hop")]),
+        (true, &[(false, "target"), (false, "hop")]),
+        (true, &[(false, "hop"), (false, "target")]),
+    ];
+    for (cwd_via_link, read_only) in cases {
         let test_root = user_owned_test_root();
         let base = dunce::canonicalize(test_root.path()).expect("canonical test root");
         let real = base.join("real");
@@ -142,19 +159,24 @@ fn sec_win_1780_legacy_link_inside_the_root_above_a_read_only_path_stops_the_com
             "mklink /J hop"
         );
         let cwd = if cwd_via_link { &linked } else { &real };
-        let docs = (if docs_via_link { &linked } else { &real })
-            .join("hop")
-            .join("docs");
+        let paths: Vec<PathBuf> = read_only
+            .iter()
+            .map(|(via_link, folder)| {
+                (if *via_link { &linked } else { &real })
+                    .join(folder)
+                    .join("docs")
+            })
+            .collect();
         let probe = real.join("target").join("docs").join("probe.txt");
         let started = super::carve_out_link::run_script(
-            &profile_with_read_only(&docs),
+            &profile_with_read_only_paths(&paths),
             cwd,
             &[],
             HashMap::new(),
             &format!("echo x> \"{}\"\r\n", probe.display()),
         );
         println!(
-            "sec-win-1780 legacy: link inside the root, cwd via link={cwd_via_link}: {started:?}"
+            "sec-win-1780 legacy: link inside the root, cwd via link={cwd_via_link}, read-only {paths:?}: {started:?}"
         );
         assert_eq!(
             (
@@ -165,7 +187,7 @@ fn sec_win_1780_legacy_link_inside_the_root_above_a_read_only_path_stops_the_com
                 probe.exists(),
             ),
             (true, false),
-            "cwd via link={cwd_via_link}: {started:?}"
+            "cwd via link={cwd_via_link}, read-only {paths:?}: {started:?}"
         );
         let _ = fs::remove_dir(real.join("hop"));
         let _ = fs::remove_dir(&linked);

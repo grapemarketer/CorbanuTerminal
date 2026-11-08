@@ -265,29 +265,27 @@ fn strictly_inside(path: &Path, root: &Path) -> bool {
 }
 
 /// #1780: the explicit read-only (and deny) `paths` that lie below writable
-/// `root` only with links followed, which `listed` (the root's read-only
-/// paths, matched by spelling) misses: a root reached through a junction
-/// with a path given by its real location, or the reverse. The root's write
-/// access lands on its real location, so these must be denied there too.
-/// They are kept as configured, as `listed` keeps its paths: the backends
-/// resolve them where it matters, and D293 (#1542, #1667) must still see a
-/// replaceable link on the way. Paths `listed` already covers (by real path)
-/// are left out.
+/// `root` only with links followed, not as spelled, which `listed` (the
+/// root's read-only paths, matched by spelling) misses: a root reached
+/// through a junction with a path given by its real location, or the
+/// reverse. The root's write access lands on its real location, so these
+/// must be denied there too. Each is kept as configured, as `listed` keeps
+/// its paths, even where another reaches the same folder: the backends
+/// resolve them where it matters, and D293 (#1542, #1667) must still see
+/// every replaceable link on the way. Paths spelled inside `root` are
+/// `listed`'s own and left to it.
 fn inside_only_by_real_path(paths: &[PathBuf], root: &Path, listed: &[PathBuf]) -> Vec<PathBuf> {
     let Ok(real_root) = dunce::canonicalize(root) else {
         return Vec::new();
     };
-    let mut covered: Vec<PathBuf> = listed
-        .iter()
-        .filter_map(|path| canonicalize_allowing_missing(path))
-        .collect();
-    let mut missed = Vec::new();
+    let mut missed: Vec<PathBuf> = Vec::new();
     for path in paths {
-        let Some(real) = canonicalize_allowing_missing(path) else {
+        if path.starts_with(root) || listed.contains(path) || missed.contains(path) {
             continue;
-        };
-        if real != real_root && real.starts_with(&real_root) && !covered.contains(&real) {
-            covered.push(real);
+        }
+        if canonicalize_allowing_missing(path)
+            .is_some_and(|real| real != real_root && real.starts_with(&real_root))
+        {
             missed.push(path.clone());
         }
     }
