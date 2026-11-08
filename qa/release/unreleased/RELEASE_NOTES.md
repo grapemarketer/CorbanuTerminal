@@ -87,6 +87,9 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   a little more slowly (so the command list opened before Enter), it ran at
   once and was refused with "Model selection is disabled until startup
   completes."
+- **`/quit` and `/exit` don't wait** (D390, #1833). Typed during startup,
+  they exit at once instead of joining the queue, so a startup that hangs can
+  still be left without Ctrl+C. Every other command still waits.
 
 ## `/cost`
 
@@ -150,6 +153,25 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   ahead on every route that offers them, and `resume_agent_v1` asked as an
   unclassified tool.
 - **The same rules apply under Aggressive** (D335).
+
+## Agent tools act only on the caller's own agents
+
+- **A sub-agent's `list_agents` shows only itself and its own agents**
+  (D320, #1756, #1767, thanks to @citadelculture). With MultiAgentV2,
+  `list_agents` used to list every live agent, including the caller's parent
+  and siblings and other root threads' agents; it now lists the caller and
+  the agents it started (and theirs), loaded or not. This is the intended
+  tightening of D320. `close_agent` and `send_input` (and their `_v1`
+  aliases) likewise refuse an agent the caller didn't start, directly or
+  through its own agents.
+- **`wait_agent` waits only for the caller's own agents** (#1744, #1701,
+  thanks to @citadelculture). `wait_agent` (and `wait_agent_v1`) could wait
+  for any loaded agent, including another root thread's, and return its final
+  status. It now refuses an agent the caller didn't start, directly or
+  through its own agents, with "wait_agent can only wait for agents spawned
+  by this agent or by its sub-agents". With MultiAgentV2, `wait_agent` used
+  to report every live agent with its last result; it now reports only the
+  caller's agents.
 
 ## `/security` wording
 
@@ -532,6 +554,51 @@ asking and now ask first:
   expansion produces (`git clone r d {-q,--upload-pack=./x}`; #1644, #1636).
 - zsh's `>!`, `>>!`, `&>!` and `>&!` clobber redirections, read as writes
   (`echo x >! ~/.zshrc`; #1640, #1607).
+- Commands in `eval`, `trap` and `alias` text, which now get every check
+  the same command gets on a line of its own (D341, #1698, #1685): writes
+  to shell start-up files (`trap 'tee -a ~/.zshrc' EXIT`,
+  `eval 'tee -a ~/.zshrc'`), output options (`curl -o`, `time -o`), sending
+  a file (`curl -d @f`), recursive reads of your home, scripts it runs
+  (`./x.sh`, `source`, `python3 x.py`), a wrapper's folder option
+  (`eval 'sudo -D sub ./run.sh'`), and, in an alias, git settings that run
+  code. Before, only some of these were checked there. A `cd` in such text
+  isn't followed: the folder it leaves counts as unknown. Ordinary text such
+  as `trap 'rm -f x' EXIT` or `alias ll='ls -l'` stays quiet.
+- Later uses of variables set in such text
+  (`eval 'F=~/.zshrc'; tee -a "$F"`), settings there of variables that run
+  code (`eval 'export GIT_PAGER=sh'`), and code written into the shells'
+  tables of code run by name (zsh's `functions`, `commands` and alias
+  tables, bash's `BASH_ALIASES` and `BASH_CMDS`), which is now checked as a
+  line of its own (`functions[f]='tee -a ~/.zshrc'; f`; D341, #1698,
+  #1685, #1704). Ordinary settings such as `eval "x=1"` or
+  `aliases[ll]='ls -l'` stay quiet.
+- A word the check can't see into (`$o`, `$(cat f)`) where a command that
+  can write code into those tables still reads its options:
+  `o=$(cat f); zstyle $o :x y functions`, `zstyle -a $(cat f)`,
+  `zselect -t 0 -r 0 -A $n`, `zsystem flock -t 0 -f $n file` (#1704).
+  `print`, `printf` and `getopts` are now read this way too. So an
+  unquoted variable, `$(…)` or pattern where `print`, `printf`, `set`,
+  `stat`, `read`, `mapfile`, `vared` or `getopts` read their options or the
+  name they write can now ask (`print -r $(cat f)`,
+  `set ?A commands ls ./x`, `stat -f %m $(cat f)`, `read -d $(cat f)`,
+  `getopts $(cat f)`), and so can a quoted one with more words after it
+  (`printf "$fmt" x`). `print -r -- $x`, `set -- $(cat f)`,
+  `stat -f %m "$f"`, `printf "$fmt"`, `print -l *.png` and `wait $pid` stay
+  quiet.
+- A program named by a path, or a shell or interpreter, run after a leading
+  redirection (`>log ./x`, `2>log sh x`, `2>&1 ./x`, `<<EOF ./x`,
+  `sudo >log ./x`, `env >log ./x`), also in `eval` text (`eval '>log ./x'`),
+  where the check used to read the redirection as the command (#1719,
+  #1482, thanks to @darkmatter-sudo). `ls >log` and `2>/dev/null ls` are
+  read as before.
+- `sudo -A`/`--askpass`, `sudo -e`/`--edit` and `sudoedit`, which run a
+  helper or editor named by the environment, also in `eval` text
+  (`eval sudo -A ./x`) (#1719, #1482, thanks to @darkmatter-sudo).
+- A command given as an argument list whose elements up to the program
+  don't each read as one word (`["true ./x"]`, `["true;./x"]`,
+  `["env", "A=1 ./y", "./x"]`) (#1719, #1482, thanks to @darkmatter-sudo).
+  A shell's `-c` script is read as before. This doesn't apply under Windows
+  path rules, where program paths hold spaces.
 
 One line asks less: `git add src/{a,b}.rs && git commit -m "msg"` no longer
 asks just because a quoted message follows the brace word (#1580, #1514,
@@ -540,6 +607,15 @@ names is now checked within a fixed size budget; past it, its output files
 count as one unknown file, the cautious reading (#1587, #1132, thanks to
 @0xzoz).
 
+## Bare git repositories a command plants
+
+- **New advice in `docs/sandbox.md`** (#1775). A sandboxed command can make a
+  bare repository in any folder it may write to, and git run there or in a
+  folder below it later runs what its config names. Corbanu Terminal
+  doesn't check for these, on Windows or elsewhere. The guide recommends
+  `git config --global safe.bareRepository explicit` (git 2.45 or later)
+  and explains what it doesn't cover.
+
 ## Windows sandbox
 
 - **The default (elevated) sandbox's commands can't break away from their
@@ -547,6 +623,60 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   they start in their job; a program that asks to break away gets "access
   denied" unless it retries without the flag. The non-admin sandbox already
   worked this way.
+- **Default (elevated) sandbox: each command gets its own identity** (D324,
+  #1717, #1648), as non-admin sandbox commands already do. Commands running
+  at the same time, for example in different projects, can no longer write
+  to each other's processes or the helper processes that start them, or
+  start programs under them. Projects are still not fully kept apart: a
+  command can still borrow another command's access and write in its
+  folders (#1560), or, by racing another command's start-up, run code
+  outside its own sandbox restrictions (#1721), and can still read and end
+  the other's processes. So still avoid running commands
+  in several projects at once (see `docs/sandbox.md`).
+- **Commands in the default sandbox can no longer read a non-admin sandbox
+  command's memory** (D429, #1803). A default (elevated) sandbox command
+  could read the memory of a non-admin sandbox command running at the same
+  time, such as secrets in its environment, its output and what was typed at
+  its prompts. Other accounts (except SYSTEM and administrators using debug
+  rights) can now only wait for a non-admin command's processes. One
+  non-admin command can still read another's memory (#1838), so still avoid
+  running commands in several projects at once.
+- **Profiles the Windows sandbox can't enforce are refused, and say why**
+  (D331, #1762). A profile with a writable folder inside a read-only one is
+  now refused for the agent's commands in the non-admin sandbox too, as it
+  already was in the default sandbox and for app-server `command/exec`; in
+  our measurements this changes the outcome only under Permissive. On both
+  sandboxes the message now names both folders, notes that the protected
+  `.git`, `.codex` and `.agents` folders count as read-only, and says to
+  change the profile so that no writable folder lies in a read-only one. In
+  the non-admin sandbox, `command/exec` (and the exec server) now refuse a
+  profile that blocks or limits reading files with a clear message that
+  says how to switch to the default sandbox, instead of an unclear error
+  from the sandbox.
+- **Non-admin sandbox: a working folder reached through a junction no
+  longer bypasses a read-only folder** (#1780, #1792). With the working
+  folder given as a junction, a read-only folder given by its real path was
+  writable, and so was a read-only folder spelled through a junction inside
+  a working folder given by its real path. Read-only paths are now matched
+  to writable folders by their real (link-resolved) path too. When one
+  profile marks the same folder read-only under one spelling and writable
+  under another, read-only wins.
+- **A writable folder inside a read-only one is refused through links too**
+  (#1801, D331). D331's refusal compared folders by spelling, so a
+  writable folder that lay inside a read-only one only through a junction
+  or folder symbolic link (on either folder, or on the working folder)
+  wasn't refused, and the non-admin sandbox let commands write there. It
+  now compares real paths too (`subst` drives included), for the agent's
+  commands in both sandboxes and for `command/exec`. The same folder
+  marked read-only and writable under two spellings is still not refused;
+  in the non-admin sandbox read-only wins (#1780).
+- **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
+  or `.agents` folder is refused for older workspace-write profiles too**
+  (#1810, D331). A profile in the older workspace-write format, for example
+  with a writable root at the workspace's `.git\hooks`, skipped D331's
+  check, so the agent's commands and `command/exec` ran and could write
+  there. Such profiles are now refused, as the default sandbox already
+  refused them. Naming `.git` itself writable is still allowed.
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
@@ -560,6 +690,23 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   git runs them outside the sandbox. Commands can still create a `.git`
   (`git init` works). A `.git` that is a link is reported after every
   command. `.git` folders deeper inside aren't checked.
+- **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
+  is protected from the first command** (#1758). At the top of a writable
+  folder (other than `%TEMP%`) with no `.git`, a configured read-only
+  `.git\hooks` makes the sandbox create `.git` before the command starts.
+  The command that caused this could still write `.git\config`, `HEAD` or
+  `objects`; only later commands found `.git` protected. Now that first
+  command can't either, as in the non-admin sandbox. The same holds for a
+  `.codex` or `.agents` folder made this way. A deeper one, such as
+  `sub\.git` for `sub\.git\hooks`, still has only `hooks` protected.
+- **Default (elevated) sandbox setup no longer fails now and then where
+  Windows requires complex passwords** (#1776). Setup gives the sandbox's
+  user accounts a fresh random password, and about one setup in 4,500 drew
+  one without the mix of characters that Windows' "Password must meet
+  complexity requirements" policy needs (the Windows Server default, and
+  common under domain policy), so setup failed with
+  `helper_user_create_or_update_failed`. Passwords now always hold
+  upper-case and lower-case letters, digits and symbols.
 - **Non-admin sandbox: links can't undo a read-only path** (#1645, D293,
   #1542; #1670, #1667). A command doesn't start when a configured read-only
   path, or a folder above it, is a link (junction, symbolic link or mount
@@ -583,3 +730,36 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   permissions of every file below (each is still checked, and anything
   unexpected falls back to the old method). In the PR's measurement on a
   101,000-file repository, a command took about 20 s instead of 31 s.
+- **Non-admin sandbox: the faster protection walks don't start at a link**
+  (D352, #1754, #1722). When the folder a walk starts at is itself a
+  junction or symbolic link, or is swapped for one as the walk starts, it
+  now leaves that folder to Windows' own walk, so the result always matches
+  what Windows does. Corbanu doesn't normally start a walk at a link, so
+  nothing changes in normal use.
+- **Known limitation, now documented: the non-admin sandbox breaks tools that
+  use named pipes** (#1797, #1561, #1778). Its commands can't write to
+  named pipes they create, so Node.js child processes with piped output
+  (`EPERM`), Git Bash (`couldn't create signal pipe`), a local `git clone`
+  and Python `multiprocessing` fail there. This is not new in this release.
+  The default (elevated) sandbox runs all of them; see "Known limitations"
+  in `docs/sandbox.md`.
+- **A default (elevated) sandbox command now starts while a non-admin
+  sandbox command is running** (#1819). Before, when the non-admin command's
+  writable folders held the Corbanu home (for example `%TEMP%`, or a project
+  folder above it), the elevated command failed after 15 seconds with
+  `timed out after 15000ms connecting runner pipe-out`. The folder with the
+  sandbox's helper programs now keeps its normal (Medium) integrity level.
+  If that folder is a link, it is left alone and the sandbox log says so. If
+  copying the helper fails and the one next to `codex.exe` is used instead,
+  a Low label on it is fixed the same way, or the log names it as the cause.
+- **Windows PowerShell's `Start-Process` works in both sandboxes** (#1805).
+  Corbanu passes commands your environment, where Windows spells the search
+  path `Path`, and both sandboxes added a second copy spelled `PATH`. Windows
+  PowerShell 5.1's `Start-Process` then failed with "Item has already been
+  added", and the copy that counted could miss folders added by
+  `shell_environment_policy.set`. Each variable now reaches a command once,
+  and a value you set wins over the inherited spelling; no folder is added
+  to or removed from what you configured. Where Corbanu sets a proxy
+  variable in both cases (`HTTP_PROXY` and `http_proxy`), sandboxed
+  commands get only the capitals, so tools that read only the lower-case
+  name (MSYS2 or Git Bash `curl`) no longer see that proxy.

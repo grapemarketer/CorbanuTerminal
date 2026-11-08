@@ -27,8 +27,10 @@ using at that moment.
 - Two commands running at the same time in different projects (or with
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
-  other runs (#1560). The default sandbox doesn't prevent this yet either
-  (#1560, #1648), so avoid running commands in several projects at once.
+  other runs (#1560), and read the other's memory, such as secrets in its
+  environment or what you type at its prompts (#1838). The default sandbox
+  doesn't prevent borrowing yet either (#1560, #1648), so avoid running
+  commands in several projects at once.
   In the default sandbox, a command that races another command's start-up
   can also run code with the sandbox account's full access, outside its own
   restrictions (#1721).
@@ -76,6 +78,25 @@ asks in the TUI whether you have checked it. Commands can still create a
 link) is flagged after every command. Only that top-level `.git` is checked,
 not `.git` folders deeper inside.
 
+**Bare repositories a command plants.** Git also uses a folder that holds
+`HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
+its config and hooks. A sandboxed command can make one in any folder it may
+write to, and git run there or in a folder below it later runs whatever
+that config names. Corbanu Terminal doesn't check for these (#1775), on
+Windows or elsewhere. We recommend making git refuse a bare repository it
+finds by searching:
+
+```shell
+git config --global safe.bareRepository explicit
+```
+
+Use git 2.45 or later: 2.38 to 2.44 also refuse git run inside `.git`,
+which breaks some hooks and submodule tools, and versions before 2.38 ignore
+the setting. It covers the git command line
+with your global config, not tools built on libgit2 or JGit, nor a git with
+another home folder (such as WSL's). Where you do work in a bare repository,
+name it with `--git-dir` or `GIT_DIR`.
+
 **Read-only paths that don't exist yet.** If your permission profile marks a
 path inside a writable folder read-only and that path doesn't exist when a
 sandboxed command starts, Corbanu Terminal creates it as an empty folder and
@@ -89,13 +110,14 @@ sandboxes do this. It has two side effects:
   create the file.
 - A read-only path inside `.git`, such as `.git\hooks`, in a folder that
   isn't a git repository yet creates a `.git` there that holds only an empty
-  `hooks` folder. The non-admin sandbox protects that `.git` at once. The
-  default sandbox protects only `hooks` for the command that made it, and the
-  whole `.git` from the next command on (#1758). Git doesn't treat such a
-  `.git` as a repository, so git commands in that folder report "not a git
-  repository" or use a repository in a folder above it. Run `git init` there
-  yourself, or remove the entry and then delete that `.git` folder while no
-  session is running.
+  `hooks` folder. When that `.git` is at the top of a folder commands may
+  write to (other than `%TEMP%`), both sandboxes protect the whole of it at
+  once, starting with the command that made it (#1758); a deeper one, such
+  as `sub\.git` for `sub\.git\hooks`, has only `hooks` protected. Git
+  doesn't treat such a `.git` as a repository, so git commands in that
+  folder report "not a git repository" or use a repository in a folder
+  above it. Run `git init` there yourself, or remove the entry and then
+  delete that `.git` folder while no session is running.
 
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some
@@ -106,6 +128,31 @@ Windows sandbox mode can't block reading the protected files. The same applies
 to a profile that limits which folders commands may read. Switch to the
 default sandbox, as below, to run it. Profiles without such entries are not
 affected.
+
+**Known limitations: tools that use named pipes.** (#1797) A command in the
+non-admin sandbox can't open a named pipe it created for writing when the pipe
+has Windows' default permissions. By default Windows lets only the pipe's
+owner, SYSTEM and Administrators write to a pipe, and the non-admin sandbox's
+write restriction doesn't count the command as the owner. So opening such a
+pipe for writing, as most programs do to connect to it, fails with "access
+denied" (Windows error 5). These fail there:
+
+- Node.js starting a child process with piped input or output (`execSync`,
+  `spawnSync`): `EPERM`. A child started with `stdio: 'inherit'` or
+  `'ignore'` works.
+- Git Bash (`bash.exe`) crashes on start with
+  `couldn't create signal pipe, Win32 error 5`.
+- A local `git clone` (from a folder on your computer) fails with the same
+  crash, from Git's own `sh.exe`.
+- Python `multiprocessing` (for example `multiprocessing.Pool`):
+  `PermissionError: [WinError 5] Access is denied`. `subprocess` with pipes
+  works.
+- Other programs that create and then use their own named pipe, such as .NET's
+  `NamedPipeClientStream` in PowerShell (`Access to the path is denied.`).
+
+The default sandbox runs all of these. If you need them, switch to the default
+sandbox as below. This was measured on Windows Server 2022, in both an
+administrator and a normal session.
 
 **How to switch to the default sandbox.**
 

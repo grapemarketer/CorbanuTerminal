@@ -33,11 +33,14 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/unified_exec/process_manager*.rs"
+      - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
       - "codex-rs/core/src/tools/sandboxing_windows_tests.rs"
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/sandboxing/src/windows_tests.rs"
       - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
@@ -71,11 +74,14 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/unified_exec/process_manager*.rs"
+      - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
       - "codex-rs/core/src/tools/sandboxing_windows_tests.rs"
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
       - "codex-rs/core/src/sandboxing/**"
       - "codex-rs/sandboxing/src/windows.rs"
+      - "codex-rs/sandboxing/src/windows_tests.rs"
       - "codex-rs/protocol/src/permissions.rs"
       - "codex-rs/config/src/loader/mod.rs"
       - "codex-rs/config/src/planted_project_metadata.rs"
@@ -180,14 +186,22 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
           grep -q "test result: ok. 4 passed" d283-1541.log
           rm d283-1541.log
-      - name: Configured read-only paths the legacy backend makes (#1686, #1708)
+      - name: Configured read-only paths the legacy backend makes (#1686, #1708, #1780)
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones resolved_permissions::tests::temp_root_carries_explicit_read_only_paths_inside_it --nocapture --test-threads=1 2>&1 | tee d1686.log
-          grep -q "test result: ok. 2 passed" d1686.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact spawn_prep::tests::explicit_read_only_paths_include_missing_ones resolved_permissions::tests::temp_root_carries_explicit_read_only_paths_inside_it resolved_permissions::tests::read_only_paths_inside_a_root_match_by_real_path --nocapture --test-threads=1 2>&1 | tee d1686.log
+          grep -q "test result: ok. 3 passed" d1686.log
           rm d1686.log
+      - name: A .git the default sandbox makes on the way is protected from the first command (#1758)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact setup::tests::payload_deny_write_paths_protect_metadata_made_on_the_way allow::tests::metadata_made_on_the_way_skips_writable_and_existing_folders --nocapture --test-threads=1 2>&1 | tee d1758.log
+          grep -q "test result: ok. 2 passed" d1758.log
+          rm d1758.log
       - name: D261 denies without the tree walk match it (D285, #1542 item 6)
         if: ${{ !cancelled() }}
         shell: bash
@@ -223,11 +237,36 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: cargo build --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bins
-      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345)
+      - name: Sandbox user passwords meet Windows complexity (#1776)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bin codex-windows-sandbox-setup -- sandbox_users::tests:: --nocapture 2>&1 | tee pw-1776.log
+          grep -q 'test result: ok. 3 passed' pw-1776.log
+      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819, D429)
         if: ${{ !cancelled() }}
         shell: bash
         # Elevated: the #341/#345 tests must not skip. #345 runs a command in
-        # the elevated sandbox, which needs its helpers.
+        # the elevated sandbox, which needs its helpers. Nor may #1780's
+        # symbolic link cases.
+        env:
+          CODEX_SEC_WIN_341_REQUIRE: "1"
+          CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+        run: |
+          set -euo pipefail
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          # The #1770 tests run in their own step below.
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib sec_win_ -- --skip sec_win_1770_ --nocapture --test-threads=1
+      - name: Sandboxed command tokens stay restricted (#1770)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # A command of each backend may not write into a fresh folder in the
+        # runner's D:\tmp that any signed-in account may write to (labelled
+        # Low, so Low integrity can't hide it): only its restricted token
+        # keeps it out.
         env:
           CODEX_SEC_WIN_341_REQUIRE: "1"
         run: |
@@ -235,7 +274,67 @@ jobs:
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib sec_win_ -- --nocapture --test-threads=1
+          export CODEX_SEC_WIN_1770_SHARED_ROOT="$(cygpath -w "${CI_BUILD_ROOT}/tmp")"
+          for backend in legacy elevated; do
+            cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact "unified_exec::tests::token_boundary::sec_win_1770_${backend}_command_cannot_write_to_a_shared_folder" --nocapture --test-threads=1 2>&1 | tee sec-1770.log
+            grep -q "test result: ok. 1 passed" sec-1770.log
+            grep -qF "sec-win-1770 ${backend}: creating a file, creating a folder and appending were refused in ${CODEX_SEC_WIN_1770_SHARED_ROOT}\\" sec-1770.log
+          done
+          rm sec-1770.log
+      - name: Environment names once, in any case (#1805)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # Windows names ignore case: a command given both `Path` and `PATH`
+        # broke Windows PowerShell's Start-Process. The caller's `Path` must
+        # reach each backend's command once, and be the value that counts.
+        env:
+          CODEX_SEC_WIN_341_REQUIRE: "1"
+        run: |
+          # Actions runs bash with -e; every check runs, and the step fails at
+          # the end if any did.
+          set +e -uo pipefail
+          failed=()
+          # check NAME CARGO_ARGS...: cargo test must pass and print each line of stdin.
+          check() {
+            local name="$1"; shift
+            local expected; expected="$(cat)"
+            if ! cargo test --locked --manifest-path codex-rs/Cargo.toml "$@" 2>&1 | tee env-1805.log; then
+              echo "::error::#1805 ${name}: cargo test failed"
+              failed+=("$name")
+              return
+            fi
+            while IFS= read -r line; do
+              if ! grep -qF -- "$line" env-1805.log; then
+                echo "::error::#1805 ${name}: missing '${line}'"
+                failed+=("$name")
+                return
+              fi
+            done <<< "$expected"
+          }
+          check protocol -p codex-protocol --lib shell_environment -- --nocapture <<'EOF'
+          set_override_replaces_inherited_spelling_of_the_same_name ... ok
+          inherited_spellings_of_one_name_keep_the_first ... ok
+          EOF
+          check core -p codex-core --lib -- --exact unified_exec::process_manager::tests::unified_exec_env_replaces_other_spellings_on_windows --nocapture <<'EOF'
+          test result: ok. 1 passed
+          EOF
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          check sandbox-env -p codex-windows-sandbox --lib env::tests:: -- --nocapture --test-threads=1 <<'EOF'
+          test result: ok. 6 passed
+          EOF
+          for backend in legacy elevated; do
+            check "$backend" -p codex-windows-sandbox --lib -- --exact "unified_exec::tests::env_case::win_1805_${backend}_command_gets_one_path_and_start_process_runs" --nocapture --test-threads=1 <<EOF
+          test result: ok. 1 passed
+          win-1805 ${backend}: one PATH
+          EOF
+          done
+          rm env-1805.log
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::#1805 checks failed: ${failed[*]}"
+            exit 1
+          fi
       - name: Legacy sandbox delete boundary (#158)
         if: ${{ !cancelled() }}
         shell: bash
@@ -248,6 +347,20 @@ jobs:
             grep -q "test result: ok. 1 passed" legacy-158.log
           done
           rm legacy-158.log
+      - name: Legacy capture returns while a descendant runs (#1826)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # A descendant left running holds the output pipes; the capture must
+        # return once the command exits, leaving it running.
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- capture_pipes::tests:: --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+          grep -q "test result: ok. 2 passed" capture-1826.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact unified_exec::tests::legacy_capture_emits_output_and_preserves_descendant_after_normal_exit --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+          grep -q "test result: ok. 1 passed" capture-1826.log
+          # The test passes without running when pwsh 7 is missing.
+          grep -q "capture pwsh exit_code=0" capture-1826.log
+          rm capture-1826.log
       - name: Job breakaway limits (#733)
         if: ${{ !cancelled() }}
         shell: bash
@@ -289,12 +402,20 @@ jobs:
       - name: Launch contract probes under the elevated sandbox
         if: ${{ !cancelled() }}
         shell: bash
+        # #1801's symbolic link and subst cases may not skip here.
+        env:
+          CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+          CORBANU_TEST_REQUIRE_SUBST: "1"
         run: |
           set -euo pipefail
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_d331 sec_win_1506 --nocapture --test-threads=1
+          # #1801: the D331 check compares by real path in all three resolvers.
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_1801 --nocapture --test-threads=1 2>&1 | tee d1801.log
+          grep -q "test result: ok. 1 passed" d1801.log
+          rm d1801.log
       # The runners are elevated, which hid #294/#295. This reruns those probes
       # with the token of an administrator's normal session (medium integrity).
       # Not covered here: a separate non-administrator account, and the
@@ -317,8 +438,10 @@ jobs:
           New-Item -ItemType Directory $temp -ErrorAction Stop | Out-Null
           icacls $temp /setowner "*$user" /Q | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "setting the owner of $temp failed" }
-          # A fresh DACL, protected, replaces the inherited one
-          # (`icacls /inheritance:r` would copy D:\'s CREATOR OWNER entry in).
+          # A fresh DACL, protected, replaces the inherited one. An
+          # `icacls /inheritance:r /grant:r` attempt (which removes inherited
+          # entries; `/inheritance:d` is the one that copies them) still left
+          # an explicit CREATOR OWNER entry in CI (run 42397202004).
           $full = [Security.AccessControl.FileSystemRights]::FullControl
           $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
           $dacl = New-Object Security.AccessControl.DirectorySecurity
@@ -383,8 +506,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 42
-            & $medium -Program $sandbox -Arguments @('sec_win_', '--nocapture', '--test-threads=1')
+            Assert-Tests $sandbox 'sec_win_' 55
+            # The #1770 tests run on their own below.
+            & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
             # D324 (#1648): the elevated backend from a normal session. Each test
             # reuses the setup an elevated run recorded right before it.
@@ -404,6 +528,107 @@ jobs:
               if ($code -ne 0) { throw "D324 $t failed in a normal session" }
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D324 $t did not run in a normal session" }
             }
+            # #1758: the elevated backend's first command, from a normal session.
+            # Only this run catches the bug: in the elevated step the one-time
+            # setup makes .git before the per-command refresh, which then
+            # finds it. Here, as for users, the setup is already recorded.
+            $t1758 = 'unified_exec::tests::command_identity::elevated::sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks'
+            Assert-Tests $sandbox $t1758 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for #1758 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $t1758, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "#1758 failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1758 did not run in a normal session" }
+            # #1780: the elevated backend with a read-only path and the cwd
+            # spelled apart (one through a junction), from a normal session.
+            $t1780 = 'unified_exec::tests::command_identity::elevated::sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only'
+            Assert-Tests $sandbox $t1780 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for #1780 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $t1780, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "#1780 elevated failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1780 elevated did not run in a normal session" }
+            # #1819: an elevated command starts while a legacy command runs
+            # (the legacy session labels this step's TEMP, which holds the
+            # elevated codex home, Low).
+            $t1819 = 'unified_exec::tests::command_identity::elevated::sec_win_1819_elevated_command_starts_while_a_legacy_command_runs'
+            Assert-Tests $sandbox $t1819 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for #1819 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $t1819, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "#1819 failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1819 did not run in a normal session" }
+            # D429 (#1803): an elevated command can't read a legacy command's
+            # memory or thread contexts (the legacy tests ran above).
+            $tD429 = 'unified_exec::tests::command_identity::elevated::d429::sec_win_d429_elevated_command_cannot_read_a_legacy_command'
+            Assert-Tests $sandbox $tD429 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for D429 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $tD429, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "D429 elevated failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D429 elevated did not run in a normal session" }
+            # #1770: a command of each backend may not write into a fresh
+            # folder in the runner's D:\tmp (not this step's TEMP) that any
+            # signed-in account may write to; only its restricted token keeps
+            # it out. The elevated one reuses a setup recorded right before.
+            $env:CODEX_SEC_WIN_1770_SHARED_ROOT = Join-Path $env:CI_BUILD_ROOT 'tmp'
+            foreach ($backend in @('legacy', 'elevated')) {
+              $t = "unified_exec::tests::token_boundary::sec_win_1770_${backend}_command_cannot_write_to_a_shared_folder"
+              Assert-Tests $sandbox $t 1
+              if ($backend -eq 'elevated') {
+                & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+                $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              }
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "#1770 $backend failed in a normal session" }
+              $refused = "sec-win-1770 ${backend}: creating a file, creating a folder and appending were refused in $($env:CODEX_SEC_WIN_1770_SHARED_ROOT)\"
+              if (-not ($out -match 'test result: ok\. 1 passed') -or -not ($out | Where-Object { $_.Contains($refused) })) {
+                throw "#1770 $backend did not run in a normal session"
+              }
+            }
+            Remove-Item Env:CODEX_SEC_WIN_1770_SHARED_ROOT
+            # #1805: each backend's command gets the caller's `Path` once, and
+            # Windows PowerShell's Start-Process runs. The elevated one reuses
+            # a setup recorded right before.
+            $failed1805 = @()
+            foreach ($backend in @('legacy', 'elevated')) {
+              $t = "unified_exec::tests::env_case::win_1805_${backend}_command_gets_one_path_and_start_process_runs"
+              Assert-Tests $sandbox $t 1
+              if ($backend -eq 'elevated') {
+                & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+                $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              }
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              # Both backends run before any failure stops the step.
+              if ($code -ne 0 -or -not ($out -match 'test result: ok\. 1 passed') -or -not ($out | Where-Object { $_.Contains("win-1805 ${backend}: one PATH") })) {
+                $failed1805 += $backend
+              }
+            }
+            if ($failed1805.Count -ne 0) { throw "#1805 failed in a normal session: $($failed1805 -join ', ')" }
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')
@@ -456,10 +681,15 @@ jobs:
             Assert-Tests $core 'sec_win_300' 2
             & $medium -Program $core -Arguments @('sec_win_300', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#300 regressions failed in a normal session" }
-            # D331: the agent path refuses a writable folder inside a read-only one.
-            Assert-Tests $core 'sec_win_d331' 1
+            # D331: the agent path refuses a writable folder inside a read-only
+            # one, also through a junction, symbolic link or subst drive (#1801).
+            Assert-Tests $core 'sec_win_d331' 3
             & $medium -Program $core -Arguments @('sec_win_d331', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D331 agent-path refusal failed in a normal session" }
+            $sandboxing = Get-TestExe @('-p', 'codex-sandboxing', '--lib')
+            Assert-Tests $sandboxing 'sec_win_1801' 1
+            & $medium -Program $sandboxing -Arguments @('sec_win_1801', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "#1801 resolver refusals failed in a normal session" }
             # #1506 item 2: planted .codex/.agents aren't loaded until confirmed.
             Assert-Tests $core 'sec_win_1506' 1
             & $medium -Program $core -Arguments @('sec_win_1506', '--nocapture', '--test-threads=1')

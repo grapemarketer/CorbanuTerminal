@@ -44,9 +44,55 @@ pub fn create_env(
         });
     }
     if let Some((name, value)) = keyring_isolation_env_var() {
-        env.insert(name.to_string(), value);
+        set_env_var(&mut env, name, value);
     }
     env
+}
+
+/// Whether environment variable names ignore case here: they do on Windows,
+/// where `Path` and `PATH` name one variable.
+const ENV_NAMES_IGNORE_CASE: bool = cfg!(target_os = "windows");
+
+/// Sets `key` to `value` in `env`. On Windows it first removes every spelling
+/// of `key` that differs only by case (#1805), so the value set here is the
+/// one a child sees: a child given both `Path` and `PATH` gets one of them
+/// depending on how the map is turned into its environment, and Windows
+/// PowerShell's `Start-Process` refuses to run at all.
+pub fn set_env_var(env: &mut HashMap<String, String>, key: &str, value: String) {
+    set_env_var_with_case(env, key, value, ENV_NAMES_IGNORE_CASE);
+}
+
+fn set_env_var_with_case(
+    env: &mut HashMap<String, String>,
+    key: &str,
+    value: String,
+    ignore_case: bool,
+) {
+    if ignore_case {
+        env.retain(|name, _| !name.eq_ignore_ascii_case(key));
+    }
+    env.insert(key.to_string(), value);
+}
+
+/// Collects `vars` into a map. When names ignore case (Windows), a name that
+/// repeats with different case keeps its first value, the one the OS returns
+/// for it (`GetEnvironmentVariableW`, and so `std::env::var`, finds the first
+/// match in the block); later spellings are dropped (#1805).
+fn collect_vars<I>(vars: I, ignore_case: bool) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    if !ignore_case {
+        return vars.into_iter().collect();
+    }
+    let mut env_map = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for (key, value) in vars {
+        if seen.insert(key.to_ascii_uppercase()) {
+            env_map.insert(key, value);
+        }
+    }
+    env_map
 }
 
 pub fn create_env_from_vars<I>(
@@ -89,7 +135,7 @@ where
     // Step 1 - determine the starting set of variables based on the
     // `inherit` strategy.
     let mut env_map: HashMap<String, String> = match policy.inherit {
-        ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
+        ShellEnvironmentPolicyInherit::All => collect_vars(vars, ENV_NAMES_IGNORE_CASE),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
             #[cfg(not(target_os = "windows"))]
@@ -97,13 +143,14 @@ where
             #[cfg(target_os = "windows")]
             let core_env_vars = WINDOWS_CORE_ENV_VARS;
 
-            vars.into_iter()
-                .filter(|(k, _)| {
+            collect_vars(
+                vars.into_iter().filter(|(k, _)| {
                     core_env_vars
                         .iter()
                         .any(|allowed| allowed.eq_ignore_ascii_case(k))
-                })
-                .collect()
+                }),
+                ENV_NAMES_IGNORE_CASE,
+            )
         }
     };
 
@@ -126,9 +173,10 @@ where
         env_map.retain(|k, _| !matches_any(k, &policy.exclude));
     }
 
-    // Step 4 - Apply user-provided overrides.
+    // Step 4 - Apply user-provided overrides. On Windows an override
+    // replaces the inherited spelling (`set.PATH` replaces `Path`).
     for (key, val) in &policy.r#set {
-        env_map.insert(key.clone(), val.clone());
+        set_env_var(&mut env_map, key, val.clone());
     }
 
     // Step 5 - If include_only is non-empty, keep only the matching vars.
@@ -138,7 +186,7 @@ where
 
     // Step 6 - Populate the thread ID environment variable when provided.
     if let Some(thread_id) = thread_id {
-        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        set_env_var(&mut env_map, CODEX_THREAD_ID_ENV_VAR, thread_id.to_string());
     }
 
     env_map
@@ -232,6 +280,53 @@ mod windows_tests {
         ]);
 
         assert_eq!(result, expected);
+    }
+
+    /// #1805: a `set` override replaces the inherited spelling of its name.
+    #[test]
+    fn set_override_replaces_inherited_spelling_of_the_same_name() {
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            r#set: HashMap::from([("PATH".to_string(), "C:\\set".to_string())]),
+            ..Default::default()
+        };
+
+        let result = populate_env(
+            make_vars(&[("Path", "C:\\inherited"), ("codex_thread_id", "stale")]),
+            &policy,
+            Some("thread"),
+        );
+        let expected = HashMap::from([
+            ("PATH".to_string(), "C:\\set".to_string()),
+            (CODEX_THREAD_ID_ENV_VAR.to_string(), "thread".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    /// #1805: spellings of one inherited name keep the first, as Windows does.
+    #[test]
+    fn inherited_spellings_of_one_name_keep_the_first() {
+        for inherit in [
+            ShellEnvironmentPolicyInherit::All,
+            ShellEnvironmentPolicyInherit::Core,
+        ] {
+            let policy = ShellEnvironmentPolicy {
+                inherit,
+                ignore_default_excludes: true,
+                ..Default::default()
+            };
+
+            let result = populate_env(
+                make_vars(&[("Path", "C:\\first"), ("PATH", "C:\\second")]),
+                &policy,
+                /*thread_id*/ None,
+            );
+            let expected = HashMap::from([("Path".to_string(), "C:\\first".to_string())]);
+
+            assert_eq!(result, expected);
+        }
     }
 
     #[test]

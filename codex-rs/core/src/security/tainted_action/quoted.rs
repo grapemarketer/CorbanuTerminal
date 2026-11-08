@@ -29,6 +29,9 @@ pub(super) struct Word {
     pub(super) dynamic: bool,
     /// An expansion outside double quotes: it may split into several words.
     pub(super) splits: bool,
+    /// #1704: an unquoted character by which the shell may glob it (`*`,
+    /// `?`, `[`, zsh's `^`, `~`, `#`).
+    pub(super) globs: bool,
     /// The word lexer keeps it as one word (a `$'...'` string, a
     /// here-string), so commands in it do not count against the lexer's
     /// even when it is a shell's script.
@@ -679,6 +682,7 @@ impl Reader<'_> {
                         _ => {}
                     }
                     list.word.equals_first |= ch == '=' && list.word.text.is_empty();
+                    list.word.globs |= matches!(ch, '*' | '?' | '[' | '^' | '~' | '#');
                     list.word.text.push(ch);
                 }
             }

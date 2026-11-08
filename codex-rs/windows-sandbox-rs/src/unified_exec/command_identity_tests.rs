@@ -666,7 +666,7 @@ fn probe_argv(entry: &str) -> Vec<String> {
 
 /// Runs `argv` as a legacy workspace-write command on `root` with `env`
 /// added to this process's environment; returns its stdout and exit code.
-async fn run_legacy(
+pub(super) async fn run_legacy(
     root: &Path,
     codex_home: &Path,
     argv: Vec<String>,
@@ -686,6 +686,17 @@ async fn run_legacy_with_tty(
     for (key, value) in env {
         env_map.insert((*key).to_string(), value.clone());
     }
+    run_legacy_with_env_map(root, codex_home, argv, env_map, tty).await
+}
+
+/// [`run_legacy`] with the command's whole environment given.
+pub(super) async fn run_legacy_with_env_map(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env_map: HashMap<String, String>,
+    tty: bool,
+) -> (String, i32) {
     let spawned = spawn_windows_sandbox_session_legacy(
         &PermissionProfile::workspace_write(),
         workspace_roots_for(root).as_slice(),
@@ -1003,4 +1014,4 @@ fn legacy_command_tools_work_with_command_identity() {
 }
 
 #[path = "elevated_identity_tests.rs"]
-mod elevated;
+pub(super) mod elevated;
