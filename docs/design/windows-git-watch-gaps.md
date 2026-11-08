@@ -354,6 +354,16 @@ together with decision 1.
 2. The owner of files a non-admin and an elevated command create, and
    whether git's `safe.directory` ownership check then refuses them (that
    would already cover much of gaps 1 and 2 in the elevated sandbox).
+   Measured for the elevated sandbox (#1846, native Windows CI, elevated
+   and normal session alike): all 18 new files and folders were owned by
+   `CodexSandboxOffline`; the 2 existing files it appended to kept their
+   owner. With no `safe.directory` setting, git refused 5 of 7 cases
+   (a new nested, bare or top-level repository, and a `.git` file a
+   command wrote, even one pointing at the user's own repository) and
+   allowed the 2 changes inside the user's own repository (`core.hooksPath`
+   and the hooks folder it names). With the runner's system
+   `safe.directory = *` it refused none. Decision 7 (D425) flags all of
+   them anyway.
 3. The added cost of gap 1 B and gap 2 B on this repository (38k files)
    and on a `repo` client with about 100 projects.
 4. Whether `npm install` with Husky v9 inside the sandbox rewrites

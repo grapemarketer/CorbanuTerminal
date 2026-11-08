@@ -778,6 +778,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   writable folder, is recorded by content; a new or changed file there is
   reported like a changed repository. Nothing is refused: Husky still
   installs inside the sandbox.
+- **Default (elevated) sandbox: possibly planted folders are reported too**
+  (D425, #1846). The `.codex`, `.agents` and `.git` folders, repositories
+  and hooks folders the non-admin sandbox watches are now watched in the
+  default sandbox as well: when a command ends, what it created or changed
+  there gets the same warning right after the command, at startup and in the
+  TUI prompt. Nothing is refused. Processes a command leaves running aren't
+  waited for.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only
