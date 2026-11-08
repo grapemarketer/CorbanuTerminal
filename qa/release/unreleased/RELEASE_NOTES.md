@@ -850,7 +850,10 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   sandbox capability SIDs** when they record them at the same time. Each
   update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`) from
   reading the file to replacing it, and the sandbox audit no longer rewrites
-  the file. An update waits at most 5 seconds for the lock, then goes ahead
-  as before, so a program that holds the lock cannot stop updates. Before, the later write could drop a SID the other process had
+  the file. Before, the later write could drop a SID the other process had
   just recorded and granted, and two first uses could each make a different
   set.
+- An update waits at most 5 seconds for the lock, then goes ahead unlocked,
+  as all updates did before. So a program that holds the lock (anything that
+  can read the Corbanu home) can delay updates by 5 seconds and bring back
+  the old race, but cannot stop them.

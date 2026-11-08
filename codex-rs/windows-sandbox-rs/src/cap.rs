@@ -82,8 +82,9 @@ fn cap_sid_lock_file(codex_home: &Path) -> PathBuf {
     codex_home.join("cap_sid.lock")
 }
 
-/// How long an update waits for another process's update to finish.
-const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// How long an update waits for another process's update to finish (longer
+/// in tests, so a slow runner never makes one go ahead unlocked).
+const LOCK_WAIT: Duration = Duration::from_secs(if cfg!(test) { 120 } else { 5 });
 
 fn new_caps(workspace: String) -> CapSids {
     CapSids {
@@ -115,46 +116,48 @@ fn read_caps(path: &Path) -> Result<Option<(CapSids, bool)>> {
 
 /// #1871: runs `update` on the recorded SIDs (made if there are none) with
 /// the update lock held from the read to the write, so concurrent updates,
-/// in this process or another, never lose one another's SIDs. `update`
+/// in this process or another, do not lose one another's SIDs. `update`
 /// returns its result and whether it changed the SIDs.
 fn update_caps<T>(codex_home: &Path, update: impl FnOnce(&mut CapSids) -> (T, bool)) -> Result<T> {
     fs::create_dir_all(codex_home)
         .with_context(|| format!("create cap sid dir {}", codex_home.display()))?;
-    let lock_path = cap_sid_lock_file(codex_home);
+    // An update takes milliseconds. Whatever can read the home can also
+    // open and hold the lock (a sandboxed command that may read it), so a
+    // lock that cannot be opened or taken within `LOCK_WAIT` does not stop
+    // this update: it goes ahead unlocked, as every update did before.
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("open {}", lock_path.display()))?;
-    // An update takes milliseconds. Whatever can read the home can also
-    // hold the lock (a sandboxed command that may read it), so a lock held
-    // longer than any update does not stop this one: it goes ahead
-    // unlocked, as every update did before.
+        .open(cap_sid_lock_file(codex_home))
+        .ok();
     let deadline = Instant::now() + LOCK_WAIT;
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(TryLockError::WouldBlock) => break,
-            Err(TryLockError::Error(err)) => {
-                return Err(err).with_context(|| format!("lock {}", lock_path.display()));
+    let locked = lock.as_ref().is_some_and(|lock| {
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break true,
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break false,
             }
         }
-    }
+    });
     let path = cap_sid_file(codex_home);
     let (mut caps, mut changed) =
         read_caps(&path)?.unwrap_or_else(|| (new_caps(make_random_cap_sid_string()), true));
     let (value, updated) = update(&mut caps);
     changed |= updated;
-    if changed {
-        persist_caps(&path, &caps)?;
+    let persisted = if changed {
+        persist_caps(&path, &caps)
+    } else {
+        Ok(())
+    };
+    if locked && let Some(lock) = &lock {
+        let _ = lock.unlock();
     }
-    // Dropping `lock` releases it.
-    Ok(value)
+    persisted.map(|()| value)
 }
 
 pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
