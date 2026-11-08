@@ -9,8 +9,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+use std::fs::TryLockError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CapSids {
@@ -74,63 +77,130 @@ fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
     Ok(())
 }
 
-pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
-    let path = cap_sid_file(codex_home);
-    if path.exists() {
-        let txt = fs::read_to_string(&path)
-            .with_context(|| format!("read cap sid file {}", path.display()))?;
-        let t = txt.trim();
-        if t.starts_with('{') && t.ends_with('}') {
-            if let Ok(obj) = serde_json::from_str::<CapSids>(t) {
-                return Ok(obj);
-            }
-        } else if !t.is_empty() {
-            let caps = CapSids {
-                workspace: t.to_string(),
-                readonly: make_random_cap_sid_string(),
-                workspace_by_cwd: HashMap::new(),
-                writable_root_by_path: HashMap::new(),
-            };
-            persist_caps(&path, &caps)?;
-            return Ok(caps);
-        }
-    }
-    let caps = CapSids {
-        workspace: make_random_cap_sid_string(),
+/// The file whose lock serializes updates of [`cap_sid_file`].
+fn cap_sid_lock_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("cap_sid.lock")
+}
+
+/// How long an update waits for another process's update to finish (longer
+/// in tests, so a slow runner never makes one go ahead unlocked).
+const LOCK_WAIT: Duration = Duration::from_secs(if cfg!(test) { 120 } else { 5 });
+
+fn new_caps(workspace: String) -> CapSids {
+    CapSids {
+        workspace,
         readonly: make_random_cap_sid_string(),
         workspace_by_cwd: HashMap::new(),
         writable_root_by_path: HashMap::new(),
+    }
+}
+
+/// The SIDs recorded in `path`, and whether they must be written back (an
+/// older plain-text file). `None` when there is none to use.
+fn read_caps(path: &Path) -> Result<Option<(CapSids, bool)>> {
+    let txt = match fs::read_to_string(path) {
+        Ok(txt) => txt,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| format!("read cap sid file {}", path.display()));
+        }
     };
-    persist_caps(&path, &caps)?;
-    Ok(caps)
+    let t = txt.trim();
+    if t.starts_with('{') && t.ends_with('}') {
+        return Ok(serde_json::from_str::<CapSids>(t)
+            .ok()
+            .map(|caps| (caps, false)));
+    }
+    Ok((!t.is_empty()).then(|| (new_caps(t.to_string()), true)))
+}
+
+/// #1871: runs `update` on the recorded SIDs (made if there are none) with
+/// the update lock held from the read to the write, so concurrent updates,
+/// in this process or another, do not lose one another's SIDs. `update`
+/// returns its result and whether it changed the SIDs.
+fn update_caps<T>(codex_home: &Path, update: impl FnOnce(&mut CapSids) -> (T, bool)) -> Result<T> {
+    fs::create_dir_all(codex_home)
+        .with_context(|| format!("create cap sid dir {}", codex_home.display()))?;
+    // An update takes milliseconds. Whatever can read the home can also
+    // open and hold the lock (a sandboxed command that may read it), so a
+    // lock that cannot be opened or taken within `LOCK_WAIT` does not stop
+    // this update: it goes ahead unlocked, as every update did before.
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cap_sid_lock_file(codex_home))
+        .ok();
+    let deadline = Instant::now() + LOCK_WAIT;
+    let locked = lock.as_ref().is_some_and(|lock| {
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break true,
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break false,
+            }
+        }
+    });
+    let path = cap_sid_file(codex_home);
+    let (mut caps, mut changed) =
+        read_caps(&path)?.unwrap_or_else(|| (new_caps(make_random_cap_sid_string()), true));
+    let (value, updated) = update(&mut caps);
+    changed |= updated;
+    let persisted = if changed {
+        persist_caps(&path, &caps)
+    } else {
+        Ok(())
+    };
+    if locked && let Some(lock) = &lock {
+        let _ = lock.unlock();
+    }
+    persisted.map(|()| value)
+}
+
+pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
+    if let Some((caps, false)) = read_caps(&cap_sid_file(codex_home))? {
+        return Ok(caps);
+    }
+    update_caps(codex_home, |caps| (caps.clone(), false))
+}
+
+/// The SID `map(caps)` records for `key`, recording a new one if it has none.
+fn recorded_or_new_sid(
+    codex_home: &Path,
+    key: String,
+    map: fn(&mut CapSids) -> &mut HashMap<String, String>,
+) -> Result<String> {
+    if let Some((mut caps, false)) = read_caps(&cap_sid_file(codex_home))?
+        && let Some(sid) = map(&mut caps).get(&key)
+    {
+        return Ok(sid.clone());
+    }
+    update_caps(codex_home, |caps| {
+        let sids = map(caps);
+        if let Some(sid) = sids.get(&key) {
+            return (sid.clone(), false);
+        }
+        let sid = make_random_cap_sid_string();
+        sids.insert(key, sid.clone());
+        (sid, true)
+    })
 }
 
 /// Returns the workspace-specific capability SID for `cwd`, creating and persisting it if missing.
 pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String> {
-    let path = cap_sid_file(codex_home);
-    let mut caps = load_or_create_cap_sids(codex_home)?;
-    let key = canonical_path_key(cwd);
-    if let Some(sid) = caps.workspace_by_cwd.get(&key) {
-        return Ok(sid.clone());
-    }
-    let sid = make_random_cap_sid_string();
-    caps.workspace_by_cwd.insert(key, sid.clone());
-    persist_caps(&path, &caps)?;
-    Ok(sid)
+    recorded_or_new_sid(codex_home, canonical_path_key(cwd), |caps| {
+        &mut caps.workspace_by_cwd
+    })
 }
 
 /// Returns the capability SID for an additional writable root, creating and persisting it if missing.
 pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<String> {
-    let path = cap_sid_file(codex_home);
-    let mut caps = load_or_create_cap_sids(codex_home)?;
-    let key = canonical_path_key(root);
-    if let Some(sid) = caps.writable_root_by_path.get(&key) {
-        return Ok(sid.clone());
-    }
-    let sid = make_random_cap_sid_string();
-    caps.writable_root_by_path.insert(key, sid.clone());
-    persist_caps(&path, &caps)?;
-    Ok(sid)
+    recorded_or_new_sid(codex_home, canonical_path_key(root), |caps| {
+        &mut caps.writable_root_by_path
+    })
 }
 
 /// The capability SID recorded for the writable root `root`, if any; never
@@ -152,17 +222,14 @@ pub(crate) fn forget_writable_root_cap_sids(
     codex_home: &Path,
     forget: impl Fn(&str) -> bool,
 ) -> Result<()> {
-    let path = cap_sid_file(codex_home);
-    if !path.exists() {
+    if !cap_sid_file(codex_home).exists() {
         return Ok(());
     }
-    let mut caps = load_or_create_cap_sids(codex_home)?;
-    let before = caps.writable_root_by_path.len();
-    caps.writable_root_by_path.retain(|key, _| !forget(key));
-    if caps.writable_root_by_path.len() != before {
-        persist_caps(&path, &caps)?;
-    }
-    Ok(())
+    update_caps(codex_home, |caps| {
+        let before = caps.writable_root_by_path.len();
+        caps.writable_root_by_path.retain(|key, _| !forget(key));
+        ((), caps.writable_root_by_path.len() != before)
+    })
 }
 
 pub fn workspace_write_cap_sid_for_root(
@@ -195,8 +262,11 @@ mod tests {
     use super::workspace_cap_sid_for_cwd;
     use super::workspace_write_cap_sid_for_root;
     use super::writable_root_cap_sid_for_path;
+    use crate::path_normalization::canonical_path_key;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::Barrier;
 
     #[test]
     fn equivalent_cwd_spellings_share_workspace_sid_key() {
@@ -251,5 +321,63 @@ mod tests {
         let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
         assert_eq!(caps.workspace_by_cwd.len(), 1);
         assert_eq!(caps.writable_root_by_path.len(), 1);
+    }
+
+    /// #1871: updates made at the same time keep every SID they record, and
+    /// first uses agree on one set of SIDs.
+    #[test]
+    fn concurrent_updates_lose_no_sid() {
+        const THREADS: usize = 8;
+        const ROOTS: usize = 25;
+        for round in 0..5 {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let codex_home = temp.path().join("codex-home");
+            let barrier = Arc::new(Barrier::new(THREADS));
+            let mut handles = Vec::new();
+            for thread in 0..THREADS {
+                let codex_home = codex_home.clone();
+                let barrier = Arc::clone(&barrier);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    let workspace = load_or_create_cap_sids(&codex_home)
+                        .map(|caps| caps.workspace)
+                        .map_err(|err| format!("{err:#}"));
+                    let roots: Vec<_> = (0..ROOTS)
+                        .map(|i| {
+                            let root = PathBuf::from(format!(r"C:\r1871\{thread}\{i}"));
+                            let sid = writable_root_cap_sid_for_path(&codex_home, &root)
+                                .map_err(|err| format!("{err:#}"));
+                            (root, sid)
+                        })
+                        .collect();
+                    (workspace, roots)
+                }));
+            }
+            let results: Vec<_> = handles
+                .into_iter()
+                .map(|handle| handle.join().expect("thread"))
+                .collect();
+            let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
+            for (workspace, roots) in results {
+                assert_eq!(workspace, Ok(caps.workspace.clone()), "round {round}");
+                for (root, sid) in roots {
+                    let recorded = caps
+                        .writable_root_by_path
+                        .get(&canonical_path_key(&root))
+                        .cloned();
+                    assert_eq!(
+                        sid.map(Some),
+                        Ok(recorded),
+                        "round {round}: {}",
+                        root.display()
+                    );
+                }
+            }
+            assert_eq!(
+                caps.writable_root_by_path.len(),
+                THREADS * ROOTS,
+                "round {round}"
+            );
+        }
     }
 }

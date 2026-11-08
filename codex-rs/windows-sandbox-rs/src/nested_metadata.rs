@@ -51,8 +51,8 @@ pub(crate) struct Found {
     pub(crate) links: Vec<PathBuf>,
     /// D420: folders that count as changed after every session, and why: a
     /// folder holding an entry whose name isn't valid Unicode (it can't be
-    /// recorded, so it isn't looked at), or a link to a folder too large to
-    /// look through.
+    /// recorded, so it isn't looked at; one note per folder), or a link to a
+    /// folder too large to look through.
     pub(crate) notes: Vec<(PathBuf, String)>,
     /// The walk stopped at its budget.
     exhausted: bool,
@@ -101,6 +101,9 @@ fn find_bounded(roots: &[PathBuf], budget: &mut usize) -> Found {
             // D420: a `HEAD` or `commondir` makes this folder a candidate
             // bare repository.
             let mut git_candidate = false;
+            // Whether this folder already has its note, and its unlistable
+            // record, for a name that isn't valid Unicode.
+            let (mut noted, mut unlisted) = (false, false);
             for entry in entries {
                 let Ok(entry) = entry else {
                     found.unlistable.push(dir.clone());
@@ -111,11 +114,22 @@ fn find_bounded(roots: &[PathBuf], budget: &mut usize) -> Found {
                 // (the records are JSON), so what is below it isn't walked
                 // and its folder counts as changed every time.
                 if entry.file_name().to_str().is_none() {
-                    found.notes.push((
-                        dir.clone(),
-                        "holds an entry whose name isn't valid Unicode, so it isn't checked"
-                            .to_string(),
-                    ));
+                    if !noted {
+                        noted = true;
+                        found.notes.push((
+                            dir.clone(),
+                            "holds an entry whose name isn't valid Unicode, so it isn't checked"
+                                .to_string(),
+                        ));
+                    }
+                    // D283: nested `.codex`/`.agents` folders below it
+                    // aren't seen either, so its folder (which can be
+                    // recorded) counts as unlistable. A plain file hides
+                    // nothing.
+                    if !unlisted && !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                        unlisted = true;
+                        found.unlistable.push(dir.clone());
+                    }
                     continue;
                 }
                 let name = entry.file_name();

@@ -204,6 +204,12 @@ pub use cap::workspace_write_root_contains_path;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_write_root_overlaps_path;
 #[cfg(target_os = "windows")]
+pub use capture_pipes::OUTPUT_DRAIN_TIMEOUT;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::PipeReader as OutputPipeReader;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::finish_each as finish_output_readers;
+#[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;

@@ -111,6 +111,8 @@ fn guardian_cwd(environment_id: &str, cwd: PathUri) -> std::io::Result<AbsoluteP
     match cwd.to_abs_path() {
         Ok(cwd) => Ok(cwd),
         Err(err) if environment_id != codex_exec_server::LOCAL_ENVIRONMENT_ID => Err(err),
+        // A `\\localhost` UNC path: `to_file_path` would panic (#1863).
+        Err(err) if cwd.to_url().host_str() == Some("") => Err(err),
         Err(_) => {
             let cwd_display = cwd.to_string();
             let path = cwd.to_url().to_file_path().map_err(|()| {
@@ -439,6 +441,10 @@ fn record_resolution(
 #[cfg(all(test, unix))]
 #[path = "approvals_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "approvals_windows_tests.rs"]
+mod windows_tests;
 
 #[cfg(test)]
 #[path = "refusal_diagnostics_tests.rs"]

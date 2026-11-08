@@ -1,11 +1,13 @@
-//! Reads a legacy capture's output pipes (#1826).
+//! Reads a capture's output pipes (#1826, #1830, #1861).
 //!
 //! A process the command leaves running can hold the pipes' write ends: a
 //! child started with handle inheritance gets them (PowerShell's
 //! `Start-Process -RedirectStandardOutput` is one), so the pipes reach end of
 //! file only when it exits. Once the command's own process has exited, the
 //! readers get [`OUTPUT_DRAIN_TIMEOUT`] to read what is left; then their
-//! reads are cancelled and the capture keeps what they read.
+//! reads are cancelled and the capture keeps what they read. The legacy
+//! capture, the legacy unified exec sessions and the elevated command runner
+//! all read this way.
 
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
@@ -20,21 +22,37 @@ use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 
 /// How long the readers may go on after the command's process exits.
-pub(crate) const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+pub const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Reads one pipe on a thread of its own until end of file or [`finish`].
-pub(crate) struct PipeReader {
+/// Reads one pipe on a thread of its own until end of file or until
+/// [`finish_each`] stops it.
+pub struct PipeReader<T = Vec<u8>> {
     stop: Arc<AtomicBool>,
-    thread: JoinHandle<Vec<u8>>,
+    thread: JoinHandle<T>,
 }
 
 impl PipeReader {
-    /// Starts reading `pipe`, a read end the reader owns and closes.
+    /// Starts reading `pipe`, a read end the reader owns and closes, into a
+    /// buffer.
     pub(crate) fn spawn(pipe: HANDLE) -> Self {
+        Self::spawn_with(pipe, Vec::new(), Vec::extend_from_slice)
+    }
+}
+
+impl<T: Send + 'static> PipeReader<T> {
+    /// Starts reading `pipe`, a read end the reader owns and closes, handing
+    /// each chunk read to `on_chunk` with `state`; the reader ends with
+    /// `state`. Stopping the reader cancels whatever blocking I/O its thread
+    /// is in, so `on_chunk` must not do I/O that must not be cut short (the
+    /// elevated runner sends the chunks to another thread to write).
+    pub fn spawn_with(
+        pipe: HANDLE,
+        mut state: T,
+        mut on_chunk: impl FnMut(&mut T, &[u8]) + Send + 'static,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread = std::thread::spawn(move || {
-            let mut buf = Vec::new();
             let mut tmp = [0u8; 8192];
             while !thread_stop.load(Ordering::Acquire) {
                 let mut read_bytes: u32 = 0;
@@ -51,13 +69,13 @@ impl PipeReader {
                 if ok == 0 || read_bytes == 0 {
                     break;
                 }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
+                on_chunk(&mut state, &tmp[..read_bytes as usize]);
             }
             // SAFETY: the reader owns `pipe` and is done with it.
             unsafe {
                 CloseHandle(pipe);
             }
-            buf
+            state
         });
         Self { stop, thread }
     }
@@ -66,6 +84,16 @@ impl PipeReader {
 /// What `readers` read: each runs until end of file or, at the latest,
 /// until `timeout` has passed, when its read in progress is cancelled.
 pub(crate) fn finish<const N: usize>(readers: [PipeReader; N], timeout: Duration) -> [Vec<u8>; N] {
+    finish_each(readers, timeout).map(Result::unwrap_or_default)
+}
+
+/// What `readers` returned: each runs until end of file or, at the latest,
+/// until `timeout` has passed, when its read in progress is cancelled. Each
+/// result is `Err` if its reader panicked.
+pub fn finish_each<T, const N: usize>(
+    readers: [PipeReader<T>; N],
+    timeout: Duration,
+) -> [std::thread::Result<T>; N] {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline && readers.iter().any(|r| !r.thread.is_finished()) {
         std::thread::sleep(Duration::from_millis(10));
@@ -84,7 +112,7 @@ pub(crate) fn finish<const N: usize>(readers: [PipeReader; N], timeout: Duration
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    readers.map(|reader| reader.thread.join().unwrap_or_default())
+    readers.map(|reader| reader.thread.join())
 }
 
 #[cfg(test)]
