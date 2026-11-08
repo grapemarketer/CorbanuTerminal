@@ -843,3 +843,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   inherited with exact case, so an inherited `Term` next to Corbanu's `TERM`
   reached the command twice and either value could count. Corbanu's value
   now replaces every inherited spelling, as in the sandboxes since #1805.
+
+## Windows sandbox: capability SIDs are recorded under a lock (#1871)
+
+- **Two Corbanu processes on one Corbanu home no longer lose each other's
+  sandbox capability SIDs** when they record them at the same time. Each
+  update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`) from
+  reading the file to replacing it, and the sandbox audit no longer rewrites
+  the file. Before, the later write could drop a SID the other process had
+  just recorded and granted, and two first uses could each make a different
+  set.
