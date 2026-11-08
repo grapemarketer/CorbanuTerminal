@@ -770,6 +770,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   project to look at it doesn't ask; later changes to it are. Nothing is
   refused: agents can still commit and run `git config` there. Going back
   to an older build drops these records the next time it saves its own.
+- **Non-admin sandbox: hooks folders a git config names are watched** (D422,
+  #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
+  included config file, or a script a program key names, when it lies in a
+  writable folder, is recorded by content; a new or changed file there is
+  reported like a changed repository. Nothing is refused: Husky still
+  installs inside the sandbox.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only
@@ -835,6 +841,15 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   change them. This is not new in this release. A change awaiting security
   sign-off (#1800) stops the memory read, and a follow-up stops the console
   read; until then, avoid running commands in several projects at once.
+- **Default (elevated) sandbox: a command that leaves a process running
+  returns when it exits** (#1830). A process started with the command's
+  output handles (PowerShell's `Start-Process -RedirectStandardOutput`, for
+  example) kept the command "running" until that process exited too, with no
+  time limit. Now one-shot commands and unified exec sessions in the default
+  sandbox finish at most about 2 seconds after the command exits, and the
+  process it started keeps running; output that process writes later is not
+  shown. The non-admin sandbox's one-shot commands behave this way since
+  #1826; its unified exec sessions still wait (#1861).
 - **A default (elevated) sandbox command now starts while a non-admin
   sandbox command is running** (#1819). Before, when the non-admin command's
   writable folders held the Corbanu home (for example `%TEMP%`, or a project
@@ -860,3 +875,17 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   inherited with exact case, so an inherited `Term` next to Corbanu's `TERM`
   reached the command twice and either value could count. Corbanu's value
   now replaces every inherited spelling, as in the sandboxes since #1805.
+
+## Windows sandbox: capability SIDs are recorded under a lock (#1871)
+
+- **Two Corbanu processes on one Corbanu home no longer lose each other's
+  sandbox capability SIDs** when they record them at the same time. Each
+  update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`) from
+  reading the file to replacing it, and the sandbox audit no longer rewrites
+  the file. Before, the later write could drop a SID the other process had
+  just recorded and granted, and two first uses could each make a different
+  set.
+- An update waits at most 5 seconds for the lock, then goes ahead unlocked,
+  as all updates did before. So a program that holds the lock (anything that
+  can read the Corbanu home) can delay updates by 5 seconds and bring back
+  the old race, but cannot stop them.

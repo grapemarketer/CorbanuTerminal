@@ -57,6 +57,11 @@ pub(crate) fn is_git_directory(dir: &Path) -> bool {
         // Unreadable: git may read it.
         Err(_) => return std::fs::symlink_metadata(dir.join("HEAD")).is_ok(),
     };
+    // Never looked at from here (a network share could collect the
+    // person's credentials): it counts as a repository.
+    if is_remote_or_device(&common) {
+        return std::fs::symlink_metadata(dir.join("HEAD")).is_ok();
+    }
     exists(&common.join("objects")) && exists(&common.join("refs")) && valid_head(&dir.join("HEAD"))
 }
 
@@ -182,8 +187,42 @@ pub(crate) fn gitdir_target(file: &Path) -> Option<PathBuf> {
 }
 
 fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    // A path a command wrote (a `gitdir:` line, a `commondir`) is only
+    // resolved on this machine's drives.
+    if is_remote_or_device(path) {
+        return false;
+    }
     let path = dunce::canonicalize(path).unwrap_or_else(|_| normalize(path));
     roots.iter().any(|root| is_at_or_below(&path, root))
+}
+
+/// A network (`\\server\share`, `//server/share`, `\??\UNC\...`) or device
+/// (`\\.\`, `\\?\`, `\??\`, or a component named `CON`, `NUL`, `COM1` ...)
+/// path: one taken from a file a command could write is never opened, since
+/// opening a share can send the person's credentials to it and opening a
+/// device can block.
+pub(crate) fn is_remote_or_device(path: &Path) -> bool {
+    const DEVICES: [&str; 8] = [
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$", "CONFIG$",
+    ];
+    let text = path.as_os_str().to_string_lossy();
+    let prefixed = ["\\\\", "//", "\\/", "/\\", "\\??\\", "/??/"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix));
+    // Split on both separators, as Windows does.
+    prefixed
+        || text.split(['\\', '/']).any(|name| {
+            let stem = name
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches([' ', ':'])
+                .to_ascii_uppercase();
+            DEVICES.contains(&stem.as_str())
+                || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+                    && stem.len() == 4
+                    && stem.as_bytes()[3].is_ascii_digit())
+        })
 }
 
 /// `path` with `.` and `..` resolved by name (as Windows resolves them), so
@@ -220,7 +259,7 @@ pub(crate) fn is_at_or_below(path: &Path, base: &Path) -> bool {
 
 /// A marker that differs every time: a folder too big to look through
 /// counts as changed after every session.
-fn truncated() -> String {
+pub(crate) fn truncated() -> String {
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
         "truncated at {:?} #{}",
