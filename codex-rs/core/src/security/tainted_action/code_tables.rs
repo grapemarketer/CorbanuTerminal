@@ -107,25 +107,47 @@ fn skipped_words(name: &str, words: &[String]) -> Option<usize> {
 /// text read as shell and aligned with `words`, says which words may be
 /// any or several; with it, such words where a writer reads its options
 /// or before a name ask too ([`Reading`]).
-/// D410: zsh's `stat` is judged only when `stat_builtin` ([`may_load_stat`]);
-/// elsewhere it is the external program, which writes no variable (`stat
-/// -f %m $f` on macOS).
-pub(super) fn writes_table(
-    words: &[String],
-    raw: &[String],
-    seen: Option<&[Seen]>,
-    stat_builtin: bool,
-) -> bool {
+/// D410: a `stat` doing so is [`Writes::StatIfLoaded`].
+pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen]>) -> Writes {
+    let mut writes = Writes::No;
+    each_command(words, |at, name| {
+        let args = &words[at + 1..];
+        let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
+        if writer_names_table(name, args)
+            || hides_name(name, args, raw.get(at + 1..).unwrap_or_default(), seen)
+        {
+            writes = if name == "stat" {
+                Writes::StatIfLoaded
+            } else {
+                Writes::Table
+            };
+        }
+        writes != Writes::No
+    });
+    writes
+}
+
+/// What [`writes_table`] found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Writes {
+    No,
+    Table,
+    /// Only zsh's `stat` builtin would (D410, #1704): zsh starts without
+    /// it, so this asks only where the action may load it
+    /// ([`may_load_stat`]); elsewhere `stat` is the external program,
+    /// which writes no variable (`stat -f %m $f` on macOS).
+    StatIfLoaded,
+}
+
+/// Calls `judge` with the position and name of each command `words` run,
+/// past assignments, wrappers, `eval`/`trap` text, `repeat N`, zsh's
+/// modifiers and `coproc`, until it returns true; returns whether it did.
+fn each_command(words: &[String], mut judge: impl FnMut(usize, &str) -> bool) -> bool {
     let mut from = 0;
     while let Some((at, name)) = indirect::command_word(&words[from..]) {
         work::step();
         let at = from + at;
-        let args = &words[at + 1..];
-        let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
-        if (stat_builtin || name != "stat")
-            && (writer_names_table(&name, args)
-                || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), seen))
-        {
+        if judge(at, &name) {
             return true;
         }
         // `coproc read -A functions`: `coproc` both names an array and runs
@@ -146,9 +168,10 @@ pub(super) fn writes_table(
 /// (`$'zmo\144load'`, lines joined, comma braces expanded), names
 /// `zmodload` (any use, `zmodload -F zsh/stat b:zstat` too) or the module;
 /// a word as written holds a brace range, which the lexer does not expand
-/// (`zmo{d..d}load`); or a command is bash's `enable` (`enable -f stat
-/// stat` loads bash's own), or is named by an expansion or a pattern
-/// (`$a$b`, `$(cat c)`, `zm*`).
+/// (`zmo{d..d}load`); or a command, also one `eval`, `trap`, `repeat` or a
+/// modifier runs, is bash's `enable` (`enable -f stat stat` loads bash's
+/// own), or is named by an expansion or a pattern (`eval $a$b $c$d`,
+/// `$(cat c)`, `zm*`).
 pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand]) -> bool {
     let names = |text: &str| {
         let plain: String = text
@@ -168,9 +191,9 @@ pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand
         simple.words.iter().any(|word| {
             work::step();
             names(word)
-        }) || indirect::command_word(&simple.words).is_some_and(|(_, name)| {
+        }) || each_command(&simple.words, |_, name| {
             name == "enable"
-                || (!matches!(name.as_str(), "[" | "[[")
+                || (!matches!(name, "[" | "[[")
                     && name.contains(['$', '`', '*', '?', '[', '{', '(']))
                 || name.contains(shell::UNSEEN_OUTPUT)
         })

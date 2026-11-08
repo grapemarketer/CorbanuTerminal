@@ -595,6 +595,10 @@ fn judged_avoiding(action: &ApprovalAction, homes: Homes, avoids_zsh: bool) -> C
             }
         }
     }
+    // D410: a `stat` writing a table where the action may load its builtin.
+    if classifier.stat_pending && classifier.stat_builtin {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
     // #1064: an interactive POSIX shell sources the file `ENV` names.
     if classifier.sets_env && classifier.interactive_shell {
         classifier.note(ProtectedActionKind::UnseenCode);
@@ -631,6 +635,7 @@ impl Classifier {
             unseen_folder: false,
             sudo_redefined: false,
             stat_builtin: false,
+            stat_pending: false,
             quoted_text: false,
             brace_unsure: false,
             launched: launched_git::Launch::default(),
@@ -1456,10 +1461,12 @@ struct Classifier {
     /// D85: the action's own command line never reaches zsh
     /// ([`named_shell::avoids_zsh`]); nested lines are not covered.
     avoids_zsh: bool,
-    /// D410 (#1704): a line judged so far may load zsh's `stat` builtin
-    /// ([`code_tables::may_load_stat`]); until one does, `stat` is the
-    /// external program.
+    /// D410 (#1704): a line of the action may load zsh's `stat` builtin
+    /// ([`code_tables::may_load_stat`]), and a `stat` would then write a
+    /// table ([`code_tables::Writes::StatIfLoaded`]). Both are judged once
+    /// every line is, so a load in a line judged later counts too.
     stat_builtin: bool,
+    stat_pending: bool,
     /// #932: comparisons left with the grammar.
     compared: shadow::Budget,
     /// #1240: PowerShell encoded commands the Windows view judged, with
@@ -2012,14 +2019,9 @@ impl Classifier {
             // reads as the shell does (`alias b=bash` then `b run.sh`).
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
-            if aliases.read(&words)
-                || code_tables::writes_table(
-                    &words,
-                    &simple.words,
-                    /*seen*/ None,
-                    self.stat_builtin,
-                )
-            {
+            let tables = code_tables::writes_table(&words, &simple.words, /*seen*/ None);
+            self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
+            if aliases.read(&words) || tables == code_tables::Writes::Table {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(

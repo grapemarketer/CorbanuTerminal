@@ -183,14 +183,17 @@ fn issue1704_option_checks_are_linear() {
 
 /// D410 (#1704): zsh has a `stat` builtin (zsh/stat, which writes arrays
 /// by name with `-A`/`-H`) only once loaded; zsh starts without it. Its
-/// table checks run only when the command line, or a line judged before it
-/// in the same action, may load it: names `zmodload` (any use, quotes
-/// aside, as written or as lexed) or `zsh/stat`, or runs bash's `enable`
-/// or a command named by an expansion. A separate command on the same line (`zmodload
-/// zsh/stat; stat …`, or a later line of the same text) counts, as a line's
-/// aliases do (#1422); so does a load after the `stat`, which keeps main's
-/// prompt. Elsewhere `stat` is the external program (`stat -f %m $f` on
-/// macOS) and only its table checks are skipped; `zstat` is always judged.
+/// table checks ask only when a line of the same action may load it: names
+/// `zmodload` (any use, quotes aside, as written or as lexed) or
+/// `zsh/stat`, holds a brace range, or runs (also through `eval`, `trap`,
+/// `repeat` or a modifier) bash's `enable` or a command named by an
+/// expansion or a pattern. A separate command on the same line (`zmodload
+/// zsh/stat; stat …`, or a later line of the same text) counts, as a
+/// line's aliases do (#1422); so does a load after the `stat` or in a line
+/// judged later (a `functions[f]` value), which keeps main's prompt: both
+/// are decided once the whole action is judged. Elsewhere `stat` is the
+/// external program (`stat -f %m $f` on macOS) and only its table checks
+/// are skipped; `zstat` is always judged.
 #[test]
 fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
     for shell in ["bash", "zsh"] {
@@ -208,23 +211,31 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "z$'m'odload zsh/stat; stat -A functions x",
             "eval 'zmodload zsh/stat'; stat -A functions x",
             "zsh -c 'zmodload zsh/stat; stat -A functions x'",
-            // Spelled so only the lexed words, or neither reading, show it
-            // (review 1): decoded, joined, brace-expanded, or a command
-            // named by an expansion; and bash's loadable `stat`.
+            // Spelled so only the lexed words show it (review 1): decoded,
+            // joined, brace-expanded; and bash's loadable `stat`.
             "zmod$''load zsh/st$''at; stat -f %m $(cat f)",
             "$'zmo\\144load' $'zsh/st\\141t'; stat -A functions x",
             "zmod\\\nload zsh/st\\\nat; stat -f %m $(cat f)",
-            "a=zmod b=load c=zsh/st; $a$b ${c}at; stat -f %m $(cat f)",
-            "z=zmod; a=at; ${z}load zsh/st$a; stat -A functions x",
-            "for i in 1 2; do stat -A functions x; $a$b ${c}at; done",
             "zmo{d,}load zsh/stat; stat -A functions x",
             "builtin zmodload zsh/stat; stat -A functions x",
             "enable -f stat stat; stat -A functions x",
-            // Review 2: a brace range, which the lexer does not expand, and
-            // a command named by a pattern.
+            // Neither reading spells it (reviews 2 and 3): a command named
+            // by known values or a pattern, also behind `eval`, `trap`,
+            // `repeat` and modifiers; a brace range, which the lexer does
+            // not expand; zsh's `braceccl`.
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG; stat -f %m $(cat f)",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t; stat -f %m $(cat f)",
+            "eval zm* zsh/st?t; stat -f %m $(cat f)",
             "zmo{d..d}load zsh/st{a..a}t; stat -A functions x",
             "zm* $(cat m); stat -A functions x",
-            "a=zmod b=load; $a$b zsh/stat; stat -A functions x",
+            // A load in a line judged after the `stat` (review 3).
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f; stat -f %m $(cat f)",
             // A load after it keeps main's prompt.
             "stat -A functions x; zmodload zsh/stat",
             // zstat needs no `stat` load.
@@ -247,6 +258,11 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "zmo{d..d}load zsh/st{a..a}t",
             "zm* $(cat m)",
             "enable -f stat stat",
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t",
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }
