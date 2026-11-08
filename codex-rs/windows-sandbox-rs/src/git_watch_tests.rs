@@ -7,14 +7,25 @@ const CLONE_CONFIG: &str = "[core]\n\trepositoryformatversion = 0\n\tfilemode = 
 
 /// The shape `git init` leaves in `dir` (Git for Windows).
 fn init_shape(dir: &Path, config: &str) {
-    for folder in ["hooks", "info", "objects/info", "objects/pack", "refs/heads", "refs/tags"] {
+    for folder in [
+        "hooks",
+        "info",
+        "objects/info",
+        "objects/pack",
+        "refs/heads",
+        "refs/tags",
+    ] {
         fs::create_dir_all(dir.join(folder)).expect("create folder");
     }
     fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
     fs::write(dir.join("config"), config).expect("config");
     fs::write(dir.join("description"), "Unnamed repository\n").expect("description");
     fs::write(dir.join("info/exclude"), "# git ls-files\n").expect("exclude");
-    for hook in ["pre-commit.sample", "post-update.sample", "fsmonitor-watchman.sample"] {
+    for hook in [
+        "pre-commit.sample",
+        "post-update.sample",
+        "fsmonitor-watchman.sample",
+    ] {
         fs::write(dir.join("hooks").join(hook), "#!/bin/sh\n").expect("hook");
     }
 }
@@ -57,8 +68,16 @@ fn only_init_and_clone_shapes_are_plain() {
                 fs::create_dir(git.join("branches")).expect("branches");
             }),
             plain("hook", INIT_CONFIG, &write("hooks/post-checkout", "evil")),
-            plain("fsmonitor", &format!("{INIT_CONFIG}\tfsmonitor = evil.exe\n"), &none),
-            plain("include", &format!("{INIT_CONFIG}[include]\n\tpath = x\n"), &none),
+            plain(
+                "fsmonitor",
+                &format!("{INIT_CONFIG}\tfsmonitor = evil.exe\n"),
+                &none
+            ),
+            plain(
+                "include",
+                &format!("{INIT_CONFIG}[include]\n\tpath = x\n"),
+                &none
+            ),
             plain(
                 "ext",
                 &CLONE_CONFIG.replace("https://example.com/a.git", "ext::sh -c evil"),
@@ -67,15 +86,27 @@ fn only_init_and_clone_shapes_are_plain() {
             plain("same-line", "[core] fsmonitor = evil.exe\n", &none),
             plain("continued", "[core]\n\tbare = \\\nfalse\n", &none),
             plain("commondir", INIT_CONFIG, &write("commondir", "..")),
-            plain("rebase", INIT_CONFIG, &write("rebase-merge/git-rebase-todo", "exec evil")),
-            plain("module", INIT_CONFIG, &write("modules/m/HEAD", "ref: refs/heads/main")),
+            plain(
+                "rebase",
+                INIT_CONFIG,
+                &write("rebase-merge/git-rebase-todo", "exec evil")
+            ),
+            plain(
+                "module",
+                INIT_CONFIG,
+                &write("modules/m/HEAD", "ref: refs/heads/main")
+            ),
             plain("remotes", INIT_CONFIG, &write("remotes/origin", "URL: x")),
-            plain("worktree-config", INIT_CONFIG, &write("config.worktree", "")),
+            plain(
+                "worktree-config",
+                INIT_CONFIG,
+                &write("config.worktree", "")
+            ),
             is_plain(&gitdir_file),
         ],
         [
-            true, true, true, false, false, false, false, false, false, false, false, false,
-            false, false, false,
+            true, true, true, false, false, false, false, false, false, false, false, false, false,
+            false, false,
         ]
     );
 }
@@ -87,8 +118,7 @@ fn a_link_inside_is_not_plain() {
     let (_dir, base) = tempdir();
     let git = base.join(".git");
     init_shape(&git, INIT_CONFIG);
-    std::os::unix::fs::symlink(base.join("elsewhere"), git.join("COMMIT_EDITMSG"))
-        .expect("link");
+    std::os::unix::fs::symlink(base.join("elsewhere"), git.join("COMMIT_EDITMSG")).expect("link");
     assert!(!is_plain(&git));
 }
 
@@ -100,7 +130,11 @@ fn git_directories_follow_gits_rule() {
     init_shape(&bare, INIT_CONFIG);
     let split = base.join("split");
     fs::create_dir_all(&split).expect("split");
-    fs::write(split.join("HEAD"), "0123456789abcdef0123456789abcdef01234567\n").expect("HEAD");
+    fs::write(
+        split.join("HEAD"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .expect("HEAD");
     fs::write(split.join("commondir"), "../bare\n").expect("commondir");
     let no_refs = base.join("no-refs");
     fs::create_dir_all(no_refs.join("objects")).expect("objects");

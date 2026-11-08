@@ -173,19 +173,57 @@ fn notice_after_a_command_names_the_recorded_folders() {
     let git: Vec<PathBuf> = (0..22)
         .map(|n| PathBuf::from(format!("/w/r{n}/.git")))
         .collect();
-    let notice = planted_after_command_notice(&[git, vec![PathBuf::from("/w/r0/.codex")]].concat())
-        .expect("notice");
+    let notice = planted_after_command_notice(
+        &[git, vec![PathBuf::from("/w/r0/.codex")]].concat(),
+        &[PlantedGitChange {
+            path: PathBuf::from("/w/bare"),
+            changes: vec!["config changed".to_string()],
+        }],
+    )
+    .expect("notice");
     assert_eq!(
         (
             notice.starts_with(&format!(
                 "{PLANTED_GIT_WARNING_PREFIX}/w/r0/.git, /w/r1/.git"
             )),
-            notice.contains("/w/r19/.git and 2 more."),
+            notice.contains("/w/r19/.git and 3 more."),
             notice.contains(&format!(
                 "\n{PLANTED_PROJECT_METADATA_WARNING_PREFIX}/w/r0/.codex."
             )),
-            planted_after_command_notice(&[]),
+            planted_after_command_notice(&[], &[]),
+            planted_after_command_notice(
+                &[],
+                &[PlantedGitChange {
+                    path: PathBuf::from("/w/bare"),
+                    changes: (1..=7).map(|n| format!("hooks/h{n} added")).collect(),
+                }],
+            )
+            .is_some_and(|notice| notice.starts_with(&format!(
+                "{PLANTED_GIT_WARNING_PREFIX}/w/bare (hooks/h1 added, hooks/h2 added, hooks/h3 added, hooks/h4 added, hooks/h5 added and 2 more)."
+            ))),
         ),
-        (true, true, true, None)
+        (true, true, true, None, true)
+    );
+}
+
+/// D420: a changed repository is shown where a recorded `.git` would be.
+#[test]
+fn git_changes_to_show_use_the_same_scope() {
+    let change = |path: &str| PlantedGitChange {
+        path: PathBuf::from(path),
+        changes: vec!["new repository".to_string()],
+    };
+    let shown = git_changes_to_show(
+        vec![
+            change("/w/project/vendor/.git"),
+            change("/w/temp/scratch"),
+            change("/w/elsewhere/.git"),
+        ],
+        &[PathBuf::from("/w/temp")],
+        Path::new("/w/project"),
+    );
+    assert_eq!(
+        shown,
+        vec![change("/w/project/vendor/.git"), change("/w/temp/scratch")]
     );
 }

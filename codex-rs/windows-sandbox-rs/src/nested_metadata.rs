@@ -43,6 +43,10 @@ pub(crate) struct Found {
     /// Folders the walk couldn't list (or entries it couldn't inspect): what
     /// lies below them is unknown.
     pub(crate) unlistable: Vec<PathBuf>,
+    /// D420 (#1775): the repositories below the top of the roots: each
+    /// nested `.git` (folder, file or link) and each folder that is itself a
+    /// git folder (a bare repository), by git's rule.
+    pub(crate) repos: Vec<PathBuf>,
 }
 
 /// The `.codex`/`.agents` entries below the top of `roots` (canonical), of
@@ -75,6 +79,9 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 }
             };
             let top = dir == *root;
+            // D420: a `HEAD` or `commondir` makes this folder a candidate
+            // bare repository.
+            let mut git_candidate = false;
             for entry in entries {
                 let Ok(entry) = entry else {
                     found.unlistable.push(dir.clone());
@@ -82,6 +89,13 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 };
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
+                git_candidate |=
+                    name.eq_ignore_ascii_case("HEAD") || name.eq_ignore_ascii_case("commondir");
+                // D420: a nested `.git` of any kind (the top-level one is
+                // D332's).
+                if !top && name.eq_ignore_ascii_case(".git") {
+                    found.repos.push(dir.join(".git"));
+                }
                 // Not followed if it is a link. A listing that shows a
                 // reparse point may not carry its tag, which tells links
                 // apart: then the entry itself is asked (#1672).
@@ -121,6 +135,9 @@ pub(crate) fn find(roots: &[PathBuf]) -> Found {
                 {
                     stack.push(entry.path());
                 }
+            }
+            if !top && git_candidate && crate::git_watch::is_git_directory(&dir) {
+                found.repos.push(dir);
             }
         }
     }
@@ -250,6 +267,80 @@ pub(crate) fn git_appeared_in_session(
         || !before
             .iter()
             .any(|old| same_path(&old.path, folder) && old.identity == now)
+}
+
+/// D420 (#1775): a repository and what git would run from it, when a
+/// session started or ended. `identity` is `None` for a link or an entry that
+/// can't be inspected: such a repository counts as changed after every
+/// session, as a top-level `.git` link does (D332).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RepoState {
+    pub(crate) path: PathBuf,
+    pub(crate) identity: Option<FileIdentity>,
+    #[serde(default)]
+    pub(crate) link: bool,
+    pub(crate) prints: crate::git_watch::Prints,
+}
+
+/// D420/gap 2 (#1775): those of `roots` (canonical) that are themselves git
+/// folders (bare repositories), which git uses where it would use
+/// `<root>\.git`.
+pub(crate) fn bare_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .filter(|root| crate::git_watch::is_git_directory(root))
+        .cloned()
+        .collect()
+}
+
+/// D420: the state of each repository in `paths`; folders a `gitdir:` line
+/// or `commondir` names are looked into when they lie in `roots`.
+pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState> {
+    paths
+        .iter()
+        .map(|path| {
+            let link = std::fs::symlink_metadata(path)
+                .map_or(false, |metadata| metadata.file_type().is_symlink());
+            RepoState {
+                path: path.clone(),
+                identity: if link { None } else { identity(path) },
+                link,
+                prints: crate::git_watch::fingerprint(path, roots),
+            }
+        })
+        .collect()
+}
+
+/// D420/D421 (#1775): what changed in each repository of `now` since
+/// `before`, for the person. A new or replaced one counts unless it has
+/// exactly the shape `git init` or `git clone` leave (D421); a link, or one
+/// that can't be inspected, counts every time.
+pub(crate) fn repo_changes(
+    before: &[RepoState],
+    now: Vec<RepoState>,
+) -> Vec<(PathBuf, Vec<String>)> {
+    now.into_iter()
+        .filter_map(|state| {
+            let changes = if state.link {
+                vec!["a link (checked after every command)".to_string()]
+            } else if state.identity.is_none() {
+                vec!["can't be inspected".to_string()]
+            } else {
+                match before
+                    .iter()
+                    .find(|old| same_path(&old.path, &state.path) && old.identity == state.identity)
+                {
+                    Some(old) => crate::git_watch::changes(&old.prints, &state.prints),
+                    None if crate::git_watch::is_plain(&state.path) => Vec::new(),
+                    None if before.iter().any(|old| same_path(&old.path, &state.path)) => {
+                        vec!["replaced".to_string()]
+                    }
+                    None => vec!["new repository".to_string()],
+                }
+            };
+            (!changes.is_empty()).then_some((state.path, changes))
+        })
+        .collect()
 }
 
 /// The file `path` is (not followed if it is a link).

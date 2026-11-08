@@ -210,7 +210,13 @@ fn git_folder(dir: &Path, prefix: &str, roots: &[PathBuf], depth: usize, prints:
     if let Ok(bytes) = std::fs::read(dir.join("commondir")) {
         let common = resolve(dir, String::from_utf8_lossy(&bytes).trim());
         if in_roots(&common, roots) {
-            git_folder(&common, &format!("{prefix}commondir/"), roots, depth - 1, prints);
+            git_folder(
+                &common,
+                &format!("{prefix}commondir/"),
+                roots,
+                depth - 1,
+                prints,
+            );
         }
     }
 }
@@ -285,7 +291,9 @@ fn write_through_mark(path: &Path) -> Option<String> {
 #[cfg(unix)]
 fn link_count(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::symlink_metadata(path).ok().map(|metadata| metadata.nlink())
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| metadata.nlink())
 }
 
 #[cfg(windows)]
@@ -389,12 +397,9 @@ pub(crate) fn is_plain(entry: &Path) -> bool {
     let Ok(hooks) = list(&entry.join("hooks")) else {
         return false;
     };
-    let only_samples = hooks.iter().all(|(name, is_file)| {
-        *is_file
-            && name
-                .to_ascii_lowercase()
-                .ends_with(".sample")
-    });
+    let only_samples = hooks
+        .iter()
+        .all(|(name, is_file)| *is_file && name.to_ascii_lowercase().ends_with(".sample"));
     if !only_samples {
         return false;
     }
