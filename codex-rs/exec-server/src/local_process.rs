@@ -654,7 +654,16 @@ fn child_env(params: &ExecParams) -> HashMap<String, String> {
         Some(env_policy) => {
             let policy = shell_environment_policy(env_policy);
             let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
-            env.extend(params.env.clone());
+            // #1817: core's variables win over the inherited ones; on Windows
+            // that includes inherited spellings of the same name that differ
+            // only by case (#1805), so each name is passed once. Sorted, so
+            // an overlay holding two spellings of one name always keeps the
+            // same one.
+            let mut overlay: Vec<_> = params.env.iter().collect();
+            overlay.sort();
+            for (key, value) in overlay {
+                shell_environment::set_env_var(&mut env, key, value.clone());
+            }
             env
         }
         None => params.env.clone(),
@@ -1389,6 +1398,33 @@ mod tests {
             expected.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
         }
         // Debug builds keep test keyring isolation in every child (`create_env`).
+        if let Some((name, value)) = shell_environment::keyring_isolation_env_var() {
+            expected.insert(name.to_string(), value);
+        }
+
+        assert_eq!(child_env(&params), expected);
+    }
+
+    /// #1817: on Windows, core's variable replaces an inherited spelling of
+    /// the same name that differs only by case; elsewhere case matters.
+    #[test]
+    fn child_env_overlay_replaces_other_spellings_on_windows() {
+        let mut params =
+            test_exec_params(HashMap::from([("TERM".to_string(), "overlay".to_string())]));
+        params.env_policy = Some(ExecEnvPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::from([("Term".to_string(), "inherited".to_string())]),
+            include_only: Vec::new(),
+        });
+
+        let mut expected = HashMap::from([("TERM".to_string(), "overlay".to_string())]);
+        if cfg!(target_os = "windows") {
+            expected.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
+        } else {
+            expected.insert("Term".to_string(), "inherited".to_string());
+        }
         if let Some((name, value)) = shell_environment::keyring_isolation_env_var() {
             expected.insert(name.to_string(), value);
         }
