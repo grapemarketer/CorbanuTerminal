@@ -128,8 +128,27 @@ fn targets_are_what_configs_name_inside_the_roots() {
             file("x.sh", "alias.f"),
             file("f", "alias.f"),
             file("smudge", "filter.lfs.smudge"),
+            // A rooted word is also tried below the work tree
+            // (`"$(git rev-parse --show-toplevel)/x.sh"`).
+            file("elsewhere/gpg.exe", "gpg.program"),
             file("scripts/cred.js", "credential.helper"),
             file(".git/conv", "diff.x.textconv"),
+            // `receive-pack` runs hooks from the git folder.
+            (
+                Path::new(".git").join(".husky"),
+                "core.hooksPath".to_string(),
+                TargetKind::HuskyHooks
+            ),
+            (
+                Path::new(".git").join(".husky").join("_").join("_"),
+                "core.hooksPath".to_string(),
+                TargetKind::Hooks
+            ),
+            (
+                Path::new(".git").join(".husky").join("_"),
+                "core.hooksPath".to_string(),
+                TargetKind::Hooks
+            ),
         ]
     );
 }
@@ -269,6 +288,16 @@ fn global_configs_new_repositories_and_husky_layouts() {
                     "core.hooksPath".to_string(),
                     TargetKind::Hooks
                 ),
+                (
+                    Path::new(".git").join(".config").join("husky").join("_"),
+                    "core.hooksPath".to_string(),
+                    TargetKind::Hooks
+                ),
+                (
+                    Path::new(".git").join(".config").join("husky"),
+                    "core.hooksPath".to_string(),
+                    TargetKind::Hooks
+                ),
             ],
             1,
         )
@@ -352,6 +381,61 @@ fn includes_are_bounded_and_never_remote() {
             true,
             true,
             false,
+        )
+    );
+}
+
+/// D422 review 3: a `.git` file naming a network share isn't followed, NT
+/// and device names count as never opened, and a path named both as a
+/// hooks folder and as a file is watched as a hooks folder.
+#[test]
+fn remote_gitdirs_device_names_and_kinds() {
+    let (_dir, base) = tempdir();
+    let checkout = base.join("remote");
+    fs::create_dir_all(&checkout).expect("checkout");
+    fs::write(checkout.join(".git"), "gitdir: //server/share/x\n").expect(".git file");
+    let work = base.join("proj");
+    fs::create_dir_all(work.join(".git")).expect("repo");
+    fs::write(
+        work.join(".git").join("config"),
+        "[alias]\n\thooks = config core.hooksPath .githooks\n[core]\n\thooksPath = .githooks\n",
+    )
+    .expect("config");
+    let found = targets(
+        &work.join(".git"),
+        Some(&work),
+        &[],
+        &[],
+        std::slice::from_ref(&base),
+        &mut ConfigBudget::default(),
+    );
+    let githooks = found
+        .iter()
+        .find(|target| target.path == work.join(".githooks"))
+        .map(|target| target.kind);
+    let remote = |path: &str| crate::git_watch::is_remote_or_device(Path::new(path));
+    assert_eq!(
+        (
+            repo_dirs(&[checkout.join(".git")]),
+            githooks,
+            remote(r"\??\UNC\evil\s\x"),
+            remote("/??/UNC/evil/s/x"),
+            remote(r"C:\work\CON"),
+            remote(r"C:\work\nul.txt"),
+            remote(r"C:\work\COM1"),
+            remote(r"C:\work\console"),
+            remote(r"C:\work\com10"),
+        ),
+        (
+            Vec::new(),
+            Some(TargetKind::Hooks),
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false
         )
     );
 }

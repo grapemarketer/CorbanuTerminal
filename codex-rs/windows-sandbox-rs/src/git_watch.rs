@@ -196,15 +196,33 @@ fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| is_at_or_below(&path, root))
 }
 
-/// A network (`\\server\share`, `//server/share`) or device (`\\.\`,
-/// `\\?\`) path: one taken from a file a command could write is never
-/// opened, since opening a share can send the person's credentials to it.
+/// A network (`\\server\share`, `//server/share`, `\??\UNC\...`) or device
+/// (`\\.\`, `\\?\`, `\??\`, or a component named `CON`, `NUL`, `COM1` ...)
+/// path: one taken from a file a command could write is never opened, since
+/// opening a share can send the person's credentials to it and opening a
+/// device can block.
 pub(crate) fn is_remote_or_device(path: &Path) -> bool {
+    const DEVICES: [&str; 8] = [
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$", "CONFIG$",
+    ];
     let text = path.as_os_str().to_string_lossy();
-    text.starts_with("\\\\")
-        || text.starts_with("//")
-        || text.starts_with("\\/")
-        || text.starts_with("/\\")
+    let prefixed = ["\\\\", "//", "\\/", "/\\", "\\??\\", "/??/"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix));
+    // Split on both separators, as Windows does.
+    prefixed
+        || text.split(['\\', '/']).any(|name| {
+            let stem = name
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches([' ', ':'])
+                .to_ascii_uppercase();
+            DEVICES.contains(&stem.as_str())
+                || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+                    && stem.len() == 4
+                    && stem.as_bytes()[3].is_ascii_digit())
+        })
 }
 
 /// `path` with `.` and `..` resolved by name (as Windows resolves them), so

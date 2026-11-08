@@ -124,8 +124,9 @@ inside of isn't read) and records, by content, each such hooks
 folder, each included config file, and each file a program setting names
 (such as `core.fsmonitor`, a credential helper or an alias set to a script
 in the project: a first word that looks like a path, and every later word),
-when it lies in a folder commands may write to. Paths on network shares or
-devices are never opened. A global or system
+when it lies in a folder commands may write to. A path a config or a
+`.git` file names on a network share or a device (`\\server\share`,
+`\\?\`, `CON` ...) is never opened. A global or system
 git config that lies in such a folder is recorded too. A new, changed or
 removed file there is flagged like a changed repository, and so is one
 that appears where a config points (a new repository's `.githooks`, say).
@@ -133,8 +134,9 @@ For Husky, the files named after git hooks in the folder above `_` count,
 and so does the `_` folder below any hooks folder. Rewriting a file with
 the same content (as `npm install` does when it reruns Husky) isn't a
 change. A hooks folder with more than 1,024 entries, or configs too large to
-read (over 1 MB in one file, 100,000 entries or 4,096 files), count as
-changed after every command. Other scripts those hooks call are ordinary project files
+read (over 1 MB in one file, 100,000 entries, 4,096 files, eight
+`core.worktree` values or 4,096 named paths), count as changed after every
+command. Other scripts those hooks call are ordinary project files
 and aren't checked, and program settings outside the list the sandbox knows
 aren't either.
 

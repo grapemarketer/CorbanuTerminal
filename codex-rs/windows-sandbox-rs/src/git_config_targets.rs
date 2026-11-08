@@ -295,7 +295,7 @@ pub(crate) fn targets(
     let mut bases: Vec<PathBuf> = vec![work_tree.unwrap_or(git_dir).to_path_buf()];
     for (entry, from) in outside.iter().chain(&own_entries) {
         if entry.name == "core.worktree" {
-            if bases.len() >= MAX_BASES {
+            if bases.len() > MAX_BASES {
                 budget.over(from);
                 break;
             }
@@ -303,25 +303,51 @@ pub(crate) fn targets(
         }
     }
     let mut found = Vec::new();
-    for (entry, from) in outside.iter().chain(&own_entries) {
+    'entries: for (entry, from) in outside.iter().chain(&own_entries) {
         for base in &bases {
             target_of(entry, from, base, homes, &mut found);
+            if found.len() > MAX_TARGETS {
+                budget.over(from);
+                break 'entries;
+            }
         }
-        if found.len() > MAX_TARGETS {
-            budget.over(from);
-            break;
+    }
+    // `receive-pack` runs hooks from the git folder, so a relative
+    // `core.hooksPath` also names a folder there.
+    if work_tree.is_some() {
+        for (entry, from) in outside.iter().chain(&own_entries) {
+            if entry.name == "core.hookspath" {
+                target_of(entry, from, git_dir, homes, &mut found);
+            }
         }
     }
     keep_in_roots(found, roots)
 }
 
-/// `found`, normalized, each once, those in `roots`.
+/// `found`, normalized, each path once, those in `roots`. A path named
+/// twice keeps the kind that records the most (a hooks folder over Husky's
+/// hook-named files over a file).
 fn keep_in_roots(found: Vec<Target>, roots: &[PathBuf]) -> Vec<Target> {
-    let mut seen = std::collections::HashSet::new();
-    let mut kept = Vec::new();
+    fn rank(kind: TargetKind) -> u8 {
+        match kind {
+            TargetKind::Hooks => 2,
+            TargetKind::HuskyHooks => 1,
+            TargetKind::File => 0,
+        }
+    }
+    let mut index = std::collections::HashMap::new();
+    let mut kept: Vec<Target> = Vec::new();
     for mut target in found {
         target.path = crate::git_watch::normalize(&target.path);
-        if seen.insert(target.path.clone()) && in_roots(&target.path, roots) {
+        if let Some(&at) = index.get(&target.path) {
+            let existing: &mut Target = &mut kept[at];
+            if rank(target.kind) > rank(existing.kind) {
+                *existing = target;
+            }
+            continue;
+        }
+        if in_roots(&target.path, roots) {
+            index.insert(target.path.clone(), kept.len());
             kept.push(target);
         }
     }
@@ -330,21 +356,19 @@ fn keep_in_roots(found: Vec<Target>, roots: &[PathBuf]) -> Vec<Target> {
 
 /// `path` lies in one of `roots`, by name or after links, and not inside a
 /// root's own `.git` (protected, and D332's). A network or device path is
-/// never resolved (a command may have written it).
+/// never resolved (a command may have written it); links are only resolved
+/// when the name alone isn't in a root.
 fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
     if crate::git_watch::is_remote_or_device(path) {
         return false;
     }
-    let canonical = dunce::canonicalize(path).ok();
-    [Some(path), canonical.as_deref()]
-        .into_iter()
-        .flatten()
-        .any(|path| {
-            roots.iter().any(|root| {
-                crate::git_watch::is_at_or_below(path, root)
-                    && !crate::git_watch::is_at_or_below(path, &root.join(".git"))
-            })
+    let inside = |path: &Path| {
+        roots.iter().any(|root| {
+            crate::git_watch::is_at_or_below(path, root)
+                && !crate::git_watch::is_at_or_below(path, &root.join(".git"))
         })
+    };
+    inside(path) || dunce::canonicalize(path).is_ok_and(|canonical| inside(&canonical))
 }
 
 /// Calls `each` with every entry of the config file at `path` and the file
@@ -367,14 +391,15 @@ fn read_config(
     if !visited.insert(crate::git_watch::normalize(path)) {
         return;
     }
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    // Only files that exist count.
     budget.files += 1;
     if budget.files > MAX_CONFIG_FILES {
         budget.over(path);
         return;
     }
-    let Ok(file) = std::fs::File::open(path) else {
-        return;
-    };
     let mut bytes = Vec::new();
     if file
         .take(MAX_CONFIG_BYTES + 1)
@@ -472,7 +497,8 @@ fn target_of(entry: &Entry, from: &Path, base: &Path, homes: &[PathBuf], found: 
     // name is looked up on PATH); every later word may be a file it runs or
     // reads (`!sh x.sh`, `node scripts/cred.js`, `rebase -x ./t.sh`,
     // `-oProxyCommand=./x`).
-    for (index, word) in words(&entry.value).into_iter().enumerate() {
+    // At most 64 words of one value.
+    for (index, word) in words(&entry.value).into_iter().take(64).enumerate() {
         let word = word.trim_start_matches('!');
         let path_like = word.contains('/') || word.contains('\\') || word.starts_with('.');
         let skipped = word.is_empty()
@@ -483,7 +509,12 @@ fn target_of(entry: &Entry, from: &Path, base: &Path, homes: &[PathBuf], found: 
         if skipped {
             continue;
         }
-        for path in resolve_all(base, word, homes) {
+        let mut paths = resolve_all(base, word, homes);
+        // `"$(git rev-parse --show-toplevel)/x.sh"` leaves `/x.sh`.
+        if let Some(rest) = word.strip_prefix('/') {
+            paths.push(base.join(rest));
+        }
+        for path in paths {
             found.push(Target {
                 path,
                 why: entry.name.clone(),
@@ -743,8 +774,10 @@ pub(crate) fn repo_dirs(entries: &[PathBuf]) -> Vec<(PathBuf, Option<PathBuf>)> 
             if metadata.is_dir() {
                 Some((entry.clone(), Some(work_tree)))
             } else if metadata.is_file() {
-                // As git reads it.
-                Some((crate::git_watch::gitdir_target(entry)?, Some(work_tree)))
+                // As git reads it; never a network or device path.
+                let target = crate::git_watch::gitdir_target(entry)?;
+                (!crate::git_watch::is_remote_or_device(&target))
+                    .then_some((target, Some(work_tree)))
             } else {
                 None
             }
