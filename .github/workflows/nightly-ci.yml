@@ -14,11 +14,32 @@ concurrency:
   group: nightly-ci::${{ github.ref }}
   cancel-in-progress: true
 
-# Read-only token: none of these jobs call the GitHub API.
+# Read-only token: only the `commit` job calls the GitHub API (read-only).
 permissions:
   contents: read
 
 jobs:
+  # #1812: a nightly on main must test the commit main pointed to when the run
+  # was created. Fails if it doesn't; warns when main hasn't moved for over a
+  # day (the 10-29..11-06 nightlies all retested 1329ea5883 because main
+  # didn't change) or moved after the run was created (a re-run).
+  commit:
+    name: Nightly commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # main's Activity API
+      actions: read # this run's creation time
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check the tested commit is main's head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/check_nightly_commit.py
+
   bazel:
     name: Bazel
     uses: ./.github/workflows/bazel.yml
@@ -62,6 +83,7 @@ jobs:
     name: Nightly CI results
     if: ${{ always() }}
     needs:
+      - commit
       - bazel
       - rust-ci
       - sdk

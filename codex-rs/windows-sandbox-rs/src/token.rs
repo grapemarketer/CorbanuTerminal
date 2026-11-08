@@ -703,12 +703,33 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
     psid_capabilities: &[*mut c_void],
     additional_restricting_sids: &[*mut c_void],
 ) -> Result<HANDLE> {
+    let mut group = sandbox_users_group_of(base_token)?;
+    create_elevated_token_with_group(
+        base_token,
+        psid_capabilities,
+        additional_restricting_sids,
+        group.as_mut_ptr() as *mut c_void,
+    )
+}
+
+/// Builds the token for
+/// [`create_token_with_caps_user_and_additional_restrictions_from`], with
+/// `psid_group` as the sandbox users' group in its default DACL and no check
+/// that `base_token` holds it. Private: production reaches it only through
+/// that function, after D324's group check. This module's tests call it
+/// directly with a group the test process holds, because they run as a user
+/// outside the sandbox users' group (#1795).
+unsafe fn create_elevated_token_with_group(
+    base_token: HANDLE,
+    psid_capabilities: &[*mut c_void],
+    additional_restricting_sids: &[*mut c_void],
+    psid_group: *mut c_void,
+) -> Result<HANDLE> {
     let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
     let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut extra_restricting_sids = Vec::with_capacity(additional_restricting_sids.len() + 1);
     extra_restricting_sids.push(psid_user);
     extra_restricting_sids.extend_from_slice(additional_restricting_sids);
-    let mut group = sandbox_users_group_of(base_token)?;
     // The token copies the SID, so it can go once the token exists.
     let command = LocalSid::from_string(&crate::cap::new_command_identity_sid_string())?;
     extra_restricting_sids.push(command.as_ptr());
@@ -718,7 +739,7 @@ unsafe fn create_token_with_caps_user_and_additional_restrictions_from(
         &extra_restricting_sids,
         DefaultDacl::Elevated {
             psid_user,
-            psid_group: group.as_mut_ptr() as *mut c_void,
+            psid_group,
             psid_command: command.as_ptr(),
         },
     )

@@ -295,3 +295,105 @@ fn sec_win_1801_writable_inside_read_only_through_a_junction_is_refused() {
         [[2; 3], [2; 3], [2; 3], [2; 3], [0; 3], [0; 3]]
     );
 }
+
+/// #1810: a profile in the older workspace-write format can hold D331's shape
+/// too: a writable folder inside a protected `.git`, `.codex` or `.agents`
+/// folder of another writable folder. Those profiles skip the non-admin
+/// checks' direct-enforcement path, so they must be refused before it, as
+/// the elevated check already refuses them. Not refused: `.git` itself named
+/// writable (the explicit rule replaces its protection), and a plain folder.
+#[test]
+fn sec_win_1810_legacy_format_profile_with_writable_inside_protected_folder_is_refused() {
+    use codex_protocol::protocol::SandboxPolicy;
+
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let workspace = dunce::canonicalize(temp_dir.path())
+        .expect("canonical temp dir")
+        .join("workspace");
+    for (parent, child) in [(".git", "hooks"), (".codex", "sub"), (".agents", "x")] {
+        std::fs::create_dir_all(workspace.join(parent).join(child)).expect("create fixture folder");
+    }
+    let cwd = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute cwd");
+    let checks = |writable: &[&str]| {
+        let writable = writable
+            .iter()
+            .fold(cwd.clone(), |path, part| path.join(part));
+        let profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![writable.clone()],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            cwd.as_path(),
+        );
+        let (file_system, network) = profile.to_runtime_permissions();
+        let read_only = writable.parent().expect("parent").to_path_buf();
+        let refusal = writable_inside_read_only_refusal(&read_only, writable.as_path());
+        let refused = |result: Option<String>| result.is_some_and(|err| err == refusal);
+        (
+            file_system.needs_direct_runtime_enforcement(network, cwd.as_path()),
+            [
+                refused(
+                    refuse_unenforceable_windows_restricted_token_profile(
+                        SandboxType::WindowsRestrictedToken,
+                        &profile,
+                        &cwd,
+                        WindowsSandboxLevel::RestrictedToken,
+                    )
+                    .err(),
+                ),
+                refused(
+                    resolve_windows_restricted_token_filesystem_overrides(
+                        SandboxType::WindowsRestrictedToken,
+                        &profile,
+                        &cwd,
+                        WindowsSandboxLevel::RestrictedToken,
+                    )
+                    .err(),
+                ),
+                refused(
+                    resolve_windows_elevated_filesystem_overrides(
+                        SandboxType::WindowsRestrictedToken,
+                        &profile,
+                        &cwd,
+                        /*use_windows_elevated_backend*/ true,
+                    )
+                    .err(),
+                ),
+            ],
+        )
+    };
+
+    assert_eq!(
+        [
+            checks(&[".git", "hooks"]),
+            checks(&[".codex", "sub"]),
+            checks(&[".agents", "x"]),
+            checks(&[".git"]),
+        ],
+        [
+            (false, [true; 3]),
+            (false, [true; 3]),
+            (false, [true; 3]),
+            (false, [false; 3]),
+        ]
+    );
+    assert_eq!(
+        resolve_windows_restricted_token_filesystem_overrides(
+            SandboxType::WindowsRestrictedToken,
+            &PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &SandboxPolicy::WorkspaceWrite {
+                    writable_roots: Vec::new(),
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                },
+                cwd.as_path(),
+            ),
+            &cwd,
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+        Ok(None)
+    );
+}

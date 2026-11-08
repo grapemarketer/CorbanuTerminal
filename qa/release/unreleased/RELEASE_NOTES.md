@@ -637,6 +637,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   commands in both sandboxes and for `command/exec`. The same folder marked read-only and
   writable under two spellings is still not refused; in the non-admin
   sandbox read-only wins (#1780).
+- **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
+  or `.agents` folder is refused for older workspace-write profiles too**
+  (#1810, D331). A profile in the older workspace-write format, for example
+  with a writable root at the workspace's `.git\hooks`, skipped D331's
+  check, so the agent's commands and `command/exec` ran and could write
+  there. Such profiles are now refused, as the default sandbox already
+  refused them. Naming `.git` itself writable is still allowed.
 - **Non-admin sandbox: nested `.codex` and `.agents` folders are watched**
   (#1642, D283, #1541). One that appears or is replaced deeper in your
   workspace while a command runs isn't loaded until you confirm it, like one
@@ -686,3 +693,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `multiprocessing` fail there. This is not new in this release. The default
   (elevated) sandbox runs all of them; see "Known limitations" in
   `docs/sandbox.md`.
+- **A default (elevated) sandbox command now starts while a non-admin
+  sandbox command is running** (#1819). Before, when the non-admin command's
+  writable folders held the Corbanu home (for example `%TEMP%`, or a project
+  folder above it), the elevated command failed after 15 seconds with
+  `timed out after 15000ms connecting runner pipe-out`. The folder with the
+  sandbox's helper programs now keeps its normal (Medium) integrity level.
