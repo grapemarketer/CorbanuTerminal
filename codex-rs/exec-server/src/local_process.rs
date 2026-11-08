@@ -1396,6 +1396,33 @@ mod tests {
         assert_eq!(child_env(&params), expected);
     }
 
+    /// #1817: on Windows, core's variable replaces an inherited spelling of
+    /// the same name that differs only by case; elsewhere case matters.
+    #[test]
+    fn child_env_overlay_replaces_other_spellings_on_windows() {
+        let mut params =
+            test_exec_params(HashMap::from([("TERM".to_string(), "overlay".to_string())]));
+        params.env_policy = Some(ExecEnvPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::from([("Term".to_string(), "inherited".to_string())]),
+            include_only: Vec::new(),
+        });
+
+        let mut expected = HashMap::from([("TERM".to_string(), "overlay".to_string())]);
+        if cfg!(target_os = "windows") {
+            expected.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
+        } else {
+            expected.insert("Term".to_string(), "inherited".to_string());
+        }
+        if let Some((name, value)) = shell_environment::keyring_isolation_env_var() {
+            expected.insert(name.to_string(), value);
+        }
+
+        assert_eq!(child_env(&params), expected);
+    }
+
     #[tokio::test]
     async fn exit_before_shutdown_records_success() {
         let (backend, metrics, exporter) = telemetry_backend();
