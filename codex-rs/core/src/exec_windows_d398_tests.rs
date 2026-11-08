@@ -305,17 +305,15 @@ enum Outcome {
     Other(String),
 }
 
+/// The outcome, and the command's output for the table.
 async fn run_command_exec(
+    level: WindowsSandboxLevel,
     profile: &PermissionProfile,
     cwd: &Path,
     real: &Path,
-    has_docs: bool,
-) -> Outcome {
+) -> (Outcome, String) {
     let cwd = AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd");
     let written = |name: &str| real.join(name).exists();
-    for name in ["ok.txt", "docs\\x.txt", ".git\\g.txt"] {
-        let _ = std::fs::remove_file(real.join(name));
-    }
     let request = build_exec_request(
         ExecParams {
             command: vec![
@@ -325,13 +323,13 @@ async fn run_command_exec(
                 "echo ok> ok.txt & echo x> docs\\x.txt & echo g> .git\\g.txt".to_string(),
             ],
             cwd: cwd.clone(),
-            expiration: ExecExpiration::from(60_000),
+            expiration: ExecExpiration::from(120_000),
             capture_policy: ExecCapturePolicy::ShellTool,
             env: HashMap::new(),
             network: None,
             network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_level: level,
             windows_sandbox_private_desktop: false,
             justification: None,
             arg0: None,
@@ -343,50 +341,64 @@ async fn run_command_exec(
         /*use_legacy_landlock*/ false,
     );
     match request {
-        Err(err) if err.to_string().contains(SPLIT_ROOTS_REFUSAL) => Outcome::SplitRootsRefused {
-            written: written("ok.txt"),
-        },
-        Err(err) => Outcome::Other(format!("refused: {err}")),
+        Err(err) if err.to_string().contains(SPLIT_ROOTS_REFUSAL) => (
+            Outcome::SplitRootsRefused {
+                written: written("ok.txt"),
+            },
+            String::new(),
+        ),
+        Err(err) => (Outcome::Other(format!("refused: {err}")), String::new()),
         Ok(request) => {
             match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
-                Ok(_) => Outcome::Ran {
-                    ok: written("ok.txt"),
-                    docs: has_docs && written("docs\\x.txt"),
-                    git: has_docs && written(".git\\g.txt"),
-                },
-                Err(err) => Outcome::Other(format!("failed: {err}")),
+                Ok(output) => (
+                    Outcome::Ran {
+                        ok: written("ok.txt"),
+                        docs: written("docs\\x.txt"),
+                        git: written(".git\\g.txt"),
+                    },
+                    format!("{}{}", output.stdout.text, output.stderr.text)
+                        .replace(['\r', '\n'], " ")
+                        .trim()
+                        .to_string(),
+                ),
+                Err(err) => (Outcome::Other(format!("failed: {err}")), String::new()),
             }
         }
     }
 }
 
-/// D398: each spelling of the working folder runs as the real path does, and
-/// `docs` (read-only) and `.git` stay unwritten; a working folder leading out
-/// of the workspace is still refused.
-#[tokio::test]
-#[serial_test::serial(codex_home)]
-async fn sec_win_d398_command_exec_non_canonical_cwd() {
-    let codex_home_dir = tempfile::tempdir().expect("codex home");
-    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+/// One fresh fixture: the workspace and the folder outside it, the
+/// spellings of the working folder that lead to the workspace, and those
+/// that lead out of it. Each spelling: (form, cwd or why it couldn't be
+/// made, the real folder). The drives it makes are removed with `guards`.
+struct Fixture {
+    workspace: PathBuf,
+    leading_in: Vec<(&'static str, Result<PathBuf, String>, PathBuf)>,
+    leading_out: Vec<(&'static str, Result<PathBuf, String>, PathBuf)>,
+    _roots: Vec<tempfile::TempDir>,
+    _guards: Vec<DriveGuard>,
+}
+
+fn fixture() -> Fixture {
     let temp = tempfile::tempdir().expect("fixture root");
     let base = dunce::canonicalize(temp.path()).expect("canonical fixture root");
     let parent = base.join("Long Parent Folder");
     let (workspace, outside) = make_workspace(&parent);
-
     // 8.3 names: CI's temp drive has them off, so that form gets its own
-    // workspace on the system drive (the workflow turns them on there).
-    let system_root = PathBuf::from(format!(
-        "{}\\d398-{}",
-        std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string()),
-        std::process::id()
-    ));
-    let system_parent = system_root.join("Long Parent Folder");
+    // workspace in the user profile on the system drive (the workflow turns
+    // them on there).
+    let profile_dir = std::env::var_os("USERPROFILE").expect("USERPROFILE");
+    let system_temp = tempfile::Builder::new()
+        .prefix("d398-")
+        .tempdir_in(profile_dir)
+        .expect("system drive fixture root");
+    let system_parent = dunce::canonicalize(system_temp.path())
+        .expect("canonical")
+        .join("Long Parent Folder");
     let (system_workspace, _) = make_workspace(&system_parent);
-    let system_workspace = dunce::canonicalize(&system_workspace).expect("canonical");
 
     let mut guards = Vec::new();
-    // (form, cwd as spelled, the real folder it leads to)
-    let mut forms: Vec<(&str, Result<PathBuf, String>, PathBuf)> = vec![(
+    let mut leading_in = vec![(
         "canonical (control)",
         Ok(workspace.clone()),
         workspace.clone(),
@@ -395,114 +407,182 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
         guards.push(guard);
         root.join("Workspace Folder")
     });
-    forms.push(("subst drive", subst_form, workspace.clone()));
+    leading_in.push(("subst drive", subst_form, workspace.clone()));
     let mapped_form = mapped_drive(&parent).map(|(root, guard)| {
         guards.push(guard);
         root.join("Workspace Folder")
     });
-    forms.push(("mapped drive", mapped_form, workspace.clone()));
-    forms.push((
+    leading_in.push(("mapped drive", mapped_form, workspace.clone()));
+    leading_in.push((
+        "canonical, system drive (8.3 control)",
+        Ok(system_workspace.clone()),
+        system_workspace.clone(),
+    ));
+    leading_in.push((
         "8.3 short name",
         short_name(&system_workspace),
         system_workspace.clone(),
     ));
-    forms.push((
+    leading_in.push((
         "whole path in lower case",
         Ok(PathBuf::from(
             workspace.display().to_string().to_lowercase(),
         )),
         workspace.clone(),
     ));
-    forms.push((
+    leading_in.push((
         "junction (control)",
         Ok(junction(&base.join("cwd-junction"), &workspace)),
         workspace.clone(),
     ));
-    forms.push((
+    leading_in.push((
         "folder symlink (control)",
         symlink(&base.join("cwd-symlink"), &workspace),
         workspace.clone(),
     ));
 
-    eprintln!("\n| cwd form | profile | command/exec (non-admin) |");
-    eprintln!("|---|---|---|");
-    let mut results = Vec::new();
-    for (form, cwd, real) in &forms {
-        let cwd = match cwd {
-            Ok(cwd) => cwd,
-            Err(why) => {
-                eprintln!("| {form} | | not made here: {why} |");
-                continue;
-            }
-        };
-        for (profile_name, profile, docs_read_only) in profiles(cwd, &real.join("docs")) {
-            let outcome = run_command_exec(&profile, cwd, real, /*has_docs*/ true).await;
-            eprintln!(
-                "| {form} `{}` | {profile_name} | {outcome:?} |",
-                cwd.display()
-            );
-            let expected = Outcome::Ran {
-                ok: true,
-                docs: !docs_read_only,
-                git: false,
-            };
-            results.push((format!("{form} / {profile_name}"), outcome, expected));
-        }
-    }
-
-    // Negative: the working folder leads out of the workspace (a junction, a
-    // folder symbolic link, a `subst` drive at another folder); the profile's
-    // workspace is the real one.
-    let mut leading_out: Vec<(&str, Result<PathBuf, String>)> = vec![
+    let mut leading_out = vec![
         (
             "junction to a folder outside the workspace",
             Ok(junction(&base.join("out-junction"), &outside)),
+            outside.clone(),
         ),
         (
             "folder symlink to a folder outside the workspace",
             symlink(&base.join("out-symlink"), &outside),
+            outside.clone(),
         ),
     ];
     let other_subst = subst(&outside).map(|(root, guard)| {
         guards.push(guard);
         root
     });
-    leading_out.push(("subst drive at a different folder", other_subst));
-    let mut negatives = Vec::new();
-    for (form, cwd) in &leading_out {
-        let cwd = match cwd {
-            Ok(cwd) => cwd,
-            Err(why) => {
-                eprintln!("| {form} | | not made here: {why} |");
+    leading_out.push(("subst drive at a different folder", other_subst, outside));
+    Fixture {
+        workspace,
+        leading_in,
+        leading_out,
+        _roots: vec![temp, system_temp],
+        _guards: guards,
+    }
+}
+
+/// D398: each spelling of the working folder runs as the real path does, and
+/// `docs` (when read-only) and `.git` stay unwritten; a working folder
+/// leading out of the workspace is still refused. Each profile gets fresh
+/// folders: the non-admin sandbox's deny entries outlive a command.
+///
+/// With `CODEX_TEST_D398_ELEVATED` (an elevated session with the sandbox
+/// helpers built) it also runs the same spellings under the default
+/// (elevated) sandbox, for comparison: that path isn't changed by D398, so
+/// only the security properties are asserted there.
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_d398_command_exec_non_canonical_cwd() {
+    let elevated = std::env::var_os("CODEX_TEST_D398_ELEVATED").is_some();
+    // Inside the user profile, like the default `~/.codex`: the elevated
+    // sandbox's setup grants its user read access to profile folders.
+    let profile_dir = std::env::var_os("USERPROFILE").expect("USERPROFILE");
+    let codex_home_dir = tempfile::Builder::new()
+        .prefix("d398-codex-home-")
+        .tempdir_in(profile_dir)
+        .expect("codex home");
+    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    if elevated {
+        stage_windows_sandbox_helpers();
+    }
+
+    eprintln!("\n| sandbox | cwd form | profile | command/exec | output |");
+    eprintln!("|---|---|---|---|---|");
+    let mut outcomes = Vec::new();
+    let mut expected = Vec::new();
+    let mut elevated_outcomes = Vec::new();
+    let profile_count = profiles(Path::new("C:\\"), Path::new("C:\\docs")).len();
+    let mut levels = vec![("non-admin", WindowsSandboxLevel::RestrictedToken)];
+    if elevated {
+        levels.push(("elevated", WindowsSandboxLevel::Elevated));
+    }
+    for (sandbox, level) in levels {
+        for index in 0..profile_count {
+            // For comparison only: the elevated sandbox with read-only docs.
+            if level == WindowsSandboxLevel::Elevated && index != 1 {
                 continue;
             }
-        };
-        for (profile_name, profile, _) in profiles(&workspace, &workspace.join("docs")) {
-            let outcome = run_command_exec(&profile, cwd, &outside, /*has_docs*/ false).await;
-            eprintln!(
-                "| {form} `{}` | {profile_name} | {outcome:?} |",
-                cwd.display()
-            );
-            negatives.push((format!("{form} / {profile_name}"), outcome));
+            let fixture = fixture();
+            for (form, cwd, real) in fixture.leading_in.iter().chain(&fixture.leading_out) {
+                let leads_out = fixture.leading_out.iter().any(|(out, ..)| out == form);
+                let cwd = match cwd {
+                    Ok(cwd) => cwd,
+                    Err(why) => {
+                        if index <= 1 {
+                            eprintln!("| {sandbox} | {form} | | not made here: {why} | |");
+                        }
+                        continue;
+                    }
+                };
+                // Leading in: `:project_roots` is the working folder as
+                // spelled. Leading out: the workspace by its real path.
+                let (profile_root, real_docs) = if leads_out {
+                    (&fixture.workspace, fixture.workspace.join("docs"))
+                } else {
+                    (cwd, real.join("docs"))
+                };
+                let (profile_name, profile, docs_read_only) = profiles(profile_root, &real_docs)
+                    .into_iter()
+                    .nth(index)
+                    .expect("profile");
+                let (outcome, output) = run_command_exec(level, &profile, cwd, real).await;
+                eprintln!(
+                    "| {sandbox} | {form} `{}` | {profile_name} | {outcome:?} | {} |",
+                    cwd.display(),
+                    output.chars().take(200).collect::<String>()
+                );
+                let label = format!("{sandbox} / {form} / {profile_name}");
+                if level == WindowsSandboxLevel::Elevated {
+                    elevated_outcomes.push((label, outcome, docs_read_only));
+                    continue;
+                }
+                expected.push((
+                    label.clone(),
+                    if leads_out {
+                        Outcome::SplitRootsRefused { written: false }
+                    } else {
+                        Outcome::Ran {
+                            ok: true,
+                            docs: !docs_read_only,
+                            git: false,
+                        }
+                    },
+                ));
+                outcomes.push((label, outcome));
+            }
         }
     }
-    drop(guards);
-    let _ = std::fs::remove_dir_all(&system_root);
 
-    let (outcomes, expected): (Vec<_>, Vec<_>) = results
-        .into_iter()
-        .map(|(label, outcome, expected)| ((label.clone(), outcome), (label, expected)))
-        .unzip();
     assert_eq!(
         outcomes, expected,
-        "every spelling of the workspace runs as the real path; read-only docs and .git stay unwritten"
+        "non-admin: every spelling of the workspace runs as the real path; read-only docs and .git stay unwritten; a working folder leading out is refused"
     );
-    assert_eq!(
-        negatives,
-        negatives
-            .iter()
-            .map(|(label, _)| (label.clone(), Outcome::SplitRootsRefused { written: false }))
-            .collect::<Vec<_>>(),
-        "a working folder leading out of the workspace is still refused"
-    );
+    for (label, outcome, docs_read_only) in elevated_outcomes {
+        if let Outcome::Ran { docs, git, .. } = outcome {
+            assert!(!git && !(docs_read_only && docs), "{label}: {outcome:?}");
+        }
+    }
+}
+
+/// Copies the elevated sandbox helpers next to this test binary, where the
+/// sandbox looks for them (as `launch_contract_windows_tests` does).
+fn stage_windows_sandbox_helpers() {
+    let exe = std::env::current_exe().expect("test binary");
+    let resources = exe.parent().expect("test dir").join("codex-resources");
+    std::fs::create_dir_all(&resources).expect("resources dir");
+    for helper in ["codex-windows-sandbox-setup", "codex-command-runner"] {
+        let source = codex_utils_cargo_bin::cargo_bin(helper).expect("sandbox helper built");
+        let destination = resources.join(format!("{helper}.exe"));
+        if let Err(error) = std::fs::copy(&source, &destination)
+            && !destination.exists()
+        {
+            panic!("stage {helper}: {error}");
+        }
+    }
 }

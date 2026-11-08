@@ -421,14 +421,19 @@ jobs:
         shell: bash
         # Every spelling must be made here: subst, mapped drive (the
         # administrative share), 8.3 short name (turned on for C:, which the
-        # normal-session step below reuses) and folder symbolic links.
+        # normal-session step below reuses) and folder symbolic links. The
+        # elevated sandbox runs the same spellings for comparison.
         env:
           CORBANU_TEST_REQUIRE_SYMLINKS: "1"
           CORBANU_TEST_REQUIRE_SUBST: "1"
           CORBANU_TEST_REQUIRE_MAPPED_DRIVE: "1"
           CORBANU_TEST_REQUIRE_8DOT3: "1"
+          CODEX_TEST_D398_ELEVATED: "1"
         run: |
           set -euo pipefail
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
           fsutil 8dot3name set C: 0
           # Both probes run before a failure stops the step.
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-core.log || true
