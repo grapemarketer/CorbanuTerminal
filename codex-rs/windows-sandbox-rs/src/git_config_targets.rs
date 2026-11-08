@@ -307,10 +307,9 @@ fn key_matches(pattern: &str, name: &str) -> bool {
 
 /// The first shell word of `command`, unquoted.
 fn first_word(command: &str) -> Option<String> {
-    let mut chars = command.chars().peekable();
     let mut word = String::new();
     let mut quote: Option<char> = None;
-    while let Some(c) = chars.next() {
+    for c in command.chars() {
         match (quote, c) {
             (None, '"' | '\'') => quote = Some(c),
             (Some(q), c) if c == q => quote = None,
@@ -353,7 +352,7 @@ pub(crate) fn parse(text: &str) -> Vec<Entry> {
             if c.is_whitespace() {
                 chars.next();
             } else if c == '#' || c == ';' {
-                while let Some(c) = chars.next() {
+                for c in chars.by_ref() {
                     if c == '\n' {
                         break;
                     }
