@@ -10,7 +10,8 @@
 #
 # Writes OUT_DIR/raw.tsv (every timed run), OUT_DIR/table.md (median per
 # size, doubling ratios, verdict) and one log per run. A run that times out
-# or crashes is listed in the table as TIMEOUT / EXIT <code>.
+# or crashes is listed in the table as TIMEOUT / EXIT <code>; any EXIT makes
+# the script exit 1. Needs bash, perl and python3 (Linux and macOS).
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -23,6 +24,21 @@ filter=security::tainted_action::tainted_action_timing_probe::classifier_timing_
 
 mkdir -p "$out"
 cd "$repo/codex-rs" || exit 1
+
+# GNU timeout (124 on expiry); macOS has none, so gtimeout from coreutils or
+# perl's alarm (SIGALRM, 142).
+limited() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$limit" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$limit" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$limit" "$@"
+  fi
+}
+
+# Seconds with a fraction (BSD date has no %N).
+now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 
 echo "== build: cargo test --release -p codex-core --lib --no-run"
 cargo test --release -p codex-core --lib --no-run 2>&1 | tee "$out/build.log"
@@ -37,16 +53,16 @@ printf 'pattern\tunits\tbytes\trun\tns\tverdict\n' >"$out/raw.tsv"
 for pattern in $patterns; do
   for n in $sizes; do
     log="$out/run-$pattern-$n.log"
-    start=$(date +%s.%N)
+    start=$(now)
     PROBE_PATTERN=$pattern PROBE_UNITS=$n PROBE_REPS=$reps \
-      timeout "$limit" cargo test --release -q -p codex-core --lib -- \
+      limited cargo test --release -q -p codex-core --lib -- \
       --ignored --exact --nocapture "$filter" >"$log" 2>&1
     status=$?
-    end=$(date +%s.%N)
+    end=$(now)
     grep '^probe' "$log" | cut -f2- >>"$out/raw.tsv"
     case $status in
       0) state=ok ;;
-      124) state=TIMEOUT ;;
+      124 | 142) state=TIMEOUT ;;
       *) state="EXIT $status" ;;
     esac
     printf '%s\t%s\t%s\t%s\n' "$pattern" "$n" "$state" \
@@ -123,3 +139,9 @@ with open(f"{out}/table.md", "w") as f:
     f.write("\n".join(lines) + "\n")
 print("\n".join(lines))
 PY
+
+# A crashed run (not a timeout) is a broken probe, not a data point.
+if cut -f3 "$out/status.tsv" | grep -q '^EXIT'; then
+  echo "some runs exited with an error; see $out/status.tsv" >&2
+  exit 1
+fi
