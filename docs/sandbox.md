@@ -82,16 +82,34 @@ prompt cover every folder commands may write to (`%TEMP%` included) and
 anything below the working folder, not only the working folder and the
 folders above it. Commands can still create a
 `.git` (`git init` works). A `.git` that is a link (a junction or symbolic
-link) is flagged after every command. Only that top-level `.git` is checked,
-not `.git` folders deeper inside.
+link) is flagged after every command.
+
+**Repositories deeper inside, and bare ones.** The same warnings cover the
+repositories deeper in a folder non-admin commands may write to (a nested
+`.git` folder, file or link, and a folder that is itself a bare
+repository), and a writable folder that is itself a bare repository. One is
+flagged when it is new or replaced, or when what git would run from it
+changes: its `config`, `config.worktree`, `commondir` or `gitdir` file, its
+`hooks`, rebase or sequencer steps, legacy `remotes`/`branches`
+definitions, a link or hard link among the files git writes to, or the same
+in its submodules (`modules`), its worktrees and the folders a `gitdir:`
+line or `commondir` names inside the writable folders. Files are compared
+by content, so rewriting one with the same content isn't a change. A new
+repository with exactly the shape `git init` or `git clone` leave (only
+the config keys they write and no `ext::` URL, only `*.sample` hooks, no
+links, no other repositories inside) isn't flagged, so cloning a project
+to look at it doesn't ask; a later change to it is. The warning names what
+changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
+checked, and a nested `.git` link is flagged after every command, as at the
+top.
 
 **Bare repositories a command plants.** Git also uses a folder that holds
 `HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
 its config and hooks. A sandboxed command can make one in any folder it may
 write to, and git run there or in a folder below it later runs whatever
-that config names. Corbanu Terminal doesn't check for these (#1775), on
-Windows or elsewhere. We recommend making git refuse a bare repository it
-finds by searching:
+that config names. Only the non-admin Windows sandbox checks for these (see
+above); the default Windows sandbox, macOS and Linux don't (#1775, #1846).
+We recommend making git refuse a bare repository it finds by searching:
 
 ```shell
 git config --global safe.bareRepository explicit
