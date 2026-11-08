@@ -2333,6 +2333,14 @@ impl Classifier {
             .as_ref()
             .filter(|(_, name)| name == "eval")
             .map(|(index, _)| index + 1);
+        // #1773: parsing sudo's value options more accurately must not erase a
+        // prompt that main reached through its older program boundary, whether
+        // it appears directly or in eval's operands.
+        if indirect::sudo_legacy_programs_differ(words)
+            || operands.is_some_and(|from| indirect::sudo_legacy_programs_differ(&words[from..]))
+        {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         if indirect::redirect_hides_command(simple, words, /*from*/ 0)
             || indirect::sudo_runs_helper(simple, words, /*from*/ 0)
             || operands.is_some_and(|from| {

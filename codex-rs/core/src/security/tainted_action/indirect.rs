@@ -478,8 +478,44 @@ pub(super) fn programs(words: &[String]) -> Vec<usize> {
     found
 }
 
+fn legacy_programs(words: &[String]) -> Vec<usize> {
+    let mut found = Vec::new();
+    if let Some((index, _)) = legacy_command_chain(words, &mut |at| found.push(at)) {
+        found.push(index);
+    }
+    found
+}
+
+/// Whether #1773 changes the pre-existing classifier's sudo program path.
+/// The caller must retain a prompt in that case, even when the new parser can
+/// identify a harmless command, because main may have classified the old path.
+pub(super) fn sudo_legacy_programs_differ(words: &[String]) -> bool {
+    let has_sudo = words.iter().any(|word| {
+        work::step();
+        basename(word).eq_ignore_ascii_case("sudo")
+    });
+    has_sudo && programs(words) != legacy_programs(words)
+}
+
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.
 fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(usize, String)> {
+    command_chain_with(words, wrapper, /*legacy_sudo*/ false)
+}
+
+/// The pre-#1773 command chain. The classifier keeps it as a prompt-only
+/// floor while the current parser identifies the command sudo actually runs.
+fn legacy_command_chain(
+    words: &[String],
+    wrapper: &mut dyn FnMut(usize),
+) -> Option<(usize, String)> {
+    command_chain_with(words, wrapper, /*legacy_sudo*/ true)
+}
+
+fn command_chain_with(
+    words: &[String],
+    wrapper: &mut dyn FnMut(usize),
+    legacy_sudo: bool,
+) -> Option<(usize, String)> {
     const KEYWORDS: &[&str] = &["!", "if", "then", "elif", "else", "do", "while", "until"];
     let mut index = 0;
     while let Some(word) = words.get(index) {
@@ -512,7 +548,11 @@ fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(us
         while let Some(option) = words.get(index) {
             work::step();
             if option.starts_with('-') {
-                index += option_words(&name, option, value_options);
+                index += if legacy_sudo && name == "sudo" {
+                    sudo_legacy_option_words(option)
+                } else {
+                    option_words(&name, option, value_options)
+                };
             } else if option.contains('=') {
                 index += 1;
             } else {
@@ -631,8 +671,10 @@ fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Optio
 /// them, as the shell runs them (`>log sudo -A true`, `sudo 2>&1 -A
 /// true`, `sudo {fd}>log -e f`). `from`: the operands of `eval`.
 pub(super) fn sudo_runs_helper(command: &SimpleCommand, words: &[String], from: usize) -> bool {
-    words.get(from..).is_some_and(sudo_in_words_runs_helper)
-        || unredirected(command, words, from).is_some_and(|runs| sudo_in_words_runs_helper(&runs))
+    let runs_helper =
+        |runs: &[String]| sudo_in_words_runs_helper(runs) || sudo_in_words_runs_legacy_helper(runs);
+    words.get(from..).is_some_and(|runs| runs_helper(runs))
+        || unredirected(command, words, from).is_some_and(|runs| runs_helper(&runs))
 }
 
 fn sudo_in_words_runs_helper(words: &[String]) -> bool {
@@ -688,6 +730,77 @@ fn sudo_in_words_runs_helper(words: &[String]) -> bool {
     // sudo and word. Filled at the first sudo.
     let mut helper_from: Vec<bool> = Vec::new();
     for at in programs(words) {
+        work::step();
+        let name = basename(&words[at]).to_lowercase();
+        if name == "sudoedit" {
+            return true;
+        }
+        if name != "sudo" {
+            continue;
+        }
+        if helper_from.is_empty() {
+            helper_from = vec![false; words.len() + 2];
+            for (next, option) in words.iter().enumerate().rev() {
+                work::step();
+                if option == "--" || !option.starts_with('-') || option == "-" {
+                    continue;
+                }
+                let (helper, takes) = read(option);
+                helper_from[next] = helper
+                    || helper_from
+                        .get(next + 1 + usize::from(takes))
+                        .copied()
+                        .unwrap_or_default();
+            }
+        }
+        if helper_from[at + 1] {
+            return true;
+        }
+    }
+    false
+}
+
+/// The pre-#1773 helper scan is retained as a prompt-only floor. It is
+/// deliberately looser than sudo's parser: classifier changes must not make a
+/// line quiet merely by reading its options more precisely.
+fn sudo_in_words_runs_legacy_helper(words: &[String]) -> bool {
+    let values: String = SUDO_LEGACY_VALUE_OPTIONS
+        .iter()
+        .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
+        .chain(["R"])
+        .collect();
+    let read = |option: &str| -> (bool, bool) {
+        work::step();
+        if let Some(long) = option.strip_prefix("--") {
+            let (name, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            let helper =
+                !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
+            let takes = !attached
+                && !name.is_empty()
+                && SUDO_LEGACY_VALUE_OPTIONS.iter().any(|known| {
+                    work::step();
+                    known
+                        .strip_prefix("--")
+                        .is_some_and(|known| known.starts_with(name))
+                });
+            return (helper, takes);
+        }
+        let letters = option.strip_prefix('-').unwrap_or_default();
+        for (at, letter) in letters.char_indices() {
+            work::step();
+            if matches!(letter, 'A' | 'e') {
+                return (true, false);
+            }
+            if values.contains(letter) {
+                return (false, letters[at + letter.len_utf8()..].is_empty());
+            }
+        }
+        (false, false)
+    };
+    let mut helper_from = Vec::new();
+    for at in legacy_programs(words) {
         work::step();
         let name = basename(&words[at]).to_lowercase();
         if name == "sudoedit" {

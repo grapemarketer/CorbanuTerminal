@@ -21,11 +21,11 @@ fn abs(path: &str) -> PathUri {
     )
 }
 
-fn script(line: &str) -> Option<ProtectedActionKind> {
+fn script_with(shell: &str, line: &str) -> Option<ProtectedActionKind> {
     let action = ApprovalAction::Shell {
         id: "call".into(),
         environment_id: "local".into(),
-        command: ["bash", "-lc", line]
+        command: [shell, "-lc", line]
             .into_iter()
             .map(str::to_string)
             .collect(),
@@ -35,6 +35,10 @@ fn script(line: &str) -> Option<ProtectedActionKind> {
         justification: None,
     };
     classify_with(&action, &fixture(HOME), Some(&fixture(USER_HOME)))
+}
+
+fn script(line: &str) -> Option<ProtectedActionKind> {
+    script_with("bash", line)
 }
 
 #[cfg(unix)]
@@ -112,6 +116,25 @@ fn issue_1773_changed_sudo_boundaries_remain_unseen_code() {
         "sudo -Nu root true",
         "sudo -a root true",
         "sudo --auth-type basic true",
+        // `programs()` reads through these words; the legacy program boundary
+        // must remain a prompt floor.
+        "sudo -- -R ./root /bin/sh -c true",
+        "sudo FOO=1 -R ./root /bin/sh -c true",
+        "sudo -- --us ./x true",
+        "sudo - --us ./x true",
+        "sudo FOO=1 -Nu ./x true",
+        "sudo -- -a ./x true",
+        // The legacy helper scanner saw helpers through invalid or ambiguous
+        // spellings, so those existing prompts remain intact.
+        "sudo -xA true",
+        "sudo -SxA true",
+        "sudo -1A true",
+        "sudo -xe f",
+        "sudo -cA true",
+        "sudo -aA true",
+        "sudo -ce f",
+        "sudo --a true",
+        "sudo --c -u -A true",
     ] {
         assert_eq!(script(line), Some(UnseenCode), "{line}");
     }
@@ -132,6 +155,23 @@ fn issue_1773_changed_sudo_boundaries_remain_unseen_code() {
     );
     for line in ["sudo --user root true", "sudo -u root true", "sudo -N true"] {
         assert_eq!(script(line), None, "{line}");
+    }
+}
+
+/// The prompt-only compatibility floor applies to zsh's classification path
+/// too; these forms cover program-boundary and legacy-helper disagreements.
+#[test]
+fn issue_1773_legacy_prompt_floor_holds_in_zsh() {
+    use ProtectedActionKind::UnseenCode;
+
+    for line in [
+        "sudo -- -R ./root /bin/sh -c true",
+        "sudo FOO=1 -Nu ./x true",
+        "sudo -xA true",
+        "sudo -cA true",
+        "sudo --c -u -A true",
+    ] {
+        assert_eq!(script_with("zsh", line), Some(UnseenCode), "{line}");
     }
 }
 
@@ -161,6 +201,9 @@ fn issue_1773_sudo_value_option_checks_are_linear() {
         ("sudo chroot options", "-R x "),
         ("sudo abbreviated long options", "--us root "),
         ("sudo no-update clusters", "-Nu root "),
+        ("sudo ambiguous long options", "--a "),
+        ("sudo option terminators", "-- -Nu root "),
+        ("sudo wrapper assignments", "FOO=1 -Nu root "),
     ] {
         work::assert_linear(label, |scale| {
             let line = format!("sudo {}./x", unit.repeat(400 * scale));
