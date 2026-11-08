@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime
 from datetime import timedelta
@@ -21,6 +22,9 @@ MAIN_REF = "refs/heads/main"
 # A nightly whose commit has been main's head for longer than this retests
 # the code an earlier nightly already ran.
 STALE_AFTER = timedelta(hours=24)
+# GitHub picks a run's commit and stamps its creation time separately, so a
+# push this shortly before the run was created may not be in it yet.
+RACE_GRACE = timedelta(minutes=2)
 # The Activity API lists 100 entries per page; a run is checked within
 # minutes of its creation, and re-runs rarely come more than a few days later.
 MAX_PAGES = 10
@@ -28,6 +32,14 @@ MAX_PAGES = 10
 
 def parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def head_at(activities: list[dict], moment: datetime) -> dict | None:
+    """The newest entry at or before `moment` (`activities` are newest first)."""
+    return next(
+        (entry for entry in activities if parse_time(entry["timestamp"]) <= moment),
+        None,
+    )
 
 
 def check(
@@ -38,23 +50,21 @@ def check(
 ) -> tuple[int, list[tuple[str, str]]]:
     """Return the exit code and the (level, message) annotations for a run.
 
-    `activities` are main's Activity API entries: each has a `timestamp` and
-    the commit (`after`) main pointed to from then on.
+    `activities` are main's Activity API entries, newest first as the API
+    returns them: each has a `timestamp` and the commit (`after`) main
+    pointed to from then on.
     """
     created = parse_time(created_at)
-    entries = sorted(activities, key=lambda entry: parse_time(entry["timestamp"]))
-    current = entries[-1] if entries else None
+    current = activities[0] if activities else None
     if ref != MAIN_REF:
         head = current["after"] if current else "unknown"
         return 0, [
             ("notice", f"Manual run on {ref} at {sha}, not main (main's head: {head}).")
         ]
+    if not activities:
+        return 1, [("error", "The Activity API returned no history for main.")]
 
-    at_creation = None
-    for entry in entries:
-        if parse_time(entry["timestamp"]) <= created:
-            at_creation = entry
-
+    at_creation = head_at(activities, created)
     if at_creation is None:
         return 0, [
             (
@@ -65,7 +75,22 @@ def check(
         ]
 
     head = at_creation["after"]
+    since = at_creation["timestamp"]
     if sha != head:
+        before = head_at(activities, created - RACE_GRACE)
+        recent = {
+            entry["after"]
+            for entry in activities
+            if created - RACE_GRACE < parse_time(entry["timestamp"]) <= created
+        }
+        if (before is not None and sha == before["after"]) or sha in recent:
+            return 0, [
+                (
+                    "warning",
+                    f"This nightly tests {sha}; main moved to {head} at {since}, "
+                    f"moments before the run was created ({created_at}).",
+                )
+            ]
         return 1, [
             (
                 "error",
@@ -74,7 +99,6 @@ def check(
             )
         ]
 
-    since = at_creation["timestamp"]
     annotations = [("notice", f"Testing main @ {sha} (main's head since {since}).")]
     age = created - parse_time(since)
     if age > STALE_AFTER:
@@ -82,8 +106,8 @@ def check(
             (
                 "warning",
                 f"main hasn't changed since {since} ({age.days} d "
-                f"{age.seconds // 3600} h before this run): this nightly retests "
-                f"{sha}, the code earlier nightlies already ran.",
+                f"{age.seconds // 3600} h before this run): this nightly tests the "
+                f"same commit, {sha}, as every nightly since then.",
             )
         )
     if current is not None and current["after"] != sha:
@@ -99,7 +123,14 @@ def check(
 
 
 def get_json(url: str, token: str) -> tuple[object, str | None]:
-    """The decoded response and the next page's URL, if any."""
+    """The decoded response and the next page's URL, if any; one retry."""
+    try:
+        return get_json_once(url, token)
+    except (urllib.error.URLError, TimeoutError):
+        return get_json_once(url, token)
+
+
+def get_json_once(url: str, token: str) -> tuple[object, str | None]:
     request = urllib.request.Request(
         url,
         headers={
@@ -131,20 +162,34 @@ def main_activities(api: str, repo: str, token: str, created_at: str) -> list[di
     return activities
 
 
+def escape(message: str) -> str:
+    """Escapes a workflow command's message."""
+    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def main() -> int:
     env = os.environ
     api = env.get("GITHUB_API_URL", "https://api.github.com")
     repo = env["GITHUB_REPOSITORY"]
     token = env["GITHUB_TOKEN"]
-    run, _ = get_json(f"{api}/repos/{repo}/actions/runs/{env['GITHUB_RUN_ID']}", token)
-    if not isinstance(run, dict):
-        raise RuntimeError(f"unexpected workflow run response: {run!r}")
-    created_at = run["created_at"]
-    ref = env["GITHUB_REF"]
-    activities = main_activities(api, repo, token, created_at)
-    code, annotations = check(ref, env["GITHUB_SHA"], created_at, activities)
+    try:
+        run, _ = get_json(
+            f"{api}/repos/{repo}/actions/runs/{env['GITHUB_RUN_ID']}", token
+        )
+        if not isinstance(run, dict):
+            raise RuntimeError(f"unexpected workflow run response: {run!r}")
+        created_at = run["created_at"]
+        activities = main_activities(api, repo, token, created_at)
+    except (OSError, RuntimeError, KeyError, ValueError) as err:
+        print(
+            f"::error title=Nightly commit::{escape(f'GitHub API request failed: {err}')}"
+        )
+        return 1
+    code, annotations = check(
+        env["GITHUB_REF"], env["GITHUB_SHA"], created_at, activities
+    )
     for level, message in annotations:
-        print(f"::{level} title=Nightly commit::{message}")
+        print(f"::{level} title=Nightly commit::{escape(message)}")
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as out:

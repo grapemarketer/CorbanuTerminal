@@ -3,9 +3,11 @@
 import unittest
 
 from check_nightly_commit import check
+from check_nightly_commit import escape
 
 MAIN = "refs/heads/main"
-# Main's real history around the 10-29..11-06 nightlies (#1812).
+# Main's real history around the 10-29..11-06 nightlies (#1812), newest
+# first as the Activity API returns it.
 ACTIVITIES = [
     {"timestamp": "2026-11-06T18:52:42Z", "after": "2d8c17d66a"},
     {"timestamp": "2026-10-29T10:53:04Z", "after": "1329ea5883"},
@@ -44,6 +46,7 @@ class CheckNightlyCommitTest(unittest.TestCase):
         self.assertEqual((code, self.levels(annotations)), (0, ["notice"]))
 
     def test_commit_that_was_not_main_head_fails(self) -> None:
+        # Made up: the real run created then tested dfeb26a122.
         code, annotations = check(
             MAIN, "1329ea5883", "2026-11-07T15:44:22Z", ACTIVITIES
         )
@@ -59,6 +62,30 @@ class CheckNightlyCommitTest(unittest.TestCase):
             MAIN, "3d2f79653a", "2026-10-01T00:00:00Z", ACTIVITIES
         )
         self.assertEqual((code, self.levels(annotations)), (0, ["warning"]))
+
+    def test_same_second_updates_keep_the_api_order(self) -> None:
+        activities = [
+            {"timestamp": "2026-11-07T10:00:00Z", "after": "newer"},
+            {"timestamp": "2026-11-07T10:00:00Z", "after": "older"},
+        ]
+        code, annotations = check(MAIN, "newer", "2026-11-07T12:00:00Z", activities)
+        self.assertEqual((code, self.levels(annotations)), (0, ["notice"]))
+
+    def test_push_just_before_creation_only_warns(self) -> None:
+        # GitHub may have picked the previous head for a run created a
+        # moment after a push.
+        code, annotations = check(
+            MAIN, "1329ea5883", "2026-11-06T18:53:30Z", ACTIVITIES
+        )
+        self.assertEqual((code, self.levels(annotations)), (0, ["warning"]))
+        self.assertIn("main moved to 2d8c17d66a", annotations[0][1])
+
+    def test_no_main_history_fails(self) -> None:
+        code, annotations = check(MAIN, "1329ea5883", "2026-11-06T16:49:19Z", [])
+        self.assertEqual((code, self.levels(annotations)), (1, ["error"]))
+
+    def test_escape(self) -> None:
+        self.assertEqual(escape("50%\r\nx"), "50%25%0D%0Ax")
 
     def test_branch_run_is_a_notice(self) -> None:
         code, annotations = check(
