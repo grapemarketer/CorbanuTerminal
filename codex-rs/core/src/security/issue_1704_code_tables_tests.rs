@@ -172,8 +172,11 @@ fn issue1704_option_checks_are_linear() {
     work::assert_linear("many zstyles", |scale| {
         let _ = kind(&["zsh", "-lc", &"zstyle -a :x y z; ".repeat(200 * scale)]);
     });
-    work::assert_linear("stat after a long load", |scale| {
-        let line = format!("zmod''load {}; stat -A $n x", "'z' ".repeat(400 * scale));
+    work::assert_linear("stat after a long line, its load lexed", |scale| {
+        let line = format!(
+            "echo {}; $'zmo\\144load' $'zsh/st\\141t'; stat -A $n x",
+            "z ".repeat(400 * scale)
+        );
         let _ = kind(&["zsh", "-lc", &line]);
     });
 }
@@ -217,6 +220,11 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "zmo{d,}load zsh/stat; stat -A functions x",
             "builtin zmodload zsh/stat; stat -A functions x",
             "enable -f stat stat; stat -A functions x",
+            // Review 2: a brace range, which the lexer does not expand, and
+            // a command named by a pattern.
+            "zmo{d..d}load zsh/st{a..a}t; stat -A functions x",
+            "zm* $(cat m); stat -A functions x",
+            "a=zmod b=load; $a$b zsh/stat; stat -A functions x",
             // A load after it keeps main's prompt.
             "stat -A functions x; zmodload zsh/stat",
             // zstat needs no `stat` load.
@@ -236,6 +244,9 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             // the prompts above come from the load.
             "zmodload zsh/stat",
             "zmodload zsh/stat; stat -f %m x",
+            "zmo{d..d}load zsh/st{a..a}t",
+            "zm* $(cat m)",
+            "enable -f stat stat",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
         }

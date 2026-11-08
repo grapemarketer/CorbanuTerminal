@@ -143,10 +143,12 @@ pub(super) fn writes_table(
 /// simple commands as lexed) may load a `stat` builtin. zsh starts without
 /// one (start-up files may load it; D410 accepts that). A word, as written
 /// with quotes and backslashes aside (`zmod''load`) or as lexed
-/// (`$'zmo\144load'`, lines joined, braces expanded), names `zmodload`
-/// (any use, `zmodload -F zsh/stat b:zstat` too) or the module; or a
-/// command is bash's `enable` (`enable -f stat stat` loads bash's own) or
-/// named by an expansion (`$a$b`).
+/// (`$'zmo\144load'`, lines joined, comma braces expanded), names
+/// `zmodload` (any use, `zmodload -F zsh/stat b:zstat` too) or the module;
+/// a word as written holds a brace range, which the lexer does not expand
+/// (`zmo{d..d}load`); or a command is bash's `enable` (`enable -f stat
+/// stat` loads bash's own), or is named by an expansion or a pattern
+/// (`$a$b`, `$(cat c)`, `zm*`).
 pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand]) -> bool {
     let names = |text: &str| {
         let plain: String = text
@@ -160,16 +162,38 @@ pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand
     };
     command.iter().any(|part| {
         work::step();
-        names(part)
+        names(part) || brace_range(part)
     }) || commands.iter().any(|simple| {
         work::step();
         simple.words.iter().any(|word| {
             work::step();
             names(word)
         }) || indirect::command_word(&simple.words).is_some_and(|(_, name)| {
-            name == "enable" || name.contains(['$', '`']) || name.contains(shell::UNSEEN_OUTPUT)
+            name == "enable"
+                || (!matches!(name.as_str(), "[" | "[[")
+                    && name.contains(['$', '`', '*', '?', '[', '{', '(']))
+                || name.contains(shell::UNSEEN_OUTPUT)
         })
     })
+}
+
+/// Whether `text` holds a brace range (`{a..z}`, `{1..3}`), read loosely:
+/// a `..` between a `{` and the next `}`.
+fn brace_range(text: &str) -> bool {
+    let mut open = false;
+    let mut dot = false;
+    let mut range = false;
+    for ch in text.chars() {
+        work::step();
+        match ch {
+            '{' => (open, dot, range) = (true, false, false),
+            '}' if open && range => return true,
+            '}' => open = false,
+            '.' if open => (range, dot) = (range || dot, true),
+            _ => dot = false,
+        }
+    }
+    false
 }
 
 /// What the quote-aware reading shows of a word ([`writes_table`]).
