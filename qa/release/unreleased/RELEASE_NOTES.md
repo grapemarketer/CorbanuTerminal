@@ -450,12 +450,16 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   PowerShell 7, git and Git Bash, and MSBuild work as before.
 - **What older versions' sandboxed commands left in `%TEMP%` becomes yours**
   (#1871). The sandbox's accounts owned those files and folders, and an
-  owner can always change permissions, so commands could grant themselves
-  access to them again. In the same upgrade step, before the old grant is
-  removed, the session makes you their owner and removes their entries for
-  the sandbox's accounts, as you (no UAC prompt). Nothing is deleted. One
-  whose permissions keep you out stays as it is; the counts are logged in
-  the Corbanu home's `.sandbox` log.
+  owner can change their permissions: a command could give its account and
+  its workspace entries there that later commands in that workspace carry,
+  and keep changing them after the upgrade (shown on native Windows CI). In
+  the same upgrade step, before the old grant is removed, the session makes
+  you their owner and removes their entries for the sandbox's accounts, as
+  you (no UAC prompt). Nothing is deleted. One whose permissions keep you
+  out stays as it is; the counts are logged in the Corbanu home's
+  `.sandbox` log. A typical session leaves several hundred (Node's
+  `node-compile-cache`, `MSBuildTemp`, temp files tools kept); on CI all
+  were taken in under a second.
 - Not changed: the non-admin sandbox still uses `%TEMP%` itself, and
   sandboxed commands can still read (not write) other sessions' temp
   folders.
