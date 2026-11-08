@@ -468,7 +468,7 @@ fn sec_win_d429_legacy_workloads_still_work() {
         ),
         (
             "tasklist",
-            cmd_c("tasklist /v /fo csv /nh 2>&1".to_string()),
+            cmd_c("tasklist /v /nh 2>&1".to_string()),
             &[],
             &["tasklist.exe"],
             false,
