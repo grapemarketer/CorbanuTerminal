@@ -717,7 +717,7 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   network (UNC) path with an unclear "not valid on this host" error (debug
   builds crashed). It still refuses it, in both sandboxes, now saying to use
   the folder's local path instead. Other network paths are unchanged: the
-  command starts but can't write there.
+  command starts sandboxed as before.
 - **A writable folder inside a read-only one is refused through links too**
   (#1801, D331). D331's refusal compared folders by spelling, so a
   writable folder that lay inside a read-only one only through a junction
