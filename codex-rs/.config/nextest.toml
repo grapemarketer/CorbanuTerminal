@@ -106,7 +106,9 @@ test-group = 'core_apply_patch_cli_integration'
 # (#1790): the guard serializes only within one process, and nextest runs each
 # test in its own. .github/scripts/test_windows_sandbox_nextest_groups.py
 # checks this, and accepts only `test(name substring)` terms joined by `|`.
-filter = 'package(codex-windows-sandbox) & (test(legacy_) | test(elevated_) | test(sec_win_1648_) | test(d311_cloud_placeholder_) | test(d311_label_walk_cloud_placeholder_))'
+# The D311 walk tests take it too (#1825): a session relabels the temporary
+# folder their trees are in.
+filter = 'package(codex-windows-sandbox) & (test(legacy_) | test(elevated_) | test(sec_win_1648_) | test(d311_))'
 test-group = 'windows_sandbox_legacy_sessions'
 
 [[profile.default.overrides]]
