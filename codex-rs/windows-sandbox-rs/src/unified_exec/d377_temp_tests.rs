@@ -485,7 +485,7 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
             })
         })
         .collect();
-    let refused_now = if refused.exists() {
+    let (refused_now, refused_taken) = if refused.exists() {
         assert!(
             crate::setup::is_elevated().expect("elevation") && aside.is_empty(),
             "{} was not set aside: {aside:?}",
@@ -497,17 +497,18 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
             .expect("the leftovers' log line");
         assert!(line.contains(", not taken 0 "), "{line}");
         assert_eq!(owner(&refused), user, "{}", refused.display());
-        refused
+        (refused, true)
     } else {
         assert_eq!(aside.len(), 1, "{aside:?}");
-        aside[0].clone()
+        (aside[0].clone(), false)
     };
     assert_eq!(
         fs::read_to_string(&refused_now).expect("read").trim(),
         "made"
     );
-    // Either way, no allow entry is left there for the sandbox's accounts or
-    // group with rights to write, delete or change it.
+    // Taken, no allow entry is left there for the sandbox's accounts or group
+    // with rights to write, delete or change it. (Set aside, it keeps its
+    // DACL, which the user may not change, under a name nothing uses.)
     let mut sandbox_sids = crate::session_temp_leftovers::sandbox_account_sids().expect("accounts");
     sandbox_sids.push(group);
     let sandbox_sids: Vec<crate::token::LocalSid> = sandbox_sids
@@ -521,11 +522,26 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     // FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER
     let mask = 0x2 | 0x4 | 0x1_0000 | 0x4_0000 | 0x8_0000;
     assert!(
-        !crate::acl::path_mask_allows(&refused_now, &psids, mask, /*require_all_bits*/ false)
+        !refused_taken
+            || !crate::acl::path_mask_allows(
+                &refused_now,
+                &psids,
+                mask,
+                /*require_all_bits*/ false
+            )
             .expect("dacl"),
         "{} still lets the sandbox change it",
         refused_now.display()
     );
+    let refused_lines = if refused_taken {
+        format!(
+            "(echo x>>\"{path}\") 2>nul && echo REFUSED-WRITTEN\r\n\
+             del /f /q \"{path}\" >nul 2>nul\r\n",
+            path = refused_now.display()
+        )
+    } else {
+        String::new()
+    };
     // A later command writes there (granting itself access first, as an
     // owner may).
     let tamper = root.path().join("d377-tamper.cmd");
@@ -540,13 +556,10 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
              icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul\r\n\
              (echo x>\"{dir}\\new.txt\") 2>nul && echo DIR-WRITTEN\r\n\
              (echo x>>\"{dir}\\inner.txt\") 2>nul && echo INNER-WRITTEN\r\n\
-             (echo x>>\"{refused_now}\") 2>nul && echo REFUSED-WRITTEN\r\n\
-             del /f /q \"{refused_now}\" >nul 2>nul\r\n\
-             if not exist \"{refused_now}\" echo REFUSED-DELETED\r\n",
+             {refused_lines}",
             file = file.display(),
             dir = dir.display(),
-            open_to_all = open_to_all.display(),
-            refused_now = refused_now.display()
+            open_to_all = open_to_all.display()
         ),
     )
     .expect("write script");
@@ -565,10 +578,14 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         "DIR-WRITTEN",
         "INNER-WRITTEN",
         "REFUSED-WRITTEN",
-        "REFUSED-DELETED",
     ] {
         assert!(!stdout.contains(written), "{written}: {stdout}");
     }
+    // Not deleted (by the command, or by the upgrade).
+    assert_eq!(
+        fs::read_to_string(&refused_now).expect("read").trim(),
+        "made"
+    );
     // Taken, not deleted.
     for path in [&file, &open_to_all, &dir, &dir.join("inner.txt")] {
         assert_eq!(owner(path), user, "{}", path.display());
