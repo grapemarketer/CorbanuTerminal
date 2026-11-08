@@ -677,6 +677,6 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `shell_environment_policy.set`. Each variable now reaches a command once,
   and a value you set wins over the inherited spelling; no folder is added
   to or removed from what you configured. Where Corbanu sets a proxy
-  variable in both cases (`HTTP_PROXY` and `http_proxy`), commands now get
-  only the capitals, so tools that read only the lower-case name (MSYS2 or
-  Git Bash `curl`) no longer see that proxy.
+  variable in both cases (`HTTP_PROXY` and `http_proxy`), sandboxed
+  commands get only the capitals, so tools that read only the lower-case
+  name (MSYS2 or Git Bash `curl`) no longer see that proxy.
