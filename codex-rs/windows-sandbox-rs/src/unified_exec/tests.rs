@@ -48,8 +48,8 @@ static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// The lock guards nothing but the order of the tests, so a test that
-/// failed holding it (#1825 added the D311 walk tests) doesn't fail the
-/// others that share the process.
+/// failed holding it doesn't fail the others that share the process (the
+/// D311 walk tests take it too since #1825).
 pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
     LEGACY_PROCESS_TEST_LOCK
         .lock()
