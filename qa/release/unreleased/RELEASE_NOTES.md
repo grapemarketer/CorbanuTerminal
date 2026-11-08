@@ -450,17 +450,19 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   PowerShell 7, git and Git Bash, and MSBuild work as before.
 - **What older versions' sandboxed commands left in `%TEMP%` becomes yours**
   (#1871). The sandbox's accounts owned those files and folders, and an
-  owner can change their permissions: a command could give its account and
-  its workspace entries there that later commands in that workspace carry,
-  and keep changing them after the upgrade (shown on native Windows CI). In
-  the same upgrade step, before the old grant is removed, the session makes
-  you their owner and removes every entry the sandbox could have added
-  (any explicit one other than yours, SYSTEM's and Administrators'), as you
-  (no UAC prompt). Nothing is deleted. One whose permissions keep you
-  out stays as it is; the counts are logged in the Corbanu home's
-  `.sandbox` log. A typical session leaves several hundred (Node's
-  `node-compile-cache`, `MSBuildTemp`, temp files tools kept); on CI all
-  were taken in under a second.
+  owner can change their permissions: a command could give its account,
+  the sandbox's group or its workspace entries there that later commands
+  carry, and keep changing them after the upgrade (shown on native Windows
+  CI). In the same upgrade step, before the old grant is removed, the
+  session, as you (no UAC prompt), makes you their owner and removes every
+  allow entry other than yours, SYSTEM's, Administrators' and OWNER
+  RIGHTS' (deny entries stay; a "no DACL" becomes one inherited from the
+  folder). Nothing is deleted. One whose permissions stop you from doing
+  that is renamed in place (`….corbanu-sandbox-leftover-…`), so programs
+  that look for it by name make a new one of yours. The counts are logged
+  in the Corbanu home's `.sandbox` log. A typical session leaves several
+  hundred (Node's `node-compile-cache`, `MSBuildTemp`, temp files tools
+  kept); on CI all were taken in under a second.
 - Not changed: the non-admin sandbox still uses `%TEMP%` itself, and
   sandboxed commands can still read (not write) other sessions' temp
   folders.

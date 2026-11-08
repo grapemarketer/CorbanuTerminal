@@ -71,8 +71,12 @@ use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 const INHERITED_ACE: u8 = 0x10;
+const ACL_REVISION: u32 = 2;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+const ACCESS_DENIED_OBJECT_ACE_TYPE: u8 = 6;
+const ACCESS_DENIED_CALLBACK_ACE_TYPE: u8 = 10;
+const ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE: u8 = 12;
 const GENERIC_READ_MASK: u32 = 0x8000_0000;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
@@ -798,22 +802,21 @@ unsafe fn is_allow_for(ace: *const c_void, psids: &[*mut c_void]) -> bool {
 }
 
 /// D377 (#1871): makes `user` the owner of the object `handle` is open to (one
-/// a sandbox account owned, so whoever wrote its entries could have been that
-/// account) and removes from its DACL every explicit allow entry except
-/// those for `trusted`, and the inherited allow entries for `accounts` (a
-/// `CREATOR OWNER` copy names the account that made the object; the system
-/// recomputes inherited entries for the new owner). Deny entries stay.
+/// a sandbox account owned, which may have written any of its entries) and
+/// keeps of its DACL only the deny entries and the allow entries for
+/// `trusted`, explicit or inherited (the system recomputes inherited ones
+/// from the parent, a `CREATOR OWNER` copy now for the user). A NULL DACL
+/// (everyone allowed everything) becomes an empty one that inherits.
 /// Inherited copies below the object follow. `handle` needs `READ_CONTROL`,
 /// `WRITE_DAC` and `WRITE_OWNER`.
 ///
 /// # Safety
-/// `handle` must be open; `user` and each of `trusted` and `accounts` must
-/// point to valid SIDs.
+/// `handle` must be open; `user` and each of `trusted` must point to valid
+/// SIDs.
 pub(crate) unsafe fn take_for_user(
     handle: HANDLE,
     user: *mut c_void,
     trusted: &[*mut c_void],
-    accounts: &[*mut c_void],
 ) -> Result<()> {
     let code = SetSecurityInfo(
         handle,
@@ -828,23 +831,45 @@ pub(crate) unsafe fn take_for_user(
         return Err(anyhow!("setting the owner failed: {code}"));
     }
     let (p_dacl, p_sd) = security_info(handle)?;
-    let result = remove_aces_from(DaclTarget::Handle(handle), p_sd, p_dacl, |_, ace| {
-        let hdr = &*(ace as *const ACE_HEADER);
-        // ACCESS_DENIED, _OBJECT, _CALLBACK and _CALLBACK_OBJECT.
-        if matches!(hdr.AceType, 1 | 6 | 10 | 12) {
-            return false;
+    let result = if p_dacl.is_null() {
+        let mut empty = [0_u32; 2];
+        let acl = empty.as_mut_ptr() as *mut ACL;
+        if InitializeAcl(acl, std::mem::size_of_val(&empty) as u32, ACL_REVISION) == 0 {
+            Err(anyhow!("InitializeAcl failed: {}", GetLastError()))
+        } else {
+            match SetSecurityInfo(
+                handle,
+                1, // SE_FILE_OBJECT
+                DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null_mut(),
+            ) {
+                ERROR_SUCCESS => Ok(()),
+                code => Err(anyhow!("setting the DACL failed: {code}")),
+            }
         }
-        if (hdr.AceFlags & INHERITED_ACE) != 0 {
-            return is_allow_for(ace, accounts);
-        }
-        // Object, compound and callback allow entries are dropped whatever
-        // they name.
-        hdr.AceType != ACCESS_ALLOWED_ACE_TYPE || !is_allow_for(ace, trusted)
-    });
+    } else {
+        remove_aces_from(DaclTarget::Handle(handle), p_sd, p_dacl, |_, ace| {
+            let kind = (*(ace as *const ACE_HEADER)).AceType;
+            let deny = matches!(
+                kind,
+                ACCESS_DENIED_ACE_TYPE
+                    | ACCESS_DENIED_OBJECT_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE
+            );
+            // Object, compound and callback allow entries go whatever they
+            // name.
+            !deny && !(kind == ACCESS_ALLOWED_ACE_TYPE && is_allow_for(ace, trusted))
+        })
+        .map(|_| ())
+    };
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    result.map(|_| ())
+    result
 }
 
 /// #1506 item 1 (D261): removes the explicit entry denying `psid` exactly

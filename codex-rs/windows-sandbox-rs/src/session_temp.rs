@@ -455,12 +455,13 @@ fn take_leftovers(folder: &Path, codex_home: &Path) {
         crate::session_temp_leftovers::take_sandbox_leftovers(folder, &accounts)
     }) {
         Ok(found) => format!(
-            "D377: in {}: looked at {}, sandbox-owned {}, taken for the user {}, not taken {}, unreadable {}, capped {}",
+            "D377: in {}: looked at {}, sandbox-owned {}, taken for the user {}, not taken {} (renamed aside {}), unreadable {}, capped {}",
             folder.display(),
             found.scanned,
             found.sandbox_owned,
             found.taken,
             found.not_taken,
+            found.set_aside,
             found.unreadable,
             found.capped
         ),

@@ -7,11 +7,12 @@
 //! able to change those: grant itself access again, and, in a folder it
 //! owns, replace what the user's own programs later put there. At the same
 //! upgrade step, before that grant goes, the user takes them: becomes their
-//! owner and removes every allow entry the sandbox could have put there
-//! (any explicit one except the user's, SYSTEM's and Administrators'), so
-//! what they allow comes from the folder they are in. Nothing is deleted.
-//! An object the user may not take (its DACL keeps the user out) is left as
-//! it is and counted.
+//! owner and removes every allow entry the sandbox could have put there (all
+//! but the user's, SYSTEM's, Administrators' and OWNER RIGHTS'; deny entries
+//! stay), so what they allow comes from the folder they are in. Nothing is
+//! deleted. One the user may not take (its DACL keeps the user from
+//! changing it) is renamed in place, so what would use it by name makes a
+//! new one, the user's; it is counted.
 
 use crate::acl::file_identity;
 use crate::acl::final_path;
@@ -21,6 +22,9 @@ use crate::deny_read_sessions::owner_sid;
 use crate::session_temp::SESSION_TEMP_PREFIX;
 use crate::token::LocalSid;
 use anyhow::Result;
+use rand::RngCore as _;
+use rand::SeedableRng as _;
+use rand::rngs::SmallRng;
 use std::fs::File;
 use std::os::windows::fs::MetadataExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
@@ -30,6 +34,8 @@ use std::path::PathBuf;
 
 /// Entries looked at, at most, in one temp folder.
 const MAX_ENTRIES: usize = 500_000;
+/// What a leftover the user may not take is renamed to end with.
+const SET_ASIDE: &str = "corbanu-sandbox-leftover";
 const READ_CONTROL: u32 = 0x2_0000;
 const WRITE_DAC: u32 = 0x4_0000;
 const WRITE_OWNER: u32 = 0x8_0000;
@@ -49,8 +55,11 @@ pub(crate) struct Leftovers {
     pub sandbox_owned: usize,
     /// Of those, taken for the user.
     pub taken: usize,
-    /// Of those, left as they were (the user may not take them).
+    /// Of those, not taken (the user may not take them, or they changed
+    /// while being taken).
     pub not_taken: usize,
+    /// Of those not taken, renamed in place.
+    pub set_aside: usize,
     /// Entries whose owner could not be read.
     pub unreadable: usize,
     /// Stopped at [`MAX_ENTRIES`].
@@ -111,13 +120,10 @@ pub(crate) fn sandbox_account_sids() -> Result<Vec<String>> {
 }
 
 /// Takes for the user each object in `base` (the folder itself excluded,
-/// links not followed, session temp folders skipped) that one of
-/// `accounts` owns. Best effort.
+/// links not followed, the user's session temp folders skipped) that one of
+/// `accounts` owns, and sets aside one the user may not take. Best effort.
 pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result<Leftovers> {
     let mut found = Leftovers::default();
-    if accounts.is_empty() {
-        return Ok(found);
-    }
     let user = current_user_sid()?;
     // A group that named this user would make the user's own objects look
     // like the sandbox's.
@@ -125,12 +131,10 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
         .iter()
         .filter(|sid| !sid.eq_ignore_ascii_case(&user))
         .collect();
+    if accounts.is_empty() {
+        return Ok(found);
+    }
     let user_sid = LocalSid::from_string(&user)?;
-    let account_sids = accounts
-        .iter()
-        .map(|sid| LocalSid::from_string(sid))
-        .collect::<Result<Vec<_>>>()?;
-    let psids: Vec<_> = account_sids.iter().map(LocalSid::as_ptr).collect();
     // The user, SYSTEM, Administrators and OWNER RIGHTS (the user, once the
     // owner).
     let trusted_sids = [user.as_str(), "S-1-5-18", "S-1-5-32-544", "S-1-3-4"]
@@ -181,10 +185,18 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
                 .any(|account| account.eq_ignore_ascii_case(&owner))
             {
                 found.sandbox_owned += 1;
-                if take_one(&path, &look, &base_key, user_sid.as_ptr(), &trusted, &psids) {
-                    found.taken += 1;
-                } else {
-                    found.not_taken += 1;
+                match take_one(&path, &look, &base_key, user_sid.as_ptr(), &trusted) {
+                    Take::Taken => found.taken += 1,
+                    Take::Changed => found.not_taken += 1,
+                    Take::Refused => {
+                        found.not_taken += 1;
+                        drop(look);
+                        if set_aside(&path) {
+                            found.set_aside += 1;
+                        }
+                        // Not walked: not the user's.
+                        continue;
+                    }
                 }
             }
             // Taken (and so made the user's) before what is in it.
@@ -198,6 +210,14 @@ pub(crate) fn take_sandbox_leftovers(base: &Path, accounts: &[String]) -> Result
     Ok(found)
 }
 
+enum Take {
+    Taken,
+    /// Not the object looked at any more, or not in the temp folder.
+    Changed,
+    /// The user may not take it.
+    Refused,
+}
+
 /// Takes `path` for the user if it still is the object `look` is open to
 /// and lies in the temp folder whose final path is `base_key`.
 fn take_one(
@@ -206,13 +226,12 @@ fn take_one(
     base_key: &str,
     user: *mut std::ffi::c_void,
     trusted: &[*mut std::ffi::c_void],
-    accounts: &[*mut std::ffi::c_void],
-) -> bool {
+) -> Take {
     let Ok(take) = open(
         path,
         READ_CONTROL | WRITE_DAC | WRITE_OWNER | FILE_READ_ATTRIBUTES,
     ) else {
-        return false;
+        return Take::Refused;
     };
     // SAFETY: both handles are open.
     let same = unsafe {
@@ -228,10 +247,29 @@ fn take_one(
     // SAFETY: the handle is open.
     let inside = unsafe { final_path(take.as_raw_handle() as _) }
         .is_ok_and(|found| comparable(&found).starts_with(&format!("{base_key}\\")));
+    if !(same && inside) {
+        return Take::Changed;
+    }
     // SAFETY: the handle is open with the rights `take_for_user` needs; the
     // SIDs are valid.
-    same && inside
-        && unsafe { take_for_user(take.as_raw_handle() as _, user, trusted, accounts) }.is_ok()
+    match unsafe { take_for_user(take.as_raw_handle() as _, user, trusted) } {
+        Ok(()) => Take::Taken,
+        Err(_) => Take::Refused,
+    }
+}
+
+/// Renames `path` in its folder (the user may: the folder is the user's or
+/// was taken first), so what would use it by name makes a new one.
+fn set_aside(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let mut aside = name.to_os_string();
+    aside.push(format!(
+        ".{SET_ASIDE}-{:08x}",
+        SmallRng::from_entropy().next_u32()
+    ));
+    std::fs::rename(path, path.with_file_name(aside)).is_ok()
 }
 
 fn open(path: &Path, access: u32) -> std::io::Result<File> {

@@ -332,6 +332,7 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
     }
     let file = temp.path().join("left.txt");
     let dir = temp.path().join("left-dir");
+    let open_to_all = temp.path().join("open-to-all.txt");
     let users = temp.path().join("other-program.txt");
     fs::write(&users, "other").expect("other program's file");
     // An older version's command in the workspace, with the temp folder one
@@ -371,10 +372,12 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         format!(
             "@echo off\r\n\
              (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
+             (echo made>\"{open_to_all}\") 2>nul && echo OPEN-MADE\r\n\
              mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
              \"{powershell}\" -NoProfile -ExecutionPolicy Bypass -File \"{keep}\" 2>&1\r\n",
             file = file.display(),
             dir = dir.display(),
+            open_to_all = open_to_all.display(),
             powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe").display(),
             keep = keep.display()
         ),
@@ -409,9 +412,25 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         (String::from_utf8_lossy(&stdout).into_owned(), code)
     });
     println!("d377 leftovers made: exit={code} stdout={stdout:?}");
-    for done in ["FILE-MADE", "DIR-MADE", "KEPT"] {
+    for done in ["FILE-MADE", "OPEN-MADE", "DIR-MADE", "KEPT"] {
         assert!(stdout.contains(done), "{done}: {stdout}");
     }
+    // What its owner may also do: a NULL DACL (everyone may do anything).
+    // Set here by the user, who may as well (round-2 review).
+    // SAFETY: a valid path; a NULL DACL is what is asked for.
+    let code = unsafe {
+        windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW(
+            crate::winutil::to_wide(&open_to_all).as_ptr(),
+            1, // SE_FILE_OBJECT
+            windows_sys::Win32::Security::DACL_SECURITY_INFORMATION
+                | windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(code, 0, "set a NULL DACL");
     let owner = |path: &Path| {
         use std::os::windows::fs::OpenOptionsExt as _;
         let file = std::fs::OpenOptions::new()
@@ -444,13 +463,16 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         &tamper,
         format!(
             "@echo off\r\n\
+             echo TAMPER-RAN\r\n\
+             (echo x>>\"{open_to_all}\") 2>nul && echo OPEN-WRITTEN\r\n\
              icacls \"{file}\" /grant \"%USERNAME%:(M)\" >nul 2>nul\r\n\
              (echo x>>\"{file}\") 2>nul && echo FILE-WRITTEN\r\n\
              icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul\r\n\
              (echo x>\"{dir}\\new.txt\") 2>nul && echo DIR-WRITTEN\r\n\
              (echo x>>\"{dir}\\inner.txt\") 2>nul && echo INNER-WRITTEN\r\n",
             file = file.display(),
-            dir = dir.display()
+            dir = dir.display(),
+            open_to_all = open_to_all.display()
         ),
     )
     .expect("write script");
@@ -462,11 +484,17 @@ fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
         /*tty*/ false,
     ));
     println!("d377 leftovers tamper: exit={code} stdout={stdout:?}");
-    for written in ["FILE-WRITTEN", "DIR-WRITTEN", "INNER-WRITTEN"] {
+    assert!(stdout.contains("TAMPER-RAN"), "{stdout}");
+    for written in [
+        "OPEN-WRITTEN",
+        "FILE-WRITTEN",
+        "DIR-WRITTEN",
+        "INNER-WRITTEN",
+    ] {
         assert!(!stdout.contains(written), "{written}: {stdout}");
     }
     // Taken, not deleted.
-    for path in [&file, &dir, &dir.join("inner.txt"), &users] {
+    for path in [&file, &open_to_all, &dir, &dir.join("inner.txt")] {
         assert_eq!(owner(path), user, "{}", path.display());
     }
     assert_eq!(fs::read_to_string(&file).expect("read").trim(), "made");
