@@ -430,9 +430,10 @@ jobs:
         run: |
           set -euo pipefail
           fsutil 8dot3name set C: 0
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-core.log
+          # Both probes run before a failure stops the step.
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-core.log || true
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-sandboxing.log || true
           grep -q "test result: ok. 1 passed" d398-core.log
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-sandboxing.log
           grep -q "test result: ok. 1 passed" d398-sandboxing.log
           rm d398-core.log d398-sandboxing.log
       # The runners are elevated, which hid #294/#295. This reruns those probes

@@ -451,10 +451,12 @@ fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
         made.then_some(drive)
     };
     let workspace_drive = subst(&parent);
-    let short = Command::new("cmd.exe")
-        .args(["/d", "/c"])
+    // Only where the volume makes 8.3 names (CI's temp drive doesn't); the
+    // `codex-core` probe covers them on the system drive.
+    let short = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
         .arg(format!(
-            "for %I in (\"{}\") do @echo %~sI",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('{}').ShortPath",
             workspace.display()
         ))
         .output()

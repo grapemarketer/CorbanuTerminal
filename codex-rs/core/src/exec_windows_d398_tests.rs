@@ -198,11 +198,14 @@ fn mapped_drive(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
 
 /// The 8.3 short spelling of `path`, if its volume makes them.
 fn short_name(path: &Path) -> Result<PathBuf, String> {
-    let output = Command::new("cmd.exe")
-        .args(["/d", "/c"])
-        .arg(format!("for %I in (\"{}\") do @echo %~sI", path.display()))
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('{}').ShortPath",
+            path.display()
+        ))
         .output()
-        .expect("run cmd for %~sI");
+        .expect("run powershell");
     let short = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     let made = output.status.success() && short != path && short.is_dir();
     assert!(
