@@ -760,6 +760,22 @@ impl Classifier {
                             found.relative_outputs += 1;
                         }
                     }
+                    // #1661: the script a wrapped git runs (`git submodule
+                    // foreach 'git fetch; git log --output=...'`, `git
+                    // bisect run '...'`): its commands run in a submodule
+                    // or an unknown folder, so push it as a script with
+                    // the folder unknown, as `-execdir` does.
+                    if let Some(operand) = git_helpers::wrapped_git_operand(&texts, at)
+                        && operand < texts.len()
+                    {
+                        push_script(
+                            found,
+                            folders,
+                            texts[operand..].join(" "),
+                            replaced(launches[operand]),
+                            /*unknown*/ true,
+                        );
+                    }
                     if WRITERS.contains(&resolved_name.as_str())
                         || outputs.is_some()
                         || !command.writes_to.is_empty()
