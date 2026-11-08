@@ -7,7 +7,11 @@
 //! So is a positional parameter (`xargs sh -c 'git config "$@"' _`).
 //!
 //! Words added at the end of a line whose subcommand git has already read
-//! are that subcommand's, so `xargs git log --oneline` stays quiet. Fails
+//! are that subcommand's, so `xargs git log --oneline` stays quiet, unless
+//! the subcommand contacts a remote, or is one git does not know, which may
+//! be an alias of one, and the launcher adds its input words (#1876: `xargs
+//! git fetch` may be given an `ext::` remote or `--upload-pack=…`), which
+//! asks. Fails
 //! closed otherwise: git with no subcommand yet, or an option first (the
 //! word lexer may split quoted text, so where the subcommand starts is
 //! certain only when it is the first word), or a first word input may fill
@@ -17,6 +21,7 @@
 
 use super::ProtectedActionKind;
 use super::outputs;
+use super::rerun;
 use super::shell::basename;
 use super::work;
 
@@ -107,6 +112,11 @@ pub(super) struct LaunchedGit<'a> {
     braces: bool,
     /// A launcher that adds words from its input runs what follows.
     fed: bool,
+    /// #1876: one that adds them after what follows (`xargs`, `parallel`),
+    /// not only where placeholders are (`find -execdir git pull \;` adds
+    /// none; it picks the repository, whose stored remotes are not on the
+    /// line). Words from a script's launcher count (`xargs sh -c …`).
+    appends: bool,
     /// A `find` or `fd`, whose exec options start such a command.
     finder: bool,
     /// An `fd`, whose `-x` may hold its command (`-xgit`).
@@ -232,6 +242,7 @@ impl<'a> LaunchedGit<'a> {
             lower,
             braces,
             fed: launched.fed || launched.replaced,
+            appends: launched.fed,
             finder: false,
             fd: false,
             placeholders: false,
@@ -285,6 +296,7 @@ impl<'a> LaunchedGit<'a> {
                 || self.attached(index).is_some());
         let parallel = PARALLELS.contains(&name);
         self.placeholders |= finder_exec || parallel;
+        self.appends |= FEEDERS.contains(&name) || parallel;
         if FEEDERS.contains(&name) || parallel || finder_exec {
             self.fed = true;
             self.hidden_launcher |= self.hidden(index);
@@ -435,6 +447,9 @@ impl<'a> LaunchedGit<'a> {
             }
             return if subcommand == "config" {
                 config(self, index + 1)
+            } else if self.appends && rerun::GIT_TRANSPORTS.contains(&subcommand.as_str()) {
+                // #1876: input may be the remote (`ext::…`) or `--upload-pack=…`.
+                Some(ProtectedActionKind::UnseenCode)
             } else {
                 None
             };
@@ -445,6 +460,20 @@ impl<'a> LaunchedGit<'a> {
                 Some(ProtectedActionKind::UnseenCode)
             }
             Some(_) if self.lower[index + 1] == "config" => config(self, index + 2),
+            // #1876: a transport subcommand given input words: one may be
+            // the remote (`echo 'ext::sh -c id' | xargs git fetch`) or a
+            // transport option (`--upload-pack=sh`).
+            // One git does not know may be an alias of one (`xargs git f`
+            // with `alias.f=fetch`). The word lexer may leave a quote on it
+            // (`parallel 'cd x && git log' ::: a` gives `log'`).
+            Some(_)
+                if self.appends
+                    && rerun::git_may_contact_remote(
+                        &self.lower[index + 1].replace(['\'', '"'], ""),
+                    ) =>
+            {
+                Some(ProtectedActionKind::UnseenCode)
+            }
             Some(_) => None,
         }
     }
