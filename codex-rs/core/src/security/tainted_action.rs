@@ -2971,6 +2971,13 @@ impl Classifier {
                 unknown_folder::elsewhere_at(words, self.sudo_unsure())
                     .is_some_and(|from| from < *index)
             });
+        // #1661: and a `submodule foreach` or `bisect run` runs its inner
+        // git in the submodule or an unknown folder, so the inner git's
+        // relative outputs ask even where the outer git was told a folder.
+        let wrapped = carried
+            .as_ref()
+            .or(command.as_ref())
+            .is_some_and(|(index, _)| git_helpers::runs_wrapped_git(words, *index));
         // #1607: zsh's file after a `>!`, with the line's variables
         // substituted as in the words.
         let zsh_writes: Vec<String> = simple
@@ -3008,7 +3015,7 @@ impl Classifier {
                 // ~`, `--output-directory ~/`) may be the home's.
                 if self.homes.is_persistence(&resolved)
                     || (file.ends_with('/') && self.homes.holds_a_home(&resolved))
-                    || self.unknown_folder_file(folders, moved, file)
+                    || self.unknown_folder_file(folders, moved || wrapped, file)
                 {
                     self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(file));
                 }

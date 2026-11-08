@@ -750,14 +750,41 @@ impl Classifier {
                         // folder; a wrapper before the command moved it
                         // (`sudo -D ~ git config -f .zshenv …`).
                         let moved = elsewhere_from.is_some_and(|from| from < at);
+                        // #1661: and a `submodule foreach` or `bisect run`
+                        // runs its inner git in the submodule or an unknown
+                        // folder, so the inner git's relative outputs ask
+                        // even where the outer git was told a folder (`git
+                        // -C ~/r submodule foreach git log
+                        // --output=../../.zshenv`).
+                        let wrapped = git_helpers::runs_wrapped_git(&texts, at);
                         if files.iter().any(|file| {
-                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                            self.unknown_folder_file(
+                                folders,
+                                moved || wrapped || folders.unchecked,
+                                file,
+                            )
                         }) {
                             note_git(found, ProtectedActionKind::Persistence);
                         }
                         if files.iter().any(|file| self.relative_place(file)) {
                             found.relative_outputs += 1;
                         }
+                    }
+                    // #1661: the script a wrapped git runs (`git submodule
+                    // foreach 'git fetch; git log --output=...'`, `git
+                    // bisect run '...'`): its commands run in a submodule
+                    // or an unknown folder, so push it as a script with
+                    // the folder unknown, as `-execdir` does.
+                    if let Some(operand) = git_helpers::wrapped_git_operand(&texts, at)
+                        && operand < texts.len()
+                    {
+                        push_script(
+                            found,
+                            folders,
+                            texts[operand..].join(" "),
+                            replaced(launches[operand]),
+                            /*unknown*/ true,
+                        );
                     }
                     if WRITERS.contains(&resolved_name.as_str())
                         || outputs.is_some()
