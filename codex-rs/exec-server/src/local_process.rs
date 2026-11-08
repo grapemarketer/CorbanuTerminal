@@ -654,7 +654,16 @@ fn child_env(params: &ExecParams) -> HashMap<String, String> {
         Some(env_policy) => {
             let policy = shell_environment_policy(env_policy);
             let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
-            env.extend(params.env.clone());
+            // #1817: core's variables win over the inherited ones; on Windows
+            // that includes inherited spellings of the same name that differ
+            // only by case (#1805), so each name is passed once. Sorted, so
+            // an overlay holding two spellings of one name always keeps the
+            // same one.
+            let mut overlay: Vec<_> = params.env.iter().collect();
+            overlay.sort();
+            for (key, value) in overlay {
+                shell_environment::set_env_var(&mut env, key, value.clone());
+            }
             env
         }
         None => params.env.clone(),
