@@ -230,3 +230,62 @@ fn legacy_repositories_behind_links_are_watched() {
         )
     );
 }
+
+/// #1849 review 4: a folder whose name isn't valid Unicode can't stop the
+/// records (or later commands): it is noted every time and what else
+/// changed is recorded; a repository two levels behind a link into a root
+/// the walk doesn't cover (`%TEMP%`) counts.
+#[test]
+fn legacy_odd_names_and_links_into_unwalked_roots() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    for dir in ["root", "scratch"] {
+        fs::create_dir_all(test_root.path().join(dir)).expect("create");
+    }
+    let root = canonical(&test_root.path().join("root"));
+    let scratch = canonical(&test_root.path().join("scratch"));
+    init_shape(&root.join("a\\.git"), INIT_CONFIG);
+    let roots = [root.clone(), scratch.clone()];
+
+    let lease = crate::integrity_leases::acquire_watching(
+        &roots,
+        std::slice::from_ref(&root),
+        /*log_dir*/ None,
+    )
+    .expect("lease");
+    fs::write(
+        root.join("a\\.git\\config"),
+        format!("{INIT_CONFIG}\tfsmonitor = evil.exe\r\n"),
+    )
+    .expect("config");
+    // A lone surrogate: valid on NTFS, not valid Unicode.
+    let odd = root.join(std::ffi::OsString::from_wide(&[0xD800, u16::from(b'x')]));
+    init_shape(&odd.join("x\\.git"), INIT_CONFIG);
+    init_shape(&scratch.join("t\\lib\\.git"), INIT_CONFIG);
+    fs::write(scratch.join("t\\lib\\.git\\hooks\\post-checkout"), "evil").expect("hook");
+    junction(&root.join("vendor"), &scratch.join("t"));
+    drop(lease);
+    // Later commands still start.
+    let again = crate::integrity_leases::acquire_watching(
+        &roots,
+        std::slice::from_ref(&root),
+        /*log_dir*/ None,
+    )
+    .is_ok();
+
+    assert_eq!(
+        (
+            changes(&root.join("a\\.git")),
+            changes(&root).is_some_and(|notes| notes.iter().any(|note| note.contains("Unicode"))),
+            changes(&root.join("vendor\\lib\\.git")),
+            again,
+        ),
+        (
+            Some(vec!["config changed".to_string()]),
+            true,
+            Some(vec!["new repository".to_string()]),
+            true,
+        )
+    );
+}
