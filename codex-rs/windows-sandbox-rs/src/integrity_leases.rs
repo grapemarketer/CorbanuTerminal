@@ -264,16 +264,7 @@ fn acquire_locked(lease: &mut IntegrityLease, wanted: &BTreeSet<PathBuf>) -> Res
         );
     }
     // Registered first: whatever happens below, a sweep can undo it.
-    lease.session = Some(create_session(
-        &lease.registry,
-        wanted,
-        &lease.absent_metadata,
-        &lease.nested_roots,
-        &lease.nested_metadata,
-        &lease.git_dirs,
-        &lease.repos,
-        &lease.config_targets,
-    )?);
+    lease.session = Some(create_session(lease, wanted)?);
     let mut labels = load_labels(&lease.registry)?;
     sweep(&lease.registry, &mut labels, lease.log_dir.as_deref())?;
     for root in wanted {
@@ -1341,16 +1332,9 @@ fn lock(registry: &Path) -> Result<File> {
     }
 }
 
-fn create_session(
-    registry: &Path,
-    roots: &BTreeSet<PathBuf>,
-    absent_metadata: &[PathBuf],
-    nested_roots: &[PathBuf],
-    nested_metadata: &[NestedMetadata],
-    git_dirs: &[NestedMetadata],
-    repos: &[RepoState],
-    config_targets: &[TargetState],
-) -> Result<(File, PathBuf)> {
+/// Registers `lease`'s session (for `roots`) with what it saw at the start.
+fn create_session(lease: &IntegrityLease, roots: &BTreeSet<PathBuf>) -> Result<(File, PathBuf)> {
+    let registry = &lease.registry;
     let mut rng = SmallRng::from_entropy();
     let path = registry.join(format!(
         "{SESSION_PREFIX}{}-{:016x}{SESSION_SUFFIX}",
@@ -1369,12 +1353,12 @@ fn create_session(
         .with_context(|| format!("create {}", path.display()))?;
     let record = SessionRecord {
         roots: roots.iter().cloned().collect(),
-        absent_metadata: absent_metadata.to_vec(),
-        nested_metadata: Some(nested_metadata.to_vec()),
-        nested_roots: nested_roots.to_vec(),
-        git_dirs: Some(git_dirs.to_vec()),
-        repos: Some(repos.to_vec()),
-        config_targets: Some(config_targets.to_vec()),
+        absent_metadata: lease.absent_metadata.clone(),
+        nested_metadata: Some(lease.nested_metadata.clone()),
+        nested_roots: lease.nested_roots.clone(),
+        git_dirs: Some(lease.git_dirs.clone()),
+        repos: Some(lease.repos.clone()),
+        config_targets: Some(lease.config_targets.clone()),
     };
     file.write_all(&serde_json::to_vec(&record)?)?;
     file.flush()?;
