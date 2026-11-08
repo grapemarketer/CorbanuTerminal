@@ -332,10 +332,19 @@ pub(super) fn sets_code_variable(
         && words[start..]
             .iter()
             .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('n'));
+    // #1774: the written positions marked once, not looked up in `writes_to`
+    // (one index per output redirection) for each word (`export >a >a …`).
+    let mut writes_here = vec![false; words.len()];
+    for at in &simple.writes_to {
+        work::step();
+        if let Some(written) = writes_here.get_mut(*at) {
+            *written = true;
+        }
+    }
     let redirect = |at: usize| {
         simple.stdin_from.binary_search(&at).is_ok()
             || simple.here_string.binary_search(&at).is_ok()
-            || simple.writes_to.contains(&at)
+            || writes_here.get(at).copied().unwrap_or(false)
     };
     // A name the classifier cannot see, or one in any case when it came
     // from a variable: a value given the uppercase attribute (`declare -u
