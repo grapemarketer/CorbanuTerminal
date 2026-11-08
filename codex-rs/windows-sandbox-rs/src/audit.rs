@@ -62,8 +62,7 @@ fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>
         unique_push(&mut set, &mut out, PathBuf::from(pubp));
     }
     // 4) PATH entries (best-effort)
-    if let Some(path) = env
-        .get("PATH")
+    if let Some(path) = crate::env::get_ignoring_case(env, "PATH")
         .cloned()
         .or_else(|| std::env::var("PATH").ok())
     {

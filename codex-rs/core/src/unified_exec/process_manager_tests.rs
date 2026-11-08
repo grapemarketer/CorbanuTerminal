@@ -36,6 +36,23 @@ fn unified_exec_env_overrides_existing_values() {
     assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
 }
 
+/// #1805: Windows names ignore case, so an inherited `Pager` must not stay
+/// beside the `PAGER` unified exec sets.
+#[cfg(windows)]
+#[test]
+fn unified_exec_env_replaces_other_spellings_on_windows() {
+    let base = HashMap::from([
+        ("Pager".to_string(), "less".to_string()),
+        ("Path".to_string(), "C:\\tools".to_string()),
+    ]);
+
+    let env = apply_unified_exec_env(base);
+
+    assert_eq!(env.get("PAGER"), Some(&"cat".to_string()));
+    assert_eq!(env.get("Pager"), None);
+    assert_eq!(env.get("Path"), Some(&"C:\\tools".to_string()));
+}
+
 #[test]
 fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
     let local_policy_env = HashMap::from([

@@ -80,7 +80,7 @@ fn issue1704_hidden_words_where_writers_read_options_ask() {
             "print -r $(cat f)",
             "zstat $o functions x",
             "zstat \"$o\" \"$n\" x",
-            "stat -f %m $(cat f)",
+            "zmodload zsh/stat; stat -f %m $(cat f)",
             "zformat $o $n x",
             "pcre_match $o $n x",
             "compadd -X $(cat f) x",
@@ -172,6 +172,147 @@ fn issue1704_option_checks_are_linear() {
     work::assert_linear("many zstyles", |scale| {
         let _ = kind(&["zsh", "-lc", &"zstyle -a :x y z; ".repeat(200 * scale)]);
     });
+    work::assert_linear("stat after a long line, its load lexed", |scale| {
+        let line = format!(
+            "echo {}; $'zmo\\144load' $'zsh/st\\141t'; stat -A $n x",
+            "z ".repeat(400 * scale)
+        );
+        let _ = kind(&["zsh", "-lc", &line]);
+    });
+}
+
+/// D410 (#1704): zsh has a `stat` builtin (zsh/stat, which writes arrays
+/// by name with `-A`/`-H`) only once loaded; zsh starts without it. Its
+/// table checks ask only when a line of the same action may load it: names
+/// `zmodload` (any use, quotes aside, as written or as lexed) or
+/// `zsh/stat`, holds a brace range, or runs (also through `eval`, `trap`,
+/// `repeat` or a modifier) bash's `enable` or a command named by an
+/// expansion or a pattern. A separate command on the same line (`zmodload
+/// zsh/stat; stat …`, or a later line of the same text) counts, as a
+/// line's aliases do (#1422); so does a load after the `stat` or in a line
+/// judged later (a `functions[f]` value), which keeps main's prompt: both
+/// are decided once the whole action is judged. Elsewhere `stat` is the
+/// external program (`stat -f %m $f` on macOS) and only its table checks
+/// are skipped; `zstat` is always judged.
+#[test]
+fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            // The same command list.
+            "zmodload zsh/stat && stat -A functions x",
+            "zmodload -F zsh/stat b:zstat && stat -f %m $v",
+            // A separate command on the same line.
+            "zmodload zsh/stat; stat -f %m $v",
+            "zmodload zsh/stat\nstat -H aliases x",
+            "zmodload -a zsh/stat stat; stat -A $n x",
+            "m=zsh/stat; zmodload $m; stat -f %m $(cat f)",
+            "zmod''load zsh/stat; stat -A functions x",
+            "z$'m'odload zsh/stat; stat -A functions x",
+            "eval 'zmodload zsh/stat'; stat -A functions x",
+            "zsh -c 'zmodload zsh/stat; stat -A functions x'",
+            // Spelled so only the lexed words show it (review 1): decoded,
+            // joined, brace-expanded; and bash's loadable `stat`.
+            "zmod$''load zsh/st$''at; stat -f %m $(cat f)",
+            "$'zmo\\144load' $'zsh/st\\141t'; stat -A functions x",
+            "zmod\\\nload zsh/st\\\nat; stat -f %m $(cat f)",
+            "zmo{d,}load zsh/stat; stat -A functions x",
+            "builtin zmodload zsh/stat; stat -A functions x",
+            "enable -f stat stat; stat -A functions x",
+            // Neither reading spells it (reviews 2 and 3): a command named
+            // by known values or a pattern, also behind `eval`, `trap`,
+            // `repeat` and modifiers; a brace range, which the lexer does
+            // not expand; zsh's `braceccl`.
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG; stat -f %m $(cat f)",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t; stat -f %m $(cat f)",
+            "eval zm* zsh/st?t; stat -f %m $(cat f)",
+            "zmo{d..d}load zsh/st{a..a}t; stat -A functions x",
+            "zm* $(cat m); stat -A functions x",
+            // After a redirection or a zsh short `if`/`until` test
+            // (review 4).
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; until [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
+            // A load in a line judged after the `stat` (review 3).
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f; stat -f %m $(cat f)",
+            // A load after it keeps main's prompt.
+            "stat -A functions x; zmodload zsh/stat",
+            // zstat needs no `stat` load.
+            "zstat -A functions x",
+            "zstat -f %m $v",
+        ] {
+            assert!(line(script).is_some(), "{shell} {script:?}");
+        }
+        // Not loaded on this line: the external `stat`.
+        for script in [
+            "stat -f %m $v",
+            "stat -f %m $(cat f)",
+            "for f in *.log; do stat -f '%m %N' $f; done",
+            "stat -c %Y $f | sort -n",
+            "stat -A functions x",
+            // The load alone, and `stat` with no word to hide, stay quiet:
+            // the prompts above come from the load.
+            "zmodload zsh/stat",
+            "zmodload zsh/stat; stat -f %m x",
+            "zmo{d..d}load zsh/st{a..a}t",
+            "zm* $(cat m)",
+            "enable -f stat stat",
+            "zmodload zsh/stat && zmodload -F zsh/stat b:zstat",
+            "zmod''load zsh/stat; z$'m'odload zsh/stat; builtin zmodload zsh/stat",
+            // (`$'zmo\144load'` asks on its own: a command name spelled
+            // with an escape.)
+            "zmod$''load zsh/st$''at",
+            "zmod\\\nload zsh/st\\\nat; zmo{d,}load zsh/stat",
+            "eval 'zmodload zsh/stat'; zsh -c 'zmodload zsh/stat'",
+            "a=zmod b=load c=zsh/st d=at; $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG",
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d",
+            "eval zm* zsh/st?t",
+            "setopt braceccl; eval zmo{d}load zsh/st{a}t",
+            "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f",
+        ] {
+            assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+        // Wherever the shell may run a command named by known values or a
+        // pattern, the load is quiet alone and makes a later `stat` ask
+        // (review 4).
+        for load in [
+            "time $a$b $c$d",
+            "! $a$b $c$d",
+            "( $a$b $c$d )",
+            "case x in x) $a$b $c$d;; esac",
+            "foreach i (1) $a$b $c$d; end",
+            "if (( 1 )) $a$b $c$d",
+            "f() $a$b $c$d; f",
+            "x=$($a$b $c$d)",
+            "sudo $a$b $c$d",
+            "$a$b $c$d &",
+            ">f zm* zsh/st?t",
+            "2>&1 zm* zsh/st?t",
+            "if [[ 1 ]] zm* zsh/st?t",
+        ] {
+            let load = format!("a=zmod b=load c=zsh/st d=at; {load}");
+            assert_eq!(line(&load), None, "{shell} {load:?}");
+            let script = format!("{load}; stat -f %m $(cat f)");
+            assert!(line(&script).is_some(), "{shell} {script:?}");
+        }
+    }
 }
 
 /// #1704: a command writing variables named by its operands (zparseopts,

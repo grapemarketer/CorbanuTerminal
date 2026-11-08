@@ -1212,6 +1212,15 @@ pub(crate) fn recorded_delete_child_denies() -> Result<Vec<DeleteChildDeny>> {
     Ok(denies.entries.into_iter().collect())
 }
 
+/// Tests only: waits for a release in progress to finish (it holds the
+/// lock for its whole sweep).
+#[cfg(test)]
+pub(crate) fn wait_for_release_in_progress() -> Result<()> {
+    let registry = ensure_registry()?;
+    drop(lock(&registry)?);
+    Ok(())
+}
+
 /// Tests only: the recorded roots.
 #[cfg(test)]
 pub(crate) fn recorded_roots() -> Result<Vec<PathBuf>> {

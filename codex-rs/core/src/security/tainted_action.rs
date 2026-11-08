@@ -641,6 +641,10 @@ fn judged_avoiding_read(
             }
         }
     }
+    // D410: a `stat` writing a table where the action may load its builtin.
+    if classifier.stat_pending && classifier.stat_builtin {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
     // #1064: an interactive POSIX shell sources the file `ENV` names.
     if classifier.sets_env && classifier.interactive_shell {
         classifier.note(ProtectedActionKind::UnseenCode);
@@ -678,6 +682,8 @@ impl Classifier {
             unknown_folder: 0,
             unseen_folder: false,
             sudo_redefined: false,
+            stat_builtin: false,
+            stat_pending: false,
             quoted_text: false,
             brace_unsure: false,
             launched: launched_git::Launch::default(),
@@ -1508,6 +1514,12 @@ struct Classifier {
     /// D85: the action's own command line never reaches zsh
     /// ([`named_shell::avoids_zsh`]); nested lines are not covered.
     avoids_zsh: bool,
+    /// D410 (#1704): a line of the action may load zsh's `stat` builtin
+    /// ([`code_tables::may_load_stat`]), and a `stat` would then write a
+    /// table ([`code_tables::Writes::StatIfLoaded`]). Both are judged once
+    /// every line is, so a load in a line judged later counts too.
+    stat_builtin: bool,
+    stat_pending: bool,
     /// #932: comparisons left with the grammar.
     compared: shadow::Budget,
     /// #1240: PowerShell encoded commands the Windows view judged, with
@@ -1832,6 +1844,9 @@ impl Classifier {
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
         let lexed = shell::simple_commands_read(command, self.main_reading);
         self.read_newly |= lexed.read_newly;
+        if !self.stat_builtin {
+            self.stat_builtin = code_tables::may_load_stat(command, &lexed.commands);
+        }
         // D191: only the action's own line, judged under POSIX path rules.
         let outer_temp = std::mem::replace(
             &mut self.temp,
@@ -2060,9 +2075,16 @@ impl Classifier {
             // reads as the shell does (`alias b=bash` then `b run.sh`).
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
-            if aliases.read(&words)
-                || code_tables::writes_table(&words, &simple.words, /*seen*/ None)
-            {
+            let tables = code_tables::writes_table(&words, &simple.words, /*seen*/ None);
+            self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
+            // D410: with known values substituted (`a=zmod b=load; $a$b`).
+            if !self.stat_builtin {
+                self.stat_builtin = words.iter().any(|word| {
+                    work::step();
+                    code_tables::names_stat_load(word)
+                });
+            }
+            if aliases.read(&words) || tables == code_tables::Writes::Table {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(

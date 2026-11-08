@@ -33,6 +33,8 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/unified_exec/process_manager*.rs"
+      - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
       - "codex-rs/core/src/tools/sandboxing_windows_tests.rs"
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
@@ -72,6 +74,8 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/unified_exec/process_manager*.rs"
+      - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
       - "codex-rs/core/src/tools/sandboxing_windows_tests.rs"
       - "codex-rs/core/src/tools/sandboxing_tests.rs"
@@ -240,7 +244,7 @@ jobs:
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --bin codex-windows-sandbox-setup -- sandbox_users::tests:: --nocapture 2>&1 | tee pw-1776.log
           grep -q 'test result: ok. 3 passed' pw-1776.log
-      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819)
+      - name: P1 Windows hardening regressions (#301, #304, #307, #323, #341, #345, #1819, D429)
         if: ${{ !cancelled() }}
         shell: bash
         # Elevated: the #341/#345 tests must not skip. #345 runs a command in
@@ -277,6 +281,60 @@ jobs:
             grep -qF "sec-win-1770 ${backend}: creating a file, creating a folder and appending were refused in ${CODEX_SEC_WIN_1770_SHARED_ROOT}\\" sec-1770.log
           done
           rm sec-1770.log
+      - name: Environment names once, in any case (#1805)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # Windows names ignore case: a command given both `Path` and `PATH`
+        # broke Windows PowerShell's Start-Process. The caller's `Path` must
+        # reach each backend's command once, and be the value that counts.
+        env:
+          CODEX_SEC_WIN_341_REQUIRE: "1"
+        run: |
+          # Actions runs bash with -e; every check runs, and the step fails at
+          # the end if any did.
+          set +e -uo pipefail
+          failed=()
+          # check NAME CARGO_ARGS...: cargo test must pass and print each line of stdin.
+          check() {
+            local name="$1"; shift
+            local expected; expected="$(cat)"
+            if ! cargo test --locked --manifest-path codex-rs/Cargo.toml "$@" 2>&1 | tee env-1805.log; then
+              echo "::error::#1805 ${name}: cargo test failed"
+              failed+=("$name")
+              return
+            fi
+            while IFS= read -r line; do
+              if ! grep -qF -- "$line" env-1805.log; then
+                echo "::error::#1805 ${name}: missing '${line}'"
+                failed+=("$name")
+                return
+              fi
+            done <<< "$expected"
+          }
+          check protocol -p codex-protocol --lib shell_environment -- --nocapture <<'EOF'
+          set_override_replaces_inherited_spelling_of_the_same_name ... ok
+          inherited_spellings_of_one_name_keep_the_first ... ok
+          EOF
+          check core -p codex-core --lib -- --exact unified_exec::process_manager::tests::unified_exec_env_replaces_other_spellings_on_windows --nocapture <<'EOF'
+          test result: ok. 1 passed
+          EOF
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          check sandbox-env -p codex-windows-sandbox --lib env::tests:: -- --nocapture --test-threads=1 <<'EOF'
+          test result: ok. 6 passed
+          EOF
+          for backend in legacy elevated; do
+            check "$backend" -p codex-windows-sandbox --lib -- --exact "unified_exec::tests::env_case::win_1805_${backend}_command_gets_one_path_and_start_process_runs" --nocapture --test-threads=1 <<EOF
+          test result: ok. 1 passed
+          win-1805 ${backend}: one PATH
+          EOF
+          done
+          rm env-1805.log
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::#1805 checks failed: ${failed[*]}"
+            exit 1
+          fi
       - name: Legacy sandbox delete boundary (#158)
         if: ${{ !cancelled() }}
         shell: bash
@@ -289,6 +347,20 @@ jobs:
             grep -q "test result: ok. 1 passed" legacy-158.log
           done
           rm legacy-158.log
+      - name: Legacy capture returns while a descendant runs (#1826)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # A descendant left running holds the output pipes; the capture must
+        # return once the command exits, leaving it running.
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- capture_pipes::tests:: --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+          grep -q "test result: ok. 2 passed" capture-1826.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact unified_exec::tests::legacy_capture_emits_output_and_preserves_descendant_after_normal_exit --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+          grep -q "test result: ok. 1 passed" capture-1826.log
+          # The test passes without running when pwsh 7 is missing.
+          grep -q "capture pwsh exit_code=0" capture-1826.log
+          rm capture-1826.log
       - name: Job breakaway limits (#733)
         if: ${{ !cancelled() }}
         shell: bash
@@ -434,7 +506,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 52
+            Assert-Tests $sandbox 'sec_win_' 55
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
@@ -498,6 +570,19 @@ jobs:
             $out
             if ($code -ne 0) { throw "#1819 failed in a normal session" }
             if (-not ($out -match 'test result: ok\. 1 passed')) { throw "#1819 did not run in a normal session" }
+            # D429 (#1803): an elevated command can't read a legacy command's
+            # memory or thread contexts (the legacy tests ran above).
+            $tD429 = 'unified_exec::tests::command_identity::elevated::d429::sec_win_d429_elevated_command_cannot_read_a_legacy_command'
+            Assert-Tests $sandbox $tD429 1
+            & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for D429 failed" }
+            $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+            $out = & $medium -Program $sandbox -Arguments @('--exact', $tD429, '--nocapture', '--test-threads=1')
+            $code = $LASTEXITCODE
+            Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+            $out
+            if ($code -ne 0) { throw "D429 elevated failed in a normal session" }
+            if (-not ($out -match 'test result: ok\. 1 passed')) { throw "D429 elevated did not run in a normal session" }
             # #1770: a command of each backend may not write into a fresh
             # folder in the runner's D:\tmp (not this step's TEMP) that any
             # signed-in account may write to; only its restricted token keeps
@@ -522,6 +607,28 @@ jobs:
               }
             }
             Remove-Item Env:CODEX_SEC_WIN_1770_SHARED_ROOT
+            # #1805: each backend's command gets the caller's `Path` once, and
+            # Windows PowerShell's Start-Process runs. The elevated one reuses
+            # a setup recorded right before.
+            $failed1805 = @()
+            foreach ($backend in @('legacy', 'elevated')) {
+              $t = "unified_exec::tests::env_case::win_1805_${backend}_command_gets_one_path_and_start_process_runs"
+              Assert-Tests $sandbox $t 1
+              if ($backend -eq 'elevated') {
+                & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+                $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              }
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              # Both backends run before any failure stops the step.
+              if ($code -ne 0 -or -not ($out -match 'test result: ok\. 1 passed') -or -not ($out | Where-Object { $_.Contains("win-1805 ${backend}: one PATH") })) {
+                $failed1805 += $backend
+              }
+            }
+            if ($failed1805.Count -ne 0) { throw "#1805 failed in a normal session: $($failed1805 -join ', ')" }
             foreach ($t in $env:LEGACY_158_TESTS.Split(' ')) {
               Assert-Tests $sandbox "unified_exec::tests::$t" 1
               $out = & $medium -Program $sandbox -Arguments @('--exact', "unified_exec::tests::$t", '--nocapture', '--test-threads=1')

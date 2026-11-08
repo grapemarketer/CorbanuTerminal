@@ -144,7 +144,15 @@ sign-off by Travis on 2026-10-13):
   for example), are left alone.
 - Commands can no longer write outside writable roots to objects that grant
   Everyone or the logon SID write access, or open other programs' named pipes
-  and other IPC endpoints for writing, unless those are labelled Low.
+  and other IPC endpoints for writing, unless those are labelled Low. Windows
+  creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` grants
+  Everyone write access and is labelled Low, so legacy commands can create,
+  change and delete files there (found by a scan of the windows-2022 runner;
+  Low folders granting Everyone Modify were measured writable by legacy
+  commands, #1770). Accepted and documented in `docs/sandbox.md` (D401): it is one
+  folder, and a normal user can't change its permissions. The elevated
+  backend's admin setup can deny it, with the other Everyone-writable
+  folders (D400, draft #1798, awaiting security sign-off).
 - The desktop commands start on is labelled Low: the per-command private
   desktop, or Core's own desktop when Core runs off the interactive window
   station with `sandbox_private_desktop = false`.
@@ -169,8 +177,9 @@ legacy command's process as the parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`)
 is refused too since D259 (but see #1560 below): each legacy command's token
 carries its own identity SID, and its default DACL (what its processes, threads, token and
 the pipes and other objects it creates without explicit security get)
-grants full access only to the user, SYSTEM and that SID, and read and
-execute to Everyone, the logon SID and the capability SIDs. A legacy command
+grants full access only to the user, SYSTEM and that SID, and only
+`SYNCHRONIZE` to Everyone, the logon SID and the capability SIDs (D429; before,
+read and execute). A legacy command
 writes only through its restricting SIDs, so it keeps full access to its own
 processes but can't open another legacy command's with any write right
 (start a child under it, change its DACL, duplicate its handles, write its
@@ -179,10 +188,18 @@ access through the user SID. Cost: a legacy command can't write to an object
 that another legacy command's process (a concurrent one, or one left running
 by an earlier command) created without explicit security, such as a named
 pipe, event or section a shared daemon serves; nor to a file it created in a
-folder without inheritable entries. Not closed: other legacy commands can
-still end its processes (`PROCESS_TERMINATE` comes with execute access), and
-can still duplicate and impersonate its token (`TOKEN_DUPLICATE` isn't a
-write right). The borrowed token carries the command's identity, so with it
+folder without inheritable entries. Since D429 (#1803) an elevated command
+(another account, which holds Everyone and the logon SID) can no longer read a
+legacy command's memory or thread contexts, query or end it; before, read and
+execute gave it `PROCESS_VM_READ` and `THREAD_GET_CONTEXT`. Cost: other accounts
+can no longer read what a legacy command creates without explicit security
+(a section or event it makes, or a file in a folder without inheritable
+entries); SYSTEM and the user keep full access. Not closed: other
+legacy commands can still read its memory and thread contexts, and end its
+processes, through the user SID (read rights and `PROCESS_TERMINATE` pass a
+write-restricted token on its normal SIDs alone, and every legacy command holds
+the user SID, #1838), and can still duplicate and impersonate its token
+(`TOKEN_DUPLICATE` isn't a write right). The borrowed token carries the command's identity, so with it
 they can write to its processes again, including starting a child in its job
 through the parent-process route, and write in its writable roots while it
 runs (#1560). The boundary D259 draws between legacy commands holds only once
@@ -238,6 +255,21 @@ outside the command's job: the COM servers `ShellBrowserWindow` (the child
 runs at Low integrity but with an unrestricted token) and
 `MMC20.Application` (Low, restricted). Closing them waits on a measurement
 on a real desktop (D260); their tests are ignored until then.
+
+Reads between elevated commands (#1803), measured on CI (run 42446494973,
+admin and normal sessions): an elevated command in one workspace can read
+the memory of another workspace's concurrent elevated command (51 MB, with
+its typed input and its output) and of that command's ConPTY console host
+(27 MB, same markers; its threads' contexts too), but can't open either for
+writing or duplicating handles, nor read its runner. Owner decisions
+(2026-11-08): #1800 closes the command-memory read (its commands' default
+DACL lets the sandbox users' group and Everyone only read the security
+descriptor, wait and query limited information); a stop-gap
+on main, which needs security sign-off, is made only if #1800 is delayed by
+days. #1800 leaves the console-host read, since the runner's default DACL
+still gives the group read access; a follow-up on top of #1800 narrows the
+group to query and synchronize rights there, gated by a test built from the
+win-1803m probe (D417).
 
 Protected paths that already exist inside writable roots when a session
 starts, such as `.git`, `.codex`, and `.agents`, also get an Everyone deny of

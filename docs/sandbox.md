@@ -16,6 +16,16 @@ to, except in places marked low-integrity: `AppData\LocalLow`, anything you
 or a program labelled Low, and folders another non-admin sandbox session is
 using at that moment.
 
+Windows itself creates one such folder: `C:\ProgramData\Microsoft\DeviceSync` is
+labelled Low and lets everyone write to it, so non-admin sandbox commands can
+create, change and delete files there (#1770; measured on Windows Server
+2022). We accept this: it is one Windows folder, and a normal user can't
+change its permissions. Don't keep files there that you rely on. Default
+sandbox commands can currently write there too, and create files in the
+other folders that let everyone do so (such as the machine key folders under
+`C:\ProgramData\Microsoft\Crypto`); a change awaiting security sign-off
+(#1798) would stop that.
+
 **What it does not stop.**
 
 - Reading your files (see "Files a profile protects from reading" below).
@@ -27,8 +37,10 @@ using at that moment.
 - Two commands running at the same time in different projects (or with
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
-  other runs (#1560). The default sandbox doesn't prevent this yet either
-  (#1560, #1648), so avoid running commands in several projects at once.
+  other runs (#1560), and read the other's memory, such as secrets in its
+  environment or what you type at its prompts (#1838). The default sandbox
+  doesn't prevent borrowing yet either (#1560, #1648), so avoid running
+  commands in several projects at once.
   In the default sandbox, a command that races another command's start-up
   can also run code with the sandbox account's full access, outside its own
   restrictions (#1721).
@@ -117,6 +129,22 @@ sandboxes do this. It has two side effects:
   above it. Run `git init` there yourself, or remove the entry and then
   delete that `.git` folder while no session is running.
 
+**A writable folder inside a read-only one.** Neither Windows sandbox can
+enforce a profile that makes a folder writable inside a read-only one
+(the protected `.git`, `.codex` and `.agents` folders count as read-only), so
+both refuse it, and the message names both folders. Folders are compared as
+spelled and by their real path, so a junction, folder symbolic link or
+`subst` drive doesn't hide this (#1801). Two cases behave differently:
+
+- The same folder marked read-only under one spelling and writable under
+  another (for example by its real path and through a junction) isn't
+  refused. In the non-admin sandbox it is read-only (#1780).
+- A protected `.git`, `.codex` or `.agents` folder that is itself a link to a
+  folder holding another writable folder of the profile is refused, because
+  that writable folder then lies inside a protected one. Replace the link
+  with a folder, or drop that writable folder from the profile. If this
+  refuses a setup you rely on, please report it.
+
 **Files a profile protects from reading.** The non-admin sandbox can't stop a
 command from reading a file. So if your permission profile denies reading some
 files (`deny` entries in your config, or the protected paths a security level
@@ -151,6 +179,17 @@ denied" (Windows error 5). These fail there:
 The default sandbox runs all of these. If you need them, switch to the default
 sandbox as below. This was measured on Windows Server 2022, in both an
 administrator and a normal session.
+
+**Default sandbox: commands can read other projects' running commands.**
+(#1803) A default sandbox command can read the memory of another default
+sandbox command running at the same time in a different project, such as
+secrets in its environment and what it prints. For a command run in a
+terminal, it can also read that command's console host, which holds what you
+type at its prompts and what it prints. It can't change them or start
+programs through them. A change awaiting security sign-off (#1800), which
+starts each command on a logon of its own, stops the memory read; a
+follow-up built on it, with a test that checks it, will stop the console
+read. Until then, avoid running commands in several projects at once.
 
 **How to switch to the default sandbox.**
 
