@@ -770,7 +770,10 @@ fn check_elevated_command_returns_while_descendant_runs(
     // Released before any check, so the descendant never outlives the test
     // by more than its own deadline.
     let release = fs::write(&release_marker, "release");
-    let (stdout, exit_code) = result.unwrap_or_else(std::panic::resume_unwind);
+    let (stdout, exit_code) = match result {
+        Ok(output) => output,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
     release.expect("release descendant after root exit");
     println!("elevated {backend} pwsh returned after {took:?}");
     println!("elevated {backend} pwsh exit_code={exit_code}");

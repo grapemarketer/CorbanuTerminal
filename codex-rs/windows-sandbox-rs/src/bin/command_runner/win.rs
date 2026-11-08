@@ -439,7 +439,9 @@ fn spawn_ipc_process(req: &SpawnRequest, base: &OwnedWinHandle) -> Result<IpcSpa
 
 /// Chunks the output readers have read, waiting for [`spawn_output_writer`].
 /// Bounded, so a parent that reads slowly slows the command down rather than
-/// the runner's memory growing.
+/// the runner's memory growing. The drain after the command exits counts
+/// time a reader waits here, so a parent more than about 2 s behind could
+/// miss the command's last output; Core reads the frames as they come.
 const OUTPUT_CHUNKS_IN_FLIGHT: usize = 8;
 
 /// Writes the chunks the output readers send as Output frames. #1830: only
