@@ -44,16 +44,22 @@ unsafe fn token_has_restricting_sid(token: HANDLE, expected_sid: *mut c_void) ->
         .any(|entry| EqualSid(entry.Sid, expected_sid) != 0))
 }
 
+/// BUILTIN\Users, which the test process holds; it stands in for the sandbox
+/// users' group, which it doesn't (#1795).
+const TEST_GROUP_SID: &str = "S-1-5-32-545";
+
 #[test]
 fn elevated_token_includes_network_proxy_restricting_sid() -> Result<()> {
     let capability_sid = LocalSid::from_string("S-1-5-21-10-20-30-40")?;
     let network_proxy_sid = LocalSid::from_string("S-1-5-21-50-60-70-80")?;
+    let group_sid = LocalSid::from_string(TEST_GROUP_SID)?;
     let base_token = unsafe { get_current_token_for_restriction()? };
     let restricted_token = unsafe {
-        create_readonly_token_with_caps_and_user_from(
+        create_elevated_token_with_group(
             base_token,
             &[capability_sid.as_ptr()],
             &[network_proxy_sid.as_ptr()],
+            group_sid.as_ptr(),
         )?
     };
 
@@ -65,5 +71,45 @@ fn elevated_token_includes_network_proxy_restricting_sid() -> Result<()> {
     }
 
     assert!(has_network_proxy_sid?);
+    Ok(())
+}
+
+/// D324: the public elevated token builders refuse a base token outside the
+/// sandbox users' group, as the test process is.
+#[test]
+fn elevated_token_builders_refuse_a_caller_outside_the_sandbox_users_group() -> Result<()> {
+    let capability_sid = LocalSid::from_string("S-1-5-21-10-20-30-40")?;
+    let network_proxy_sid = LocalSid::from_string("S-1-5-21-50-60-70-80")?;
+    let base_token = unsafe { get_current_token_for_restriction()? };
+    let results = unsafe {
+        [
+            create_readonly_token_with_caps_and_user_from(
+                base_token,
+                &[capability_sid.as_ptr()],
+                &[network_proxy_sid.as_ptr()],
+            ),
+            create_workspace_write_token_with_caps_and_user_from(
+                base_token,
+                &[capability_sid.as_ptr()],
+                &[network_proxy_sid.as_ptr()],
+            ),
+        ]
+    };
+    let mut refusals = Vec::new();
+    for result in results {
+        match result {
+            Ok(token) => {
+                unsafe { CloseHandle(token) };
+                refusals.push(None);
+            }
+            Err(err) => refusals.push(Some(format!("{err:#}"))),
+        }
+    }
+    unsafe { CloseHandle(base_token) };
+
+    for refusal in refusals {
+        let refusal = refusal.expect("a token for a caller outside CodexSandboxUsers");
+        assert!(refusal.contains(SANDBOX_USERS_GROUP), "{refusal}");
+    }
     Ok(())
 }
