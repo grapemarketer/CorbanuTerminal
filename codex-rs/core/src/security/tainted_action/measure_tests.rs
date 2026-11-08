@@ -193,7 +193,13 @@ fn judge(homes: &MeasureHomes, shell: &str, script: &str, cwd: &Path, forced: bo
         if forced {
             judged_avoiding(&action, homes.homes(), /*avoids_zsh*/ true).found
         } else {
-            judged(&action, homes.homes(), /*as_named*/ true, /*main_reading*/ false).found
+            judged(
+                &action,
+                homes.homes(),
+                /*as_named*/ true,
+                /*main_reading*/ false,
+            )
+            .found
         }
     });
     Judgment { found, sites }

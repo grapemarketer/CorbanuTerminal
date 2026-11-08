@@ -209,10 +209,7 @@ fn issue_1772_review_lines_ask() {
         .filter(|(_, line)| in_workspace(X_EVIL, line).is_none())
         .map(|(item, line)| format!("item {item}: {line}"))
         .collect();
-    for argv in [
-        ["sh", "-c", "true &>f ./x"],
-        ["dash", "-c", "true &>f ./x"],
-    ] {
+    for argv in [["sh", "-c", "true &>f ./x"], ["dash", "-c", "true &>f ./x"]] {
         if in_workspace_argv(X_EVIL, &argv).is_none() {
             quiet.push(format!("item 2: {argv:?}"));
         }
