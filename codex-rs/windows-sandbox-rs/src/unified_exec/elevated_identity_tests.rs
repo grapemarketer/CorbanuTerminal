@@ -74,6 +74,23 @@ async fn spawn_elevated(
     env: &[(&str, String)],
     tty: bool,
 ) -> codex_utils_pty::SpawnedProcess {
+    try_spawn_elevated(root, codex_home, argv, env, tty)
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        })
+}
+
+async fn try_spawn_elevated(
+    root: &Path,
+    codex_home: &Path,
+    argv: Vec<String>,
+    env: &[(&str, String)],
+    tty: bool,
+) -> anyhow::Result<codex_utils_pty::SpawnedProcess> {
     // Core passes its environment on; PowerShell needs it.
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     for (key, value) in env {
@@ -101,12 +118,6 @@ async fn spawn_elevated(
         /*use_private_desktop*/ true,
     )
     .await
-    .unwrap_or_else(|err| {
-        panic!(
-            "spawn elevated command: {err:#}\n{}",
-            sandbox_log(codex_home)
-        )
-    })
 }
 
 /// Runs `argv` as an elevated workspace-write command on `root`; returns its
@@ -1018,15 +1029,41 @@ fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
         async |_holder_pid| {
             // SAFETY: reads labels only.
             let home_low = unsafe { crate::integrity::effective_label_is_low(codex_home.path()) };
-            let during = run_elevated(
+            let during = match try_spawn_elevated(
                 root.path(),
                 codex_home.path(),
                 argv(),
                 &[],
                 /*tty*/ false,
             )
-            .await;
-            let bin_low = unsafe { crate::integrity::effective_label_is_low(&bin_dir) };
+            .await
+            {
+                Ok(spawned) => {
+                    let (stdout, code) = collect_stdout_and_exit(
+                        spawned,
+                        codex_home.path(),
+                        Duration::from_secs(/*secs*/ 120),
+                    )
+                    .await;
+                    (String::from_utf8_lossy(&stdout).into_owned(), code)
+                }
+                Err(err) => (format!("start error: {err:#}"), -1),
+            };
+            // The runner's file and its folder.
+            let mut labelled = vec![bin_dir.clone()];
+            labelled.extend(
+                fs::read_dir(&bin_dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path()),
+            );
+            let bin_low = labelled
+                .iter()
+                // SAFETY: reads labels only.
+                .map(|path| unsafe { crate::integrity::effective_label_is_low(path) })
+                .collect::<anyhow::Result<Vec<bool>>>()
+                .map(|lows| lows.contains(&true));
             (home_low.ok(), during, bin_low.ok())
         },
     ));
@@ -1035,7 +1072,7 @@ fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
     );
     // Otherwise the legacy session never covered this home and the test
     // proves nothing.
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         home_low,
         Some(true),
         "the legacy session did not label this codex home Low"
