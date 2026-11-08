@@ -658,7 +658,11 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   now compares real paths too (`subst` drives included), for the agent's
   commands in both sandboxes and for `command/exec`. The same folder
   marked read-only and writable under two spellings is still not refused;
-  in the non-admin sandbox read-only wins (#1780).
+  in the non-admin sandbox read-only wins (#1780). Newly refused for the
+  same reason: a protected `.git`, `.codex` or `.agents` folder that is a
+  link to a folder holding another writable folder of the profile. Replace
+  the link with a folder; see "A writable folder inside a read-only one" in
+  `docs/sandbox.md`.
 - **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
   or `.agents` folder is refused for older workspace-write profiles too**
   (#1810, D331). A profile in the older workspace-write format, for example
@@ -732,6 +736,18 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   and Python `multiprocessing` fail there. This is not new in this release.
   The default (elevated) sandbox runs all of them; see "Known limitations"
   in `docs/sandbox.md`.
+- **Known limitation, now documented: non-admin sandbox commands can write
+  in `C:\ProgramData\Microsoft\DeviceSync`** (#1770). Windows labels that
+  folder Low and lets everyone write to it. This is not new in this
+  release, and we accept it; don't keep files there that you rely on.
+- **Known limitation, now documented: default (elevated) sandbox commands
+  can read other projects' running commands** (#1803). A command can read
+  the memory of another project's command running at the same time
+  (secrets in its environment, what it prints) and, for one run in a
+  terminal, its console host (what you type and what it prints). It can't
+  change them. This is not new in this release. A change awaiting security
+  sign-off (#1800) stops the memory read, and a follow-up stops the console
+  read; until then, avoid running commands in several projects at once.
 - **A default (elevated) sandbox command now starts while a non-admin
   sandbox command is running** (#1819). Before, when the non-admin command's
   writable folders held the Corbanu home (for example `%TEMP%`, or a project
