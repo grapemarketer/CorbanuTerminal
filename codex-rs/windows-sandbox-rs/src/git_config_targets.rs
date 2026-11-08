@@ -860,15 +860,14 @@ pub(crate) fn target_states_with(
             break;
         }
     }
-    let mut states: Vec<TargetState> = keep_in_roots(found, roots)
-        .into_iter()
-        .map(|target| TargetState {
-            prints: target_prints(&target),
-            path: target.path,
-            why: target.why,
+    // #1877: several targets at a time.
+    let mut states: Vec<TargetState> =
+        crate::par_map::par_map(&keep_in_roots(found, roots), |target| TargetState {
+            prints: target_prints(target),
+            path: target.path.clone(),
+            why: target.why.clone(),
             kind: target.kind,
-        })
-        .collect();
+        });
     // Past a limit, the configs count as changed after every session.
     if let Some(at) = budget.overflow {
         let mut prints = Prints::new();
@@ -891,12 +890,16 @@ pub(crate) fn target_changes(
     before: &[TargetState],
     now: Vec<TargetState>,
 ) -> Vec<(PathBuf, Vec<String>)> {
+    // #1877: the first of `before` at the same path both ways by
+    // `is_at_or_below` (each component equal ignoring ASCII case), looked up
+    // rather than compared with each.
+    let mut by_path = std::collections::HashMap::new();
+    for old in before {
+        by_path.entry(path_key(&old.path)).or_insert(old);
+    }
     now.into_iter()
         .filter_map(|state| {
-            let old = before.iter().find(|old| {
-                crate::git_watch::is_at_or_below(&old.path, &state.path)
-                    && crate::git_watch::is_at_or_below(&state.path, &old.path)
-            });
+            let old = by_path.get(&path_key(&state.path));
             let empty = Prints::new();
             let changes: Vec<String> =
                 crate::git_watch::changes(old.map_or(&empty, |old| &old.prints), &state.prints)
@@ -905,6 +908,14 @@ pub(crate) fn target_changes(
                     .collect();
             (!changes.is_empty()).then_some((state.path, changes))
         })
+        .collect()
+}
+
+/// `path` by component, ASCII lower-cased: two paths have the same key
+/// exactly when each is [`crate::git_watch::is_at_or_below`] the other.
+pub(crate) fn path_key(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect()
 }
 
