@@ -525,16 +525,25 @@ pub(super) fn classify_as_windows(
     codex_home: &Path,
     user_home: Option<&Path>,
 ) -> Option<ProtectedActionKind> {
+    indirect::reset_sudo_option_boundary_changed();
     let mut classifier = Classifier::new(
         Homes::windows_first(codex_home, user_home),
         /*avoids_zsh*/ false,
     );
     classifier.judge_command(command, cwd);
+    if indirect::sudo_option_boundary_changed() {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
+    indirect::reset_sudo_option_boundary_changed();
     let mut windows = Classifier::new(
         Homes::windows(codex_home, user_home),
         /*avoids_zsh*/ false,
     );
     windows.judge_command(command, cwd);
+    if indirect::sudo_option_boundary_changed() {
+        windows.note(ProtectedActionKind::UnseenCode);
+    }
+    indirect::reset_sudo_option_boundary_changed();
     if let Some(kind) = windows.found {
         classifier.note(kind);
     }
@@ -563,6 +572,9 @@ fn judged_both(action: &ApprovalAction, homes: impl Fn() -> Homes, as_named: boo
 /// `main_reading`: redirections are lexed as on main
 /// (`shell::simple_commands_read`).
 fn judged(action: &ApprovalAction, homes: Homes, as_named: bool, main_reading: bool) -> Classifier {
+    // `avoids_zsh` reads command words too, so reset before any reader can
+    // observe a changed #1773 sudo option boundary.
+    indirect::reset_sudo_option_boundary_changed();
     let avoids_zsh = as_named
         && match action {
             ApprovalAction::Shell { command, .. } | ApprovalAction::ExecCommand { command, .. } => {
@@ -582,9 +594,11 @@ fn judged_avoiding(
     homes: impl Fn() -> Homes,
     avoids_zsh: bool,
 ) -> Classifier {
+    indirect::reset_sudo_option_boundary_changed();
     let mut classifier =
         judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ false);
     if classifier.read_newly {
+        indirect::reset_sudo_option_boundary_changed();
         let main = judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ true);
         if let Some(kind) = main.found {
             classifier.note(kind);
@@ -651,6 +665,12 @@ fn judged_avoiding_read(
     }
     // A lookup budget ran out: something was not followed.
     if classifier.homes.exhausted() {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
+    // #1773: a reader actually crossed a sudo option boundary that main read
+    // differently. Preserve its old prompt without scanning past sudo's own
+    // command (which would turn ordinary command options into sudo options).
+    if indirect::sudo_option_boundary_changed() {
         classifier.note(ProtectedActionKind::UnseenCode);
     }
     // D191: an action that asks anyway asks as on main.
@@ -2411,6 +2431,12 @@ impl Classifier {
             .as_ref()
             .filter(|(_, name)| name == "eval")
             .map(|(index, _)| index + 1);
+        // #1773: the compatibility floor runs once over every quote-blind
+        // word, not at individual command-word readers. It therefore covers
+        // direct, carried, `-exec`, precommand, and redirection paths alike.
+        if indirect::sudo_option_boundaries_differ(simple, words) {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         if indirect::redirect_hides_command(simple, words, /*from*/ 0)
             || indirect::sudo_runs_helper(simple, words, /*from*/ 0)
             || operands.is_some_and(|from| {
@@ -3826,6 +3852,10 @@ fn level_name(level: SecurityLevel) -> &'static str {
 #[cfg(test)]
 #[path = "tainted_action_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tainted_action_sudo_tests.rs"]
+mod sudo_tests;
 
 #[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
