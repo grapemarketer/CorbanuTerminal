@@ -708,6 +708,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   the shape `git init` or `git clone` leave isn't reported, so cloning a
   project to look at it doesn't ask; later changes to it are. Nothing is
   refused: agents can still commit and run `git config` there.
+- **Non-admin sandbox: hooks folders a git config names are watched** (D422,
+  #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
+  included config file, or a script a program key names, when it lies in a
+  writable folder, is recorded by content; a new or changed file there is
+  reported like a changed repository. Nothing is refused: Husky still
+  installs inside the sandbox.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only

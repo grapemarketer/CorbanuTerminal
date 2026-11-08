@@ -103,6 +103,22 @@ changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
 checked, and a nested `.git` link is flagged after every command, as at the
 top.
 
+**Hooks folders and files a git config names.** Many projects point
+`core.hooksPath` at a folder in the project (Husky's `.husky` or
+`.husky\_`, a team `.githooks`). The repository's config may be protected,
+but that folder is ordinary project content, so a command could add a hook
+there for your next `git commit`. The non-admin sandbox reads the configs
+git would read for each repository it watches (the top-level `.git`
+included, plus your global and system git configs and the files their
+`include` lines name) and records, by content, each such hooks folder, each
+included config file and each program file a config key names (such as
+`core.fsmonitor` or an `!` alias set to a script in the project) that lies
+in a folder commands may write to. A new or changed file there is flagged
+like a changed repository. For Husky, the files in `.husky` named after git
+hooks count too. Rewriting a file with the same content (as `npm install`
+does when it reruns Husky) isn't a change. Other scripts those hooks call
+are ordinary project files and aren't checked.
+
 **Bare repositories a command plants.** Git also uses a folder that holds
 `HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
 its config and hooks. A sandboxed command can make one in any folder it may

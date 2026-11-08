@@ -144,8 +144,26 @@ fn gitdir_target(file: &Path) -> Option<PathBuf> {
 }
 
 fn in_roots(path: &Path, roots: &[PathBuf]) -> bool {
-    let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = dunce::canonicalize(path).unwrap_or_else(|_| normalize(path));
     roots.iter().any(|root| is_at_or_below(&path, root))
+}
+
+/// `path` with `.` and `..` resolved by name (as Windows resolves them), so
+/// `root\a\..\..\x` doesn't count as inside `root`.
+pub(crate) fn normalize(path: &Path) -> PathBuf {
+    let mut normal = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normal.pop() {
+                    normal.push(part);
+                }
+            }
+            other => normal.push(other),
+        }
+    }
+    normal
 }
 
 /// `path` is `base` or below it, ignoring ASCII case (as Windows compares
@@ -307,7 +325,7 @@ fn link_count(_path: &Path) -> Option<u64> {
 }
 
 /// A file's content hash, `dir`, `link to <target>` or `unreadable`.
-fn file_print(path: &Path) -> String {
+pub(crate) fn file_print(path: &Path) -> String {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return "unreadable".to_string();
     };

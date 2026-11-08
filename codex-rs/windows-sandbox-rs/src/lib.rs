@@ -3,6 +3,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod git_config_targets;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod git_watch;
 mod planted_log;
 #[cfg(any(target_os = "windows", test))]

@@ -171,3 +171,37 @@ fn legacy_root_becoming_a_bare_repository_is_recorded() {
         )
     );
 }
+
+/// D422 (#1775): a hooks folder `core.hooksPath` names in the work tree
+/// (Husky v9's `.husky\_`, whose stubs run `.husky\<hook>`) is watched: a
+/// new hook there counts, a rewrite with the same content doesn't.
+#[test]
+fn legacy_hooks_path_targets_are_watched() {
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = test_root.path().join("husky");
+    fs::create_dir_all(root.join(".husky\\_")).expect("create husky");
+    let root = canonical(&root);
+    init_shape(
+        &root.join(".git"),
+        &format!("{INIT_CONFIG}\thooksPath = .husky/_\r\n"),
+    );
+    fs::write(root.join(".husky\\_\\pre-commit"), "stub").expect("stub");
+    let (husky, stubs) = (root.join(".husky"), root.join(".husky\\_"));
+
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    fs::write(stubs.join("pre-commit"), "stub").expect("same stub");
+    fs::write(husky.join("README.md"), "not a hook").expect("not a hook");
+    fs::write(husky.join("post-checkout"), "evil").expect("hook");
+    drop(lease);
+
+    assert_eq!(
+        (changes(&husky), changes(&stubs)),
+        (
+            Some(vec!["core.hooksPath: post-checkout added".to_string()]),
+            None,
+        )
+    );
+}
