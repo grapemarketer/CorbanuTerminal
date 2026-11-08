@@ -851,7 +851,7 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   sandbox finish at most about 2 seconds after the command exits, and the
   process it started keeps running; output that process writes later is not
   shown. The non-admin sandbox's one-shot commands behave this way since
-  #1826; its unified exec sessions still wait (#1861).
+  #1826, and its unified exec sessions now do too (#1861).
 - **A default (elevated) sandbox command now starts while a non-admin
   sandbox command is running** (#1819). Before, when the non-admin command's
   writable folders held the Corbanu home (for example `%TEMP%`, or a project

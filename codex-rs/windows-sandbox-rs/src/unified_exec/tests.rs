@@ -635,15 +635,22 @@ fn runner_resizer_sends_resize_frame() {
     });
 }
 
-#[test]
-fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+/// #1826, #1861: a legacy capture or session returns once the command exits
+/// while a descendant it left running holds the output pipes, and leaves that
+/// descendant running. `run` runs the argv it is given in the legacy sandbox
+/// with the cwd and codex home it is given, returning the command's stdout
+/// and exit code.
+fn check_legacy_command_returns_while_descendant_runs(
+    label: &str,
+    run: impl FnOnce(&Path, &Path, Vec<String>) -> (String, i32),
+) {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
     let _guard = legacy_process_test_guard();
     let cwd = sandbox_cwd();
-    let codex_home = sandbox_home("legacy-capture-pwsh");
-    println!("capture pwsh codex_home={}", codex_home.path().display());
+    let codex_home = sandbox_home(&format!("legacy-{}-pwsh", label.replace(' ', "-")));
+    println!("{label} pwsh codex_home={}", codex_home.path().display());
     let ready_marker = codex_home.path().join("descendant-started");
     let release_marker = codex_home.path().join("release-descendant");
     let survival_marker = codex_home.path().join("descendant-survived");
@@ -659,53 +666,50 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     );
     let parent_command = format!(
         "Write-Output LEGACY-CAPTURE-DIRECT; {}",
-        start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail,),
+        start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail),
     );
-    let permission_profile = PermissionProfile::workspace_write();
-    let result = run_windows_sandbox_capture(
-        &permission_profile,
-        workspace_roots_for(cwd.as_path()).as_slice(),
-        codex_home.path(),
-        vec![
-            pwsh.display().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            parent_command,
-        ],
-        cwd.as_path(),
-        HashMap::new(),
-        Some(10_000),
-        /*cancellation*/ None,
-        /*use_private_desktop*/ true,
-    )
-    .expect("run legacy capture powershell");
-    let descendant_pid = fs::read_to_string(&ready_marker)
-        .expect("read descendant pid")
-        .trim()
-        .parse()
-        .expect("parse descendant pid");
-    let descendant_process = open_process_for_wait(descendant_pid);
-    fs::write(&release_marker, "release").expect("release descendant after root exit");
-    let descendant_process = descendant_process.expect("open descendant after normal capture exit");
-
-    println!("capture pwsh exit_code={}", result.exit_code);
-    println!("capture pwsh timed_out={}", result.timed_out);
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    println!("capture pwsh stderr={stderr:?}");
-    assert_eq!(result.exit_code, 0, "stdout={stdout:?} stderr={stderr:?}");
+    let argv = vec![
+        pwsh.display().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        parent_command,
+    ];
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(cwd.as_path(), codex_home.path(), argv)
+    }));
+    let took = started.elapsed();
+    // Opened before the release so its exit can be awaited; `None` if it has
+    // already exited (it gives up after its own deadline).
+    let descendant_process = fs::read_to_string(&ready_marker)
+        .ok()
+        .and_then(|pid| pid.trim().parse().ok())
+        .and_then(|pid| open_process_for_wait(pid).ok());
+    // Released before any check, so the descendant never outlives the test
+    // by more than its own deadline.
+    let release = fs::write(&release_marker, "release");
+    let (stdout, exit_code) = match result {
+        Ok(output) => output,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    release.expect("release descendant after root exit");
+    println!("{label} pwsh returned after {took:?}");
+    println!("{label} pwsh exit_code={exit_code}");
+    assert_eq!(exit_code, 0, "stdout={stdout:?}");
     assert!(
         stdout.contains("LEGACY-CAPTURE-DIRECT"),
         "stdout={stdout:?}"
     );
     assert!(
         wait_for_path(&survival_marker, Duration::from_secs(10)),
-        "sandbox descendant did not survive normal capture exit"
+        "the {label} descendant did not survive the command's exit; \
+         the command returned after {took:?}"
     );
+    let descendant_process = descendant_process.expect("open descendant after normal legacy exit");
     wait_for_process_exit(&descendant_process, Duration::from_secs(10))
         .expect("sandbox descendant did not exit after release");
-    // #1826: the capture now returns while the descendant runs, so the
-    // session's labels (#158) are put back on a thread of the capture's once
+    // #1826: the command now returns while the descendant runs, so the
+    // session's labels (#158) are put back on a thread of the backend's once
     // it exits. Wait for that before the test (and maybe its process) ends.
     let temp_roots = ["TEMP", "TMP"]
         .into_iter()
@@ -728,6 +732,69 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     }
     // The release goes on (the recorded denies) after the labels.
     crate::integrity_leases::wait_for_release_in_progress().expect("wait for the release");
+}
+
+#[test]
+fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+    check_legacy_command_returns_while_descendant_runs("capture", |cwd, codex_home, argv| {
+        let permission_profile = PermissionProfile::workspace_write();
+        let result = run_windows_sandbox_capture(
+            &permission_profile,
+            workspace_roots_for(cwd).as_slice(),
+            codex_home,
+            argv,
+            cwd,
+            HashMap::new(),
+            Some(10_000),
+            /*cancellation*/ None,
+            /*use_private_desktop*/ true,
+        )
+        .expect("run legacy capture powershell");
+        println!("capture pwsh timed_out={}", result.timed_out);
+        println!(
+            "capture pwsh stderr={:?}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        (
+            String::from_utf8_lossy(&result.stdout).into_owned(),
+            result.exit_code,
+        )
+    });
+}
+
+/// #1861: the same for a legacy unified exec session (pipes, not a ConPTY),
+/// whose exit is reported once its output readers finish.
+#[test]
+fn legacy_session_exits_and_preserves_descendant_after_normal_exit() {
+    check_legacy_command_returns_while_descendant_runs(
+        "legacy session",
+        |cwd, codex_home, argv| {
+            current_thread_runtime().block_on(async {
+                let permission_profile = PermissionProfile::workspace_write();
+                let spawned = spawn_windows_sandbox_session_legacy(
+                    &permission_profile,
+                    workspace_roots_for(cwd).as_slice(),
+                    codex_home,
+                    argv,
+                    cwd,
+                    HashMap::new(),
+                    Some(10_000),
+                    &[],
+                    &[],
+                    /*tty*/ false,
+                    /*stdin_open*/ false,
+                    /*use_private_desktop*/ true,
+                )
+                .await
+                .expect("spawn legacy session powershell");
+                // Longer than the descendant's own deadline, so the old wait
+                // shows as a late return rather than a timeout.
+                let (stdout, exit_code) =
+                    collect_stdout_and_exit(spawned, codex_home, Duration::from_secs(60)).await;
+                (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
+            })
+        },
+    );
 }
 
 /// #1830: the elevated runner, like the legacy capture (#1826), returns once
