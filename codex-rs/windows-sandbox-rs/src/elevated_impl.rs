@@ -191,6 +191,8 @@ mod windows_impl {
         )?;
         // Build capability SID for ACL grants.
         let caps = load_or_create_cap_sids(codex_home)?;
+        // D425 (#1846): dropped once the command has ended (when this returns).
+        let mut planted_watch = None;
         let (sid_for_null, cap_sids) = if permissions.uses_write_capabilities_for_cwd(cwd, &env_map)
         {
             let write_roots = effective_write_roots_for_permissions(
@@ -199,6 +201,12 @@ mod windows_impl {
                 &env_map,
                 codex_home,
                 write_roots_override,
+            );
+            planted_watch = crate::spawn_prep::watch_elevated_write_roots(
+                &permissions,
+                cwd,
+                &write_roots,
+                logs_base_dir,
             );
             let cap_sids = write_roots
                 .iter()
@@ -300,6 +308,7 @@ mod windows_impl {
                 let _ = cancel_handle.join();
             }
             drop(pipe_write);
+            drop(planted_watch);
             let (exit_code, timed_out) = result?;
             let exit_code = crate::credential_watch::stopped_output(
                 credential_watch
