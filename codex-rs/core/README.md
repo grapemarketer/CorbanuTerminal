@@ -169,8 +169,9 @@ legacy command's process as the parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`)
 is refused too since D259 (but see #1560 below): each legacy command's token
 carries its own identity SID, and its default DACL (what its processes, threads, token and
 the pipes and other objects it creates without explicit security get)
-grants full access only to the user, SYSTEM and that SID, and read and
-execute to Everyone, the logon SID and the capability SIDs. A legacy command
+grants full access only to the user, SYSTEM and that SID, and only
+`SYNCHRONIZE` to Everyone, the logon SID and the capability SIDs (D429; before,
+read and execute). A legacy command
 writes only through its restricting SIDs, so it keeps full access to its own
 processes but can't open another legacy command's with any write right
 (start a child under it, change its DACL, duplicate its handles, write its
@@ -179,10 +180,18 @@ access through the user SID. Cost: a legacy command can't write to an object
 that another legacy command's process (a concurrent one, or one left running
 by an earlier command) created without explicit security, such as a named
 pipe, event or section a shared daemon serves; nor to a file it created in a
-folder without inheritable entries. Not closed: other legacy commands can
-still end its processes (`PROCESS_TERMINATE` comes with execute access), and
-can still duplicate and impersonate its token (`TOKEN_DUPLICATE` isn't a
-write right). The borrowed token carries the command's identity, so with it
+folder without inheritable entries. Since D429 (#1803) an elevated command
+(another account, which holds Everyone and the logon SID) can no longer read a
+legacy command's memory or thread contexts, query or end it; before, read and
+execute gave it `PROCESS_VM_READ` and `THREAD_GET_CONTEXT`. Cost: other accounts
+can no longer read what a legacy command creates without explicit security
+(a section or event it makes, or a file in a folder without inheritable
+entries); SYSTEM and the user keep full access. Not closed: other
+legacy commands can still read its memory and thread contexts, and end its
+processes, through the user SID (read rights and `PROCESS_TERMINATE` pass a
+write-restricted token on its normal SIDs alone, and every legacy command holds
+the user SID, #1838), and can still duplicate and impersonate its token
+(`TOKEN_DUPLICATE` isn't a write right). The borrowed token carries the command's identity, so with it
 they can write to its processes again, including starting a child in its job
 through the parent-process route, and write in its writable roots while it
 runs (#1560). The boundary D259 draws between legacy commands holds only once

@@ -27,8 +27,10 @@ using at that moment.
 - Two commands running at the same time in different projects (or with
   different extra folders they may write to) aren't kept apart: one can
   borrow the other's access and write in that project's folders while the
-  other runs (#1560). The default sandbox doesn't prevent this yet either
-  (#1560, #1648), so avoid running commands in several projects at once.
+  other runs (#1560), and read the other's memory, such as secrets in its
+  environment or what you type at its prompts (#1838). The default sandbox
+  doesn't prevent borrowing yet either (#1560, #1648), so avoid running
+  commands in several projects at once.
   In the default sandbox, a command that races another command's start-up
   can also run code with the sandbox account's full access, outside its own
   restrictions (#1721).
