@@ -690,6 +690,24 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     );
     wait_for_process_exit(&descendant_process, Duration::from_secs(10))
         .expect("sandbox descendant did not exit after release");
+    // #1826: the capture now returns while the descendant runs, so the
+    // session's labels (#158) are put back on a thread of the capture's once
+    // it exits. Wait for that before the test (and maybe its process) ends.
+    for root in [std::env::temp_dir(), cwd] {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        // SAFETY: an existing folder.
+        while !matches!(
+            unsafe { crate::integrity::effective_label_is_low(&root) },
+            Ok(false)
+        ) {
+            assert!(
+                Instant::now() < deadline,
+                "{} still labelled Low after the descendant exited",
+                root.display()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 /// Observed state after a legacy workspace-write session tries to delete one
