@@ -131,8 +131,8 @@ fn keep_helper_bin_dir_medium(codex_home: &Path, log_dir: Option<&Path>) {
 /// Low and time out opening the parent's pipes. Only that file (not its
 /// folder) gets an explicit Medium label; a link is left alone.
 fn keep_fallback_helper_medium(fallback: &Path, log_dir: Option<&Path>) {
-    // A bare name is found on `PATH` at launch.
-    if !fallback.is_absolute() || !fallback.exists() {
+    // A bare name is found on `PATH` at launch; only a file is labelled.
+    if !fallback.is_absolute() || !fallback.is_file() {
         return;
     }
     let cause = "the likely cause is a Low label inherited from a folder a legacy session made writable (#1819)";
@@ -448,6 +448,8 @@ mod tests {
     use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
+    use super::keep_fallback_helper_medium;
+    use super::keep_helper_bin_dir_medium;
     use super::materialized_file_name;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -668,8 +670,13 @@ mod tests {
             .output()
             .expect("mklink");
         assert!(output.status.success(), "mklink: {output:?}");
-        // SAFETY: reads the label of a folder this test made.
-        let before = unsafe { crate::integrity::read_explicit_labels(&target) }.expect("labels");
+        // SAFETY: reads labels of folders this test made.
+        let (before, link_before) = unsafe {
+            (
+                crate::integrity::read_explicit_labels(&target).expect("labels"),
+                crate::integrity::read_own_explicit_labels(&link).expect("link labels"),
+            )
+        };
 
         keep_helper_bin_dir_medium(&codex_home, Some(&logs));
 
@@ -680,9 +687,18 @@ mod tests {
         );
         assert!(!log.contains("could not label"), "{log}");
         assert!(crate::workspace_acl::is_link(&link));
-        // SAFETY: reads the label of a folder this test made.
-        let after = unsafe { crate::integrity::read_explicit_labels(&target) }.expect("labels");
-        assert_eq!(before, after);
+        // SAFETY: reads labels of folders this test made. Before the fix,
+        // Windows' walk wrote the Medium label on the junction itself.
+        unsafe {
+            assert_eq!(
+                crate::integrity::read_explicit_labels(&target).expect("labels"),
+                before
+            );
+            assert_eq!(
+                crate::integrity::read_own_explicit_labels(&link).expect("link labels"),
+                link_before
+            );
+        }
     }
 
     /// #1819 follow-up: the runner next to `codex.exe`, used when copying it
