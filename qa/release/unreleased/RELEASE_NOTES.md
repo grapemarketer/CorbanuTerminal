@@ -848,9 +848,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
 
 - **Two Corbanu processes on one Corbanu home no longer lose each other's
   sandbox capability SIDs** when they record them at the same time. Each
-  update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`, open
-  only to you, SYSTEM and Administrators, so sandboxed commands cannot hold
-  it) from reading the file to replacing it, and the sandbox audit no longer
-  rewrites the file. Before, the later write could drop a SID the other process had
+  update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`) from
+  reading the file to replacing it, and the sandbox audit no longer rewrites
+  the file. An update waits at most 5 seconds for the lock, then goes ahead
+  as before, so a program that holds the lock cannot stop updates. Before, the later write could drop a SID the other process had
   just recorded and granted, and two first uses could each make a different
   set.
