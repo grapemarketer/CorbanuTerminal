@@ -166,15 +166,6 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
             },
         ),
     ];
-    let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
-        Path::new("<read-only>"),
-        Path::new("<writable>"),
-    );
-    let refusal_start = refusal_start
-        .split("<writable>")
-        .next()
-        .expect("message names the writable folder")
-        .to_string();
     let mut outcomes = Vec::new();
     for (label, path) in denies {
         let (mut file_system, _) = base.to_runtime_permissions();
