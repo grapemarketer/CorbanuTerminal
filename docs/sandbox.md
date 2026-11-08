@@ -163,11 +163,14 @@ there. Husky's own startup files (`init.sh` in its config folder, v8's
 the list the sandbox knows.
 
 **The default (elevated) Windows sandbox** keeps the same records and
-shows the same warnings (D425, #1846), with two differences. They are
+shows the same warnings (D425, #1846), with three differences. They are
 written when the command itself ends: Corbanu Terminal can't see the
 processes a command leaves running there, so what those change later isn't
-flagged. And nested `.codex`/`.agents` folders that already exist get no
-extra protection: a command can move or replace them, which is flagged.
+flagged. Nested `.codex`/`.agents` folders that already exist get no extra
+protection: a command can change what is inside them unflagged; only moving
+or replacing one is flagged. And the records themselves (in
+`%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
+whose writable folder contains them, such as your whole user folder.
 Its commands run as their own Windows account, so what they create is owned
 by that account, and git refuses such a repository ("dubious ownership")
 unless a `safe.directory` setting trusts it. Corbanu Terminal flags these

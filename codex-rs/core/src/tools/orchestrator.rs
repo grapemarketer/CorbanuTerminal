@@ -1996,9 +1996,10 @@ async fn warn_unlabelled_writable_roots<Rq, Out, T>(
 }
 
 /// D424 (#1775): after a run in the Windows sandbox (non-admin, or D425
-/// (#1846) elevated), tells the person right away about the folders recorded as possibly planted in the
-/// run's writable roots (a `.git` git would run hooks from, a `.codex` or
-/// `.agents`), rather than only at the next start. Display only.
+/// (#1846) elevated), tells the person right away about the folders
+/// recorded as possibly planted in the run's writable roots (a `.git` git
+/// would run hooks from, a `.codex` or `.agents`), rather than only at the
+/// next start. Display only.
 async fn warn_planted_after_run<Rq, Out, T>(
     tool: &T,
     req: &Rq,

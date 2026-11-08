@@ -1,12 +1,13 @@
 //! #1506 item 2 (D262): `.codex` and `.agents` folders at the top of a
-//! writable root that were absent when a Windows sandbox session (non-admin,
-//! or since D425 (#1846) elevated) started and existed when it ended (or while it still runs), and
-//! (D283, #1541) those deeper in a writable root that weren't there, as the
-//! same folder, when the session started. A
-//! sandboxed command may have planted them, so Corbanu Terminal doesn't load
-//! them (project config, hooks, skills) until the user confirms them. The
-//! records live with the sandbox's integrity-label records, where sandboxed
-//! commands can't read or change them.
+//! writable root that were absent when a Windows sandbox session
+//! (non-admin, or since D425 (#1846) elevated) started and existed when it
+//! ended (or while it still runs), and (D283, #1541) those deeper in a
+//! writable root that weren't there, as the same folder, when the session
+//! started. A sandboxed command may have planted them, so Corbanu Terminal
+//! doesn't load them (project config, hooks, skills) until the user confirms
+//! them. The records live with the sandbox's integrity-label records, where
+//! non-admin sandboxed commands can't read or change them (elevated ones can
+//! when a writable root contains them; see `docs/sandbox.md`).
 
 use std::path::Path;
 use std::path::PathBuf;

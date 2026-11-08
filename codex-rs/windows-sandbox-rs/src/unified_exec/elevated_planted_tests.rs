@@ -1,5 +1,5 @@
 //! D425 (#1846): the elevated sandbox keeps the non-admin sandbox's records
-//! of what its commands may have planted (D262, D283, D332, D420), written
+//! of what its commands may have planted (D262, D283, D332, D420, D422), written
 //! when the command ends, and labels nothing to do so.
 
 use super::*;
@@ -8,7 +8,8 @@ fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).expect("canonical")
 }
 
-/// A repository the person made, as `git init` leaves it.
+/// A repository the person made, as `git init` leaves it, with a
+/// `core.hooksPath` folder in its work tree (D422).
 fn user_repo(dir: &Path) {
     for folder in [
         "hooks",
@@ -22,14 +23,15 @@ fn user_repo(dir: &Path) {
     fs::write(dir.join(".git\\HEAD"), "ref: refs/heads/main\n").expect("HEAD");
     fs::write(
         dir.join(".git\\config"),
-        "[core]\n\trepositoryformatversion = 0\n",
+        "[core]\n\trepositoryformatversion = 0\n\thooksPath = .githooks\n",
     )
     .expect("config");
+    fs::create_dir_all(dir.join(".githooks")).expect("hooks folder");
 }
 
 /// What the records say about `workspace` after a command that planted
-/// `.codex`, `deep\.agents` and `.git` there and changed `userrepo`'s config,
-/// and what the post-command notice was told (records since `mark`).
+/// `.codex`, `deep\.agents` and `.git` there, changed `userrepo`'s config and
+/// added a hook to the folder its `core.hooksPath` names, and what the post-command notice was told (records since `mark`).
 fn recorded(workspace: &Path, mark: u64) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     let mut planted: Vec<PathBuf> = crate::planted_project_metadata()
         .expect("planted records")
@@ -54,7 +56,7 @@ fn recorded(workspace: &Path, mark: u64) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<Pat
     (planted, changed, told)
 }
 
-const PLANT: &str = "(mkdir .codex) & (mkdir deep\\.agents) & (mkdir .git) & (echo [core]>> userrepo\\.git\\config) & (echo hooksPath = x>> userrepo\\.git\\config) & (echo ok> done.txt)";
+const PLANT: &str = "(mkdir .codex) & (mkdir deep\\.agents) & (mkdir .git) & (echo [user]>> userrepo\\.git\\config) & (echo name = x>> userrepo\\.git\\config) & (echo exit 0> userrepo\\.githooks\\pre-commit) & (echo ok> done.txt)";
 
 fn expected(workspace: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     let mut planted = vec![
@@ -63,7 +65,10 @@ fn expected(workspace: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
         workspace.join("deep\\.agents"),
     ];
     planted.sort();
-    let changed = vec![workspace.join("userrepo\\.git")];
+    let changed = vec![
+        workspace.join("userrepo\\.git"),
+        workspace.join("userrepo\\.githooks"),
+    ];
     let mut told = planted.clone();
     told.extend(changed.clone());
     told.sort();
@@ -169,7 +174,7 @@ fn sec_win_1846_elevated_capture_records_what_its_command_plants() {
 /// goes back when that session ends. What appeared is recorded when the
 /// watch ends. (No elevation needed.)
 #[test]
-fn sec_win_1846_records_only_watch_keeps_no_label_in_place() {
+fn sec_win_1846_records_only_watch_keeps_no_legacy_label_in_place() {
     let _guard = legacy_process_test_guard();
     let test_root = user_owned_test_root();
     let root = canonical(test_root.path());
