@@ -80,6 +80,10 @@ class CheckNightlyCommitTest(unittest.TestCase):
         self.assertEqual((code, self.levels(annotations)), (0, ["warning"]))
         self.assertIn("main moved to 2d8c17d66a", annotations[0][1])
 
+    def test_push_over_two_minutes_before_creation_fails(self) -> None:
+        code, _ = check(MAIN, "1329ea5883", "2026-11-06T18:54:43Z", ACTIVITIES)
+        self.assertEqual(code, 1)
+
     def test_no_main_history_fails(self) -> None:
         code, annotations = check(MAIN, "1329ea5883", "2026-11-06T16:49:19Z", [])
         self.assertEqual((code, self.levels(annotations)), (1, ["error"]))

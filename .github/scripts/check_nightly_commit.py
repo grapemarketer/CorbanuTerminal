@@ -9,6 +9,7 @@ annotation either way and exits 1 when a run on main tests any other commit.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -126,7 +127,7 @@ def get_json(url: str, token: str) -> tuple[object, str | None]:
     """The decoded response and the next page's URL, if any; one retry."""
     try:
         return get_json_once(url, token)
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
         return get_json_once(url, token)
 
 
@@ -146,8 +147,9 @@ def get_json_once(url: str, token: str) -> tuple[object, str | None]:
 
 
 def main_activities(api: str, repo: str, token: str, created_at: str) -> list[dict]:
-    """Main's activity, newest first, back to the last entry before `created_at`."""
-    created = parse_time(created_at)
+    """Main's activity, newest first, back to the head RACE_GRACE before
+    `created_at`."""
+    oldest_needed = parse_time(created_at) - RACE_GRACE
     url: str | None = f"{api}/repos/{repo}/activity?ref={MAIN_REF}&per_page=100"
     activities: list[dict] = []
     for _ in range(MAX_PAGES):
@@ -157,7 +159,7 @@ def main_activities(api: str, repo: str, token: str, created_at: str) -> list[di
         if not isinstance(page, list):
             raise RuntimeError(f"unexpected Activity API response: {page!r}")
         activities.extend(page)
-        if any(parse_time(entry["timestamp"]) <= created for entry in page):
+        if any(parse_time(entry["timestamp"]) <= oldest_needed for entry in page):
             break
     return activities
 
@@ -180,14 +182,21 @@ def main() -> int:
             raise RuntimeError(f"unexpected workflow run response: {run!r}")
         created_at = run["created_at"]
         activities = main_activities(api, repo, token, created_at)
-    except (OSError, RuntimeError, KeyError, ValueError) as err:
-        print(
-            f"::error title=Nightly commit::{escape(f'GitHub API request failed: {err}')}"
+        code, annotations = check(
+            env["GITHUB_REF"], env["GITHUB_SHA"], created_at, activities
         )
+    except (
+        OSError,
+        http.client.HTTPException,
+        RuntimeError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        ValueError,
+    ) as err:
+        message = f"GitHub API request or response failed: {err!r}"
+        print(f"::error title=Nightly commit::{escape(message)}")
         return 1
-    code, annotations = check(
-        env["GITHUB_REF"], env["GITHUB_SHA"], created_at, activities
-    )
     for level, message in annotations:
         print(f"::{level} title=Nightly commit::{escape(message)}")
     summary = env.get("GITHUB_STEP_SUMMARY")
