@@ -551,9 +551,36 @@ struct InterruptAgentResult {
     process_effect: String,
 }
 
-/// Starts a turn on `agent_id` as its runtime reports one, so the agent
-/// reads `Running`; returns the turn so the caller can finish it.
+/// Ends the real turn a spawn started on `agent_id` (it would otherwise
+/// change the agent's status at any moment) and waits until the agent is
+/// neither starting nor running.
+async fn settle_agent(manager: &ThreadManager, agent_id: ThreadId) -> AgentStatus {
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("agent thread should exist");
+    thread
+        .submit(Op::Interrupt)
+        .await
+        .expect("interrupt should submit");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = manager.agent_control().get_status(agent_id).await;
+        if !matches!(status, AgentStatus::PendingInit | AgentStatus::Running) {
+            return status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "agent did not settle: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Settles `agent_id`, then starts a turn on it as its runtime reports one,
+/// so the agent reads `Running`; returns the turn so the caller can finish it.
 async fn start_agent_turn(manager: &ThreadManager, agent_id: ThreadId) -> Arc<TurnContext> {
+    settle_agent(manager, agent_id).await;
     let thread = manager
         .get_thread(agent_id)
         .await
@@ -6088,9 +6115,9 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     );
 }
 
-/// D404 (#1796): interrupting an agent that isn't running, whether it hasn't
-/// started a turn yet or has finished one, only reports its status: no
-/// interrupt reaches it and no message wakes it with a new turn.
+/// D404 (#1796): interrupting an agent that isn't running, whether its turn
+/// was stopped or has finished, only reports its status: no interrupt reaches
+/// it and no message wakes it with a new turn.
 #[tokio::test]
 async fn d404_interrupting_an_agent_that_is_not_running_only_reports_its_status() {
     let (mut session, mut turn) = make_session_and_context().await;
@@ -6146,14 +6173,17 @@ async fn d404_interrupting_an_agent_that_is_not_running_only_reports_its_status(
         serde_json::from_str::<InterruptAgentResult>(&content).expect("result should be json")
     };
 
+    // The spawn's own turn, stopped here directly: the agent is idle.
+    let idle = settle_agent(&manager, agent_id).await;
     let before = reaches_agent();
     let result = interrupt().await;
-    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(result.previous_status, idle);
     assert_eq!(
         result.process_effect,
         "not running: nothing was interrupted and the agent was not started"
     );
-    assert_eq!(reaches_agent(), before, "nothing reaches a pending agent");
+    assert_eq!(reaches_agent(), before, "nothing reaches an idle agent");
+    assert_eq!(manager.agent_control().get_status(agent_id).await, idle);
 
     let thread = manager
         .get_thread(agent_id)
@@ -7959,9 +7989,8 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
          after untrusted content entered the session, so it needs your approval, and \
          approvals are off (approval_policy = never)."
     );
-    let asks_for_every_target = |label: &'static str| {
+    let asks_for_every_target = |label: &'static str, targets: Vec<String>| {
         let dispatch = &dispatch;
-        let targets = &targets;
         let restart = &restart;
         let session = &session;
         let turn = &turn;
@@ -7969,7 +7998,9 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
             for tool in tools {
                 // An unknown target counts as not running.
                 for target in targets.iter().cloned().chain(["nobody".to_string()]) {
-                    let refusal = dispatch(tool, target.clone()).await.expect_err("asks");
+                    let Err(refusal) = dispatch(tool, target.clone()).await else {
+                        panic!("{level:?} {label} {tool} {target}: went ahead");
+                    };
                     assert!(
                         refusal.starts_with(restart.as_str()),
                         "{level:?} {label} {tool} {target}: {refusal}"
@@ -7993,33 +8024,34 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
         }
     };
 
+    // The spawn's own turn, stopped here directly: the agent is idle.
+    let idle = settle_agent(&manager, agent_id).await;
+    asks_for_every_target("idle", targets.to_vec()).await;
+    assert_eq!(manager.agent_control().get_status(agent_id).await, idle);
+
     // #1768 review: a session (re)loaded without a turn is `PendingInit`, as
     // is a finished agent that `send_message` reloaded; a follow-up would
-    // start its turn, so it asks.
-    let status = manager.agent_control().get_status(agent_id).await;
-    assert_eq!(status, AgentStatus::PendingInit);
-    asks_for_every_target("pending").await;
+    // start its turn, so it asks. A thread nothing has submitted to stays so.
+    let pending = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("pending thread should start")
+        .thread_id;
+    assert_eq!(
+        manager.agent_control().get_status(pending).await,
+        AgentStatus::PendingInit
+    );
+    asks_for_every_target(
+        "pending",
+        vec![format!("thread:{pending}"), pending.to_string()],
+    )
+    .await;
 
     let thread = manager
         .get_thread(agent_id)
         .await
         .expect("worker thread should exist");
-    let first_turn = thread.session.new_default_turn().await;
-    thread
-        .session
-        .send_event(
-            first_turn.as_ref(),
-            EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
-                turn_id: first_turn.sub_id.clone(),
-                trace_id: None,
-                started_at: None,
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        )
-        .await;
-    let status = manager.agent_control().get_status(agent_id).await;
-    assert_eq!(status, AgentStatus::Running);
+    let first_turn = start_agent_turn(&manager, agent_id).await;
     for tool in tools {
         for target in &targets {
             assert_eq!(
@@ -8047,5 +8079,5 @@ async fn followup_task_after_untrusted_content(level: codex_security_policy::Sec
         .await;
     let status = manager.agent_control().get_status(agent_id).await;
     assert!(matches!(status, AgentStatus::Completed(_)), "{status:?}");
-    asks_for_every_target("finished").await;
+    asks_for_every_target("finished", targets.to_vec()).await;
 }
