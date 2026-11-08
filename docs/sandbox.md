@@ -79,7 +79,9 @@ Terminal before the command starts, so that command doesn't count it as
 planted; another command that was already running still does. Commands
 can't change, move or delete the ones that existed when they started, or
 the folders above them. A folder the sandbox can't list counts as planted,
-and so does one holding a folder whose name isn't valid Unicode. Folders inside
+and so does one holding a folder whose name isn't valid Unicode (when that is
+the workspace itself, its top-level `.codex`/`.agents` count as planted until
+that folder is renamed or removed). Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
 
 **A `.git` created while a command runs.** Git runs a `.git` folder's hooks
