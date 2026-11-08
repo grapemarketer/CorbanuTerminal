@@ -810,3 +810,8 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   variable in both cases (`HTTP_PROXY` and `http_proxy`), sandboxed
   commands get only the capitals, so tools that read only the lower-case
   name (MSYS2 or Git Bash `curl`) no longer see that proxy.
+- **Remote and exec-server commands on Windows also get each variable once**
+  (#1817). The exec-server added Corbanu's variables beside the ones it
+  inherited with exact case, so an inherited `Term` next to Corbanu's `TERM`
+  reached the command twice and either value could count. Corbanu's value
+  now replaces every inherited spelling, as in the sandboxes since #1805.
