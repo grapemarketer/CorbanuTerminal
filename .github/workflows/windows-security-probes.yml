@@ -288,8 +288,9 @@ jobs:
         env:
           CODEX_SEC_WIN_341_REQUIRE: "1"
         run: |
-          set -uo pipefail
-          # Every check runs; the step fails at the end if any did.
+          # Actions runs bash with -e; every check runs, and the step fails at
+          # the end if any did.
+          set +e -uo pipefail
           failed=()
           # check NAME CARGO_ARGS... -- then each line of stdin must appear in the output.
           check() {
