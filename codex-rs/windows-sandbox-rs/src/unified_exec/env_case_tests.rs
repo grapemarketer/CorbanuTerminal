@@ -13,7 +13,9 @@ use super::command_identity::run_legacy_with_env_map;
 use super::*;
 
 const MARKER: &str = "win-1805-marker-found";
-const STARTED: &str = "win-1805 start-process exit=3";
+const STARTED: &str = "win-1805 start-process ran";
+/// Printed when the process `Start-Process` started wrote its file.
+const CHILD: &str = "child wrote: True";
 
 /// The parent's environment with the search path spelled `Path` only, a
 /// folder holding `marker1805.cmd` in front, and its own `TEMP`.
@@ -42,8 +44,8 @@ fn probe_argv(root: &Path, tools: &Path) -> Vec<String> {
         &ps1,
         "$ErrorActionPreference = 'Stop'\r\n\
          try {\r\n\
-           $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\cmd.exe\" -ArgumentList '/c', 'exit 3' -Wait -PassThru -NoNewWindow\r\n\
-           \"win-1805 start-process exit=$($p.ExitCode)\"\r\n\
+           $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\cmd.exe\" -ArgumentList '/c', 'echo ran>win-1805-child.txt' -Wait -PassThru -NoNewWindow\r\n\
+           \"win-1805 start-process ran (exit=$($p.ExitCode), child wrote: $(Test-Path win-1805-child.txt))\"\r\n\
          } catch {\r\n\
            \"win-1805 start-process failed: $($_.Exception.Message)\"\r\n\
          }\r\n",
@@ -86,8 +88,11 @@ fn assert_one_path(backend: &str, stdout: &str, exit_code: i32, codex_home: &Pat
         "#1805: the {backend} command's search path is not the caller's `Path`\n\
          stdout={stdout:?}"
     );
+    // The exit code is printed but not checked: in the legacy backend under
+    // an elevated runner, `-Wait -PassThru` once gave none (CI run
+    // 42451153807), an issue apart from #1805.
     assert!(
-        stdout.contains(STARTED),
+        stdout.contains(STARTED) && stdout.contains(CHILD),
         "#1805: Windows PowerShell's Start-Process failed in the {backend} command\n\
          stdout={stdout:?}"
     );
