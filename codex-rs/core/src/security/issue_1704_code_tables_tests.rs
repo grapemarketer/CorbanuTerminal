@@ -234,6 +234,13 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "eval zm* zsh/st?t; stat -f %m $(cat f)",
             "zmo{d..d}load zsh/st{a..a}t; stat -A functions x",
             "zm* $(cat m); stat -A functions x",
+            // After a redirection or a zsh short `if`/`until` test
+            // (review 4).
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
+            "a=zmod b=load c=zsh/st d=at; until [[ 1 ]] $a$b $c$d; stat -f %m $(cat f)",
             // A load in a line judged after the `stat` (review 3).
             "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f; stat -f %m $(cat f)",
             // A load after it keeps main's prompt.
@@ -258,13 +265,52 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
             "zmo{d..d}load zsh/st{a..a}t",
             "zm* $(cat m)",
             "enable -f stat stat",
+            "zmodload zsh/stat && zmodload -F zsh/stat b:zstat",
+            "zmod''load zsh/stat; z$'m'odload zsh/stat; builtin zmodload zsh/stat",
+            // (`$'zmo\144load'` asks on its own: a command name spelled
+            // with an escape.)
+            "zmod$''load zsh/st$''at",
+            "zmod\\\nload zsh/st\\\nat; zmo{d,}load zsh/stat",
+            "eval 'zmodload zsh/stat'; zsh -c 'zmodload zsh/stat'",
             "a=zmod b=load c=zsh/st d=at; $a$b $c$d",
             "a=zmod b=load c=zsh/st d=at; eval $a$b $c$d",
             "a=zmod b=load c=zsh/st d=at; noglob $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; repeat 1 $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; - $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; nocorrect $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; trap '$a$b $c$d' DEBUG",
+            "a=zmod b=load c=zsh/st d=at; >f $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; 2>/dev/null $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; <<<x $a$b $c$d",
+            "a=zmod b=load c=zsh/st d=at; if [[ 1 ]] $a$b $c$d",
+            "eval zm* zsh/st?t",
             "setopt braceccl; eval zmo{d}load zsh/st{a}t",
             "setopt braceccl; functions[f]='zmo{d}load -i zsh/st{a}t'; f",
         ] {
             assert_eq!(line(script), None, "{shell} {script:?}");
+        }
+        // Wherever the shell may run a command named by known values or a
+        // pattern, the load is quiet alone and makes a later `stat` ask
+        // (review 4).
+        for load in [
+            "time $a$b $c$d",
+            "! $a$b $c$d",
+            "( $a$b $c$d )",
+            "case x in x) $a$b $c$d;; esac",
+            "foreach i (1) $a$b $c$d; end",
+            "if (( 1 )) $a$b $c$d",
+            "f() $a$b $c$d; f",
+            "x=$($a$b $c$d)",
+            "sudo $a$b $c$d",
+            "$a$b $c$d &",
+            ">f zm* zsh/st?t",
+            "2>&1 zm* zsh/st?t",
+            "if [[ 1 ]] zm* zsh/st?t",
+        ] {
+            let load = format!("a=zmod b=load c=zsh/st d=at; {load}");
+            assert_eq!(line(&load), None, "{shell} {load:?}");
+            let script = format!("{load}; stat -f %m $(cat f)");
+            assert!(line(&script).is_some(), "{shell} {script:?}");
         }
     }
 }

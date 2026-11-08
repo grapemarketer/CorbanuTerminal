@@ -1790,7 +1790,9 @@ impl Classifier {
         // #841: this line's own sed programs (nested lines have theirs).
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
         let lexed = shell::simple_commands(command);
-        self.stat_builtin |= code_tables::may_load_stat(command, &lexed.commands);
+        if !self.stat_builtin {
+            self.stat_builtin = code_tables::may_load_stat(command, &lexed.commands);
+        }
         // D191: only the action's own line, judged under POSIX path rules.
         let outer_temp = std::mem::replace(
             &mut self.temp,
@@ -2021,6 +2023,13 @@ impl Classifier {
             // name known from a value (`t=functions; zparseopts -a $t`).
             let tables = code_tables::writes_table(&words, &simple.words, /*seen*/ None);
             self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
+            // D410: with known values substituted (`a=zmod b=load; $a$b`).
+            if !self.stat_builtin {
+                self.stat_builtin = words.iter().any(|word| {
+                    work::step();
+                    code_tables::names_stat_load(word)
+                });
+            }
             if aliases.read(&words) || tables == code_tables::Writes::Table {
                 self.note(ProtectedActionKind::UnseenCode);
             }
