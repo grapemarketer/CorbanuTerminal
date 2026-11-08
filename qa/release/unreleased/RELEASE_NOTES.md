@@ -692,8 +692,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   command. `.git` folders deeper inside aren't checked.
 - **Non-admin sandbox: possibly planted folders are reported where you see
   them** (D424, #1775). A `.git`, `.codex` or `.agents` folder a command may
-  have planted is now named in a warning right after that command ends, not
-  only at the next start. At startup, a flagged `.git` is shown (and the TUI
+  have planted is now named in a warning right after that command ends (for
+  one that leaves processes running, after a later command), not only at the
+  next start. At startup, a flagged `.git` is shown (and the TUI
   asks about it) when it lies in any folder commands may write to,
   `%TEMP%` included, or below the working folder; before, only one in the
   working folder or a folder above it was.

@@ -166,13 +166,13 @@ pub fn planted_after_command_notice(paths: &[PathBuf]) -> Option<String> {
     let mut parts = Vec::new();
     if !git_dirs.is_empty() {
         parts.push(format!(
-            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while this non-admin Windows sandbox command ran, so the command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do. Corbanu Terminal asks you to confirm it when it next starts.",
+            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do. Corbanu Terminal asks you to confirm it when it next starts.",
             list(&git_dirs)
         ));
     }
     if !folders.is_empty() {
         parts.push(format!(
-            "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared or changed while this non-admin Windows sandbox command ran, so the command may have planted it. Its config, hooks and skills aren't loaded until you confirm it.",
+            "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Its config, hooks and skills aren't loaded until you confirm it.",
             list(&folders)
         ));
     }

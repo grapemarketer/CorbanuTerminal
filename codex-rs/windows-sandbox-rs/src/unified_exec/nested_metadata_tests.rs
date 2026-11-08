@@ -634,7 +634,9 @@ fn legacy_command_creating_git_is_recorded_as_planted() {
             exit_code,
             git.join("hooks\\post-checkout").is_file(),
             planted(&git),
-            crate::planted_records_since(mark).contains(&git),
+            crate::planted_records_since(mark)
+                .iter()
+                .any(|(_, path)| *path == git),
         ),
         (0, true, true, true)
     );

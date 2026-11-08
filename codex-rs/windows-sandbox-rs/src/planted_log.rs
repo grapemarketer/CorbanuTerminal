@@ -46,16 +46,15 @@ pub fn planted_records_mark() -> u64 {
     log().seq
 }
 
-/// The folders recorded as possibly planted after `mark`, each once, oldest
-/// first (always none off Windows).
-pub fn planted_records_since(mark: u64) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for (_, path) in log().entries.iter().filter(|(seq, _)| *seq > mark) {
-        if !paths.contains(path) {
-            paths.push(path.clone());
-        }
-    }
-    paths
+/// The folders recorded as possibly planted after `mark`, with each
+/// record's number, oldest first (always none off Windows).
+pub fn planted_records_since(mark: u64) -> Vec<(u64, PathBuf)> {
+    log()
+        .entries
+        .iter()
+        .filter(|(seq, _)| *seq > mark)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
