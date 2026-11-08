@@ -139,7 +139,13 @@ class PrChangedPathsTest(unittest.TestCase):
                 "codex",
                 "argument_comment_lint",
                 "windows_native_tests",
-                "windows_native_other",
+                "windows_native_sandbox",
+            ),
+            "codex-rs/sandboxing/src": (
+                "codex",
+                "argument_comment_lint",
+                "windows_native_tests",
+                "windows_native_sandbox",
             ),
             "codex-rs/exec-server/tests": (
                 "codex",
@@ -235,8 +241,11 @@ class PrChangedPathsTest(unittest.TestCase):
 
     def test_windows_native_targets_follow_the_changed_groups(self) -> None:
         core = "//codex-rs/tui/... //codex-rs/core/... //codex-rs/state/... //codex-rs/login/..."
-        sandbox = "//codex-rs/windows-sandbox-rs/... //codex-rs/network-proxy/..."
-        other = "//codex-rs/process-hardening/... //codex-rs/exec-server/..."
+        sandbox = (
+            "//codex-rs/windows-sandbox-rs/... //codex-rs/network-proxy/... "
+            "//codex-rs/process-hardening/... //codex-rs/sandboxing/..."
+        )
+        other = "//codex-rs/exec-server/..."
         self.assertEqual(self.targets(False, False, False), "")
         self.assertEqual(self.targets(True, False, False), core)
         self.assertEqual(self.targets(False, True, False), sandbox)

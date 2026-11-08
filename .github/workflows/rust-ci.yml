@@ -64,10 +64,10 @@ jobs:
           # forced file list above, which matches none of them; nightly runs
           # every crate's native Windows tests in bazel.yml instead. Each
           # group runs its own crates' targets only: tui, core, state and
-          # login (#636); windows-sandbox-rs and network-proxy, whose Windows
-          # tests build their tokens with windows-sandbox-rs (#1813, after
-          # #1795 merged unseen); process-hardening and exec-server, which
-          # have whole Windows-only test files.
+          # login (#636); windows-sandbox-rs and the crates whose Windows
+          # tests use it or that it uses: network-proxy, process-hardening
+          # and sandboxing (#1813, after #1795 merged unseen); exec-server,
+          # which has whole Windows-only test files.
           windows_native_tests=false
           windows_native_core=false
           windows_native_sandbox=false
@@ -85,8 +85,8 @@ jobs:
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
             [[ $f == codex-rs/tui/* || $f == codex-rs/core/* || $f == codex-rs/state/* || $f == codex-rs/login/* ]] && windows_native_core=true windows_native_tests=true
-            [[ $f == codex-rs/windows-sandbox-rs/* || $f == codex-rs/network-proxy/* ]] && windows_native_sandbox=true windows_native_tests=true
-            [[ $f == codex-rs/process-hardening/* || $f == codex-rs/exec-server/* ]] && windows_native_other=true windows_native_tests=true
+            [[ $f == codex-rs/windows-sandbox-rs/* || $f == codex-rs/network-proxy/* || $f == codex-rs/process-hardening/* || $f == codex-rs/sandboxing/* ]] && windows_native_sandbox=true windows_native_tests=true
+            [[ $f == codex-rs/exec-server/* ]] && windows_native_other=true windows_native_tests=true
             [[ $f == .github/workflows/rust-ci-windows-native-tests.yml ]] && windows_native_core=true windows_native_sandbox=true windows_native_other=true windows_native_tests=true
             [[ $f == codex-rs/protocol/* || $f == codex-rs/app-server-protocol/* || $f == .github/workflows/rust-ci.yml ]] && app_server_schema=true
             [[ $f == codex-rs/security-policy/* || $f == codex-rs/utils/absolute-path/* || $f == codex-rs/utils/path-uri/* || $f == codex-rs/ext/items/* ]] && app_server_schema=true
@@ -111,10 +111,10 @@ jobs:
             windows_native_targets+=" //codex-rs/tui/... //codex-rs/core/... //codex-rs/state/... //codex-rs/login/..."
           fi
           if [[ $windows_native_sandbox == true ]]; then
-            windows_native_targets+=" //codex-rs/windows-sandbox-rs/... //codex-rs/network-proxy/..."
+            windows_native_targets+=" //codex-rs/windows-sandbox-rs/... //codex-rs/network-proxy/... //codex-rs/process-hardening/... //codex-rs/sandboxing/..."
           fi
           if [[ $windows_native_other == true ]]; then
-            windows_native_targets+=" //codex-rs/process-hardening/... //codex-rs/exec-server/..."
+            windows_native_targets+=" //codex-rs/exec-server/..."
           fi
           windows_native_targets="${windows_native_targets# }"
           echo "Windows native test targets: ${windows_native_targets:-none}"
@@ -238,8 +238,8 @@ jobs:
   # codex-login on PRs that change one of them (#636, owner decision
   # 2026-10-15): Windows-only test failures in these crates broke nightly
   # after merging. Since #1813 also windows-sandbox-rs with network-proxy,
-  # and process-hardening with exec-server; only the changed groups' targets
-  # run (see `changed`). Restore-only, like every PR job.
+  # process-hardening and sandboxing, and exec-server; only the changed
+  # groups' targets run (see `changed`). Restore-only, like every PR job.
   windows_native_tests:
     name: Windows native tests
     needs: changed
@@ -555,7 +555,7 @@ jobs:
             exit 0
           fi
 
-          # Required whenever it runs (PRs touching tui, core, state, login).
+          # Required whenever it runs (PRs touching its crates, see `changed`).
           if [[ "${NEEDS_CHANGED_OUTPUTS_WINDOWS_NATIVE_TESTS}" == 'true' ]]; then
             [[ '${{ needs.windows_native_tests.result }}' == 'success' ]] || { echo 'windows_native_tests failed'; exit 1; }
           fi

@@ -515,10 +515,17 @@ class PrAppServerSchemaFixturesTest(unittest.TestCase):
 class PrWindowsNativeTestsTest(unittest.TestCase):
     """#636 (owner decision 2026-10-15): native Windows tests on PRs that
     change codex-tui, codex-core, codex-state or codex-login; since #1813 also
-    windows-sandbox-rs, network-proxy, process-hardening and exec-server."""
+    windows-sandbox-rs, network-proxy, process-hardening, sandboxing and
+    exec-server."""
 
     CRATES = ("tui", "core", "state", "login")
-    MORE_CRATES = ("windows-sandbox-rs", "network-proxy", "process-hardening", "exec-server")
+    MORE_CRATES = (
+        "windows-sandbox-rs",
+        "network-proxy",
+        "process-hardening",
+        "sandboxing",
+        "exec-server",
+    )
     REUSABLE = "rust-ci-windows-native-tests.yml"
 
     def workflow(self, name: str) -> str:

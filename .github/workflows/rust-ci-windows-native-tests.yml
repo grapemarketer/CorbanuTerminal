@@ -3,10 +3,10 @@ name: rust-ci Windows native tests
 # Native Windows Bazel tests for the crates whose Windows-only failures kept
 # breaking nightly (#636, owner decision 2026-10-15): codex-tui, codex-core,
 # codex-state and codex-login; since #1813 also windows-sandbox-rs,
-# network-proxy, process-hardening and exec-server. rust-ci.yml runs this on
-# pull requests that change one of those crates, passing only the changed
-# groups' targets; nightly-ci.yml still runs every crate's native Windows
-# tests (bazel.yml, test-windows-native-main).
+# network-proxy, process-hardening, sandboxing and exec-server. rust-ci.yml
+# runs this on pull requests that change one of those crates, passing only
+# the changed groups' targets; nightly-ci.yml still runs every crate's native
+# Windows tests (bazel.yml, test-windows-native-main).
 #
 # Same Bazel setup as test-windows-native-main, limited to those crates' test
 # targets. Restore-only: it reads the repository cache nightly saves on main
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   test:
-    name: Bazel test (${{ inputs.targets }})
+    name: Bazel test (changed crates)
     runs-on: windows-2022
     timeout-minutes: 90
     environment:
