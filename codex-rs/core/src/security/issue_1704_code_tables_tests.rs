@@ -319,6 +319,8 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
 /// `[[ … ]]` tests before finding the command the shell runs.
 #[test]
 fn issue1845_table_writer_walk_skips_held_words() {
+    use super::ProtectedActionKind::UnseenCode;
+
     for shell in ["bash", "zsh"] {
         let line = |script: &str| kind(&[shell, "-lc", script]);
         for script in [
@@ -331,10 +333,27 @@ fn issue1845_table_writer_walk_skips_held_words() {
             "f=/dev/null; 2>\"$f\" read -A functions",
             "<a <b read -A functions",
         ] {
-            assert!(line(script).is_some(), "{shell}: {script}");
+            assert_eq!(line(script), Some(UnseenCode), "{shell}: {script}");
         }
-        // zsh's spaced clobber redirect has a separate held file word.
-        assert!(kind(&["zsh", "-lc", ">! f zparseopts -a functions -- f:"]).is_some());
+    }
+    // zsh's spaced clobber redirect has a separate held file word.
+    assert_eq!(
+        kind(&["zsh", "-lc", ">! f zparseopts -a functions -- f:"]),
+        Some(UnseenCode)
+    );
+    for script in [
+        ">! enable -f stat stat; stat -A BASH_ALIASES f",
+        ">! enable -f stat stat && stat -A BASH_ALIASES f",
+        ">! enable stat; stat -A BASH_ALIASES f",
+        "t=enable; >! $t -f stat stat; stat -A BASH_ALIASES f",
+    ] {
+        for shell in ["bash", "zsh"] {
+            assert_eq!(
+                kind(&[shell, "-lc", script]),
+                Some(UnseenCode),
+                "{shell}: {script}"
+            );
+        }
     }
     // Review 5: filtering held words must remain linear for a long command.
     work::assert_linear("#1845 held command words", |scale| {

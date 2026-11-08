@@ -2096,13 +2096,23 @@ impl Classifier {
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
             // #1845: command walks skip redirection operands and zsh `[[ … ]]`
-            // tests; only the remaining words can name a table writer.
-            let tables = code_tables::writes_table(
-                &code_tables::run_words(&words, simple),
-                &code_tables::run_words(&simple.words, simple),
-                /*seen*/ None,
-            );
-            self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
+            // tests; keep main's unfiltered reading as a compatibility floor,
+            // then consider both shells where their redirections differ.
+            let table_readings = [
+                code_tables::writes_table(&words, &simple.words, /*seen*/ None),
+                code_tables::writes_table(
+                    &code_tables::run_words(&words, simple, /*zsh*/ false),
+                    &code_tables::run_words(&simple.words, simple, /*zsh*/ false),
+                    /*seen*/ None,
+                ),
+                code_tables::writes_table(
+                    &code_tables::run_words(&words, simple, /*zsh*/ true),
+                    &code_tables::run_words(&simple.words, simple, /*zsh*/ true),
+                    /*seen*/ None,
+                ),
+            ];
+            self.stat_pending |= table_readings.contains(&code_tables::Writes::StatIfLoaded);
+            let tables = table_readings.contains(&code_tables::Writes::Table);
             // D410: with known values substituted (`a=zmod b=load; $a$b`).
             if !self.stat_builtin {
                 self.stat_builtin = words.iter().any(|word| {
@@ -2110,7 +2120,7 @@ impl Classifier {
                     code_tables::names_stat_load(word)
                 });
             }
-            if aliases.read(&words) || tables == code_tables::Writes::Table {
+            if aliases.read(&words) || tables {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(
