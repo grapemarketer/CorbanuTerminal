@@ -886,6 +886,7 @@ pub fn planted_project_metadata() -> Result<Vec<PathBuf>> {
     let PlantedMetadata {
         entries: mut planted,
         confirmed,
+        ..
     } = load_planted(&registry)?;
     for record in records {
         planted.extend(

@@ -300,7 +300,7 @@ pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState
         .iter()
         .map(|path| {
             let link = std::fs::symlink_metadata(path)
-                .map_or(false, |metadata| metadata.file_type().is_symlink());
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
             RepoState {
                 path: path.clone(),
                 identity: if link { None } else { identity(path) },
