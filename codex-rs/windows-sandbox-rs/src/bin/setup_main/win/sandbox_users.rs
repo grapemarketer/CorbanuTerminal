@@ -1,9 +1,8 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use rand::RngCore;
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::Rng;
+use rand::rngs::OsRng;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -363,18 +362,37 @@ pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
     Ok(psid)
 }
 
+const PASSWORD_LEN: usize = 24;
+const PASSWORD_CHARS: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+
 fn random_password() -> String {
-    const CHARS: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
-    let mut rng = SmallRng::from_entropy();
-    let mut buf = [0u8; 24];
-    rng.fill_bytes(&mut buf);
-    buf.iter()
-        .map(|b| {
-            let idx = (*b as usize) % CHARS.len();
-            CHARS[idx] as char
-        })
-        .collect()
+    random_password_with(|n| OsRng.gen_range(0..n))
+}
+
+/// Windows' "Password must meet complexity requirements" policy (on by default on
+/// Windows Server, including the CI runners) rejects a password without characters
+/// from at least three of the four classes. A uniform draw from `PASSWORD_CHARS`
+/// misses that about once in 9,000 passwords, and NetUserAdd/NetUserSetInfo then fail
+/// with NERR 2245, failing setup (#1776). Redraw until all four classes are present.
+/// `pick(n)` returns a uniformly random index in `0..n`.
+fn random_password_with(mut pick: impl FnMut(usize) -> usize) -> String {
+    loop {
+        let candidate: String = (0..PASSWORD_LEN)
+            .map(|_| PASSWORD_CHARS[pick(PASSWORD_CHARS.len())] as char)
+            .collect();
+        if has_every_character_class(&candidate) {
+            return candidate;
+        }
+    }
+}
+
+fn has_every_character_class(password: &str) -> bool {
+    let has = |class: fn(&u8) -> bool| password.as_bytes().iter().any(class);
+    has(u8::is_ascii_uppercase)
+        && has(u8::is_ascii_lowercase)
+        && has(u8::is_ascii_digit)
+        && has(|b| !b.is_ascii_alphanumeric())
 }
 
 #[derive(Serialize)]
@@ -583,3 +601,7 @@ pub(super) fn commit_setup_marker(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "sandbox_users_tests.rs"]
+mod tests;

@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::allow::protected_metadata_made_on_the_way;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::identity::sandbox_setup_is_complete;
@@ -1171,13 +1172,25 @@ fn build_payload_deny_write_paths(
         request.command_cwd,
         request.env_map,
     );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
+    let deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()
         .map(|path| canonicalize_path(&path))
         .collect();
-    deny_write_paths.extend(allow_deny_paths.deny);
-    deny_write_paths
+    // #1758: the setup helper makes missing ones before the command starts;
+    // a `.git` it makes on the way (for `.git\hooks`) is protected from that
+    // command on, as it is from the next (and in the non-admin sandbox, #1705).
+    // Listed first, so the helper protects it right after making it, before
+    // making the path below it (narrowing the gap for a command already
+    // running).
+    let mut made_on_the_way = protected_metadata_made_on_the_way(
+        request.permissions,
+        request.command_cwd,
+        &deny_write_paths,
+    );
+    made_on_the_way.extend(deny_write_paths);
+    made_on_the_way.extend(allow_deny_paths.deny);
+    made_on_the_way
 }
 
 /// #323: a launch with deny-read rules registers this process as a session
@@ -2203,6 +2216,53 @@ mod tests {
             .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
         );
+    }
+
+    /// #1758: a top-level `.git`/`.codex`/`.agents` the setup helper makes on
+    /// the way to a missing configured read-only path is protected from the
+    /// first command on, in any writable root but the temp ones (D283).
+    #[test]
+    fn payload_deny_write_paths_protect_metadata_made_on_the_way() {
+        let tmp = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(tmp.path()).expect("canonical tempdir");
+        let codex_home = base.join("codex-home");
+        let command_cwd = base.join("workspace");
+        let other = base.join("other");
+        let temp = base.join("temp");
+        for dir in [&command_cwd, &other, &temp] {
+            fs::create_dir_all(dir).expect("create root");
+        }
+        let explicit = vec![
+            command_cwd.join(".git\\hooks"),
+            other.join(".Agents\\skills"),
+            other.join(".codex"),
+            command_cwd.join("deep\\.codex\\hooks"),
+            temp.join(".git\\hooks"),
+        ];
+        let writable_roots =
+            vec![AbsolutePathBuf::from_absolute_path(&other).expect("absolute writable root")];
+        let permission_profile = workspace_write_profile(
+            &writable_roots,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ true,
+        );
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let env_map = HashMap::from([("TEMP".to_string(), temp.display().to_string())]);
+        let request = super::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: &command_cwd,
+            env_map: &env_map,
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths =
+            super::build_payload_deny_write_paths(&request, Some(explicit.clone()));
+
+        let mut expected: HashSet<PathBuf> = explicit.into_iter().collect();
+        expected.extend([command_cwd.join(".git"), other.join(".Agents")]);
+        assert_eq!(expected, deny_write_paths.into_iter().collect());
     }
 
     #[test]

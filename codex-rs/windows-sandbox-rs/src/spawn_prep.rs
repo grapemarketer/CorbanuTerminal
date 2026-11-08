@@ -5,6 +5,7 @@ use crate::acl::allow_null_device;
 use crate::acl::ensure_allow_write_aces;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::allow::protected_metadata_made_on_the_way;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::new_command_identity_sid_string;
 use crate::cap::workspace_write_cap_sid_for_root;
@@ -638,6 +639,12 @@ pub(crate) fn apply_legacy_session_acl_rules(
             .chain(&explicit_read_only)
         {
             // Again: a command already running may have removed it since.
+            // A `.git` made on the way again is protected too (#1758).
+            deny.extend(protected_metadata_made_on_the_way(
+                permissions,
+                current_dir,
+                std::slice::from_ref(path),
+            ));
             create_missing_carve_out(path, &canonical_allow)?;
             deny.insert(path.clone());
             explicit_carve_outs.insert(path.clone());

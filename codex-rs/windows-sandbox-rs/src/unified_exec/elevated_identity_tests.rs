@@ -787,3 +787,194 @@ fn sec_win_1648_elevated_tools_work_with_command_identity() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// #1758: a configured read-only `.git\hooks` in a workspace with no `.git`.
+/// The setup helper makes `.git\hooks`, and `.git` on the way, before the
+/// first command starts; that command can't write `.git` (a `config` there
+/// would make it a repository git later runs outside the sandbox) any more
+/// than the next one can. Before, the deny set was read before `.git` existed,
+/// so only the next command was kept out. The workspace stays writable.
+#[test]
+fn sec_win_1758_elevated_first_command_cannot_write_a_git_made_for_its_hooks() {
+    let Some(codex_home) = elevated_home("sec-1758") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let workspace = dunce::canonicalize(root.path()).expect("canonical workspace");
+    let git = workspace.join(".git");
+    let hooks = git.join("hooks");
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    // The workspace profile the other elevated tests use (a profile built
+    // from entries alone couldn't write its workspace here); the configured
+    // `.git\hooks` arrives as Core passes it to this backend.
+    let profile = PermissionProfile::workspace_write();
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    // Relative to the workspace (the cwd): the runner quotes arguments the
+    // C runtime's way, which cmd doesn't read, so no quotes inside.
+    let script = "(echo planted> .git\\config) & (echo planted> .git\\hooks\\pre-commit) & (mkdir .git\\objects) & (echo ok> allowed.txt)".to_string();
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let runtime = current_thread_runtime();
+    let exit_code = runtime.block_on(async {
+        let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &profile,
+            workspace_roots_for(&workspace).as_slice(),
+            codex_home.path(),
+            vec![cmd, "/d".to_string(), "/c".to_string(), script],
+            &workspace,
+            env_map,
+            /*proxy_enforced*/ false,
+            /*network_proxy_restricting_sid*/ None,
+            Some(90_000),
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ true,
+            /*write_roots_override*/ None,
+            &crate::DenyReadTargets::default(),
+            // As Core passes a configured read-only path for this backend.
+            &[absolute(&hooks)],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated command: {err:#}\n{}",
+                sandbox_log(codex_home.path())
+            )
+        });
+        collect_stdout_and_exit(
+            spawned,
+            codex_home.path(),
+            Duration::from_secs(/*secs*/ 120),
+        )
+        .await
+        .1
+    });
+    record_setup(codex_home.path());
+    let state = (
+        hooks.is_dir(),
+        git.join("config").exists(),
+        hooks.join("pre-commit").exists(),
+        git.join("objects").exists(),
+        workspace.join("allowed.txt").exists(),
+    );
+    println!(
+        "\nsec-1758: exit={exit_code} (hooks, config, pre-commit, objects, allowed)={state:?}"
+    );
+
+    pretty_assertions::assert_eq!(
+        (exit_code, state),
+        (0, (true, false, false, false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}
+
+/// #1780 (the bug was in the non-admin sandbox): the elevated sandbox keeps a
+/// read-only `docs` read-only when it or the working folder is spelled
+/// through a junction and the other by its real path, with nothing passed
+/// beyond the profile (Core's resolvers pass no deny path for these). With
+/// both spelled by the real path, the command writes its workspace and not
+/// `docs`, also with `docs` spelled through the junction. With the cwd
+/// spelled through it the command may not start at all here (the sandbox
+/// account can't pass the user-owned test root at the link), which is fine;
+/// it just mustn't write `docs`.
+#[test]
+fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only() {
+    let Some(codex_home) = elevated_home("sec-1780") else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let root = user_owned_test_root();
+    let base = dunce::canonicalize(root.path()).expect("canonical test root");
+    let real = base.join("real");
+    fs::create_dir_all(real.join("docs")).expect("create docs");
+    let linked = base.join("linked");
+    assert!(
+        super::super::real_path_read_only::make_link("/J", &linked, &real),
+        "mklink /J failed"
+    );
+    let probe = real.join("docs").join("probe.txt");
+    let cmd = system32_exe("cmd.exe").display().to_string();
+    let runtime = current_thread_runtime();
+    let mut outcomes = Vec::new();
+    for (cwd, docs) in [
+        (&real, real.join("docs")),
+        (&linked, real.join("docs")),
+        (&real, linked.join("docs")),
+    ] {
+        let (mut file_system, network) =
+            PermissionProfile::workspace_write().to_runtime_permissions();
+        file_system
+            .entries
+            .push(codex_protocol::permissions::FileSystemSandboxEntry::new(
+                codex_protocol::permissions::FileSystemPath::Path {
+                    path: AbsolutePathBuf::from_absolute_path(&docs).expect("absolute"),
+                },
+                codex_protocol::permissions::FileSystemAccessMode::Read,
+            ));
+        let profile = PermissionProfile::from_runtime_permissions(&file_system, network);
+        // Relative to the cwd (no quotes, see #1758's test); `docs` there is
+        // `real\docs` either way.
+        let script = "(echo x> docs\\probe.txt) & (echo y> ok.txt)".to_string();
+        let env_map: HashMap<String, String> = std::env::vars().collect();
+        let exit = runtime.block_on(async {
+            match spawn_windows_sandbox_session_elevated_for_permission_profile(
+                &profile,
+                workspace_roots_for(cwd).as_slice(),
+                codex_home.path(),
+                vec![cmd.clone(), "/d".to_string(), "/c".to_string(), script],
+                cwd,
+                env_map,
+                /*proxy_enforced*/ false,
+                /*network_proxy_restricting_sid*/ None,
+                Some(90_000),
+                /*read_roots_override*/ None,
+                /*read_roots_include_platform_defaults*/ true,
+                /*write_roots_override*/ None,
+                &crate::DenyReadTargets::default(),
+                &[],
+                /*tty*/ false,
+                /*stdin_open*/ false,
+                /*use_private_desktop*/ true,
+            )
+            .await
+            {
+                Ok(spawned) => Some(
+                    collect_stdout_and_exit(
+                        spawned,
+                        codex_home.path(),
+                        Duration::from_secs(/*secs*/ 120),
+                    )
+                    .await
+                    .1,
+                ),
+                Err(err) => {
+                    println!("sec-win-1780 elevated: start error: {err:#}");
+                    None
+                }
+            }
+        });
+        let outcome = (exit, probe.exists(), real.join("ok.txt").exists());
+        println!(
+            "sec-win-1780 elevated: cwd {}, docs {}: (exit, docs written, workspace written)={outcome:?}",
+            cwd.display(),
+            docs.display()
+        );
+        let _ = fs::remove_file(&probe);
+        let _ = fs::remove_file(real.join("ok.txt"));
+        outcomes.push(outcome);
+    }
+    record_setup(codex_home.path());
+    let _ = fs::remove_dir(&linked);
+
+    // The cwd by its real path starts either way; through the junction, only
+    // `docs` staying unwritten is required.
+    pretty_assertions::assert_eq!(
+        (outcomes[0], outcomes[1].1, outcomes[2]),
+        ((Some(0), false, true), false, (Some(0), false, true)),
+        "{}",
+        sandbox_log(codex_home.path())
+    );
+}

@@ -12,6 +12,7 @@
 //! fails closed where such a command takes the name it writes.
 
 use super::indirect;
+use super::quoted;
 use super::shell;
 use super::unknown_folder;
 use super::work;
@@ -102,15 +103,19 @@ fn skipped_words(name: &str, words: &[String]) -> Option<usize> {
 /// name ([`hides_name`]; `raw` are the words as written, aligned with
 /// `words`), past assignments, wrappers, `eval`/`trap` text and zsh's
 /// modifiers. Over-matches only (a word naming a table that is not the
-/// name written still asks).
-pub(super) fn writes_table(words: &[String], raw: &[String]) -> bool {
+/// name written still asks). `seen`, from the quote-aware reading of
+/// text read as shell and aligned with `words`, says which words may be
+/// any or several; with it, such words where a writer reads its options
+/// or before a name ask too ([`Reading`]).
+pub(super) fn writes_table(words: &[String], raw: &[String], seen: Option<&[Seen]>) -> bool {
     let mut from = 0;
     while let Some((at, name)) = indirect::command_word(&words[from..]) {
         work::step();
         let at = from + at;
         let args = &words[at + 1..];
+        let seen = seen.map(|seen| seen.get(at + 1..).unwrap_or_default());
         if writer_names_table(&name, args)
-            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default())
+            || hides_name(&name, args, raw.get(at + 1..).unwrap_or_default(), seen)
         {
             return true;
         }
@@ -125,13 +130,71 @@ pub(super) fn writes_table(words: &[String], raw: &[String]) -> bool {
     false
 }
 
+/// What the quote-aware reading shows of a word ([`writes_table`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Seen {
+    /// Its text as written.
+    Known,
+    /// One word of a value the classifier cannot see (`"$o"`).
+    One,
+    /// Any number of words: an unquoted expansion, which may split (`$o`,
+    /// `$(cat f)`), one of several words (`"$@"`), a brace expansion, or
+    /// an unquoted pattern that may match a file named like an option or
+    /// a table (`?A`, `"$o"*`).
+    Many,
+    /// Any number of words, none an option or a table's name: a pattern
+    /// that cannot match one (`*.png`, `:completion:*`).
+    Pattern,
+}
+
+impl Seen {
+    pub(super) fn of(word: &quoted::Word) -> Self {
+        // In double quotes too: `"$@"`, `"${a[@]}"`, zsh's flags
+        // (`"${(@f)x}"`, `"${=x}"`), and zsh's `$=x`, `$~x` and `$^x`,
+        // which the reading keeps as text; not a length (`"${#a[@]}"`).
+        let mut text = String::with_capacity(word.text.len());
+        let mut rest = word.text.as_str();
+        while let Some(start) = rest.find("${#") {
+            work::step();
+            text.push_str(&rest[..start]);
+            rest = rest[start..]
+                .find('}')
+                .map_or("", |end| &rest[start + end + 1..]);
+        }
+        text.push_str(rest);
+        let several = [
+            "$@", "${@", "[@]", "${(", "${=", "${~", "${^", "$=", "$~", "$^",
+        ]
+        .iter()
+        .any(|form| {
+            work::step();
+            text.contains(form)
+        });
+        if word.splits
+            || word.brace_expansion
+            || several
+            || (word.globs && (word.dynamic || may_match(&word.text)))
+        {
+            Seen::Many
+        } else if word.dynamic {
+            Seen::One
+        } else if word.globs {
+            Seen::Pattern
+        } else {
+            Seen::Known
+        }
+    }
+}
+
 /// Where a writer not judged by `code_variables` takes the names it writes:
 /// its option letters whose value is a name, those taking another value,
-/// and which operands (counted from 0, past its options) are names.
-/// `zparseopts` (all its words are options, specs or names) and `zstyle`
-/// are judged in [`hides_name`].
+/// and which operands (counted from 0, past its options) are names
+/// ([`reading`] says where it reads options). `zparseopts` (all its words
+/// are options, specs or names) and `zstyle` are judged in [`hides_name`].
 const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("set", "A", "o", Operands::None),
+    ("print", "v", "fuCxX", Operands::None),
+    ("printf", "v", "", Operands::None),
     ("stat", "AH", "fF", Operands::None),
     ("zstat", "AH", "fF", Operands::None),
     ("wait", "p", "", Operands::None),
@@ -142,6 +205,7 @@ const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("zselect", "aA", "t", Operands::None),
     ("strftime", "s", "", Operands::None),
     ("zsystem", "f", "ti", Operands::None),
+    ("getopts", "", "", Operands::At(&[1])),
     ("getln", "", "", Operands::From(0)),
     ("ztie", "", "df", Operands::From(0)),
     ("sysread", "c", "iost", Operands::From(0)),
@@ -153,6 +217,18 @@ const NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
     ("zgetattr", "", "", Operands::At(&[2])),
 ];
 
+/// Writers `code_variables` judges by their names, read here only with
+/// quotes (where redirections are not words: `read -r x < "$f"`), for a
+/// value that may be several words (`read -d $(cat f)`) or a word that may
+/// be an option where options go. zsh's `read -p` and `-k` take no value
+/// there; counting them as taking one only adds prompts.
+const QUOTED_NAME_POSITIONS: &[(&str, &str, &str, Operands)] = &[
+    ("read", "aA", "dinNptuk", Operands::From(0)),
+    ("mapfile", "", "dnOsuCc", Operands::From(0)),
+    ("readarray", "", "dnOsuCc", Operands::From(0)),
+    ("vared", "", "prMmift", Operands::From(0)),
+];
+
 #[derive(Clone, Copy)]
 enum Operands {
     None,
@@ -160,76 +236,231 @@ enum Operands {
     At(&'static [usize]),
 }
 
+/// How a writer reads its options, and which words the classifier cannot
+/// see fail closed there (#1704, round 8 of #1698's review). The classifier
+/// does not know whether such a word was quoted, so it may split into
+/// several words (`set $(cat f)`, or a parameter in bash or under zsh's
+/// `shwordsplit`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// Options come before the first operand. Any such word among them may
+    /// be an option taking a name (`o=-A; set $o commands ls ./x`) or
+    /// several words; one among the operands before the last name may move
+    /// a later word into a name's place (`zlistattr $(cat f)`).
+    Leading,
+    /// Options come among the operands too (`zselect 0 -A NAME`, `zsystem
+    /// flock -f NAME file`). Only a hidden name fails closed: these write
+    /// descriptor numbers.
+    Anywhere,
+    /// Options come before the first operand, and only a hidden name fails
+    /// closed: `wait -p` writes a job's number (`wait $pid` stays quiet).
+    Names,
+}
+
+fn reading(writer: &str) -> Reading {
+    match writer {
+        "zselect" | "zsystem" => Reading::Anywhere,
+        "wait" => Reading::Names,
+        _ => Reading::Leading,
+    }
+}
+
 /// Whether the command `name` with `args` (and `raw`, as written) takes a
 /// name it writes from a word the classifier cannot see: an expansion, a
 /// command's output, or a word the shell may glob or brace-expand into a
-/// table's name (`touch functions; zparseopts -a function[s]`). Its other
-/// words (`set -- "$@"`, `zstyle ':x' y "$v"`) are not names.
-fn hides_name(name: &str, args: &[String], raw: &[String]) -> bool {
+/// table's name (`touch functions; zparseopts -a function[s]`); or has
+/// such a word where it reads options, or before a name it may move
+/// (see [`Reading`]). Its other words (`set -- "$@"`, `zstyle ':x' y
+/// "$v"`, `wait $pid`) are not names.
+fn hides_name(name: &str, args: &[String], raw: &[String], seen: Option<&[Seen]>) -> bool {
     let hidden = |at: usize| {
         [args.get(at), raw.get(at)]
             .into_iter()
             .flatten()
             .any(|word| {
                 work::step();
-                word.contains(['$', '`', '*', '?', '[', '{', '^', '~', '#', '(', '<'])
+                word.contains(['$', '`'])
+                    || word.contains(GLOB)
                     || word.contains(shell::UNSEEN_OUTPUT)
             })
     };
+    let seen_at = |at: usize| {
+        seen.and_then(|seen| seen.get(at).copied())
+            .unwrap_or(Seen::Known)
+    };
+    let many = |at: usize| seen_at(at) == Seen::Many;
+    // Whether a word after `at` is one the classifier cannot see, or names
+    // a table. Worked out once, from the end.
+    let later = std::cell::OnceCell::new();
+    let names_later = |at: usize| {
+        let later = later.get_or_init(|| {
+            let mut later = vec![false; args.len() + 1];
+            for at in (0..args.len()).rev() {
+                work::step();
+                later[at] = later[at + 1]
+                    || matches!(seen_at(at), Seen::One | Seen::Many)
+                    || names_table(&args[at]);
+            }
+            later
+        });
+        later.get(at + 1).copied().unwrap_or(false)
+    };
+    // A word where an option goes: several words may be an option taking a
+    // name (`set $(cat f)`). So may one with a word after it where options
+    // take names, or both (`set "$o" ls ./x` with `-Acommands`); where
+    // none does, it may be a flag moving a later word, one the classifier
+    // cannot see or a table's name, into a name's place.
+    let option = |at: usize, takes_names: bool| match seen_at(at) {
+        Seen::Many => true,
+        Seen::One if takes_names => at + 1 < args.len(),
+        Seen::One => names_later(at),
+        Seen::Pattern | Seen::Known => false,
+    };
     match name {
         "zparseopts" => return (0..args.len()).any(hidden),
-        // `zstyle -s|-b|-a ctx style NAME`, `zstyle -g NAME`.
+        // `zstyle -s|-b|-a ctx style NAME`, `zstyle -g NAME`; its first
+        // word may be such an option (`zstyle $o :x y functions`), and a
+        // context or style that is several words may hold the name
+        // (`zstyle -a $(cat f)`).
         "zstyle" => {
+            // `zstyle` takes no option's value attached (`-afoo`): one
+            // word there is one option, its name a later word.
+            if option(0, /*takes_names*/ false) {
+                return true;
+            }
             let Some(option) = args.first().filter(|arg| arg.starts_with('-')) else {
                 return false;
             };
-            return (option.contains(['s', 'b', 'a']) && hidden(3))
+            return (option.contains(['s', 'b', 'a']) && (hidden(3) || (1..3).any(many)))
                 || (option.contains('g') && hidden(1));
         }
         _ => {}
     }
-    let Some(&(_, names, values, operands)) =
-        NAME_POSITIONS.iter().find(|(writer, ..)| *writer == name)
+    let quoted = seen.is_some().then_some(QUOTED_NAME_POSITIONS);
+    let Some(&(_, names, values, operands)) = NAME_POSITIONS
+        .iter()
+        .chain(quoted.into_iter().flatten())
+        .find(|(writer, ..)| *writer == name)
     else {
         return false;
     };
+    let reading = reading(name);
+    let leading = reading == Reading::Leading;
     let named = |operand: usize| match operands {
         Operands::None => false,
         Operands::From(first) => operand >= first,
         Operands::At(list) => list.contains(&operand),
     };
-    // Past the options (`--` or the first operand ends them).
+    // Several words before the last name move a later word into it.
+    let before_name = |operand: usize| match operands {
+        Operands::None => false,
+        Operands::From(first) => operand < first,
+        Operands::At(list) => list.iter().any(|name| operand < *name),
+    };
+    // Past the options: `--` ends them, and so does the first operand
+    // where options lead.
     let mut operand = None;
+    let mut ended = false;
     let mut at = 0;
     while at < args.len() {
         work::step();
         let arg = &args[at];
-        match operand {
-            None if arg == "--" => operand = Some(0),
-            None if arg.len() > 1 && arg.starts_with(['-', '+']) => {
-                if let Some((flag_at, flag)) = arg[1..]
-                    .char_indices()
-                    .find(|(_, flag)| names.contains(*flag) || values.contains(*flag))
-                {
-                    let attached = 1 + flag_at + flag.len_utf8() < arg.len();
-                    let value = if attached { at } else { at + 1 };
-                    if names.contains(flag) && hidden(value) {
-                        return true;
-                    }
-                    at = value;
-                }
+        let options = !ended && (operand.is_none() || reading == Reading::Anywhere);
+        if options && arg == "--" {
+            ended = true;
+            operand = Some(operand.unwrap_or(0));
+        } else if options && arg.len() > 1 && arg.starts_with(['-', '+']) {
+            // Where options lead, one the classifier cannot see (`-$o`) may
+            // be any.
+            if leading && option(at, !names.is_empty()) {
+                return true;
             }
-            _ => {
-                let index = operand.unwrap_or(0);
-                if named(index) && hidden(at) {
+            if let Some((flag_at, flag)) = arg[1..]
+                .char_indices()
+                .find(|(_, flag)| names.contains(*flag) || values.contains(*flag))
+            {
+                let attached = 1 + flag_at + flag.len_utf8() < arg.len();
+                let value = if attached { at } else { at + 1 };
+                // A hidden name, or where options lead a value that is
+                // several words (`set -o $(cat f)`).
+                if (names.contains(flag) && hidden(value)) || (leading && many(value)) {
                     return true;
                 }
-                operand = Some(index + 1);
+                at = value;
             }
+        } else if options && leading && option(at, !names.is_empty()) {
+            return true;
+        } else if options && leading && seen_at(at) == Seen::Pattern {
+            // A pattern may match nothing (`*.none(N)`, `nullglob`), so
+            // options may still follow it, or several words: either moves
+            // a later word into an option's or a name's place.
+            if names_later(at) {
+                return true;
+            }
+        } else {
+            let index = operand.unwrap_or(0);
+            // Several words before a name move a later word into it: one
+            // the classifier cannot see, or a table's (`zgetattr *.png
+            // "$n"`).
+            let moves = many(at) || (seen_at(at) == Seen::Pattern && names_later(at));
+            if (named(index) && hidden(at)) || (leading && before_name(index) && moves) {
+                return true;
+            }
+            operand = Some(index + 1);
         }
         at += 1;
     }
     false
+}
+
+/// Characters by which the shell may glob a word (zsh's extended forms
+/// too) or that a brace expansion left.
+const GLOB: [char; 9] = ['*', '?', '[', '{', '^', '~', '#', '(', '<'];
+
+/// Whether a pattern may match a file named like an option or a table
+/// (`?A`, `-e?`, `*`, `function[s]`). One matching only paths (`~/x`,
+/// `*/x`), names with another start (`:completion:*`), or names holding a
+/// `.` and ending other than in `]` (`*.png`), which no table, name or
+/// option taking one is, cannot; not past zsh's `^`, `~` or a group, nor a
+/// `.` in brackets or before `#` (`*~a/b`, `^*.png`, `*[.]x`, `x.#`).
+fn may_match(pattern: &str) -> bool {
+    let Some(glob) = pattern.find(GLOB) else {
+        return false;
+    };
+    // zsh's `#` repeats what is before it, which may be nothing.
+    let mut prefix = &pattern[..glob];
+    if pattern[glob..].starts_with('#') {
+        prefix = prefix
+            .char_indices()
+            .next_back()
+            .map_or(prefix, |(last, _)| &prefix[..last]);
+    }
+    if !prefix.starts_with(['-', '+'])
+        && !TABLES.iter().any(|table| {
+            work::step();
+            table.starts_with(prefix)
+        })
+    {
+        return false;
+    }
+    let mut chars = pattern.chars().peekable();
+    let mut first = true;
+    let mut bracket = false;
+    let mut dot = false;
+    while let Some(ch) = chars.next() {
+        work::step();
+        match ch {
+            '^' | '(' | '|' => return true,
+            '~' if !first => return true,
+            '[' => bracket = true,
+            ']' => bracket = false,
+            '/' if !bracket => return false,
+            '.' if !bracket && chars.peek() != Some(&'#') => dot = true,
+            _ => {}
+        }
+        first = false;
+    }
+    !(dot && !bracket && !pattern.ends_with(GLOB) && !pattern.ends_with(']'))
 }
 
 /// Whether the command `name` with `args` writes a variable named by a

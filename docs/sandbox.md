@@ -107,6 +107,31 @@ to a profile that limits which folders commands may read. Switch to the
 default sandbox, as below, to run it. Profiles without such entries are not
 affected.
 
+**Known limitations: tools that use named pipes.** (#1797) A command in the
+non-admin sandbox can't open a named pipe it created for writing when the pipe
+has Windows' default permissions. By default Windows lets only the pipe's
+owner, SYSTEM and Administrators write to a pipe, and the non-admin sandbox's
+write restriction doesn't count the command as the owner. So opening such a
+pipe for writing, as most programs do to connect to it, fails with "access
+denied" (Windows error 5). These fail there:
+
+- Node.js starting a child process with piped input or output (`execSync`,
+  `spawnSync`): `EPERM`. A child started with `stdio: 'inherit'` or
+  `'ignore'` works.
+- Git Bash (`bash.exe`) crashes on start with
+  `couldn't create signal pipe, Win32 error 5`.
+- A local `git clone` (from a folder on your computer) fails with the same
+  crash, from Git's own `sh.exe`.
+- Python `multiprocessing` (for example `multiprocessing.Pool`):
+  `PermissionError: [WinError 5] Access is denied`. `subprocess` with pipes
+  works.
+- Other programs that create and then use their own named pipe, such as .NET's
+  `NamedPipeClientStream` in PowerShell (`Access to the path is denied.`).
+
+The default sandbox runs all of these. If you need them, switch to the default
+sandbox as below. This was measured on Windows Server 2022, in both an
+administrator and a normal session.
+
 **How to switch to the default sandbox.**
 
 - In the TUI, run `/setup-default-sandbox` and approve the Administrator prompt.
