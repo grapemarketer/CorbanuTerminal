@@ -693,7 +693,11 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     // #1826: the capture now returns while the descendant runs, so the
     // session's labels (#158) are put back on a thread of the capture's once
     // it exits. Wait for that before the test (and maybe its process) ends.
-    for root in [std::env::temp_dir(), cwd] {
+    let temp_roots = ["TEMP", "TMP"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from);
+    for root in temp_roots.chain([cwd]) {
         let deadline = Instant::now() + Duration::from_secs(15);
         // SAFETY: an existing folder.
         while !matches!(
@@ -708,6 +712,8 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+    // The release goes on (the recorded denies) after the labels.
+    crate::integrity_leases::wait_for_release_in_progress().expect("wait for the release");
 }
 
 /// Observed state after a legacy workspace-write session tries to delete one
