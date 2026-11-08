@@ -381,3 +381,217 @@ async fn sec_win_1506_planted_project_config_is_not_loaded() {
         )
     );
 }
+
+/// How a test folder is reached through a link (#1801).
+#[derive(Clone, Copy, Debug)]
+enum LinkKind {
+    Junction,
+    Symlink,
+    Subst,
+}
+
+/// A link to `target`: a junction or folder symbolic link at `link`, or a
+/// `subst` drive (its root returned). `None` if this account may not make a
+/// symbolic link (a normal session without developer mode), unless
+/// `CORBANU_TEST_REQUIRE_SYMLINKS` is set (the elevated CI run).
+fn make_link(kind: LinkKind, link: &Path, target: &Path) -> Option<AbsolutePathBuf> {
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    match kind {
+        LinkKind::Junction => {
+            let status = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("run mklink");
+            assert!(status.status.success(), "mklink /J: {status:?}");
+            Some(absolute(link))
+        }
+        LinkKind::Symlink => match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => Some(absolute(link)),
+            Err(err) => {
+                assert!(
+                    std::env::var_os("CORBANU_TEST_REQUIRE_SYMLINKS").is_none(),
+                    "symlink_dir: {err}"
+                );
+                None
+            }
+        },
+        LinkKind::Subst => Some(
+            ('M'..='Z')
+                .rev()
+                .find_map(|letter| {
+                    let drive = format!("{letter}:");
+                    if Path::new(&format!("{drive}\\")).exists() {
+                        return None;
+                    }
+                    std::process::Command::new("subst")
+                        .arg(&drive)
+                        .arg(target)
+                        .status()
+                        .ok()
+                        .filter(std::process::ExitStatus::success)
+                        .map(|_| absolute(Path::new(&format!("{drive}\\"))))
+                })
+                .expect("a free drive letter for subst"),
+        ),
+    }
+}
+
+/// Removes a `subst` drive when dropped.
+struct SubstGuard(Option<AbsolutePathBuf>);
+
+impl Drop for SubstGuard {
+    fn drop(&mut self) {
+        if let Some(root) = &self.0 {
+            let drive = root.as_path().to_string_lossy();
+            let _ = std::process::Command::new("subst")
+                .args([drive.trim_end_matches('\\'), "/d"])
+                .status();
+        }
+    }
+}
+
+/// #1801: D331's refusal of a writable folder inside a read-only one holds
+/// when the two (or the working folder) are spelled apart by a link, as the
+/// agent's commands launch under the unelevated sandbox: the working folder
+/// given as a junction, and a writable folder reached through a junction, a
+/// folder symbolic link or a `subst` drive into the read-only folder. Nothing
+/// runs and nothing is written in the read-only folder. Not refused: a
+/// writable folder through a link elsewhere, and the read-only folder itself
+/// named writable through a link (read-only wins there, #1780).
+#[tokio::test]
+#[serial_test::serial(codex_home)]
+async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
+    let codex_home_dir = tempfile::tempdir().expect("codex home");
+    let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+
+    let mut outcomes = Vec::new();
+    // (label, cwd through a junction, writable through a link of this kind
+    // (the writable folder is `out` otherwise), link target)
+    let cases: [(&str, bool, Option<LinkKind>, &str); 7] = [
+        ("cwd through a junction", true, None, ""),
+        (
+            "out through a junction",
+            false,
+            Some(LinkKind::Junction),
+            "docs",
+        ),
+        (
+            "out through a symbolic link",
+            false,
+            Some(LinkKind::Symlink),
+            "docs",
+        ),
+        ("out through subst", false, Some(LinkKind::Subst), "docs"),
+        (
+            "cwd and out through junctions",
+            true,
+            Some(LinkKind::Junction),
+            "docs",
+        ),
+        (
+            "control: a link elsewhere",
+            false,
+            Some(LinkKind::Junction),
+            "other",
+        ),
+        (
+            "control: docs itself",
+            false,
+            Some(LinkKind::Junction),
+            "docs\\",
+        ),
+    ];
+    for (label, cwd_via_junction, link, target) in cases {
+        let root = tempfile::tempdir().expect("fixture root");
+        let real_root = dunce::canonicalize(root.path()).expect("canonical root");
+        let workspace = real_root.join("workspace");
+        let docs = workspace.join("docs");
+        std::fs::create_dir_all(docs.join("out")).expect("create docs\\out");
+        std::fs::create_dir_all(workspace.join("other")).expect("create other");
+        let real_docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+        let cwd = if cwd_via_junction {
+            make_link(LinkKind::Junction, &real_root.join("cwd-link"), &workspace)
+                .expect("junction")
+        } else {
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace")
+        };
+        // The writable folder, as the profile spells it, and where a write
+        // through it lands.
+        let mut subst = SubstGuard(None);
+        let (writable, lands_in) = match link {
+            None => (real_docs.join("out"), docs.join("out")),
+            Some(kind) => {
+                let real_target = workspace.join(target.trim_end_matches('\\'));
+                let Some(link_root) = make_link(kind, &real_root.join("link"), &real_target) else {
+                    eprintln!("sec-win-1801 {label}: skipped: no symbolic link privilege");
+                    continue;
+                };
+                if matches!(kind, LinkKind::Subst) {
+                    subst.0 = Some(link_root.clone());
+                }
+                if target == "docs" {
+                    (link_root.join("out"), docs.join("out"))
+                } else {
+                    (link_root, real_target)
+                }
+            }
+        };
+        let base = PermissionProfile::workspace_write()
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+        let (mut file_system, _) = base.to_runtime_permissions();
+        for (path, access) in [
+            (&real_docs, FileSystemAccessMode::Read),
+            (&writable, FileSystemAccessMode::Write),
+        ] {
+            file_system.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access,
+                missing_path_behavior: None,
+            });
+        }
+        let profile = PermissionProfile::from_runtime_permissions(
+            &file_system,
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        let script = format!("echo y> \"{}\"", writable.join("y.txt").as_path().display());
+        let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
+            Err(refused) => refused.to_string(),
+            Ok(request) => {
+                match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                    Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                    Err(err) => format!("failed at spawn: {err}"),
+                }
+            }
+        };
+        let written = lands_in.join("y.txt").exists();
+        eprintln!("sec-win-1801 {label}: written={written} {outcome}");
+        let refused = outcome
+            == format!(
+                "unsupported operation: {}",
+                codex_sandboxing::writable_inside_read_only_refusal(
+                    real_docs.as_path(),
+                    writable.as_path(),
+                )
+            );
+        outcomes.push((label, refused, written));
+        drop(subst);
+    }
+
+    let expected = [
+        ("cwd through a junction", true, false),
+        ("out through a junction", true, false),
+        ("out through a symbolic link", true, false),
+        ("out through subst", true, false),
+        ("cwd and out through junctions", true, false),
+        ("control: a link elsewhere", false, true),
+        ("control: docs itself", false, false),
+    ];
+    let expected: Vec<_> = expected
+        .into_iter()
+        .filter(|(label, ..)| outcomes.iter().any(|(ran, ..)| ran == label))
+        .collect();
+    assert_eq!(outcomes, expected);
+}
