@@ -495,6 +495,13 @@ fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
                 ))),
                 FileSystemAccessMode::Read,
             )]),
+            // A read-only folder that doesn't exist yet.
+            with(vec![entry(
+                special(FileSystemSpecialPath::project_roots(Some(
+                    "missing".to_string(),
+                ))),
+                FileSystemAccessMode::Read,
+            )]),
         ]
     };
     // The non-admin resolver's answer, deny-write paths by real path.
@@ -540,7 +547,17 @@ fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
         .iter()
         .map(|profile| non_admin(profile, &workspace))
         .collect();
-    assert!(canonical.iter().all(Result::is_ok), "{canonical:?}");
+    // What the canonical folder gets: no extra deny-write path for the plain
+    // profile (the backend protects `.git` itself), and the read-only folder,
+    // existing or not, for the others.
+    assert_eq!(
+        canonical,
+        vec![
+            Ok(None),
+            Ok(Some((vec![workspace.join("docs")], false))),
+            Ok(Some((vec![workspace.join("missing")], false))),
+        ]
+    );
     let mut forms = vec![
         (
             "lower case",
@@ -555,14 +572,24 @@ fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
         forms.push(("8.3 short name", short));
     }
     for (form, cwd) in &forms {
-        let profiles = profiles(cwd);
-        let answers: Vec<_> = profiles.iter().map(|p| non_admin(p, cwd)).collect();
-        assert_eq!(&answers, &canonical, "{form} {}", cwd.display());
-        assert!(
-            profiles.iter().all(|p| others_accept(p, cwd)),
-            "{form} {}",
-            cwd.display()
-        );
+        // The workspace as spelled by the working folder, and by its real
+        // path (two spellings of one root in the legacy projection).
+        for profile_root in [cwd, &workspace] {
+            let profiles = profiles(profile_root);
+            let answers: Vec<_> = profiles.iter().map(|p| non_admin(p, cwd)).collect();
+            assert_eq!(
+                &answers,
+                &canonical,
+                "{form} {}, workspace {}",
+                cwd.display(),
+                profile_root.display()
+            );
+            assert!(
+                profiles.iter().all(|p| others_accept(p, cwd)),
+                "{form} {}",
+                cwd.display()
+            );
+        }
     }
 
     // Leading out of the workspace: refused, as before.
