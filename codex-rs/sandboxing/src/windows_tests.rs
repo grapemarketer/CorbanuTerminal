@@ -181,3 +181,117 @@ fn unenforceable_profiles_get_clear_refusals() {
         )
     );
 }
+
+/// #1801: the D331 refusal compares by real path too, in all three checks
+/// (the agent path's, the non-admin resolver's and the elevated one's): a
+/// writable folder inside the read-only `docs` only through a junction is
+/// refused, whether the junction is on the writable folder or on the working
+/// folder, or the read-only folder is spelled through one. A junction to the
+/// read-only folder itself is left to #1780 (read-only wins), and one
+/// elsewhere is a plain writable folder: no D331 refusal at all for those.
+#[cfg(windows)]
+#[test]
+fn sec_win_1801_writable_inside_read_only_through_a_junction_is_refused() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let real_root = dunce::canonicalize(temp_dir.path()).expect("canonical temp dir");
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let workspace = absolute(&real_root.join("workspace"));
+    let docs = workspace.join("docs");
+    std::fs::create_dir_all(docs.join("out").as_path()).expect("create docs\\out");
+    std::fs::create_dir_all(workspace.join("other").as_path()).expect("create other");
+    let junction = |name: &str, target: &AbsolutePathBuf| {
+        let link = real_root.join(name);
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(target.as_path())
+            .output()
+            .expect("run mklink");
+        assert!(output.status.success(), "mklink /J: {output:?}");
+        absolute(&link)
+    };
+    let (cwd_link, docs_link, other_link) = (
+        junction("cwd-link", &workspace),
+        junction("docs-link", &docs),
+        junction("other-link", &workspace.join("other")),
+    );
+    let profile =
+        |cwd: &AbsolutePathBuf, read_only: &AbsolutePathBuf, writable: &AbsolutePathBuf| {
+            let entry = |path: &AbsolutePathBuf, access| {
+                FileSystemSandboxEntry::new(FileSystemPath::Path { path: path.clone() }, access)
+            };
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        FileSystemAccessMode::Read,
+                    ),
+                    entry(cwd, FileSystemAccessMode::Write),
+                    entry(read_only, FileSystemAccessMode::Read),
+                    entry(writable, FileSystemAccessMode::Write),
+                ]),
+                NetworkSandboxPolicy::Restricted,
+            )
+        };
+    let any_refusal = writable_inside_read_only_refusal(Path::new("<r>"), Path::new("<w>"));
+    let any_refusal = any_refusal
+        .split("<w>")
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    // 2: refused naming these folders; 1: some other D331 refusal; 0: none.
+    let checks = |cwd: &AbsolutePathBuf,
+                  read_only: &AbsolutePathBuf,
+                  writable: &AbsolutePathBuf| {
+        let profile = profile(cwd, read_only, writable);
+        let refusal = writable_inside_read_only_refusal(read_only.as_path(), writable.as_path());
+        let refused = |result: Option<String>| match result {
+            Some(err) if err == refusal => 2,
+            Some(err) if err.starts_with(&any_refusal) => 1,
+            _ => 0,
+        };
+        [
+            refused(
+                refuse_unenforceable_windows_restricted_token_profile(
+                    SandboxType::WindowsRestrictedToken,
+                    &profile,
+                    cwd,
+                    WindowsSandboxLevel::RestrictedToken,
+                )
+                .err(),
+            ),
+            refused(
+                resolve_windows_restricted_token_filesystem_overrides(
+                    SandboxType::WindowsRestrictedToken,
+                    &profile,
+                    cwd,
+                    WindowsSandboxLevel::RestrictedToken,
+                )
+                .err(),
+            ),
+            refused(
+                resolve_windows_elevated_filesystem_overrides(
+                    SandboxType::WindowsRestrictedToken,
+                    &profile,
+                    cwd,
+                    /*use_windows_elevated_backend*/ true,
+                )
+                .err(),
+            ),
+        ]
+    };
+
+    assert_eq!(
+        [
+            checks(&cwd_link, &docs, &docs.join("out")),
+            checks(&workspace, &docs, &docs_link.join("out")),
+            checks(&cwd_link, &docs, &docs_link.join("out")),
+            checks(&workspace, &docs_link, &docs.join("out")),
+            checks(&workspace, &docs, &docs_link),
+            checks(&workspace, &docs, &other_link),
+        ],
+        [[2; 3], [2; 3], [2; 3], [2; 3], [0; 3], [0; 3]]
+    );
+}
