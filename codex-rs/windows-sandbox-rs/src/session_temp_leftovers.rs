@@ -41,6 +41,8 @@ const READ_CONTROL: u32 = 0x2_0000;
 const WRITE_DAC: u32 = 0x4_0000;
 const WRITE_OWNER: u32 = 0x8_0000;
 const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_SHARE_READ: u32 = 0x1;
+const FILE_SHARE_WRITE: u32 = 0x2;
 const FILE_SHARE_ALL: u32 = 0x7;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
@@ -261,12 +263,19 @@ fn take_one(
 /// Renames `path` in its folder if it still is the object `look` is open to
 /// and lies in the temp folder whose final path is `base_key` (the user may:
 /// the folder is the user's or was taken first). While the rename's handle
-/// is open, no folder on the way can be renamed or replaced.
+/// is open, neither it nor a folder on the way can be renamed or replaced.
 fn set_aside(path: &Path, look: &File, base_key: &str) -> bool {
     use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO;
     use windows_sys::Win32::Storage::FileSystem::FileRenameInfo;
     use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
-    let Ok(moving) = open(path, DELETE | FILE_READ_ATTRIBUTES) else {
+    // Without delete sharing: no one can move the object (and so free the
+    // folders above it) while it is checked and renamed.
+    let Ok(moving) = std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    else {
         return false;
     };
     // SAFETY: both handles are open.
