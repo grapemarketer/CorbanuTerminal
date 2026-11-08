@@ -122,6 +122,34 @@ changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
 checked, and a nested `.git` link is flagged after every command, as at the
 top.
 
+**Hooks folders and files a git config names.** Many projects point
+`core.hooksPath` at a folder in the project (Husky's `.husky` or
+`.husky\_`, a team `.githooks`). The repository's config may be protected,
+but that folder is ordinary project content, so a command could add a hook
+there for your next `git commit`. The non-admin sandbox reads the configs
+git would read for each repository it watches (the top-level `.git`
+included, plus the global and system git configs in their usual places and
+the files their `include` lines name; a repository the writable folder is
+inside of isn't read) and records, by content, each such hooks
+folder, each included config file, and each file a program setting names
+(such as `core.fsmonitor`, a credential helper or an alias set to a script
+in the project: a first word that looks like a path, and every later word),
+when it lies in a folder commands may write to. A path a config or a
+`.git` file names on a network share or a device (`\\server\share`,
+`\\?\`, `CON` ...) is never opened. A global or system
+git config that lies in such a folder is recorded too. A new, changed or
+removed file there is flagged like a changed repository, and so is one
+that appears where a config points (a new repository's `.githooks`, say).
+For Husky, the files named after git hooks in the folder above `_` count,
+and so does the `_` folder below any hooks folder. Rewriting a file with
+the same content (as `npm install` does when it reruns Husky) isn't a
+change. A hooks folder with more than 1,024 entries, or configs too large to
+read (over 1 MB in one file, 100,000 entries, 4,096 files, eight
+`core.worktree` values or 4,096 named paths), count as changed after every
+command. Other scripts those hooks call are ordinary project files
+and aren't checked, and program settings outside the list the sandbox knows
+aren't either.
+
 **Bare repositories a command plants.** Git also uses a folder that holds
 `HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
 its config and hooks. A sandboxed command can make one in any folder it may
