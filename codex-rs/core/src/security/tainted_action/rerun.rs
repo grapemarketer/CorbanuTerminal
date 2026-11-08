@@ -667,6 +667,18 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
         let name = word.split_once('=').map_or(word, |(name, _)| name);
         name.len() >= shortest && option.starts_with(name)
     };
+    // Git's `ext::` smart transport runs an arbitrary command as the remote
+    // helper (`git fetch ext::sh -c id` runs `sh -c id`), code the host cannot
+    // read. Git allows it from the command line by default
+    // (`protocol.ext.allow` is `user`), so a remote operand naming it asks
+    // like git's other program-running forms. A quoted remote keeps the whole
+    // `ext::` string as one word, so the scheme is matched at the word's start.
+    if args.iter().any(|word| {
+        work::step();
+        ext_remote_scheme(word)
+    }) {
+        return true;
+    }
     args.iter().enumerate().any(|(at, word)| {
         work::step();
         if word.starts_with("--") {
@@ -686,6 +698,15 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
             })
         }
     })
+}
+
+/// Whether `word` is a git remote using the `ext::` smart transport, whose
+/// operand git runs as a command. The scheme is matched case-insensitively
+/// and only at the word's start, so an option value or path that merely
+/// contains `ext::` later is left alone.
+fn ext_remote_scheme(word: &str) -> bool {
+    word.split_once("::")
+        .is_some_and(|(scheme, rest)| scheme.eq_ignore_ascii_case("ext") && !rest.is_empty())
 }
 
 /// #1528: git's built-in commands (`git --list-cmds=builtins`; list from
