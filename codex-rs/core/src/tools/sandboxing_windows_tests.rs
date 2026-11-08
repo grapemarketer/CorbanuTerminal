@@ -394,6 +394,7 @@ enum LinkKind {
 /// `subst` drive (its root returned). `None` if this account may not make a
 /// symbolic link (a normal session without developer mode), unless
 /// `CORBANU_TEST_REQUIRE_SYMLINKS` is set (the elevated CI run).
+#[allow(clippy::expect_used)] // test fixture setup
 fn make_link(kind: LinkKind, link: &Path, target: &Path) -> Option<AbsolutePathBuf> {
     let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
     match kind {
