@@ -183,7 +183,10 @@ pipe, event or section a shared daemon serves; nor to a file it created in a
 folder without inheritable entries. Since D429 (#1803) an elevated command
 (another account, which holds Everyone and the logon SID) can no longer read a
 legacy command's memory or thread contexts, query or end it; before, read and
-execute gave it `PROCESS_VM_READ` and `THREAD_GET_CONTEXT`. Not closed: other
+execute gave it `PROCESS_VM_READ` and `THREAD_GET_CONTEXT`. Cost: other accounts
+can no longer read what a legacy command creates without explicit security
+(a section or event it makes, or a file in a folder without inheritable
+entries); SYSTEM and the user keep full access. Not closed: other
 legacy commands can still read its memory and thread contexts, and end its
 processes, through the user SID (read rights and `PROCESS_TERMINATE` pass a
 write-restricted token on its normal SIDs alone, and every legacy command holds

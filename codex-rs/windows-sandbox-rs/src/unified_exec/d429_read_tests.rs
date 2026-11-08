@@ -289,7 +289,11 @@ fn sec_win_d429_elevated_command_cannot_read_a_legacy_command() {
     let _guard = legacy_process_test_guard();
     let line = read_a_legacy_command(Reader::Elevated, elevated_home.path());
     record_setup(elevated_home.path());
-    let missing = unreadable_parts(&line);
+    let mut missing = unreadable_parts(&line);
+    // D429 gives other accounts `SYNCHRONIZE` alone.
+    if !line.split(' ').any(|part| part == "query_limited=err5") {
+        missing.push("query_limited=err5".to_string());
+    }
     assert!(
         missing.is_empty(),
         "an elevated command read a legacy command: {line}\nmissing={missing:?}"
@@ -340,13 +344,19 @@ fn on_path(name: &str) -> Option<PathBuf> {
 #[test]
 fn sec_win_d429_legacy_workloads_still_work() {
     let _guard = legacy_process_test_guard();
-    let (Some(python), Some(pwsh), Some(bash)) = (
-        on_path("python.exe"),
-        pwsh_path(),
-        git_for_windows("bin\\bash.exe"),
-    ) else {
+    let pwsh = pwsh_path();
+    if pwsh.is_none() {
+        assert!(
+            std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "pwsh is missing on CI"
+        );
+        println!("skipping: pwsh is not installed");
+    }
+    let (Some(python), Some(pwsh)) = (on_path("python.exe"), pwsh) else {
         return;
     };
+    // Reported only; optional off CI.
+    let bash = git_for_windows("bin\\bash.exe");
     // The toolchain's own cargo: rustup's proxy can't write its temp
     // folder from a sandboxed command (#1778).
     let Some(sysroot) = std::process::Command::new("rustc")
@@ -474,6 +484,16 @@ fn sec_win_d429_legacy_workloads_still_work() {
             false,
         ),
         (
+            "ensurepip",
+            cmd_c("d429venv\\Scripts\\python.exe -m ensurepip 2>&1".to_string()),
+            &[],
+            &["Successfully installed pip"],
+            false,
+        ),
+    ];
+    let mut cases = cases;
+    if let Some(bash) = bash {
+        cases.push((
             "git bash",
             vec![
                 bash.display().to_string(),
@@ -483,15 +503,8 @@ fn sec_win_d429_legacy_workloads_still_work() {
             &[],
             &["d429-bash-done"],
             false,
-        ),
-        (
-            "ensurepip",
-            cmd_c("d429venv\\Scripts\\python.exe -m ensurepip 2>&1".to_string()),
-            &[],
-            &["Successfully installed pip"],
-            false,
-        ),
-    ];
+        ));
+    }
     let runtime = current_thread_runtime();
     let mut failures = Vec::new();
     for (name, argv, env, expected, required) in cases {
