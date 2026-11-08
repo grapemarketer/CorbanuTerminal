@@ -5,6 +5,8 @@
 //! directly"). Now each runs as from the real path: the working folder is
 //! writable, and the read-only `docs` and the protected `.git` stay
 //! read-only. Junctions and folder symbolic links ran before and still do.
+//! A mapped drive's real path is a network (UNC) path, which the non-admin
+//! sandbox's commands can't write at all, as before D398 from a UNC path.
 //!
 //! It must not let anything else through: a working folder that is a
 //! junction, folder symbolic link or `subst` drive leading out of the
@@ -148,12 +150,12 @@ fn subst(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
     ))
 }
 
-/// `net use Y: \\localhost\<drive>$\<folder>` (the administrative share), or
-/// `CODEX_TEST_D398_SHARE` (`\\host\share`) over `CODEX_TEST_D398_SHARE_DIR`
-/// when the workflow made one: the mapped drive's root.
-fn mapped_drive(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
+/// `target` through the administrative share `\\localhost\<drive>$`, or
+/// through `CODEX_TEST_D398_SHARE` (`\\host\share`) over
+/// `CODEX_TEST_D398_SHARE_DIR` when the workflow made one.
+fn share_path(target: &Path) -> Result<String, String> {
     let target_text = target.display().to_string();
-    let share_path = match (
+    match (
         std::env::var("CODEX_TEST_D398_SHARE"),
         std::env::var("CODEX_TEST_D398_SHARE_DIR"),
     ) {
@@ -162,14 +164,19 @@ fn mapped_drive(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
             let rest = target
                 .strip_prefix(&real_dir)
                 .map_err(|_| format!("{target_text} is not under {dir}"))?;
-            format!("{share}\\{}", rest.display())
+            Ok(format!("{share}\\{}", rest.display()))
         }
-        _ => format!(
+        _ => Ok(format!(
             "\\\\localhost\\{}$\\{}",
             &target_text[..1],
             &target_text[3..]
-        ),
-    };
+        )),
+    }
+}
+
+/// `net use Y: <share_path(target)>`: the mapped drive's root.
+fn mapped_drive(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
+    let share_path = share_path(target)?;
     let drive = free_drive();
     let output = Command::new("net")
         .args(["use", &drive, &share_path])
@@ -314,6 +321,12 @@ async fn run_command_exec(
 ) -> (Outcome, String) {
     let cwd = AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd");
     let written = |name: &str| real.join(name).exists();
+    // Several spellings share a folder: start each run with none of the
+    // files there.
+    for name in ["ok.txt", "docs\\x.txt", ".git\\g.txt"] {
+        let _ = std::fs::remove_file(real.join(name));
+        assert!(!written(name), "{name} is left over in {}", real.display());
+    }
     let request = build_exec_request(
         ExecParams {
             command: vec![
@@ -413,6 +426,16 @@ fn fixture() -> Fixture {
         root.join("Workspace Folder")
     });
     leading_in.push(("mapped drive", mapped_form, workspace.clone()));
+    // What a mapped drive's real path is.
+    let unc = share_path(&workspace).and_then(|unc| {
+        let unc = PathBuf::from(unc);
+        if unc.is_dir() {
+            Ok(unc)
+        } else {
+            Err(format!("{} can't be reached here", unc.display()))
+        }
+    });
+    leading_in.push(("UNC path (control)", unc, workspace.clone()));
     leading_in.push((
         "canonical, system drive (8.3 control)",
         Ok(system_workspace.clone()),
@@ -542,10 +565,20 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
                     elevated_outcomes.push((label, outcome, docs_read_only));
                     continue;
                 }
+                let network = form.starts_with("mapped drive") || form.starts_with("UNC path");
                 expected.push((
                     label.clone(),
                     if leads_out {
                         Outcome::SplitRootsRefused { written: false }
+                    } else if network {
+                        // The non-admin sandbox's commands can't write
+                        // through a network path at all (fails closed), so
+                        // a mapped drive runs like the UNC path it leads to.
+                        Outcome::Ran {
+                            ok: false,
+                            docs: false,
+                            git: false,
+                        }
                     } else {
                         Outcome::Ran {
                             ok: true,
