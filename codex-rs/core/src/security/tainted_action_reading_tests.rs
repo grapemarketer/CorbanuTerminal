@@ -266,6 +266,7 @@ fn mains_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActio
 }
 
 /// The verdict of the classifier's own (new) reading alone.
+#[cfg(unix)]
 fn new_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActionKind> {
     use super::tainted_action_redirect_tests::HOME;
     use super::tainted_action_redirect_tests::action_in;
@@ -283,6 +284,7 @@ fn new_verdict(files: &[(&str, &str)], argv: &[&str]) -> Option<ProtectedActionK
 /// the new reading. Review 1 item 3's trailing stdout redirection inside a
 /// substitution is unspliced only when `!main_reading` (route 1), so
 /// main's reading still splices `true` in as the command word.
+#[cfg(unix)]
 const REVIEW_QUIET_ON_MAIN: &[&str] = &["review 1 item 3: $(echo true >log) ./x"];
 
 /// PR #1794 review 2: the case lists' claims, on main's reading: each

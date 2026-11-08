@@ -6,7 +6,10 @@
 //! claims against main's reading. In its own file:
 //! `tainted_action_tests.rs` is at the repository's blob size limit.
 
+// Every item below is `#[cfg(unix)]`: on Windows nothing uses these.
+#[cfg(unix)]
 use super::*;
+#[cfg(unix)]
 use pretty_assertions::assert_eq;
 
 #[cfg(unix)]
