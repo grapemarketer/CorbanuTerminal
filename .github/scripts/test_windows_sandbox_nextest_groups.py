@@ -7,6 +7,7 @@ one process. Nextest runs each test in its own process, so it serializes
 them only through the test group, which selects tests by name.
 """
 
+import functools
 import re
 import tomllib
 import unittest
@@ -20,6 +21,7 @@ CRATE_DIR = CODEX_RS / "windows-sandbox-rs"
 PACKAGE = "codex-windows-sandbox"
 GROUP = "windows_sandbox_legacy_sessions"
 GUARD = "legacy_process_test_guard"
+LOCK = "LEGACY_PROCESS_TEST_LOCK"
 
 FN_RE = re.compile(
     r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
@@ -131,15 +133,24 @@ def is_test_fn(code: str, fn_start: int) -> bool:
 
 
 def guard_users(sources: dict[str, str]) -> dict[str, str]:
-    """Maps each test that takes the guard, directly or through helpers, to
-    its file. Helpers are followed by name. Raises ScanError for a use it
-    cannot follow: a mention that is not a call, a call outside a function,
-    or a helper that nothing calls."""
+    """Maps each test that takes the guard, directly or through helpers or
+    other tests, to its file. Callers are followed by name. Raises ScanError
+    for a use it cannot follow: the lock used outside the guard, a mention
+    that is not a call, a call outside a function, or a helper that nothing
+    calls."""
     scanned = {path: code_only(text) for path, text in sources.items()}
     files = {path: code for path, (code, _) in scanned.items()}
     uses = [item for _, items in scanned.values() for item in items]
     spans = {path: fn_spans(code) for path, code in files.items()}
     trait_impls = {path: trait_impl_spans(code) for path, code in files.items()}
+    for path, code in files.items():
+        for match in re.finditer(rf"\b{LOCK}\b", code):
+            inside = [span for span in spans[path] if span[3] < match.start() < span[2]]
+            before = code[max(0, match.start() - 80) : match.start()]
+            in_guard = inside and max(inside, key=lambda span: span[1])[0] == GUARD
+            if not re.search(r"\bstatic\s+$", before) and not in_guard:
+                line = code.count("\n", 0, match.start()) + 1
+                raise ScanError(f"{path}:{line}: {LOCK} is used outside {GUARD}")
     tests: dict[str, str] = {}
     seen: set[str] = set()
     pending = [GUARD]
@@ -158,7 +169,7 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
             for match in mention.finditer(code):
                 line = code.count("\n", 0, match.start()) + 1
                 where = f"{path}:{line}: {callee}"
-                if re.search(r"\bfn\s+$", code[: match.start()]):
+                if re.search(r"\bfn\s+$", code[max(0, match.start() - 80) : match.start()]):
                     continue
                 if not re.match(r"\s*\(", code[match.end() :]):
                     raise ScanError(f"{where} is used without being called")
@@ -175,11 +186,16 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
                 callers += 1
                 if is_test_fn(code, fn_start):
                     tests[name] = path
-                else:
-                    pending.append(name)
-        if callers == 0:
+                # A test can call another test, so follow tests too.
+                pending.append(name)
+        if callers == 0 and callee not in tests:
             raise ScanError(f"{callee} takes the guard but nothing calls it")
     return tests
+
+
+@functools.cache
+def crate_guard_users() -> dict[str, str]:
+    return guard_users(crate_sources())
 
 
 def crate_sources() -> dict[str, str]:
@@ -267,7 +283,7 @@ class WindowsSandboxNextestGroupTest(unittest.TestCase):
     maxDiff = None
 
     def test_every_guard_user_is_in_the_legacy_sessions_group(self) -> None:
-        tests = guard_users(crate_sources())
+        tests = crate_guard_users()
         config = tomllib.loads(NEXTEST_TOML.read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"][GROUP]["max-threads"], 1)
         self.assertEqual(other_groups_claiming_the_crate(config), [])
@@ -280,7 +296,7 @@ class WindowsSandboxNextestGroupTest(unittest.TestCase):
         )
 
     def test_scan_finds_direct_helper_and_nested_helper_users(self) -> None:
-        tests = guard_users(crate_sources())
+        tests = crate_guard_users()
         # Direct, outside unified_exec, through run_legacy_delete_fixture, and
         # through com_launch -> run_powershell_launch.
         for name in (
@@ -332,6 +348,11 @@ fn split_attribute() {
 }
 
 #[test]
+fn calls_a_test() {
+    split_attribute();
+}
+
+#[test]
 fn through_a_nested_helper() {
     fn inner() { let _guard = legacy_process_test_guard(); }
     inner();
@@ -348,7 +369,12 @@ fn through_an_extern_helper() {
 """
         self.assertEqual(
             sorted(guard_users({"x.rs": source})),
-            ["split_attribute", "through_a_nested_helper", "through_an_extern_helper"],
+            [
+                "calls_a_test",
+                "split_attribute",
+                "through_a_nested_helper",
+                "through_an_extern_helper",
+            ],
         )
 
     def test_scan_fails_on_uses_it_cannot_follow(self) -> None:
@@ -357,6 +383,8 @@ fn through_an_extern_helper() {
             "binding": "#[test]\nfn t() { let lock = legacy_process_test_guard; let _g = lock(); }",
             "uncalled helper": "fn h() { let _g = legacy_process_test_guard(); }",
             "macro": "macro_rules! m { () => { legacy_process_test_guard() }; }",
+            "lock": "static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());\n"
+            "#[test]\nfn t() { let _g = super::LEGACY_PROCESS_TEST_LOCK.lock(); }",
             "renamed guard": "use super::legacy_process_test_guard as lock;\n#[test]\nfn t() { let _g = lock(); }",
             "renamed helper": "fn h() { let _g = legacy_process_test_guard(); }\n#[test]\nfn a() { h(); }\n"
             "use self::{h as other};\n#[test]\nfn b() { other(); }",
