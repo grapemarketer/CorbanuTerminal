@@ -173,6 +173,7 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
             "-g",
             "-h",
             "-p",
+            "-R",
             "-C",
             "-D",
             "-r",
@@ -183,6 +184,7 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
             "--group",
             "--host",
             "--prompt",
+            "--chroot",
             "--close-from",
             "--chdir",
             "--role",
@@ -267,15 +269,50 @@ const FLAG_LETTERS: &[(&str, &str)] = &[
     ("watch", "bcegptx"),
 ];
 
+/// Sudo's long options, including flags, so an abbreviation only consumes
+/// the following word when it unambiguously names an option that takes one.
+const SUDO_LONG_OPTIONS: &[(&str, bool)] = &[
+    ("askpass", false),
+    ("background", false),
+    ("bell", false),
+    ("chdir", true),
+    ("chroot", true),
+    ("close-from", true),
+    ("command-timeout", true),
+    ("edit", false),
+    ("group", true),
+    ("help", false),
+    ("host", true),
+    ("list", false),
+    ("login", false),
+    ("non-interactive", false),
+    ("other-user", true),
+    ("preserve-env", false),
+    ("preserve-groups", false),
+    ("prompt", true),
+    ("remove-timestamp", false),
+    ("reset-timestamp", false),
+    ("role", true),
+    ("set-home", false),
+    ("shell", false),
+    ("stdin", false),
+    ("type", true),
+    ("user", true),
+    ("validate", false),
+    ("version", false),
+];
+
 /// #1482: how many words a wrapper's option word uses: one, or two when
 /// it takes a value that is not attached. A short cluster takes the next
 /// word only when its last letter takes a value and every letter before it
 /// is a known flag of `wrapper` (`sudo -nC 3`, `sudo -nD sub`, `env -iu
-/// X`); any other cluster is one word. A long option takes the next word
-/// only when it is named in full (`sudo --chdir sub`); an abbreviation is
-/// read as before, since some long options take an optional value that is
-/// never a separate word.
+/// X`); any other cluster is one word. Sudo also accepts unambiguous
+/// long-option prefixes and scans a known value letter after an unknown
+/// cluster letter (`sudo --us root`, `sudo -xu root`).
 pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) -> usize {
+    if wrapper == "sudo" {
+        return sudo_option_words(option, value_options);
+    }
     if value_options.contains(&option) {
         return 2;
     }
@@ -302,6 +339,47 @@ pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) 
         }
         if !flags.contains(letter) {
             return 1;
+        }
+    }
+    1
+}
+
+/// #1773: sudo's parser accepts an unambiguous long-option prefix. It also
+/// scans every short-option letter: an unknown earlier letter cannot hide a
+/// known option that takes the next word.
+fn sudo_option_words(option: &str, value_options: &[&str]) -> usize {
+    if let Some(long) = option.strip_prefix("--") {
+        let (name, attached) = long
+            .split_once('=')
+            .map_or((long, false), |(name, _)| (name, true));
+        if attached || name.is_empty() {
+            return 1;
+        }
+        let mut match_takes_value = None;
+        for (known, takes_value) in SUDO_LONG_OPTIONS {
+            work::step();
+            if known.starts_with(name) {
+                if match_takes_value.is_some() {
+                    return 1;
+                }
+                match_takes_value = Some(*takes_value);
+            }
+        }
+        return 1 + usize::from(match_takes_value == Some(true));
+    }
+    let Some(letters) = option.strip_prefix('-') else {
+        return 1;
+    };
+    for (at, letter) in letters.char_indices() {
+        work::step();
+        let takes_value = value_options.iter().any(|value_option| {
+            work::step();
+            value_option
+                .strip_prefix('-')
+                .is_some_and(|name| name.len() == letter.len_utf8() && name.starts_with(letter))
+        });
+        if takes_value {
+            return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
         }
     }
     1
@@ -488,7 +566,6 @@ fn sudo_in_words_runs_helper(words: &[String]) -> bool {
     let values: String = options
         .iter()
         .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
-        .chain(["R"])
         .collect();
     // Whether the option runs a helper, and whether its value is the next
     // word.

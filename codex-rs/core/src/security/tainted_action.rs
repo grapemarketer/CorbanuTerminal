@@ -3741,5 +3741,9 @@ fn level_name(level: SecurityLevel) -> &'static str {
 mod tests;
 
 #[cfg(test)]
+#[path = "tainted_action_sudo_tests.rs"]
+mod sudo_tests;
+
+#[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
 mod tainted_action_refusal_tests;
