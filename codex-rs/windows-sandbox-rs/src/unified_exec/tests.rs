@@ -721,13 +721,18 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
 
 /// #1830: the elevated runner, like the legacy capture (#1826), returns once
 /// the command exits while a descendant it left running holds the output
-/// pipes, and leaves that descendant running.
-#[test]
-fn elevated_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+/// pipes, and leaves that descendant running. `run` runs the argv it is given
+/// in the elevated sandbox on the root it is given, returning the command's
+/// stdout and exit code.
+fn check_elevated_command_returns_while_descendant_runs(
+    backend: &str,
+    run: impl FnOnce(&Path, &Path, Vec<String>) -> (String, i32),
+) {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let Some(codex_home) = command_identity::elevated::elevated_home("elevated-capture-pwsh")
+    let Some(codex_home) =
+        command_identity::elevated::elevated_home(&format!("elevated-{backend}-pwsh"))
     else {
         return;
     };
@@ -751,59 +756,94 @@ fn elevated_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         "Write-Output ELEVATED-CAPTURE-DIRECT; {}",
         start_powershell_child(&pwsh, root.path(), &descendant_command, &parent_tail),
     );
-    let permission_profile = PermissionProfile::workspace_write();
-    let workspace_roots = workspace_roots_for(root.path());
+    let argv = vec![
+        pwsh.display().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        parent_command,
+    ];
     let started = Instant::now();
-    let result = crate::run_windows_sandbox_capture_for_permission_profile_elevated(
-        crate::ElevatedSandboxProfileCaptureRequest {
-            permission_profile: &permission_profile,
-            workspace_roots: workspace_roots.as_slice(),
-            codex_home: codex_home.path(),
-            command: vec![
-                pwsh.display().to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                parent_command,
-            ],
-            cwd: root.path(),
-            // Core passes its environment on; PowerShell needs it.
-            env_map: std::env::vars().collect(),
-            timeout_ms: Some(10_000),
-            cancellation: None,
-            use_private_desktop: true,
-            proxy_enforced: false,
-            network_proxy_restricting_sid: None,
-            read_roots_override: None,
-            read_roots_include_platform_defaults: true,
-            write_roots_override: None,
-            deny_read_override: &crate::DenyReadTargets::default(),
-            deny_write_paths_override: &[],
-        },
-    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(root.path(), codex_home.path(), argv)
+    }));
     let took = started.elapsed();
+    // Released before any check, so the descendant never outlives the test
+    // by more than its own deadline.
     let release = fs::write(&release_marker, "release");
-    let result = result.unwrap_or_else(|err| {
-        panic!(
-            "run elevated capture powershell: {err:#}\n{}",
-            sandbox_log(codex_home.path())
-        )
-    });
+    let (stdout, exit_code) = result.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     release.expect("release descendant after root exit");
-    println!("elevated capture pwsh returned after {took:?}");
-    println!("elevated capture pwsh exit_code={}", result.exit_code);
-    println!("elevated capture pwsh timed_out={}", result.timed_out);
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert_eq!(result.exit_code, 0, "stdout={stdout:?} stderr={stderr:?}");
+    println!("elevated {backend} pwsh returned after {took:?}");
+    println!("elevated {backend} pwsh exit_code={exit_code}");
+    assert_eq!(
+        exit_code,
+        0,
+        "stdout={stdout:?}\n{}",
+        sandbox_log(codex_home.path())
+    );
     assert!(
         stdout.contains("ELEVATED-CAPTURE-DIRECT"),
         "stdout={stdout:?}"
     );
     assert!(
         wait_for_path(&survival_marker, Duration::from_secs(10)),
-        "#1830: the elevated descendant did not survive the command's exit; \
-         the capture returned after {took:?}"
+        "#1830: the elevated {backend} descendant did not survive the command's exit; \
+         the command returned after {took:?}"
     );
+}
+
+#[test]
+fn elevated_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+    check_elevated_command_returns_while_descendant_runs("capture", |root, codex_home, argv| {
+        let permission_profile = PermissionProfile::workspace_write();
+        let workspace_roots = workspace_roots_for(root);
+        let result = crate::run_windows_sandbox_capture_for_permission_profile_elevated(
+            crate::ElevatedSandboxProfileCaptureRequest {
+                permission_profile: &permission_profile,
+                workspace_roots: workspace_roots.as_slice(),
+                codex_home,
+                command: argv,
+                cwd: root,
+                // Core passes its environment on; PowerShell needs it.
+                env_map: std::env::vars().collect(),
+                timeout_ms: Some(10_000),
+                cancellation: None,
+                use_private_desktop: true,
+                proxy_enforced: false,
+                network_proxy_restricting_sid: None,
+                read_roots_override: None,
+                read_roots_include_platform_defaults: true,
+                write_roots_override: None,
+                deny_read_override: &crate::DenyReadTargets::default(),
+                deny_write_paths_override: &[],
+            },
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "run elevated capture powershell: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        });
+        println!("elevated capture pwsh timed_out={}", result.timed_out);
+        (
+            String::from_utf8_lossy(&result.stdout).into_owned(),
+            result.exit_code,
+        )
+    });
+}
+
+/// The same for an elevated unified exec session (pipes, not a ConPTY), which
+/// reports its exit when the runner sends it.
+#[test]
+fn elevated_session_exits_and_preserves_descendant_after_normal_exit() {
+    check_elevated_command_returns_while_descendant_runs("session", |root, codex_home, argv| {
+        current_thread_runtime().block_on(command_identity::elevated::run_elevated(
+            root,
+            codex_home,
+            argv,
+            &[],
+            /*tty*/ false,
+        ))
+    });
 }
 
 /// Observed state after a legacy workspace-write session tries to delete one

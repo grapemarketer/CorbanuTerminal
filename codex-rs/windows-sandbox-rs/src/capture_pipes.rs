@@ -23,7 +23,8 @@ use windows_sys::Win32::System::IO::CancelSynchronousIo;
 /// How long the readers may go on after the command's process exits.
 pub const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Reads one pipe on a thread of its own until end of file or [`finish`].
+/// Reads one pipe on a thread of its own until end of file or until
+/// [`finish_each`] stops it.
 pub struct PipeReader<T = Vec<u8>> {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<T>,
@@ -33,14 +34,16 @@ impl PipeReader {
     /// Starts reading `pipe`, a read end the reader owns and closes, into a
     /// buffer.
     pub(crate) fn spawn(pipe: HANDLE) -> Self {
-        Self::spawn_with(pipe, Vec::new(), |buf, chunk| buf.extend_from_slice(chunk))
+        Self::spawn_with(pipe, Vec::new(), Vec::extend_from_slice)
     }
 }
 
 impl<T: Send + 'static> PipeReader<T> {
     /// Starts reading `pipe`, a read end the reader owns and closes, handing
     /// each chunk read to `on_chunk` with `state`; the reader ends with
-    /// `state`.
+    /// `state`. Stopping the reader cancels whatever blocking I/O its thread
+    /// is in, so `on_chunk` must not do I/O that must not be cut short (the
+    /// elevated runner sends the chunks to another thread to write).
     pub fn spawn_with(
         pipe: HANDLE,
         mut state: T,
@@ -83,7 +86,9 @@ pub(crate) fn finish<const N: usize>(readers: [PipeReader; N], timeout: Duration
     finish_each(readers, timeout).map(|read| read.unwrap_or_default())
 }
 
-/// [`finish`] for any reader; each result is `Err` if its reader panicked.
+/// What `readers` returned: each runs until end of file or, at the latest,
+/// until `timeout` has passed, when its read in progress is cancelled. Each
+/// result is `Err` if its reader panicked.
 pub fn finish_each<T, const N: usize>(
     readers: [PipeReader<T>; N],
     timeout: Duration,

@@ -792,12 +792,13 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   read; until then, avoid running commands in several projects at once.
 - **Default (elevated) sandbox: a command that leaves a process running
   returns when it exits** (#1830). A process started with the command's
-  output handles (Windows PowerShell's `Start-Process
-  -RedirectStandardOutput`, for example) kept the command "running" until
-  that process exited too, with no time limit. The command now returns at
-  most 2 seconds after it exits and the process it started keeps running,
-  as in the non-admin sandbox since #1826. Output that process writes later
-  is not shown.
+  output handles (PowerShell's `Start-Process -RedirectStandardOutput`, for
+  example) kept the command "running" until that process exited too, with no
+  time limit. Now one-shot commands and unified exec sessions in the default
+  sandbox finish at most about 2 seconds after the command exits, and the
+  process it started keeps running; output that process writes later is not
+  shown. The non-admin sandbox's one-shot commands behave this way since
+  #1826; its unified exec sessions still wait (#1861).
 - **A default (elevated) sandbox command now starts while a non-admin
   sandbox command is running** (#1819). Before, when the non-admin command's
   writable folders held the Corbanu home (for example `%TEMP%`, or a project
