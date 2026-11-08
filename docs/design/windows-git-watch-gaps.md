@@ -338,7 +338,7 @@ sandbox boundary also needs security sign-off.
 | Gap 3 A: watch `core.hooksPath` and same-class targets (decision 4)                                                                       | Yes                                            | Decision (ordinary project folders)                                                                                                                                    |
 | Gap 1 C, gap 3 B: protect instead of flag (decision 5)                                                                                    | Moves the boundary; breaks some agent commands | Decision and security sign-off                                                                                                                                         |
 | When and where warnings appear: a notice right after the command, and showing entries outside the working folder's ancestors (decision 6) | Yes                                            | Decision (new UI); the new checks depend on it                                                                                                                         |
-| The same flags in the elevated sandbox (decision 7)                                                                                       | Yes                                            | Decision; it keeps no planted records at all today                                                                                                                     |
+| The same flags in the elevated sandbox (decision 7)                                                                                       | Yes                                            | D425; done in #1846 (it kept no planted records before)                                                                                                                |
 
 Order: gap 1 A and gap 2 A can be recorded now, but most of what they find
 is only shown once decision 6 is taken. In a `repo` client root, gap 1 A
@@ -354,6 +354,16 @@ together with decision 1.
 2. The owner of files a non-admin and an elevated command create, and
    whether git's `safe.directory` ownership check then refuses them (that
    would already cover much of gaps 1 and 2 in the elevated sandbox).
+   Measured for the elevated sandbox (#1846, native Windows CI, elevated
+   and normal session alike): all 18 new files and folders were owned by
+   `CodexSandboxOffline`; the 2 existing files it appended to kept their
+   owner. With no `safe.directory` setting, git refused 5 of 7 cases
+   (a new nested, bare or top-level repository, and a `.git` file a
+   command wrote, even one pointing at the user's own repository) and
+   allowed the 2 changes inside the user's own repository (`core.hooksPath`
+   and the hooks folder it names). With the runner's system
+   `safe.directory = *` it refused none. D425 (the elevated-sandbox row
+   above) flags all of them anyway.
 3. The added cost of gap 1 B and gap 2 B on this repository (38k files)
    and on a `repo` client with about 100 projects.
 4. Whether `npm install` with Husky v9 inside the sandbox rewrites

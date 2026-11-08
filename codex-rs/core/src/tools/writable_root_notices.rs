@@ -82,7 +82,7 @@ static PLANTED_TOLD: LazyLock<Mutex<HashMap<ThreadId, PlantedTold>>> =
 type PlantedTold = (u64, HashSet<u64>);
 
 /// D424 (#1775): the notice for the folders recorded as possibly planted
-/// since `mark` (taken before a run in the non-admin Windows sandbox), or
+/// since `mark` (taken before a run in either Windows sandbox), or
 /// since the thread's first such run if that is earlier (a command it left
 /// running may have ended meanwhile), that lie at or below one of the run's
 /// own `writable` roots (canonical). Each record is told once per thread;

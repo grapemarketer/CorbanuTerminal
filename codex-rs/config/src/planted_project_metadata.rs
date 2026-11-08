@@ -1,12 +1,13 @@
 //! #1506 item 2 (D262): `.codex` and `.agents` folders at the top of a
-//! writable root that were absent when a non-admin (legacy) Windows sandbox
-//! session started and existed when it ended (or while it still runs), and
-//! (D283, #1541) those deeper in a writable root that weren't there, as the
-//! same folder, when the session started. A
-//! sandboxed command may have planted them, so Corbanu Terminal doesn't load
-//! them (project config, hooks, skills) until the user confirms them. The
-//! records live with the sandbox's integrity-label records, where sandboxed
-//! commands can't read or change them.
+//! writable root that were absent when a Windows sandbox session
+//! (non-admin, or since D425 (#1846) elevated) started and existed when it
+//! ended (or while it still runs), and (D283, #1541) those deeper in a
+//! writable root that weren't there, as the same folder, when the session
+//! started. A sandboxed command may have planted them, so Corbanu Terminal
+//! doesn't load them (project config, hooks, skills) until the user confirms
+//! them. The records live with the sandbox's integrity-label records, where
+//! non-admin sandboxed commands can't read or change them (elevated ones can
+//! when a writable root contains them; see `docs/sandbox.md`).
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ pub const PLANTED_PROJECT_METADATA_WARNING_PREFIX: &str =
     "Possibly planted project folder not loaded: ";
 
 /// D332 (#1682): start of the warning for a writable folder's top-level
-/// `.git` that appeared or changed while a non-admin sandbox command ran.
+/// `.git` that appeared or changed while a Windows sandbox command ran.
 pub const PLANTED_GIT_WARNING_PREFIX: &str = "Possibly planted git folder: ";
 
 /// Whether `path` is a `.git` entry (D332's records hold only top-level
@@ -66,12 +67,12 @@ impl PlantedProjectMetadata {
     pub fn git_warning(&self, git_dir: &Path) -> Option<String> {
         match self {
             Self::Unreadable(err) => Some(format!(
-                "{PLANTED_GIT_WARNING_PREFIX}{}. The records of folders that non-admin Windows sandbox commands may have planted can't be read ({err}), so Corbanu Terminal can't tell whether a command planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder; check them first.",
+                "{PLANTED_GIT_WARNING_PREFIX}{}. The records of folders that Windows sandbox commands may have planted can't be read ({err}), so Corbanu Terminal can't tell whether a command planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder; check them first.",
                 without_following(git_dir).display()
             )),
             Self::Known(_) => self.contains(git_dir).then(|| {
                 format!(
-                    "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder. Check its hooks and config, then open Corbanu Terminal in this folder and confirm it.",
+                    "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a Windows sandbox command ran, so a command may have planted it. Git runs its hooks and config outside the sandbox whenever you run git in this folder. Check its hooks and config, then open Corbanu Terminal in this folder and confirm it.",
                     without_following(git_dir).display()
                 )
             }),
@@ -123,11 +124,11 @@ impl PlantedProjectMetadata {
     pub fn reason(&self, folder: &Path) -> String {
         match self {
             Self::Known(_) => format!(
-                "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared while a non-admin Windows sandbox command ran, so a command may have planted it; its config, hooks and skills are ignored. Check its contents, then open Corbanu Terminal in this folder and choose to load it.",
+                "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared while a Windows sandbox command ran, so a command may have planted it; its config, hooks and skills are ignored. Check its contents, then open Corbanu Terminal in this folder and choose to load it.",
                 folder.display()
             ),
             Self::Unreadable(err) => format!(
-                "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. The records of project folders that non-admin Windows sandbox commands may have planted can't be read ({err}), so no project config, hooks or skills are loaded until they can.",
+                "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. The records of project folders that Windows sandbox commands may have planted can't be read ({err}), so no project config, hooks or skills are loaded until they can.",
                 folder.display()
             ),
         }
@@ -194,7 +195,7 @@ pub fn git_changes_warning(changes: &[PlantedGitChange]) -> Option<String> {
         list.push_str(&format!(" and {} more", changes.len() - SHOWN));
     }
     Some(format!(
-        "{PLANTED_GIT_WARNING_PREFIX}{list}. These appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs a repository's hooks and config outside the sandbox whenever you run git there. Check them, then confirm them when Corbanu Terminal asks."
+        "{PLANTED_GIT_WARNING_PREFIX}{list}. These appeared or changed while a Windows sandbox command ran, so a command may have planted them. Git runs a repository's hooks and config outside the sandbox whenever you run git there. Check them, then confirm them when Corbanu Terminal asks."
     ))
 }
 
@@ -222,7 +223,7 @@ pub fn planted_git_changes() -> Vec<PlantedGitChange> {
 }
 
 /// D420/D424 (#1775): those of `changes` to show at startup: in a folder
-/// non-admin sandbox commands may write to (`writable_roots`, canonical),
+/// Windows sandbox commands may write to (`writable_roots`, canonical),
 /// below `cwd`, or in `cwd` or a folder above it.
 pub fn git_changes_to_show(
     changes: Vec<PlantedGitChange>,
@@ -273,13 +274,13 @@ pub fn planted_after_command_notice(
     let mut parts = Vec::new();
     if !git_dirs.is_empty() {
         parts.push(format!(
-            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do, then confirm it when the TUI asks at startup.",
+            "{PLANTED_GIT_WARNING_PREFIX}{}. It appeared or changed while a Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Git runs its hooks and config outside the sandbox whenever you (or your editor) run git there: check them before you do, then confirm it when the TUI asks at startup.",
             list(&git_dirs)
         ));
     }
     if !folders.is_empty() {
         parts.push(format!(
-            "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared or changed while a non-admin Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Its config, hooks and skills aren't loaded until you confirm it.",
+            "{PLANTED_PROJECT_METADATA_WARNING_PREFIX}{}. It appeared or changed while a Windows sandbox command ran (this one, or another that wrote there), so that command may have planted it. Its config, hooks and skills aren't loaded until you confirm it.",
             list(&folders)
         ));
     }

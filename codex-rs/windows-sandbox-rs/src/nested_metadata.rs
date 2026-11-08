@@ -51,11 +51,21 @@ pub(crate) struct Found {
     pub(crate) links: Vec<PathBuf>,
     /// D420: folders that count as changed after every session, and why: a
     /// folder holding an entry whose name isn't valid Unicode (it can't be
-    /// recorded, so it isn't looked at), or a link to a folder too large to
-    /// look through.
+    /// recorded, so it isn't looked at; one note per folder), or a link to a
+    /// folder too large to look through.
     pub(crate) notes: Vec<(PathBuf, String)>,
     /// The walk stopped at its budget.
     exhausted: bool,
+}
+
+impl Found {
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+            && self.unlistable.is_empty()
+            && self.repos.is_empty()
+            && self.links.is_empty()
+            && self.notes.is_empty()
+    }
 }
 
 /// The `.codex`/`.agents` entries below the top of `roots` (canonical), of
@@ -66,10 +76,73 @@ pub(crate) struct Found {
 /// and Core doesn't run from inside `.git`. Names match the way NTFS
 /// compares them (each character upper-cased), so `.agentſ` counts; such a
 /// name never matches a snapshot.
+///
+/// #1877: the folders down to [`SPLIT_DEPTH`] are listed on several
+/// threads, each deeper subtree by one thread as [`find_bounded`] walks it. Each part is put back in its place, so the result is the same,
+/// in the same order, as one walk.
 pub(crate) fn find(roots: &[PathBuf]) -> Found {
-    let mut budget = usize::MAX;
-    find_bounded(roots, &mut budget)
+    // A folder's place: its root, then for each level its position counted
+    // from the last folder listed (the walk takes the last one first).
+    let parts = std::sync::Mutex::new(Vec::<(Vec<usize>, Found)>::new());
+    let seed = roots
+        .iter()
+        .enumerate()
+        .map(|(n, root)| (root.clone(), vec![n]))
+        .collect();
+    let walked = crate::acl::walk::par_walk(
+        seed,
+        crate::acl::walk::check_threads(),
+        |(dir, place): (PathBuf, Vec<usize>), more| {
+            let mut part = Found::default();
+            let mut budget = usize::MAX;
+            if place.len() <= SPLIT_DEPTH {
+                let mut children = Vec::new();
+                list(dir, place.len() == 1, &mut part, &mut budget, &mut children);
+                let count = children.len();
+                more.extend(children.into_iter().enumerate().map(|(n, child)| {
+                    let mut place = place.clone();
+                    place.push(count - 1 - n);
+                    (child, place)
+                }));
+            } else {
+                let mut stack = vec![dir];
+                while let Some(dir) = stack.pop() {
+                    list(dir, /*top*/ false, &mut part, &mut budget, &mut stack);
+                }
+            }
+            if !part.is_empty() {
+                parts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((place, part));
+            }
+            Ok(())
+        },
+    );
+    if walked.is_err() {
+        // A panic: walk again on this thread, as before #1877.
+        let mut budget = usize::MAX;
+        return find_bounded(roots, &mut budget);
+    }
+    let mut parts = parts
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A folder's own part comes before those below it.
+    parts.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut found = Found::default();
+    for (_, part) in parts {
+        found.entries.extend(part.entries);
+        found.unlistable.extend(part.unlistable);
+        found.repos.extend(part.repos);
+        found.links.extend(part.links);
+        found.notes.extend(part.notes);
+    }
+    found
 }
+
+/// [`find`] lists each folder down to this depth (a root is 1) as its own
+/// piece of work; each deeper subtree is walked whole by one thread.
+const SPLIT_DEPTH: usize = 4;
 
 /// [`find`], looking at no more than `budget` entries (it counts down).
 fn find_bounded(roots: &[PathBuf], budget: &mut usize) -> Found {
@@ -81,115 +154,133 @@ fn find_bounded(roots: &[PathBuf], budget: &mut usize) -> Found {
                 found.exhausted = true;
                 return found;
             }
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                // Gone. A folder that is still there but says "not found"
-                // (a ProjFS or Cloud Files provider can) is unlistable.
-                Err(err)
-                    if err.kind() == std::io::ErrorKind::NotFound
-                        && std::fs::symlink_metadata(&dir)
-                            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    continue;
-                }
-                Err(_) => {
-                    found.unlistable.push(dir);
-                    continue;
-                }
-            };
             let top = dir == *root;
-            // D420: a `HEAD` or `commondir` makes this folder a candidate
-            // bare repository.
-            let mut git_candidate = false;
-            for entry in entries {
-                let Ok(entry) = entry else {
-                    found.unlistable.push(dir.clone());
-                    break;
-                };
-                *budget = budget.saturating_sub(1);
-                // D420: a name that isn't valid Unicode can't be recorded
-                // (the records are JSON), so what is below it isn't walked
-                // and its folder counts as changed every time.
-                if entry.file_name().to_str().is_none() {
-                    found.notes.push((
-                        dir.clone(),
-                        "holds an entry whose name isn't valid Unicode, so it isn't checked"
-                            .to_string(),
-                    ));
-                    continue;
-                }
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                git_candidate |=
-                    name.eq_ignore_ascii_case("HEAD") || name.eq_ignore_ascii_case("commondir");
-                // D420: a nested `.git` of any kind (the top-level one is
-                // D332's).
-                // Names fold as NTFS compares them (`.gıt` opens as `.git`).
-                if !top && (name.eq_ignore_ascii_case(".git") || folds_to(&name, ".git")) {
-                    found.repos.push(dir.join(".git"));
-                }
-                // Not followed if it is a link. A listing that shows a
-                // reparse point may not carry its tag, which tells links
-                // apart: then the entry itself is asked (#1672).
-                let metadata = match entry.metadata() {
-                    Ok(metadata)
-                        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 =>
-                    {
-                        std::fs::symlink_metadata(entry.path())
-                    }
-                    other => other,
-                };
-                if let Some((metadata_name, exact)) = metadata_name(&name) {
-                    // The top-level ones are D262's.
-                    if top && exact {
-                        continue;
-                    }
-                    if !top {
-                        let path = dir.join(metadata_name);
-                        let identity = (exact && !is_link(metadata.as_ref()))
-                            .then(|| identity(&entry.path()))
-                            .flatten();
-                        found.entries.push(NestedMetadata { path, identity });
-                        if exact {
-                            continue;
-                        }
-                    }
-                }
-                // D420: a folder link isn't walked, but git follows it: a
-                // repository behind one (moved to `%TEMP%`, say) counts.
-                if !name.eq_ignore_ascii_case(".git")
-                    && !folds_to(&name, ".git")
-                    && is_link(metadata.as_ref())
-                {
-                    let link = entry.path();
-                    if std::fs::metadata(link.join(".git")).is_ok() {
-                        found.repos.push(link.join(".git"));
-                    } else if crate::git_watch::is_git_directory(&link) {
-                        found.repos.push(link.clone());
-                    }
-                    if std::fs::metadata(&link).is_ok_and(|metadata| metadata.is_dir()) {
-                        found.links.push(link);
-                    }
-                }
-                let Ok(metadata) = metadata else {
-                    found.unlistable.push(entry.path());
-                    continue;
-                };
-                // `is_dir` is false for links.
-                if metadata.is_dir()
-                    // ASCII only: skipping a folded name (`.gıt`) would
-                    // leave an ordinary folder unwatched.
-                    && !name.eq_ignore_ascii_case(".git")
-                {
-                    stack.push(entry.path());
-                }
-            }
-            if !top && git_candidate && crate::git_watch::is_git_directory(&dir) {
-                found.repos.push(dir);
-            }
+            list(dir, top, &mut found, budget, &mut stack);
         }
     }
     found
+}
+
+/// Records what `dir` (`top`: one of the roots) holds in `found`, and adds
+/// the folders to walk next to `stack`, in the order listed.
+fn list(dir: PathBuf, top: bool, found: &mut Found, budget: &mut usize, stack: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // Gone. A folder that is still there but says "not found"
+        // (a ProjFS or Cloud Files provider can) is unlistable.
+        Err(err)
+            if err.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(&dir)
+                    .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return;
+        }
+        Err(_) => {
+            found.unlistable.push(dir);
+            return;
+        }
+    };
+    // D420: a `HEAD` or `commondir` makes this folder a candidate
+    // bare repository.
+    let mut git_candidate = false;
+    // Whether this folder already has its note, and its unlistable
+    // record, for a name that isn't valid Unicode.
+    let (mut noted, mut unlisted) = (false, false);
+    for entry in entries {
+        let Ok(entry) = entry else {
+            found.unlistable.push(dir.clone());
+            break;
+        };
+        *budget = budget.saturating_sub(1);
+        // D420: a name that isn't valid Unicode can't be recorded
+        // (the records are JSON), so what is below it isn't walked
+        // and its folder counts as changed every time.
+        if entry.file_name().to_str().is_none() {
+            if !noted {
+                noted = true;
+                found.notes.push((
+                    dir.clone(),
+                    "holds an entry whose name isn't valid Unicode, so it isn't checked"
+                        .to_string(),
+                ));
+            }
+            // D283: nested `.codex`/`.agents` folders below it
+            // aren't seen either, so its folder (which can be
+            // recorded) counts as unlistable. A plain file hides
+            // nothing.
+            if !unlisted && !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                unlisted = true;
+                found.unlistable.push(dir.clone());
+            }
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        git_candidate |=
+            name.eq_ignore_ascii_case("HEAD") || name.eq_ignore_ascii_case("commondir");
+        // D420: a nested `.git` of any kind (the top-level one is
+        // D332's).
+        // Names fold as NTFS compares them (`.gıt` opens as `.git`).
+        if !top && (name.eq_ignore_ascii_case(".git") || folds_to(&name, ".git")) {
+            found.repos.push(dir.join(".git"));
+        }
+        // Not followed if it is a link. A listing that shows a
+        // reparse point may not carry its tag, which tells links
+        // apart: then the entry itself is asked (#1672).
+        let metadata = match entry.metadata() {
+            Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+                std::fs::symlink_metadata(entry.path())
+            }
+            other => other,
+        };
+        if let Some((metadata_name, exact)) = metadata_name(&name) {
+            // The top-level ones are D262's.
+            if top && exact {
+                continue;
+            }
+            if !top {
+                let path = dir.join(metadata_name);
+                let identity = (exact && !is_link(metadata.as_ref()))
+                    .then(|| identity(&entry.path()))
+                    .flatten();
+                found.entries.push(NestedMetadata { path, identity });
+                if exact {
+                    continue;
+                }
+            }
+        }
+        // D420: a folder link isn't walked, but git follows it: a
+        // repository behind one (moved to `%TEMP%`, say) counts.
+        if !name.eq_ignore_ascii_case(".git")
+            && !folds_to(&name, ".git")
+            && is_link(metadata.as_ref())
+        {
+            let link = entry.path();
+            if std::fs::metadata(link.join(".git")).is_ok() {
+                found.repos.push(link.join(".git"));
+            } else if crate::git_watch::is_git_directory(&link) {
+                found.repos.push(link.clone());
+            }
+            if std::fs::metadata(&link).is_ok_and(|metadata| metadata.is_dir()) {
+                found.links.push(link);
+            }
+        }
+        let Ok(metadata) = metadata else {
+            found.unlistable.push(entry.path());
+            continue;
+        };
+        // `is_dir` is false for links.
+        if metadata.is_dir()
+            // ASCII only: skipping a folded name (`.gıt`) would
+            // leave an ordinary folder unwatched.
+            && !name.eq_ignore_ascii_case(".git")
+        {
+            stack.push(entry.path());
+        }
+    }
+    if !top && git_candidate && crate::git_watch::is_git_directory(&dir) {
+        found.repos.push(dir);
+    }
 }
 
 /// Which of `.codex`/`.agents` `name` is, and whether it is that name up to
@@ -379,21 +470,19 @@ pub(crate) fn bare_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// D420: the state of each repository in `paths`; folders a `gitdir:` line
-/// or `commondir` names are looked into when they lie in `roots`.
+/// or `commondir` names are looked into when they lie in `roots`. #1877:
+/// several repositories at a time.
 pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState> {
-    paths
-        .iter()
-        .map(|path| {
-            let link = std::fs::symlink_metadata(path)
-                .is_ok_and(|metadata| metadata.file_type().is_symlink());
-            RepoState {
-                path: path.clone(),
-                identity: if link { None } else { identity(path) },
-                link,
-                prints: crate::git_watch::fingerprint(path, roots),
-            }
-        })
-        .collect()
+    crate::par_map::par_map(paths, |path| {
+        let link =
+            std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink());
+        RepoState {
+            path: path.clone(),
+            identity: if link { None } else { identity(path) },
+            link,
+            prints: crate::git_watch::fingerprint(path, roots),
+        }
+    })
 }
 
 /// D420/D421 (#1775): what changed in each repository of `now` since
@@ -404,6 +493,13 @@ pub(crate) fn repo_changes(
     before: &[RepoState],
     now: Vec<RepoState>,
 ) -> Vec<(PathBuf, Vec<String>)> {
+    // #1877: `before` by path as [`same_path`] compares them, in order,
+    // looked up rather than compared with each.
+    let mut by_path: std::collections::HashMap<String, Vec<&RepoState>> =
+        std::collections::HashMap::new();
+    for old in before {
+        by_path.entry(path_text(&old.path)).or_default().push(old);
+    }
     now.into_iter()
         .filter_map(|state| {
             let changes = if state.link {
@@ -411,16 +507,14 @@ pub(crate) fn repo_changes(
             } else if state.identity.is_none() {
                 vec!["can't be inspected".to_string()]
             } else {
-                match before
-                    .iter()
-                    .find(|old| same_path(&old.path, &state.path) && old.identity == state.identity)
-                {
+                let same = by_path
+                    .get(&path_text(&state.path))
+                    .map_or(&[][..], Vec::as_slice);
+                match same.iter().find(|old| old.identity == state.identity) {
                     Some(old) => crate::git_watch::changes(&old.prints, &state.prints),
                     // Only a new one may pass as plain (D421), not one that
                     // replaced a repository.
-                    None if before.iter().any(|old| same_path(&old.path, &state.path)) => {
-                        vec!["replaced".to_string()]
-                    }
+                    None if !same.is_empty() => vec!["replaced".to_string()],
                     None if crate::git_watch::is_plain(&state.path) => Vec::new(),
                     None => vec!["new repository".to_string()],
                 }
@@ -453,6 +547,12 @@ pub(crate) fn identity(path: &Path) -> Option<FileIdentity> {
 /// folder itself (#1672).
 fn is_link(metadata: Result<&std::fs::Metadata, &std::io::Error>) -> bool {
     metadata.map_or(true, |metadata| metadata.file_type().is_symlink())
+}
+
+/// `path` as [`same_path`] compares it: two paths are the same exactly when
+/// these are equal.
+fn path_text(path: &Path) -> String {
+    path.as_os_str().to_string_lossy().to_ascii_lowercase()
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {

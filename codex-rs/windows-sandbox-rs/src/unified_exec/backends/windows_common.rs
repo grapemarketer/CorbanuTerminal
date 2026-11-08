@@ -93,6 +93,7 @@ pub(crate) fn start_runner_stdout_reader(
     stderr_tx: Option<broadcast::Sender<Vec<u8>>>,
     exit_tx: oneshot::Sender<i32>,
     credential_watch: Option<crate::credential_watch::CredentialWatch>,
+    planted_watch: Option<crate::integrity_leases::IntegrityLease>,
 ) {
     std::thread::spawn(move || {
         let stopped_by_watch = || {
@@ -100,7 +101,7 @@ pub(crate) fn start_runner_stdout_reader(
                 .as_ref()
                 .and_then(crate::credential_watch::CredentialWatch::finish)
         };
-        loop {
+        let exit_code = loop {
             let msg = match crate::ipc_framed::read_frame(&mut pipe_read) {
                 Ok(Some(v)) => v,
                 Ok(None) => {
@@ -109,8 +110,7 @@ pub(crate) fn start_runner_stdout_reader(
                         &stdout_tx,
                         stderr_tx.as_ref(),
                     );
-                    let _ = exit_tx.send(-1);
-                    break;
+                    break -1;
                 }
                 Err(err) => {
                     send_runner_error(
@@ -118,8 +118,7 @@ pub(crate) fn start_runner_stdout_reader(
                         &stdout_tx,
                         stderr_tx.as_ref(),
                     );
-                    let _ = exit_tx.send(-1);
-                    break;
+                    break -1;
                 }
             };
 
@@ -158,13 +157,11 @@ pub(crate) fn start_runner_stdout_reader(
                             exit_code = 1;
                         }
                     }
-                    let _ = exit_tx.send(exit_code);
-                    break;
+                    break exit_code;
                 }
                 Message::Error { payload } => {
                     send_runner_error(&payload.message, &stdout_tx, stderr_tx.as_ref());
-                    let _ = exit_tx.send(-1);
-                    break;
+                    break -1;
                 }
                 Message::SpawnReady { .. }
                 | Message::Stdin { .. }
@@ -173,7 +170,11 @@ pub(crate) fn start_runner_stdout_reader(
                 | Message::SpawnRequest { .. }
                 | Message::Terminate { .. } => {}
             }
-        }
+        };
+        // D425 (#1846): the command has ended; what it planted is recorded
+        // before its exit is reported, so the post-command notice finds it.
+        drop(planted_watch);
+        let _ = exit_tx.send(exit_code);
     });
 }
 

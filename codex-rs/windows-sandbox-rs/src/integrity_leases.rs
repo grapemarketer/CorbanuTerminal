@@ -39,6 +39,11 @@
 //! A lease ends when the command's last process exits, so processes it
 //! leaves running (a server, say) keep writing until they exit too.
 //!
+//! D425 (#1846): an elevated session keeps the same records with a lease
+//! that labels nothing ([`watch`]); its roots never keep a label in place.
+//! It ends when the command exits: Core can't see the processes the
+//! command leaves running, which run in the runner's job.
+//!
 //! Every acquire, every release and the startup sweep
 //! ([`repair_stale_integrity_labels`]) put back the label of each recorded
 //! root that no live session holds, and remove each recorded deny that lies
@@ -145,6 +150,17 @@ struct SessionRecord {
     /// builds before D422).
     #[serde(default)]
     config_targets: Option<Vec<TargetState>>,
+    /// D425 (#1846): an elevated session's, which labels nothing: its roots
+    /// don't keep a label (or a deny) in place.
+    #[serde(default)]
+    records_only: bool,
+}
+
+impl SessionRecord {
+    /// The roots whose labels and denies this session keeps in place.
+    fn held_roots(&self) -> &[PathBuf] {
+        if self.records_only { &[] } else { &self.roots }
+    }
 }
 
 /// D262: project metadata folders that appeared while a session ran, and
@@ -175,6 +191,8 @@ pub(crate) struct IntegrityLease {
     repos: Vec<RepoState>,
     /// D422: what their configs name, at the start.
     config_targets: Vec<TargetState>,
+    /// D425: labels nothing ([`watch`]).
+    records_only: bool,
 }
 
 /// `%LOCALAPPDATA%\CorbanuTerminalSandbox`, which a session whose writable
@@ -221,6 +239,26 @@ pub(crate) fn acquire_watching(
     nested_roots: &[PathBuf],
     log_dir: Option<&Path>,
 ) -> Result<IntegrityLease> {
+    start(roots, nested_roots, log_dir, /*records_only*/ false)
+}
+
+/// D425 (#1846): for an elevated session, the records [`acquire_watching`]
+/// keeps (D262, D283, D332, D420, D422), labelling nothing. Dropping it
+/// records what appeared or changed.
+pub(crate) fn watch(
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+    log_dir: Option<&Path>,
+) -> Result<IntegrityLease> {
+    start(roots, nested_roots, log_dir, /*records_only*/ true)
+}
+
+fn start(
+    roots: &[PathBuf],
+    nested_roots: &[PathBuf],
+    log_dir: Option<&Path>,
+    records_only: bool,
+) -> Result<IntegrityLease> {
     let registry = ensure_registry()?;
     // Outside the lock: the walk can take a while. Whatever appears from
     // here on counts as planted.
@@ -247,6 +285,7 @@ pub(crate) fn acquire_watching(
         git_dirs,
         repos,
         config_targets,
+        records_only,
     };
     let wanted: BTreeSet<PathBuf> = roots.iter().cloned().collect();
     let result = acquire_locked(&mut lease, &wanted);
@@ -268,6 +307,9 @@ fn acquire_locked(lease: &mut IntegrityLease, wanted: &BTreeSet<PathBuf>) -> Res
     lease.session = Some(create_session(lease, wanted)?);
     let mut labels = load_labels(&lease.registry)?;
     sweep(&lease.registry, &mut labels, lease.log_dir.as_deref())?;
+    if lease.records_only {
+        return Ok(());
+    }
     for root in wanted {
         // A root that can't be labelled stays as it is: commands can't write
         // there, which is safe, and the others still work.
@@ -477,7 +519,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
         if let Some(record) = &record
             && record_planted(registry, &record.absent_metadata, log_dir).is_err()
         {
-            live.extend(record.roots.iter().cloned());
+            live.extend(record.held_roots().iter().cloned());
             continue;
         }
         // D283: a session that ended without releasing its lease: what
@@ -495,7 +537,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 record_nested_planted(registry, nested, found, log_dir).is_ok()
             };
             if !recorded {
-                live.extend(record.roots.iter().cloned());
+                live.extend(record.held_roots().iter().cloned());
                 continue;
             }
         }
@@ -517,7 +559,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 record_repo_changes(registry, changed, log_dir).is_ok()
             };
             if !recorded {
-                live.extend(record.roots.iter().cloned());
+                live.extend(record.held_roots().iter().cloned());
                 continue;
             }
         }
@@ -534,7 +576,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
                 )
                 .is_ok();
             if !recorded {
-                live.extend(record.roots.iter().cloned());
+                live.extend(record.held_roots().iter().cloned());
                 continue;
             }
         }
@@ -543,7 +585,7 @@ fn sweep(registry: &Path, labels: &mut Labels, log_dir: Option<&Path>) -> Result
             Ok(()) => {}
             Err(err) => match record {
                 Some(record) if err.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
-                    live.extend(record.roots);
+                    live.extend(record.held_roots().iter().cloned());
                 }
                 // A session file that can't be read or probed may belong to
                 // a live session: keep every label this time.
@@ -788,13 +830,16 @@ fn repo_paths(
     repos.extend(behind);
     notes.extend(behind_notes);
     repos.extend(crate::nested_metadata::bare_roots(roots));
+    // #1877: the same path both ways by `is_at_or_below`, looked up rather
+    // than compared with each.
+    let key = crate::git_config_targets::path_key;
+    let mut listed: std::collections::HashSet<Vec<String>> =
+        repos.iter().map(|path| key(path)).collect();
     for state in before {
-        let listed = repos.iter().any(|path| {
-            crate::git_watch::is_at_or_below(path, &state.path)
-                && crate::git_watch::is_at_or_below(&state.path, path)
-        });
-        if !listed && std::fs::symlink_metadata(&state.path).is_ok() {
+        let state_key = key(&state.path);
+        if !listed.contains(&state_key) && std::fs::symlink_metadata(&state.path).is_ok() {
             repos.push(state.path.clone());
+            listed.insert(state_key);
         }
     }
     (repos, notes)
@@ -1012,7 +1057,7 @@ pub fn confirm_planted_project_metadata(path: &Path) -> Result<bool> {
             })
         {
             anyhow::bail!(
-                "a non-admin sandbox command that may have created {} is still running; confirm it once that command has ended",
+                "a sandboxed command that may have created {} is still running; confirm it once that command has ended",
                 path.display()
             );
         }
@@ -1403,6 +1448,7 @@ fn create_session(lease: &IntegrityLease, roots: &BTreeSet<PathBuf>) -> Result<(
         git_dirs: Some(lease.git_dirs.clone()),
         repos: Some(lease.repos.clone()),
         config_targets: Some(lease.config_targets.clone()),
+        records_only: lease.records_only,
     };
     file.write_all(&serde_json::to_vec(&record)?)?;
     file.flush()?;

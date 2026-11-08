@@ -343,6 +343,7 @@ class WindowsSandboxNextestGroupTest(unittest.TestCase):
             [
                 "pf_27_s06_d2_vault_unreadable_through_tool_launch_under_workspace_write",
                 "pf_27_s06_elevated_launch_cannot_read_protected_files_or_core_memory",
+                "sec_win_1863_command_exec_localhost_unc_cwd_fails_closed",
                 "windows_elevated_does_not_create_missing_workspace_metadata",
                 "windows_elevated_enforces_deny_read_and_protects_setup_marker",
             ],
