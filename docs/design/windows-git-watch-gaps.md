@@ -217,14 +217,14 @@ candidate.
   repositories, with the gap 1 rules.**
 - **C. Docs: recommend setting `safe.bareRepository=explicit` in your
   global git config.** Git then refuses to use a bare repository it finds
-  by searching, and stops with an error. Use git 2.45 or later: before
-  that, `explicit` also refuses git run inside `.git`, `.git\worktrees\*`
-  and `.git\modules\*`, which breaks some hooks and submodule tools. It
-  only covers tools that run the git command line with that global config
-  (not libgit2 or JGit based tools, nor a git with another home folder,
-  such as WSL's). It breaks
-  workflows that run git inside a bare repository without `--git-dir`,
-  including some bare-repository-plus-worktrees setups.
+  by searching, and stops with an error. Use git 2.45 or later: in 2.38
+  to 2.44, `explicit` also refuses git run inside `.git`,
+  `.git\worktrees\*` and `.git\modules\*`, which breaks some hooks and
+  submodule tools, and versions before 2.38 ignore it. It only covers tools
+  that run the git command line with that global config (not libgit2 or
+  JGit based tools, nor a git with another home folder, such as WSL's). It
+  breaks workflows that run git inside a bare repository without
+  `--git-dir`, including some bare-repository-plus-worktrees setups.
 
 **Recommendation: A now, C in `docs/sandbox.md` now, B together with gap 1's
 B.** C is the only option that also covers editors before the next start.
