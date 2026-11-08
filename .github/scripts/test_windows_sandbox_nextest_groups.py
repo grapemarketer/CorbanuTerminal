@@ -21,8 +21,15 @@ PACKAGE = "codex-windows-sandbox"
 GROUP = "windows_sandbox_legacy_sessions"
 GUARD = "legacy_process_test_guard"
 
-FN_RE = re.compile(r"\bfn\s+([A-Za-z_]\w*)")
-TEST_ATTR_RE = re.compile(r"^\s*#\[(?:\w+::)?test\b")
+FN_RE = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
+    r"(?:extern\s+\"\"\s+)?fn\s+([A-Za-z_]\w*)",
+    re.MULTILINE,
+)
+TEST_ATTR_RE = re.compile(r"#\[\s*(?:\w+::)*test\s*[\](]")
+RAW_STRING_RE = re.compile(r'(?:b|c)?r(#*)"')
+CHAR_RE = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^\\'\n])'")
+USE_RE = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s[^;]*;", re.MULTILINE | re.DOTALL)
 # The only filter shape the check understands, so it cannot misjudge one:
 # `package(codex-windows-sandbox) & (test(a) | test(b) | ...)`.
 FILTER_RE = re.compile(
@@ -31,31 +38,86 @@ FILTER_RE = re.compile(
 TERM_RE = re.compile(r"^test\(([A-Za-z0-9_:]+)\)$")
 
 
-def enclosing_fn(lines: list[str], index: int) -> tuple[str, int] | None:
-    for i in range(index, -1, -1):
-        match = FN_RE.search(lines[i])
-        if match:
-            return match.group(1), i
-    return None
+class ScanError(ValueError):
+    """A guard use the scan cannot tie to a test; the check fails closed."""
 
 
-def is_test_fn(lines: list[str], fn_line: int) -> bool:
-    i = fn_line - 1
-    while i >= 0:
-        stripped = lines[i].strip()
-        if TEST_ATTR_RE.match(lines[i]):
-            return True
-        if stripped.startswith(("#[", "//")) or stripped == "" or stripped.endswith(")]"):
-            i -= 1
+def blank(text: str) -> str:
+    return re.sub(r"[^\n]", " ", text)
+
+
+def code_only(source: str) -> str:
+    """Blanks comments, string and char literals and `use` items, keeping
+    every other character (and so every line and column) in place."""
+    out = []
+    i = 0
+    n = len(source)
+    while i < n:
+        if source.startswith("//", i):
+            j = source.find("\n", i)
+            j = n if j < 0 else j
+        elif source.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if source.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif source.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+        elif raw := RAW_STRING_RE.match(source, i):
+            close = '"' + raw.group(1)
+            j = source.find(close, raw.end())
+            j = n if j < 0 else j + len(close)
+        elif (source[i] == '"' or source.startswith(('b"', 'c"'), i)) and not (
+            i and (source[i - 1].isalnum() or source[i - 1] == "_")
+        ):
+            j = source.index('"', i) + 1
+            while j < n and source[j] != '"':
+                j += 2 if source[j] == "\\" else 1
+            j += 1
+        elif char := CHAR_RE.match(source, i):
+            j = char.end()
+        else:
+            out.append(source[i])
+            i += 1
             continue
-        return False
-    return False
+        out.append(blank(source[i:j]))
+        i = j
+    return USE_RE.sub(lambda m: blank(m.group(0)), "".join(out))
+
+
+def fn_spans(code: str) -> list[tuple[str, int, int, int]]:
+    """(name, start of the `fn` line, end of its body, end of its signature)."""
+    spans = []
+    for match in FN_RE.finditer(code):
+        body = re.compile(r"[{;]").search(code, match.end())
+        if body is None or code[body.start()] == ";":
+            continue
+        depth, j = 0, body.start()
+        while j < len(code):
+            depth += {"{": 1, "}": -1}.get(code[j], 0)
+            if depth == 0:
+                break
+            j += 1
+        spans.append((match.group(1), match.start(), j, body.start()))
+    return spans
+
+
+def is_test_fn(code: str, fn_start: int) -> bool:
+    """Whether the attributes just above the `fn` line include a test one."""
+    before = code[:fn_start].rstrip()
+    item_start = max(before.rfind("}"), before.rfind(";"), before.rfind("{")) + 1
+    return TEST_ATTR_RE.search(code[item_start:fn_start]) is not None
 
 
 def guard_users(sources: dict[str, str]) -> dict[str, str]:
     """Maps each test that takes the guard, directly or through helpers, to
-    its file. Helpers are followed by name."""
-    files = {path: text.splitlines() for path, text in sources.items()}
+    its file. Helpers are followed by name. Raises ScanError for a use it
+    cannot follow: a mention that is not a call, a call outside a function,
+    or a helper that nothing calls."""
+    files = {path: code_only(text) for path, text in sources.items()}
+    spans = {path: fn_spans(code) for path, code in files.items()}
     tests: dict[str, str] = {}
     seen: set[str] = set()
     pending = [GUARD]
@@ -64,20 +126,31 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
         if callee in seen:
             continue
         seen.add(callee)
-        call = re.compile(rf"\b{re.escape(callee)}\s*\(")
-        definition = re.compile(rf"\bfn\s+{re.escape(callee)}\b")
-        for path, lines in files.items():
-            for index, line in enumerate(lines):
-                if not call.search(line) or definition.search(line):
+        mention = re.compile(rf"\b{re.escape(callee)}\b")
+        callers = 0
+        for path, code in files.items():
+            for match in mention.finditer(code):
+                line = code.count("\n", 0, match.start()) + 1
+                where = f"{path}:{line}: {callee}"
+                if re.search(r"\bfn\s+$", code[: match.start()]):
                     continue
-                found = enclosing_fn(lines, index)
-                if found is None:
-                    continue
-                name, fn_line = found
-                if is_test_fn(lines, fn_line):
+                if not re.match(r"\s*\(", code[match.end() :]):
+                    raise ScanError(f"{where} is used without being called")
+                inside = [
+                    span
+                    for span in spans[path]
+                    if span[3] < match.start() < span[2]
+                ]
+                if not inside:
+                    raise ScanError(f"{where} is called outside a function body")
+                name, fn_start, _, _ = max(inside, key=lambda span: span[1])
+                callers += 1
+                if is_test_fn(code, fn_start):
                     tests[name] = path
                 else:
                     pending.append(name)
+        if callers == 0:
+            raise ScanError(f"{callee} takes the guard but nothing calls it")
     return tests
 
 
@@ -86,6 +159,16 @@ def crate_sources() -> dict[str, str]:
         str(path.relative_to(REPO_ROOT)): path.read_text(encoding="utf-8")
         for path in sorted(CRATE_DIR.rglob("*.rs"))
     }
+
+
+def has_top_level_or(filter_: str) -> bool:
+    depth = 0
+    for char in filter_:
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0 and char in "|+":
+            return True
+    # nextest also spells union `or`; any top-level `or` counts.
+    return re.search(r"\bor\b", re.sub(r"\([^()]*\)", "", filter_)) is not None
 
 
 def other_groups_claiming_the_crate(config: dict) -> list[str]:
@@ -103,6 +186,7 @@ def other_groups_claiming_the_crate(config: dict) -> list[str]:
                 i
                 for i, override in enumerate(overrides)
                 if override.get("test-group") == GROUP
+                and "platform" not in override
                 and f"package({PACKAGE})" in override.get("filter", "")
             ]
             overrides = overrides[: ours[0]] if ours else overrides
@@ -112,7 +196,8 @@ def other_groups_claiming_the_crate(config: dict) -> list[str]:
             if group is None or group == GROUP:
                 continue
             scoped = re.match(r"^\s*package\(([\w-]+)\)\s*&", filter_)
-            if scoped is None or scoped.group(1) == PACKAGE:
+            # `&` binds tighter than `|`, so a top-level `|` unscopes it.
+            if scoped is None or scoped.group(1) == PACKAGE or has_top_level_or(filter_):
                 claims.append(f"profile.{profile}: {group}: {filter_}")
     return claims
 
@@ -199,6 +284,45 @@ fn unrelated() {}
         self.assertEqual(missing_from_group(tests, ["legacy_"]), ["x.rs: sec_win_1_elevated_two"])
         self.assertEqual(missing_from_group(tests, ["legacy_", "elevated_"]), [])
 
+    def test_scan_handles_layouts_rustfmt_and_tests_produce(self) -> None:
+        source = """
+use super::tests::legacy_process_test_guard;
+
+/// Doc comment naming fn not_a_test() and legacy_process_test_guard.
+#[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "a long reason that makes rustfmt split this attribute"
+)]
+fn split_attribute() {
+    // fn not_a_test() { legacy_process_test_guard }
+    let text = "fn quoted() { legacy_process_test_guard }";
+    fn nested(x: u8) -> u8 { x }
+    let _guard = legacy_process_test_guard();
+    let _ = (text, nested(1), '{', r#"}"#);
+}
+
+#[test]
+fn through_a_nested_helper() {
+    fn inner() { let _guard = legacy_process_test_guard(); }
+    inner();
+}
+"""
+        self.assertEqual(
+            sorted(guard_users({"x.rs": source})),
+            ["split_attribute", "through_a_nested_helper"],
+        )
+
+    def test_scan_fails_on_uses_it_cannot_follow(self) -> None:
+        for case, source in {
+            "pointer": "fn h() { let _g = legacy_process_test_guard(); }\n#[test]\nfn t() { run(h); }",
+            "binding": "#[test]\nfn t() { let lock = legacy_process_test_guard; let _g = lock(); }",
+            "uncalled helper": "fn h() { let _g = legacy_process_test_guard(); }",
+            "macro": "macro_rules! m { () => { legacy_process_test_guard() }; }",
+        }.items():
+            with self.subTest(case=case), self.assertRaises(ScanError):
+                guard_users({"x.rs": source})
+
     def test_check_reports_another_group_that_could_claim_the_crate(self) -> None:
         config = {
             "profile": {
@@ -207,6 +331,9 @@ fn unrelated() {}
                         {"filter": "package(codex-core) & test(x)", "test-group": "a"},
                         {"filter": "test(elevated_)", "test-group": "b"},
                         {"filter": f"package({PACKAGE}) & test(y)", "test-group": "c"},
+                        {"filter": "package(codex-core) & test(x) | test(y)", "test-group": "f"},
+                        {"filter": "package(codex-core) & test(x) or test(y)", "test-group": "g"},
+                        {"filter": "package(codex-core) & (test(x) | test(y))", "test-group": "h"},
                         {"filter": f"package({PACKAGE}) & (test(z))", "test-group": GROUP},
                         {"filter": "test(later)", "test-group": "d"},
                     ]
@@ -219,6 +346,8 @@ fn unrelated() {}
             [
                 "profile.default: b: test(elevated_)",
                 f"profile.default: c: package({PACKAGE}) & test(y)",
+                "profile.default: f: package(codex-core) & test(x) | test(y)",
+                "profile.default: g: package(codex-core) & test(x) or test(y)",
                 "profile.local: e: test(local)",
             ],
         )
