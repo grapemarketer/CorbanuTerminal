@@ -18,5 +18,3 @@ qa/portfolio/agent-cost-accounting/pf-60-s03/impl-03-tui-full-final.log
 qa/initiative-control/management-bootstrap/pf83-codeblind-35/common/mediator-campaign.jsonl
 qa/initiative-control/management-bootstrap/pf83-codeblind-35/review/reviewer-r1-events.jsonl
 qa/initiative-control/management-bootstrap/pf83-codeblind-35/runs/F04/collected/evidence/pty.raw
-# Over the limit on main (514232 bytes); #1781 adds a regression test to it.
-codex-rs/core/src/security/tainted_action_tests.rs
