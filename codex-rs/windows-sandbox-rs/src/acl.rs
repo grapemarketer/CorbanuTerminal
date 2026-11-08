@@ -1132,7 +1132,7 @@ pub(crate) fn link_count(path: &Path) -> Option<u32> {
         .open(path)
         .ok()?;
     // SAFETY: the handle is open for the call.
-    unsafe { file_info(file.as_raw_handle() as HANDLE) }
+    unsafe { file_info(file.as_raw_handle() as _) }
         .ok()
         .map(|info| info.nNumberOfLinks)
 }
