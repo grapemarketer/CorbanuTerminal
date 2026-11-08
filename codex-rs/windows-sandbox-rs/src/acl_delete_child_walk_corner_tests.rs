@@ -17,72 +17,11 @@ use super::*;
 use crate::acl::walk::Handle;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_ne;
-use windows_sys::Win32::Security::AddMandatoryAce;
-use windows_sys::Win32::Security::SE_SACL_PROTECTED;
-use windows_sys::Win32::Security::SetSecurityDescriptorSacl;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
 const MEDIUM: &str = "S-1-16-8192";
 const GENERIC_WRITE: u32 = 0x4000_0000;
-/// `SYSTEM_MANDATORY_LABEL_NO_WRITE_UP`.
-const NO_WRITE_UP: u32 = 0x1;
-
-/// Writes `path`'s label SACL protected (inheriting nothing from above),
-/// with one explicit `level` entry with `flags`, or none. The entries are
-/// written with Windows' walk (so the objects below inherit them), then the
-/// protection on the object alone: `PROTECTED_SACL_SECURITY_INFORMATION`
-/// would need `SeSecurityPrivilege`, which a normal session lacks.
-fn protect_label(path: &Path, label: Option<(&str, u32)>) {
-    let mut buffer = vec![0_u32; 32];
-    let acl = buffer.as_mut_ptr() as *mut ACL;
-    // SAFETY: a buffer of the size given, a valid SID, path and descriptor.
-    unsafe {
-        assert_ne!(InitializeAcl(acl, 128, 2), 0, "InitializeAcl");
-        if let Some((level, flags)) = label {
-            let sid = LocalSid::from_string(level).expect("label SID");
-            assert_ne!(
-                AddMandatoryAce(acl, 2, flags, NO_WRITE_UP, sid.as_ptr()),
-                0,
-                "AddMandatoryAce"
-            );
-        }
-        let code = SetNamedSecurityInfoW(
-            to_wide(path).as_ptr() as *mut u16,
-            SE_FILE_OBJECT,
-            LABEL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            acl,
-        );
-        assert_eq!(code, ERROR_SUCCESS, "label {}", path.display());
-        let mut sd: SECURITY_DESCRIPTOR = std::mem::zeroed();
-        let psd = &mut sd as *mut SECURITY_DESCRIPTOR as *mut c_void;
-        assert_ne!(
-            InitializeSecurityDescriptor(psd, SECURITY_DESCRIPTOR_REVISION),
-            0
-        );
-        assert_ne!(SetSecurityDescriptorSacl(psd, 1, acl, 0), 0);
-        assert_ne!(
-            SetSecurityDescriptorControl(psd, SE_SACL_PROTECTED, SE_SACL_PROTECTED),
-            0
-        );
-        assert_ne!(
-            SetFileSecurityW(to_wide(path).as_ptr(), LABEL_SECURITY_INFORMATION, psd),
-            0,
-            "protect the label of {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        );
-    }
-    let sddl = full_sddl(path);
-    assert!(
-        sddl.contains("S:P"),
-        "{} is not protected: {sddl}",
-        path.display()
-    );
-}
 
 /// Protected label SACLs below the root: a folder with a protected Medium
 /// label and one with none, each with stale objects (moved in from a Low
@@ -241,7 +180,7 @@ const REPARSE_CASES: [(&str, bool); 3] = [
 fn d311_other_reparse_points_match_the_tree_walk() {
     let mut failed = Vec::new();
     for (folder, stale) in REPARSE_CASES {
-        let base = tempfile::tempdir().expect("base dir");
+        let (_guard, base) = serialized_base();
         let setup = |root: &Path, _: &Path| {
             other_reparse_points(root, folder, stale);
             true
@@ -274,7 +213,7 @@ fn d311_other_reparse_points_match_the_tree_walk() {
 fn d311_label_walk_other_reparse_points_match_windows_walk() {
     let mut failed = Vec::new();
     for (folder, stale) in REPARSE_CASES {
-        let base = tempfile::tempdir().expect("base dir");
+        let (_guard, base) = serialized_base();
         let setup = |root: &Path, _: &Path| {
             other_reparse_points(root, folder, stale);
             true
@@ -366,7 +305,7 @@ fn check_below(root: &Path, written: &Handle) -> anyhow::Result<()> {
 /// of either would write.
 #[test]
 fn d311_root_swapped_before_the_check_is_not_checked() {
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     let verbatim = std::fs::canonicalize(base.path())
         .expect("canonical base")
         .join("t");
@@ -448,7 +387,7 @@ const LINK_ROOTS: [(&str, &[&str]); 2] = [
 fn d311_link_roots_match_the_tree_walk() {
     let mut failed = Vec::new();
     for (name, args) in LINK_ROOTS {
-        let base = tempfile::tempdir().expect("base dir");
+        let (_guard, base) = serialized_base();
         let Some(outcome) = equality_case_in(base.path(), name, &link_root(args)) else {
             continue;
         };
@@ -475,7 +414,7 @@ fn d311_link_roots_match_the_tree_walk() {
 fn d311_label_walk_link_roots_match_windows_walk() {
     let mut failed = Vec::new();
     for (name, args) in LINK_ROOTS {
-        let base = tempfile::tempdir().expect("base dir");
+        let (_guard, base) = serialized_base();
         let Some(outcome) = command_case_in(base.path(), name, &link_root(args), None) else {
             continue;
         };
@@ -496,7 +435,7 @@ fn d311_label_walk_link_roots_match_windows_walk() {
 /// workspace it points at.
 #[test]
 fn d311_walks_refuse_a_link_root_before_writing() {
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     let verbatim = std::fs::canonicalize(base.path())
         .expect("canonical base")
         .join("t");
@@ -552,7 +491,7 @@ fn d311_walks_refuse_a_link_root_before_writing() {
 #[test]
 fn d311_root_swapped_for_a_link_while_opened_is_refused() {
     use crate::acl::walk::BETWEEN_ROOT_OPENS;
-    let base = tempfile::tempdir().expect("base dir");
+    let (_guard, base) = serialized_base();
     let verbatim = std::fs::canonicalize(base.path())
         .expect("canonical base")
         .join("t");
