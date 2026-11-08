@@ -35,9 +35,7 @@ pub(super) fn git_name(word: &str) -> Option<Option<String>> {
 /// (`git-submodule`) already names its subcommand. `git submodule` takes
 /// options before `foreach` (`--quiet`, `-q`, `--cached`).
 pub(super) fn wrapped_git_operand(words: &[String], at: usize) -> Option<usize> {
-    let Some(word) = words.get(at) else {
-        return None;
-    };
+    let word = words.get(at)?;
     // A dashed helper (`git-submodule`, `git-bisect`) already names the
     // subcommand it runs.
     if let Some(Some(subcommand)) = git_name(word) {
