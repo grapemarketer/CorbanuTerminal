@@ -26,6 +26,7 @@ use std::process::Stdio;
 const SOURCES: &[&str] = &[
     include_str!("../tainted_action.rs"),
     include_str!("../tainted_action_tests.rs"),
+    include_str!("../issue_1276_to_1620_tests.rs"),
     include_str!("../tainted_action_refusal_tests.rs"),
     include_str!("arithmetic_tests.rs"),
     include_str!("arithmetic.rs"),
