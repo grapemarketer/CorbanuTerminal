@@ -85,3 +85,63 @@ fn keyring_isolation_exemption_is_exact() {
         HashMap::new()
     );
 }
+
+/// #1805: where names ignore case, setting a name replaces its other spellings.
+#[test]
+fn set_env_var_replaces_other_spellings_only_when_names_ignore_case() {
+    let env = HashMap::from([
+        ("Path".to_string(), "inherited".to_string()),
+        ("path".to_string(), "lower".to_string()),
+        ("PATHEXT".to_string(), ".EXE".to_string()),
+    ]);
+
+    let mut ignoring = env.clone();
+    set_env_var_with_case(
+        &mut ignoring,
+        "PATH",
+        "set".to_string(),
+        /*ignore_case*/ true,
+    );
+    assert_eq!(
+        ignoring,
+        HashMap::from([
+            ("PATH".to_string(), "set".to_string()),
+            ("PATHEXT".to_string(), ".EXE".to_string()),
+        ])
+    );
+
+    let mut keeping = env.clone();
+    set_env_var_with_case(
+        &mut keeping,
+        "PATH",
+        "set".to_string(),
+        /*ignore_case*/ false,
+    );
+    let mut expected = env;
+    expected.insert("PATH".to_string(), "set".to_string());
+    assert_eq!(keeping, expected);
+}
+
+/// #1805: where names ignore case, the first spelling of a name wins.
+#[test]
+fn collect_vars_keeps_the_first_spelling_only_when_names_ignore_case() {
+    let vars = || {
+        vec![
+            ("Path".to_string(), "first".to_string()),
+            ("HOME".to_string(), "home".to_string()),
+            ("PATH".to_string(), "second".to_string()),
+        ]
+    };
+
+    assert_eq!(
+        collect_vars(vars(), /*ignore_case*/ true),
+        HashMap::from([
+            ("Path".to_string(), "first".to_string()),
+            ("HOME".to_string(), "home".to_string()),
+        ])
+    );
+    assert_eq!(
+        collect_vars(vars(), /*ignore_case*/ false),
+        vars().into_iter().collect::<HashMap<_, _>>()
+    );
+}

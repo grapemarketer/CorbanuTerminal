@@ -741,3 +741,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   If that folder is a link, it is left alone and the sandbox log says so. If
   copying the helper fails and the one next to `codex.exe` is used instead,
   a Low label on it is fixed the same way, or the log names it as the cause.
+- **Windows PowerShell's `Start-Process` works in both sandboxes** (#1805).
+  Corbanu passes commands your environment, where Windows spells the search
+  path `Path`, and both sandboxes added a second copy spelled `PATH`. Windows
+  PowerShell 5.1's `Start-Process` then failed with "Item has already been
+  added", and the copy that counted could miss folders added by
+  `shell_environment_policy.set`. Each variable now reaches a command once,
+  and a value you set wins over the inherited spelling; no folder is added
+  to or removed from what you configured. Where Corbanu sets a proxy
+  variable in both cases (`HTTP_PROXY` and `http_proxy`), sandboxed
+  commands get only the capitals, so tools that read only the lower-case
+  name (MSYS2 or Git Bash `curl`) no longer see that proxy.

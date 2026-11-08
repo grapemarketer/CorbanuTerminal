@@ -2988,6 +2988,10 @@ mod command_identity;
 #[path = "token_boundary_tests.rs"]
 mod token_boundary;
 
+/// #1805: a command's environment holds each name once, in any case.
+#[path = "env_case_tests.rs"]
+mod env_case;
+
 /// D285: what the per-command ACL work costs on a large workspace.
 #[path = "acl_cost_tests.rs"]
 mod acl_cost;
