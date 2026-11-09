@@ -1374,7 +1374,7 @@ fn assert_permission_preset_request(
 }
 
 /// #1506 item 2 (D262): the startup prompt for project folders that appeared
-/// while a non-admin sandbox command ran.
+/// while a Windows sandbox command ran.
 #[tokio::test]
 async fn planted_project_metadata_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

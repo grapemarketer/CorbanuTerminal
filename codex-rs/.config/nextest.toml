@@ -79,9 +79,10 @@ slow-timeout = { period = "1m", terminate-after = 3 }
 
 [[profile.default.overrides]]
 # Ten sessions on a 4-worker runtime, timing how long each request waits on
-# the state DB: it needs the cores it uses, not one slot among busy tests
-# (#905; Bazel reserves them with state's `cpu:4` unit-test tag).
-filter = 'package(codex-state) & test(ten_sessions_on_one_home_wait_briefly_and_lose_no_record)'
+# the state DB, and an expiry timing how long another writer waits: they need
+# the cores they use, not one slot among busy tests (#905, #1881; Bazel runs
+# them alone, `exclusive`, in state-unit-tests-alone).
+filter = 'package(codex-state) & (test(ten_sessions_on_one_home_wait_briefly_and_lose_no_record) | test(expiry_at_the_detail_horizon_never_holds_up_another_writer))'
 threads-required = 4
 
 [[profile.default.overrides]]

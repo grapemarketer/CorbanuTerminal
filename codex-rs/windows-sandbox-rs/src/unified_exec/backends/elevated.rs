@@ -182,6 +182,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     )?;
 
     let sandbox_creds = elevated.sandbox_creds;
+    let planted_watch = elevated.planted_watch;
     let request = RunnerTransportRequest {
         permissions,
         codex_home: codex_home.to_path_buf(),
@@ -243,6 +244,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         stderr_rx.as_ref().map(|(tx, _rx)| tx.clone()),
         exit_tx,
         credential_watch,
+        planted_watch,
     );
 
     Ok(finish_driver_spawn(

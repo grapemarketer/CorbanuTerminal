@@ -162,12 +162,28 @@ there. Husky's own startup files (`init.sh` in its config folder, v8's
 `~/.huskyrc`) aren't checked either, and nor are program settings outside
 the list the sandbox knows.
 
+**The default (elevated) Windows sandbox** keeps the same records and
+shows the same warnings (D425, #1846), with three differences. They are
+written when the command itself ends: Corbanu Terminal can't see the
+processes a command leaves running there, so what those change later isn't
+flagged. Nested `.codex`/`.agents` folders that already exist get no extra
+protection: a command can change what is inside them unflagged; only moving
+or replacing one is flagged. And the records themselves (in
+`%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
+whose writable folder contains them, such as your whole user folder.
+Its commands run as their own Windows account, so what they create is owned
+by that account, and git refuses such a repository ("dubious ownership")
+unless a `safe.directory` setting trusts it. Corbanu Terminal flags these
+anyway: many git setups trust every folder (`safe.directory = *`), and a
+change inside one of your own repositories (a hook, `core.hooksPath`) is
+never refused.
+
 **Bare repositories a command plants.** Git also uses a folder that holds
 `HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
 its config and hooks. A sandboxed command can make one in any folder it may
 write to, and git run there or in a folder below it later runs whatever
-that config names. Only the non-admin Windows sandbox checks for these (see
-above); the default Windows sandbox, macOS and Linux don't (#1775, #1846).
+that config names. Both Windows sandboxes check for these (see above);
+macOS and Linux don't (#1775, #1846).
 We recommend making git refuse a bare repository it finds by searching:
 
 ```shell
