@@ -76,3 +76,80 @@ pub fn is_local_fixed(letter: char) -> bool {
 pub fn is_local_fixed(_letter: char) -> bool {
     false
 }
+
+/// D446: whether `path` is on a network: a UNC path (`\\server\share`,
+/// `\\?\UNC\server\share`) or, on Windows, on a drive letter Windows reports
+/// as remote (a mapped network drive). Device paths (`\\.\`) and verbatim
+/// drive paths (`\\?\C:\`) are judged by their drive.
+pub fn is_network_path(path: &std::path::Path) -> bool {
+    let text = path.to_string_lossy();
+    let rest = match text.strip_prefix(r"\\?\").or_else(|| text.strip_prefix(r"\\.\")) {
+        Some(rest) => {
+            if rest
+                .get(..4)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"UNC\"))
+            {
+                return true;
+            }
+            rest
+        }
+        None if text.starts_with(r"\\") || text.starts_with("//") => return true,
+        None => &text,
+    };
+    let mut chars = rest.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) => is_remote_drive(letter),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_remote_drive(letter: char) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    /// `DRIVE_REMOTE` from `GetDriveTypeW`.
+    const DRIVE_REMOTE: u32 = 4;
+    if !letter.is_ascii_alphabetic() {
+        return false;
+    }
+    let root = crate::winutil::to_wide(format!("{letter}:\\"));
+    // SAFETY: a NUL-terminated wide string.
+    (unsafe { GetDriveTypeW(root.as_ptr()) }) == DRIVE_REMOTE
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_remote_drive(_letter: char) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod network_path_tests {
+    use super::is_network_path;
+    use std::path::Path;
+
+    #[test]
+    fn d446_unc_paths_are_network_paths() {
+        for path in [
+            r"\\server\share\work",
+            r"\\localhost\C$\work",
+            r"\\127.0.0.1\share",
+            r"\\?\UNC\server\share\work",
+            r"\\?\unc\server\share",
+            r"\\.\UNC\server\share",
+            "//server/share/work",
+        ] {
+            assert!(is_network_path(Path::new(path)), "{path}");
+        }
+        for path in [r"\\?\C:\work", r"\\.\C:\work", "relative", "/home/work"] {
+            assert!(!is_network_path(Path::new(path)), "{path}");
+        }
+    }
+
+    /// The system drive is local.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn d446_the_system_drive_is_not_a_network_path() {
+        let drive = std::env::var("SystemDrive").expect("SystemDrive");
+        assert!(!is_network_path(Path::new(&format!(r"{drive}\Windows"))));
+        assert!(!is_network_path(Path::new(&format!(r"\\?\{drive}\Windows"))));
+    }
+}

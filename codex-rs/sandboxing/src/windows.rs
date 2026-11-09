@@ -189,6 +189,7 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     {
         return Ok(None);
     }
+    refuse_network_working_folder(sandbox_policy_cwd.as_path())?;
     // D331: the backend refuses these too, with an unclear error, including
     // the profiles the early return below lets through.
     refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
@@ -489,6 +490,24 @@ fn real_windows_override_path(path: &Path) -> std::result::Result<PathBuf, Strin
         Some(real) => normalize_windows_override_path(&real),
         None => normalize_windows_override_path(path),
     }
+}
+
+/// D446: refuses a working folder on a network (a UNC path, or a mapped
+/// drive, whose real path is one) for the unelevated restricted-token
+/// backend. Its commands can't write there at all, so they would run as if
+/// the folder were read-only (#1866 measured a mapped drive); refuse with a
+/// clear message instead. `\\localhost` paths are refused earlier (#1863).
+pub fn refuse_network_working_folder(cwd: &Path) -> std::result::Result<(), String> {
+    use codex_windows_sandbox::local_drive::is_network_path;
+    let network = is_network_path(cwd)
+        || canonicalize_allowing_missing(cwd).is_some_and(|real| is_network_path(&real));
+    if network {
+        return Err(format!(
+            "`{}` is a network folder (a UNC path or a mapped network drive). The Windows non-admin sandbox can't let commands write there, so it doesn't run them in it; use a folder on a local drive instead.",
+            cwd.display()
+        ));
+    }
+    Ok(())
 }
 
 fn windows_policy_has_root_read_access(

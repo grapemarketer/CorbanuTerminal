@@ -55,6 +55,7 @@ pub use windows::UNELEVATED_DENY_READ_REFUSAL;
 pub use windows::UNELEVATED_READ_ROOTS_REFUSAL;
 pub use windows::WindowsSandboxFilesystemOverrides;
 pub use windows::permission_profile_supports_windows_restricted_token_sandbox;
+pub use windows::refuse_network_working_folder;
 pub use windows::refuse_unenforceable_windows_read_restrictions;
 pub use windows::refuse_unenforceable_windows_restricted_token_profile;
 pub use windows::resolve_windows_elevated_filesystem_overrides;

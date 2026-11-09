@@ -457,6 +457,16 @@ pub(crate) fn attach_windows_sandbox_filesystem_overrides(
             use_windows_elevated_backend,
         )
     } else {
+        // D446: the command's own working folder may differ from the
+        // sandbox's (resolved below); neither may be on a network.
+        if exec_req.sandbox == SandboxType::WindowsRestrictedToken
+            && exec_req.windows_sandbox_level
+                != codex_protocol::config_types::WindowsSandboxLevel::Elevated
+            && let Ok(cwd) = exec_req.cwd.to_abs_path()
+        {
+            codex_sandboxing::refuse_network_working_folder(cwd.as_path())
+                .map_err(CodexErr::UnsupportedOperation)?;
+        }
         resolve_windows_restricted_token_filesystem_overrides(
             exec_req.sandbox,
             &exec_req.permission_profile,
