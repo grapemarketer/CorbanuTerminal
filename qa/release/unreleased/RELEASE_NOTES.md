@@ -934,7 +934,8 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   Corbanu would read through it, for example from a network share. Such a
   swapped file is now recorded as unreadable, so the change is flagged. A
   link that is already in a git folder is still read through, as git
-  reads it.
+  reads it. A file Windows can't read as itself (for example a placeholder
+  whose provider isn't running) now counts as changed after every command.
 
 ## Windows sandbox: capability SIDs are recorded under a lock (#1871)
 

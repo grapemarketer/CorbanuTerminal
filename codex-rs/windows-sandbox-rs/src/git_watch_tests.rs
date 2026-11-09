@@ -88,9 +88,9 @@ fn file_print_reads_a_compressed_file() {
 }
 
 /// Makes the file `path` a reparse point with the Microsoft tag `tag`
-/// (not a link) that no filter serves.
+/// (not a link) that no filter serves; false when this process may not.
 #[cfg(windows)]
-fn set_reparse_tag(path: &Path, tag: u32) {
+fn set_reparse_tag(path: &Path, tag: u32) -> bool {
     use std::os::windows::fs::OpenOptionsExt as _;
     use std::os::windows::io::AsRawHandle as _;
     const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
@@ -119,7 +119,13 @@ fn set_reparse_tag(path: &Path, tag: u32) {
             std::ptr::null_mut(),
         )
     };
-    assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        // Access denied or a privilege not held (CI runs as an administrator).
+        assert!(matches!(err.raw_os_error(), Some(5 | 1314)), "{err}");
+        eprintln!("skipped: setting a reparse point needs more rights: {err}");
+    }
+    ok != 0
 }
 
 /// #1909: a reparse point other than a link that can't be read as itself
@@ -131,7 +137,9 @@ fn file_print_of_an_unserved_reparse_point_differs_every_time() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("config");
     fs::write(&file, "x\n").expect("write");
-    set_reparse_tag(&file, TAG_HSM);
+    if !set_reparse_tag(&file, TAG_HSM) {
+        return;
+    }
     let (first, second) = (file_print(&file), file_print(&file));
     assert_eq!(
         (first == second, first.starts_with("truncated at")),
