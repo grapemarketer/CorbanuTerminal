@@ -404,9 +404,9 @@ pub(crate) fn with_contents(entries: Vec<NestedMetadata>) -> Vec<NestedMetadata>
 /// ([`crate::git_watch::unfollowed_file_print`], which marks hard links and
 /// reads only the file itself), a link by its target only (never followed),
 /// a folder as `dir`. A `folder` that is a file is its content
-/// ([`crate::git_watch::file_print`]). A folder that can't be listed, a name that isn't
-/// valid Unicode, or more than [`MAX_CONTENT_ENTRIES`] entries or
-/// [`MAX_CONTENT_BYTES`] of files make it differ every time.
+/// ([`crate::git_watch::file_print`]). A folder that can't be listed, a
+/// name that isn't valid Unicode, or more than [`MAX_CONTENT_ENTRIES`]
+/// entries or [`MAX_CONTENT_BYTES`] of files make it differ every time.
 pub(crate) fn contents(folder: &Path) -> crate::git_watch::Prints {
     let mut prints = crate::git_watch::Prints::new();
     // A `.codex`/`.agents` that is a file: its content.

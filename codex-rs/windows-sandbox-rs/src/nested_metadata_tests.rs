@@ -350,7 +350,9 @@ fn contents_do_not_read_a_link_swapped_in() {
     assert_eq!(
         (
             prints.get("p.md").map(String::as_str),
-            prints.values().any(|print| Some(print) == secret_print.get("")),
+            prints
+                .values()
+                .any(|print| Some(print) == secret_print.get("")),
         ),
         (Some("unreadable"), false)
     );
