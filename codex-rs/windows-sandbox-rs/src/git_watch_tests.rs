@@ -535,3 +535,49 @@ fn modules_named_like_git_folders_and_too_deep() {
         )
     );
 }
+
+/// #1909: a `repo` client's work tree names, in its `.git` file, a git
+/// folder that is also a repository of its own; one snapshot looks at it
+/// once and records exactly what a look per repository records.
+#[test]
+fn shared_folder_prints_match_one_look_per_repository() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let roots = vec![root.clone()];
+    let mut entries = Vec::new();
+    for n in 0..3 {
+        let git = root.join(format!(".repo/projects/p{n}.git"));
+        init_shape(&git, CLONE_CONFIG);
+        fs::write(git.join("hooks/commit-msg"), format!("#!/bin/sh\n# {n}\n")).expect("hook");
+        let work = root.join(format!("p{n}"));
+        fs::create_dir_all(&work).expect("work tree");
+        fs::write(
+            work.join(".git"),
+            format!("gitdir: ../.repo/projects/p{n}.git\n"),
+        )
+        .expect(".git file");
+        entries.push(git);
+        entries.push(work.join(".git"));
+    }
+    let folders = FolderPrints::default();
+    let shared: Vec<Prints> = entries
+        .iter()
+        .map(|entry| fingerprint_with(entry, &roots, &folders))
+        .collect();
+    let alone: Vec<Prints> = entries
+        .iter()
+        .map(|entry| fingerprint(entry, &roots))
+        .collect();
+    // One look per git folder: three, not six.
+    let looks = folders.0.lock().expect("looks").len();
+    assert_eq!(
+        (
+            shared == alone,
+            looks,
+            shared[1]
+                .keys()
+                .any(|name| name.starts_with("gitdir/hooks/"))
+        ),
+        (true, 3, true)
+    );
+}

@@ -591,6 +591,7 @@ pub(crate) fn bare_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
 /// or `commondir` names are looked into when they lie in `roots`. #1877:
 /// several repositories at a time.
 pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState> {
+    let folders = crate::git_watch::FolderPrints::default();
     crate::par_map::par_map(paths, |path| {
         let link =
             std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink());
@@ -598,7 +599,7 @@ pub(crate) fn repo_states(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<RepoState
             path: path.clone(),
             identity: if link { None } else { identity(path) },
             link,
-            prints: crate::git_watch::fingerprint(path, roots),
+            prints: crate::git_watch::fingerprint_with(path, roots, &folders),
         }
     })
 }
