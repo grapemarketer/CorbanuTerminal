@@ -201,6 +201,7 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_tags = [],
         unit_test_tags = [],
+        unit_test_alone = [],
         unit_test_timeout = None,
         extra_binaries = [],
         extra_binaries_non_windows = [],
@@ -250,6 +251,16 @@ def codex_rust_crate(
         unit_test_tags: Extra tags for the library's unit-test target only
             (not binary unit tests or integration tests), e.g. `cpu:4` so
             Bazel reserves the cores its tests use instead of the default one.
+        unit_test_alone: Full names of library unit tests that bound wall-clock
+            time. The unit-test target skips them, and a `<name>-unit-tests-alone`
+            target runs them one at a time, tagged `exclusive`: Bazel runs it
+            after every build action and every other test, so no other action
+            of the same Bazel run takes their cores. Exclusive tests never run
+            remotely; a configuration that allows only remote test execution
+            must also allow `TestRunner=local`. Both targets then pass libtest
+            args, which the launcher runs as given: `--test_filter` and
+            `CODEX_BAZEL_TEST_SKIP_FILTERS` no longer apply to them, and
+            sharding is refused.
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
         extra_binaries: Additional binary labels to surface as test data and
@@ -355,8 +366,11 @@ def codex_rust_crate(
         )
 
         unit_test_kwargs = {}
-        if unit_test_args:
-            unit_test_kwargs["args"] = unit_test_args
+        if unit_test_alone and unit_test_shard_count:
+            fail("unit_test_alone cannot be combined with sharding " + unit_test_name)
+        alone_skips = [arg for test in unit_test_alone for arg in ["--skip", test]]
+        if unit_test_args or alone_skips:
+            unit_test_kwargs["args"] = unit_test_args + alone_skips
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
         if unit_test_shard_count:
@@ -371,6 +385,16 @@ def codex_rust_crate(
             tags = test_tags + unit_test_tags,
             **unit_test_kwargs
         )
+
+        if unit_test_alone:
+            workspace_root_test(
+                name = unit_test_name + "-alone",
+                env = test_env,
+                test_bin = ":" + unit_test_binary,
+                workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                args = ["--exact", "--test-threads=1"] + unit_test_alone,
+                tags = test_tags + unit_test_tags + ["exclusive"],
+            )
 
         maybe_deps += [name]
 
