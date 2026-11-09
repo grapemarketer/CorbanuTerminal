@@ -56,6 +56,8 @@
 /codex-rs/core/src/tools/handlers/mod.rs @corbanu-security
 /codex-rs/hooks/src/events/permission_request.rs @corbanu-security
 /codex-rs/telegram/src/approvals.rs @corbanu-security
+/codex-rs/telegram/src/auth.rs @corbanu-security
+/codex-rs/app-server-transport/src/transport/auth.rs @corbanu-security
 # Filesystem/permission policy and built-in permission profiles.
 /codex-rs/protocol/src/permissions.rs @corbanu-security
 /codex-rs/protocol/src/permissions/ @corbanu-security
