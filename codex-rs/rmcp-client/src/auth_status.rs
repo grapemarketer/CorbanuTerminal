@@ -353,13 +353,19 @@ mod tests {
     fn assert_recorded_discovery_failure(discovery: Result<Option<StreamableHttpOAuthDiscovery>>) {
         let error = discovery.expect_err("the recording HTTP client rejects OAuth discovery");
         assert!(
-            matches!(
-                error.downcast_ref::<AuthError>(),
-                Some(AuthError::MetadataError(reason))
-                    if reason.contains("expected discovery request failure")
-            ),
+            discovery_request_failure(&error)
+                .is_some_and(|reason| reason.contains("expected discovery request failure")),
             "OAuth discovery must preserve the executor transport failure: {error:#}"
         );
+    }
+
+    /// rmcp reports a failed discovery request as `DiscoveryRequestFailed` with the
+    /// HTTP client's error as its source.
+    fn discovery_request_failure(error: &anyhow::Error) -> Option<String> {
+        match error.downcast_ref::<AuthError>()? {
+            AuthError::DiscoveryRequestFailed { source, .. } => Some(source.to_string()),
+            _ => None,
+        }
     }
 
     async fn spawn_oauth_discovery_server(metadata: serde_json::Value) -> TestServer {
@@ -565,12 +571,10 @@ mod tests {
         .expect_err("cross-origin OAuth discovery redirects must be rejected");
 
         assert!(
-            matches!(
-                error.downcast_ref::<AuthError>(),
-                Some(AuthError::MetadataError(reason))
-                    if reason.contains("OAuth discovery redirect to non-same-origin URL rejected")
-                        && reason.contains(&redirect_url)
-            ),
+            discovery_request_failure(&error).is_some_and(|reason| {
+                reason.contains("OAuth discovery redirect to non-same-origin URL rejected")
+                    && reason.contains(&redirect_url)
+            }),
             "OAuth discovery must preserve the cross-origin redirect rejection: {error:#}"
         );
         redirect_target.verify().await;
@@ -607,10 +611,8 @@ mod tests {
             .expect_err("transient OAuth discovery failures must not become unsupported access");
 
             assert!(
-                matches!(
-                    error.downcast_ref::<AuthError>(),
-                    Some(AuthError::MetadataError(reason)) if reason.contains(status.as_str())
-                ),
+                discovery_request_failure(&error)
+                    .is_some_and(|reason| reason.contains(status.as_str())),
                 "auth-status discovery must preserve HTTP {status}: {error:#}"
             );
             server.verify().await;
