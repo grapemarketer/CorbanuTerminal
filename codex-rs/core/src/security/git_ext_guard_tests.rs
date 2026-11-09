@@ -107,14 +107,17 @@ fn d447_reads_the_count_as_git_does() {
     assert_eq!(command_env.len(), 1);
 }
 
-/// git with only `env` of the git variables a runner might set.
+/// git with none of the `GIT_*` variables a runner (or a git hook running
+/// the tests) might set, only those in `env`.
 fn git(dir: &Path, env: &HashMap<String, String>, args: &[&str]) -> std::process::Output {
-    Command::new("git")
+    let mut command = Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
         .current_dir(dir)
-        .env_remove("GIT_ALLOW_PROTOCOL")
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_GLOBAL")
         .envs(env)
         .args(args)
         .output()

@@ -689,7 +689,10 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `--config-env` on the line, or `GIT_CONFIG_PARAMETERS`. A
   `GIT_ALLOW_PROTOCOL` list that held only `ext` is left empty, which
   allows no git transport. A command session started before the untrusted
-  content keeps its environment.
+  content keeps its environment. Git variables that only your shell's
+  startup files set (and so only the shell snapshot restores) aren't seen:
+  a `GIT_ALLOW_PROTOCOL` set there keeps `ext`, and the entry may take the
+  place of a `GIT_CONFIG_KEY_<n>` set there.
 
 ## Bare git repositories a command plants
 
