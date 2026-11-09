@@ -1005,6 +1005,8 @@ pub(super) fn git_remote_unseen(
     let rest = args.get(start..).unwrap_or_default();
     let mark = |at: usize| mark(start + at);
     let unseen_at = |at: usize, word: &str| !mark(at).seen && unseen(word);
+    // `remote show|prune` take several remotes, each of which may be a URL.
+    let mut several = false;
     let before = match sub.as_str() {
         "remote" | "submodule" => {
             let verb = rest.iter().find(|word| {
@@ -1019,7 +1021,11 @@ pub(super) fn git_remote_unseen(
                 ("submodule", Some("add")) => 1,
                 // They connect to their remote, which may be a URL (`git
                 // remote show 'ext::sh -c …'`).
-                ("remote", Some("show" | "prune" | "set-head")) => 1,
+                ("remote", Some("show" | "prune")) => {
+                    several = true;
+                    1
+                }
+                ("remote", Some("set-head")) => 1,
                 // `submodule set-url <path> <url>` writes config, which
                 // asks as persistence.
                 _ => return false,
@@ -1031,8 +1037,10 @@ pub(super) fn git_remote_unseen(
         _ => 0,
     };
     // Every operand may be a remote: an alias's (`f = remote add -f`
-    // makes `git f o -- "$url"` add one) and `fetch --multiple`'s.
-    let every = !GIT_COMMANDS.contains(&sub.as_str())
+    // makes `git f o -- "$url"` add one), `fetch --multiple`'s and `remote
+    // show|prune`'s after their verb.
+    let every = several
+        || !GIT_COMMANDS.contains(&sub.as_str())
         || (sub == "fetch"
             && rest.iter().any(|word| {
                 work::step();

@@ -323,6 +323,9 @@ fn issue_1876_review_3_lines_ask() {
         "git remote prune \"$r\"",
         "git remote set-head \"$r\" -a",
         "git remote show -n \"$r\"",
+        // Codex review: they take several remotes.
+        "git remote show origin e\"$r\"",
+        "git remote prune origin e\"$r\"",
         // Optional: a cut before the subcommand (`alias.git=fetch`).
         "git git log \"$v\"",
         // Accepted new prompts.
