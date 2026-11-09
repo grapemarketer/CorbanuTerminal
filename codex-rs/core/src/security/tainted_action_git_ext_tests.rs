@@ -168,6 +168,7 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         "git push origin refs/heads/\"$branch\"",
         "git push origin origin/\"$branch\"",
         "git push origin -- \"$branch\"",
+        "sudo -u git git fetch origin",
         "git clone https://x.example/r -- \"$dir\"",
         "git clone -b \"$b\" https://x.example/r d",
         "git fetch --depth=\"$DEPTH\" origin",
@@ -216,6 +217,10 @@ fn issue_1876_review_1_lines_ask() {
         "sudo -u git git fetch \"$r\"",
         "env -u git git fetch \"$r\"",
         "git log git; git fetch \"$r\"",
+        // A remote named `git`: the scan the next git word starts does not
+        // end this command's options (Codex review).
+        "git fetch git log \"$v\"",
+        "git push git HEAD:x \"$v\"",
         // Item 3: a case-insensitive filesystem finds the helper.
         "git REMOTE-EXT x ./e.sh",
         "git Remote-Ext x ./e.sh",

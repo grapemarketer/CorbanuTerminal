@@ -933,7 +933,14 @@ pub(super) fn git_may_contact_remote(sub: &str) -> bool {
 /// know may be an alias of a transport (#1528). The words read end at the
 /// next git word (`sudo -u git git fetch "$r"`: the user name is not the git
 /// that runs), so each word is read by one scan.
-pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bool {
+/// `options_after[i]`: whether `args[i..]` hold, before any `--`, an unseen
+/// word that may be an option (see [`git_options_after`]); a scan cut at a
+/// git word (`git fetch git log "$v"`, a remote named `git`) asks on it.
+pub(super) fn git_remote_unseen(
+    args: &[String],
+    subcommand: Option<&str>,
+    options_after: &[bool],
+) -> bool {
     let end = args
         .iter()
         .position(|word| {
@@ -943,6 +950,7 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
                 || git_helpers::git_name(word).is_some()
         })
         .unwrap_or(args.len());
+    let cut = end < args.len() && options_after.get(end).copied().unwrap_or(false);
     let args = &args[..end];
     // A dashed helper (`git-fetch`) names its subcommand; its words start
     // right after its name. Otherwise the subcommand is git's first word
@@ -972,16 +980,11 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
     if !git_may_contact_remote(&sub) {
         return false;
     }
-    let unseen = |word: &str| word.contains(['$', '`']) || word.contains(UNSEEN_OUTPUT);
+    let unseen = git_word_unseen;
     if unseen(&sub) {
         return false; // a subcommand the line does not show already asks (simple_command)
     }
-    // Whether a word the line does not show may start with `-`: nothing
-    // visible comes before its first unseen text (`"$v"`, `$(…)x`).
-    let may_be_option = |word: &str| {
-        let word = word.trim_start_matches(['"', '\'']);
-        word.starts_with(['$', '`', '-']) || word.starts_with(UNSEEN_OUTPUT)
-    };
+    let may_be_option = git_word_may_be_option;
     let rest = args.get(start..).unwrap_or_default();
     let before = match sub.as_str() {
         "remote" | "submodule" => {
@@ -1049,7 +1052,34 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
         }
         operands += 1;
     }
-    false
+    // Cut at a git word that may be this command's operand: a later word
+    // may still be its option.
+    cut && !after_dashes
+}
+
+/// Whether `word` holds text the line does not show.
+fn git_word_unseen(word: &str) -> bool {
+    word.contains(['$', '`']) || word.contains(UNSEEN_OUTPUT)
+}
+
+/// Whether a word the line does not show may start with `-`: nothing
+/// visible comes before its first unseen text (`"$v"`, `$(…)x`).
+fn git_word_may_be_option(word: &str) -> bool {
+    let word = word.trim_start_matches(['"', '\'']);
+    word.starts_with(['$', '`', '-']) || word.starts_with(UNSEEN_OUTPUT)
+}
+
+/// #1876: for each of a command's words (and the end), whether it or a
+/// later word, before any `--`, is unseen and may be an option. Worked out
+/// once per command, right to left, for [`git_remote_unseen`].
+pub(super) fn git_options_after(words: &[String]) -> Vec<bool> {
+    let mut after = vec![false; words.len() + 1];
+    for (at, word) in words.iter().enumerate().rev() {
+        work::step();
+        after[at] = word != "--"
+            && (after[at + 1] || (git_word_unseen(word) && git_word_may_be_option(word)));
+    }
+    after
 }
 
 /// For an option word the line does not fully show (`--depth="$n"`,

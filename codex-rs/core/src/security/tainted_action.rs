@@ -2713,6 +2713,8 @@ impl Classifier {
         }
         let mut later = LaterWords::new(&lower);
         let mut git_programs_read = false;
+        // #1876: worked out at the first git word (`rerun::git_options_after`).
+        let mut git_options_after: Option<Vec<bool>> = None;
         // Not only at command position: wrappers (`nice -n 5`, `sudo -u x`,
         // `timeout 9`, `eval`, `npx`, nested `sh -c`) put the real command later.
         for (index, word) in lower.iter().enumerate() {
@@ -2801,8 +2803,13 @@ impl Classifier {
             // #1876: a transport subcommand whose remote the line does not
             // show. Each scan ends at the next git word, so the words are
             // read once in all (`sudo -u git git fetch "$r"` reads both).
-            let unseen_remote =
-                (is_git || helper.is_some()) && rerun::git_remote_unseen(git_args.0, subcommand);
+            let unseen_remote = (is_git || helper.is_some())
+                && rerun::git_remote_unseen(
+                    git_args.0,
+                    subcommand,
+                    &git_options_after.get_or_insert_with(|| rerun::git_options_after(&words))
+                        [index + 1..],
+                );
             if (is_git && code_variables::git_runs_code_after_git(git_args.0, git_args.1))
                 || (helper == Some(None) && code_variables::git_runs_code(git_args.0, git_args.1))
                 || git_program
