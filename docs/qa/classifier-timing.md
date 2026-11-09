@@ -120,15 +120,25 @@ plus noise, not their growth; their verdict comes from the ubuntu run.
 2.5 "linear" line. The five timed runs spread widely on this runner (4000:
 141.4–175.5 ms; 8000: 335.4–389.6 ms; fastest-to-fastest 2.37), ubuntu gives
 2.01, 2.03, 2.04 for the same lines, and an earlier macos-15 run of the same
-probe on `main` `f048967c21` gave 1.79, 1.53, 2.01 (run 42535773156). A
-macos-15 rerun of this one pattern with 15 timed runs per size and a 16000
-step is in progress (run 42545500274); its result will be added here.
+probe on `main` `f048967c21` gave 1.79, 1.53, 2.01 (run 42535773156).
+
+A macos-15 rerun of this one pattern with 15 timed runs per size and a 16000
+step (run 42545500274, same `main` `16dcfa301e`, probe at `68db54cd43`;
+`classifier-timing/macos-15-nested-rerun/`) came out linear:
+
+| pattern | 1000 ms | 2000 ms | 4000 ms | 8000 ms | 16000 ms | doubling ratios | script verdict |
+|---|---|---|---|---|---|---|---|
+| nested_substitution | 93.156 | 133.176 | 217.681 | 456.091 | 831.492 | 1.43, 1.63, 2.10, 1.82 | linear |
+
+Medians of 15 timed runs. All 5 processes exited 0, no timeouts (longest:
+16000, 16.37 s). The spread per size is wide again (8000: 321.6–600.1 ms),
+so the 2.51 above is runner noise, not growth.
 
 ## Verdicts
 
 | pattern | verdict | classifier result on the lines |
 |---|---|---|
-| nested_substitution | linear on ubuntu-24.04; macos-15 unclear (one ratio 2.51), rerun pending | `Some(UnseenCode)` at every size |
+| nested_substitution | linear (macos-15 1k–8k run had one ratio of 2.51; its 15-run rerun to 16000 is linear) | `Some(UnseenCode)` at every size |
 | alias_chain | linear | `Some(UnseenCode)` at every size |
 | arithmetic | linear | `None` at every size |
 | glob_alternatives | linear | `None` at 1000 and 2000, `Some(UnseenCode)` at 4000 and 8000 |
@@ -178,6 +188,7 @@ workflow in `darkmatter-sudo/corbanu-macos-repro`
 clone this repository, check out the `main` commit, merge the probe commit,
 then run the self-test and `scripts/classifier_timing_probe.sh` with the
 release overrides above. Runs: 42538602895 (1k–8k, ubuntu-24.04 and
-macos-15), 42538684868 (64–512), 42538688053 (2038/2039). The full logs of
+macos-15), 42538684868 (64–512), 42538688053 (2038/2039), 42545500274
+(macos-15 `nested_substitution` rerun). The full logs of
 each run, including the build output and every per-process log, are in
 that repository under `logs/`.
