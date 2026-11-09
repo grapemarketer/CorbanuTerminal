@@ -107,41 +107,73 @@ fn resolve(base: &Path, target: &str) -> PathBuf {
     }
 }
 
+/// [`fingerprint_with`] for one repository on its own.
+#[cfg(test)]
+pub(crate) fn fingerprint(entry: &Path, roots: &[PathBuf]) -> Prints {
+    fingerprint_with(entry, roots, &FolderPrints::default())
+}
+
+/// #1909: what [`fingerprint_with`] records for each git folder on its own
+/// (a fresh look, prefix `""`), each folder looked at once for all the
+/// repositories of one snapshot: a `repo` client's work trees name, in
+/// their `.git` files, the very git folders it also finds as bare
+/// repositories, which used to be looked through twice.
+#[derive(Default)]
+pub(crate) struct FolderPrints(
+    std::sync::Mutex<
+        std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::OnceLock<Prints>>>,
+    >,
+);
+
+impl FolderPrints {
+    /// The prints of the git folder `dir` under `prefix`, into `prints`.
+    fn insert(&self, dir: &Path, prefix: &str, roots: &[PathBuf], prints: &mut Prints) {
+        let key = dunce::canonicalize(dir).unwrap_or_else(|_| normalize(dir));
+        let cell = std::sync::Arc::clone(
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(key)
+                .or_default(),
+        );
+        let own = cell.get_or_init(|| {
+            let mut own = Prints::new();
+            git_folder(
+                dir,
+                "",
+                roots,
+                MAX_DEPTH,
+                /*follow_common*/ true,
+                &mut Walk::default(),
+                &mut own,
+            );
+            own
+        });
+        for (name, print) in own {
+            prints.insert(format!("{prefix}{name}"), print.clone());
+        }
+    }
+}
+
 /// What git would run from the repository at `entry`: a `.git` folder or a
 /// bare repository's folder (its git folder), or a `.git` file (its
 /// `gitdir:` line, and the folder it names). Folders named by a `gitdir:`
 /// line or `commondir` are only looked into when they lie in one of `roots`
 /// (canonical; elsewhere commands can't write). A link `entry` isn't
-/// followed (the caller counts it as changed every time).
-pub(crate) fn fingerprint(entry: &Path, roots: &[PathBuf]) -> Prints {
+/// followed (the caller counts it as changed every time). A git folder
+/// already looked at for this snapshot's `folders` isn't looked at again.
+pub(crate) fn fingerprint_with(entry: &Path, roots: &[PathBuf], folders: &FolderPrints) -> Prints {
     let mut prints = Prints::new();
-    let mut walk = Walk::default();
     match std::fs::symlink_metadata(entry) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            git_folder(
-                entry,
-                "",
-                roots,
-                MAX_DEPTH,
-                /*follow_common*/ true,
-                &mut walk,
-                &mut prints,
-            );
+            folders.insert(entry, "", roots, &mut prints);
         }
         Ok(metadata) if metadata.is_file() => {
             prints.insert(".git".to_string(), file_print(entry));
             if let Some(target) = gitdir_target(entry)
                 && in_roots(&target, roots)
             {
-                git_folder(
-                    &target,
-                    "gitdir/",
-                    roots,
-                    MAX_DEPTH,
-                    /*follow_common*/ true,
-                    &mut walk,
-                    &mut prints,
-                );
+                folders.insert(&target, "gitdir/", roots, &mut prints);
             }
         }
         Ok(_) => {
