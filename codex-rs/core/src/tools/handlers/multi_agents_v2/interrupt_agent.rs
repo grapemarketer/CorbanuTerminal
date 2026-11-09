@@ -14,8 +14,7 @@ const NOT_RUNNING_EFFECT: &str =
 
 /// What an interrupt does to a pending agent, whose first turn may be about
 /// to start (D435).
-const PENDING_EFFECT: &str =
-    "pending: interrupt sent, which stops its first turn if one is starting; no new turn was started";
+const PENDING_EFFECT: &str = "pending: interrupt sent, which stops its first turn if one is starting; no new turn was started";
 
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
