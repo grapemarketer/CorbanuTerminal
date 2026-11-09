@@ -53,6 +53,7 @@
 /codex-rs/core/src/tools/approvals.rs @corbanu-security
 /codex-rs/core/src/tools/handlers/request_permissions.rs @corbanu-security
 /codex-rs/core/src/state/granted_permissions.rs @corbanu-security
+/codex-rs/core/src/tools/handlers/mod.rs @corbanu-security
 /codex-rs/hooks/src/events/permission_request.rs @corbanu-security
 /codex-rs/telegram/src/approvals.rs @corbanu-security
 # Filesystem/permission policy and built-in permission profiles.
@@ -74,6 +75,8 @@
 /codex-rs/protected-state/ @corbanu-security
 /codex-rs/content-security/ @corbanu-security
 /codex-rs/browser-isolation/ @corbanu-security
+/codex-rs/tui/src/security/ @corbanu-security
+/codex-rs/cli/src/nested_security.rs @corbanu-security
 # Credentials, vault and key custody.
 /codex-rs/vault/ @corbanu-security
 /codex-rs/secrets/ @corbanu-security
@@ -87,6 +90,8 @@
 /codex-rs/login/src/auth/provider_key_vault.rs @corbanu-security
 /codex-rs/core/src/config/auth_keyring.rs @corbanu-security
 /codex-rs/core/src/config/network_proxy_credential* @corbanu-security
+/codex-rs/core/src/model_broker_auth* @corbanu-security
+/codex-rs/model-provider/src/model_key_broker.rs @corbanu-security
 # Dependency and advisory policy.
 /codex-rs/deny.toml @corbanu-security
 /codex-rs/.cargo/audit.toml @corbanu-security
