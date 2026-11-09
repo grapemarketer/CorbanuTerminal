@@ -102,22 +102,23 @@ fn env_usize(name: &str, default: usize) -> usize {
 
 #[test]
 fn lines_have_the_units_asked_for() {
-    assert_eq!(line("nested_substitution", 2), "cat $(cat $(cat f))");
-    assert_eq!(line("alias_chain", 2), "alias a0=a1; alias a1=./x; a0");
-    assert_eq!(line("arithmetic", 3), "echo $((v0+v1+v2))");
+    assert_eq!(line("nested_substitution", /*n*/ 2), "cat $(cat $(cat f))");
+    assert_eq!(line("alias_chain", /*n*/ 2), "alias a0=a1; alias a1=./x; a0");
+    assert_eq!(line("arithmetic", /*n*/ 3), "echo $((v0+v1+v2))");
     assert_eq!(
-        line("glob_alternatives", 2),
+        line("glob_alternatives", /*n*/ 2),
         "shopt -s extglob; cat ./@(f0|f1)"
     );
-    assert_eq!(line("nested_quotes", 2), "echo \"${a:-\"${a:-x}\"}\"");
+    assert_eq!(line("nested_quotes", /*n*/ 2), "echo \"${a:-\"${a:-x}\"}\"");
 }
 
 #[test]
 #[ignore = "timing probe: run by hand, see the module docs"]
+#[expect(clippy::print_stdout, reason = "the probe lines are the probe's output")]
 fn classifier_timing_probe() {
     let pattern = std::env::var("PROBE_PATTERN").expect("PROBE_PATTERN");
-    let n = env_usize("PROBE_UNITS", 1000);
-    let reps = env_usize("PROBE_REPS", 5);
+    let n = env_usize("PROBE_UNITS", /*default*/ 1000);
+    let reps = env_usize("PROBE_REPS", /*default*/ 5);
     let line = line(&pattern, n);
     // Tracing silenced while timing, as the work counter does (#1716).
     tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
