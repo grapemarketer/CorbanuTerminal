@@ -5,8 +5,10 @@
 //! directly"). Now each runs as from the real path: the working folder is
 //! writable, and the read-only `docs` and the protected `.git` stay
 //! read-only. Junctions and folder symbolic links ran before and still do.
-//! A mapped drive's real path is a network (UNC) path: the command runs,
-//! but the non-admin sandbox's commands can't write there at all.
+//! A mapped drive's real path is a network (UNC) path, where the non-admin
+//! sandbox's commands can't write at all: D446 refuses a working folder on a
+//! network (a mapped drive, or a UNC path through the computer's name) with
+//! a clear message rather than running the command without write access.
 //!
 //! It must not let anything else through: a working folder that is a
 //! junction, folder symbolic link or `subst` drive leading out of the
@@ -41,6 +43,8 @@ use std::process::Command;
 /// Writes `ok.txt` in the working folder, `docs\x.txt` and `.git\g.txt`.
 const WRITE_SCRIPT: &str = "echo ok> ok.txt & echo x> docs\\x.txt & echo g> .git\\g.txt";
 const SPLIT_ROOTS_REFUSAL: &str = "cannot enforce split writable root sets directly";
+/// D446's refusal of a working folder on a network.
+const NETWORK_REFUSAL: &str = "is a network folder (a UNC path or a mapped network drive)";
 
 struct EnvGuard {
     key: &'static str,
@@ -176,6 +180,27 @@ fn share_path(target: &Path) -> Result<String, String> {
     }
 }
 
+/// D446: `target` as a UNC path through this computer's name rather than
+/// `localhost` (which `command/exec` refuses before the sandbox, #1863).
+fn computer_name_unc(target: &Path) -> Result<PathBuf, String> {
+    let share_path = share_path(target)?;
+    let computer = std::env::var("COMPUTERNAME").map_err(|err| format!("COMPUTERNAME: {err}"))?;
+    let rest = share_path
+        .strip_prefix(r"\\localhost\")
+        .ok_or_else(|| format!("{share_path} is not on \\\\localhost"))?;
+    let unc = PathBuf::from(format!(r"\\{computer}\{rest}"));
+    let made = unc.is_dir();
+    assert!(
+        made || !required("CORBANU_TEST_REQUIRE_MAPPED_DRIVE"),
+        "{} is not reachable",
+        unc.display()
+    );
+    if !made {
+        return Err(format!("{} is not reachable", unc.display()));
+    }
+    Ok(unc)
+}
+
 /// `net use Y: <share_path(target)>`: the mapped drive's root.
 fn mapped_drive(target: &Path) -> Result<(PathBuf, DriveGuard), String> {
     let share_path = share_path(target)?;
@@ -306,6 +331,10 @@ enum Outcome {
     SplitRootsRefused {
         written: bool,
     },
+    /// Refused with D446's message; nothing written.
+    NetworkRefused {
+        written: bool,
+    },
     Ran {
         ok: bool,
         docs: bool,
@@ -362,6 +391,12 @@ async fn run_command_exec(
                 written: written("ok.txt"),
             },
             String::new(),
+        ),
+        Err(err) if err.to_string().contains(NETWORK_REFUSAL) => (
+            Outcome::NetworkRefused {
+                written: written("ok.txt"),
+            },
+            err.to_string(),
         ),
         Err(err) => (Outcome::Other(format!("refused: {err}")), String::new()),
         Ok(request) => {
@@ -430,6 +465,9 @@ fn fixture() -> Fixture {
         root.join("Workspace Folder")
     });
     leading_in.push(("mapped drive", mapped_form, workspace.clone()));
+    // D446: a UNC path through the computer's name (`\\localhost` is
+    // refused before the sandbox, #1863).
+    leading_in.push(("UNC path", computer_name_unc(&workspace), workspace.clone()));
     leading_in.push((
         "canonical, system drive (8.3 control)",
         Ok(system_workspace.clone()),
@@ -561,20 +599,16 @@ async fn sec_win_d398_command_exec_non_canonical_cwd() {
                     elevated_outcomes.push((label, outcome, docs_read_only));
                     continue;
                 }
-                let network = *form == "mapped drive";
+                let network = matches!(*form, "mapped drive" | "UNC path");
                 expected.push((
                     label.clone(),
                     if leads_out {
                         Outcome::SplitRootsRefused { written: false }
                     } else if network {
-                        // The non-admin sandbox's commands can't write
-                        // through a network path at all (fails closed): a
-                        // mapped drive runs, but nothing is written.
-                        Outcome::Ran {
-                            ok: false,
-                            docs: false,
-                            git: false,
-                        }
+                        // D446: the non-admin sandbox's commands can't
+                        // write through a network path at all, so it is
+                        // refused with a clear message.
+                        Outcome::NetworkRefused { written: false }
                     } else {
                         Outcome::Ran {
                             ok: true,

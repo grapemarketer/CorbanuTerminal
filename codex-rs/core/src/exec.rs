@@ -457,6 +457,18 @@ pub(crate) fn attach_windows_sandbox_filesystem_overrides(
             use_windows_elevated_backend,
         )
     } else {
+        // D446: `command/exec` (this function's only non-admin caller) runs
+        // in neither a command nor a sandbox working folder on a network.
+        if exec_req.sandbox == SandboxType::WindowsRestrictedToken
+            && exec_req.windows_sandbox_level
+                != codex_protocol::config_types::WindowsSandboxLevel::Elevated
+        {
+            let cwd = exec_req.cwd.to_abs_path()?;
+            for folder in [cwd.as_path(), sandbox_cwd.as_path()] {
+                codex_sandboxing::refuse_network_working_folder(folder)
+                    .map_err(CodexErr::UnsupportedOperation)?;
+            }
+        }
         resolve_windows_restricted_token_filesystem_overrides(
             exec_req.sandbox,
             &exec_req.permission_profile,
