@@ -319,6 +319,10 @@ fn issue_1876_remote_scan_is_linear() {
             "\"$v\" -- ",
             "git push origin HEAD:x {}",
         ),
+        // Git words the outer loop finds through its own reading: upper
+        // case (`GIT`) and a finder's attached command (`--exec=git`).
+        ("upper-case git words", "-C GIT ", "git {}fetch \"$r\""),
+        ("attached execs", "fd --exec=git ", "git fetch {}\"$r\""),
         (
             "global options before the subcommand",
             "-C d ",

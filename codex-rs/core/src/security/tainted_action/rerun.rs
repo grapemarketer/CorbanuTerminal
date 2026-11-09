@@ -932,26 +932,18 @@ pub(super) fn git_may_contact_remote(sub: &str) -> bool {
 /// helper's (`git-fetch`); git's own is found in `args`, and one git does not
 /// know may be an alias of a transport (#1528). The words read end at the
 /// next git word (`sudo -u git git fetch "$r"`: the user name is not the git
-/// that runs), so each word is read by one scan.
-/// `options_after[i]`: whether `args[i..]` hold, before any `--`, an unseen
-/// word that may be an option (see [`git_options_after`]); a scan cut at a
-/// git word (`git fetch git log "$v"`, a remote named `git`) asks on it.
+/// that runs), so each word is read by one scan: `args` end where the
+/// caller's next git command starts.
+/// `options_after[i]`: whether the command's words from `args[i]` on hold,
+/// before any `--`, an unseen word that may be an option (see
+/// [`git_options_after`]); a scan cut at the next git command (`git fetch
+/// git log "$v"`, a remote named `git`) asks on it.
 pub(super) fn git_remote_unseen(
     args: &[String],
     subcommand: Option<&str>,
     options_after: &[bool],
 ) -> bool {
-    let end = args
-        .iter()
-        .position(|word| {
-            work::step();
-            basename(word) == "git"
-                || indirect::equals_git(word)
-                || git_helpers::git_name(word).is_some()
-        })
-        .unwrap_or(args.len());
-    let cut = end < args.len() && options_after.get(end).copied().unwrap_or(false);
-    let args = &args[..end];
+    let cut = options_after.get(args.len()).copied().unwrap_or(false);
     // A dashed helper (`git-fetch`) names its subcommand; its words start
     // right after its name. Otherwise the subcommand is git's first word
     // after its global options and their values (`-C x fetch`).
