@@ -3313,6 +3313,101 @@ fn legacy_command_log_redacts_credentials() {
     });
 }
 
+/// #1964: killing a legacy command at its time limit writes
+/// `timed out after N ms` to the sandbox log. A command that exits inside
+/// the limit does not.
+#[test]
+fn legacy_timeout_kill_logs_the_limit_and_a_normal_exit_does_not() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
+        let permission_profile = PermissionProfile::workspace_write();
+        let roots = workspace_roots_for(cwd.as_path());
+
+        let timeout_ms = 1_500u64;
+        let timed_out_home = sandbox_home("legacy-timeout-log");
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &permission_profile,
+            roots.as_slice(),
+            timed_out_home.path(),
+            vec![
+                system32_exe("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+                    .display()
+                    .to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 30".to_string(),
+            ],
+            cwd.as_path(),
+            session_temp_env(timed_out_home.path()),
+            Some(timeout_ms),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy command that exceeds its limit");
+        let (_stdout, exit_code) =
+            collect_stdout_and_exit(spawned, timed_out_home.path(), Duration::from_secs(30)).await;
+        let log = sandbox_log(timed_out_home.path());
+        assert_eq!(
+            exit_code, 1,
+            "the time limit kills the command with exit code 1:\n{log}"
+        );
+        let logged_limit_ms = u32::try_from(timeout_ms).expect("limit fits the wait");
+        assert!(
+            log.contains(&format!("timed out after {logged_limit_ms} ms")),
+            "sandbox log should record the limit that killed the command:\n{log}"
+        );
+
+        let normal_timeout_ms = 60_000u64;
+        let normal_home = sandbox_home("legacy-timeout-log-ok");
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &permission_profile,
+            roots.as_slice(),
+            normal_home.path(),
+            vec![
+                system32_exe("cmd.exe").display().to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                "echo LEGACY-TIMEOUT-LOG-OK".to_string(),
+            ],
+            cwd.as_path(),
+            session_temp_env(normal_home.path()),
+            Some(normal_timeout_ms),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn legacy command that exits inside its limit");
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, normal_home.path(), Duration::from_secs(90)).await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        let log = sandbox_log(normal_home.path());
+        assert_eq!(exit_code, 0, "stdout={stdout:?}\n{log}");
+        assert!(
+            stdout.contains("LEGACY-TIMEOUT-LOG-OK"),
+            "stdout={stdout:?}\n{log}"
+        );
+        assert!(
+            !log.contains("timed out after"),
+            "a normal exit must not record a timeout:\n{log}"
+        );
+    });
+}
+
 /// #398: the same on the elevated (sandbox user) path, whose command
 /// runner writes the log too.
 #[test]

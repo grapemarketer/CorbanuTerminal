@@ -540,6 +540,13 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
         let mut descendants_preserved = false;
         if wait_res == WAIT_TIMEOUT {
+            // #1964: `TerminateJobObject` leaves exit code 1, so the FAILURE
+            // line cannot show that the time limit killed the command. `N` is
+            // the millisecond count this wait actually used.
+            log_note(
+                &format!("timed out after {timeout} ms"),
+                wait_logs_base_dir.as_deref(),
+            );
             terminate_job_or_process(&job_for_wait, &wait_handle, wait_logs_base_dir.as_deref());
         } else if let Err(err) = job_for_wait.preserve_descendants() {
             log_note(
