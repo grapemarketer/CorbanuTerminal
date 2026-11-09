@@ -1,10 +1,34 @@
-main:  16dcfa301ef611951da5e871aba44fbba3e2d72d
-probe: 254f97af7b9e2462a92acac50c6d2a9ff800e420 (darkmatter-sudo/CorbanuTerminal)
-probe parents: dc07070214de6121280b373a2d53c6fe78e0a7f7 16dcfa301ef611951da5e871aba44fbba3e2d72d 
+main:  3ae732a62f80eccc51bce019ea4069f4d9dab6e8
+probe: 63644feac8b426af343348eacd0acaf5644900cc (darkmatter-sudo/CorbanuTerminal)
+probe parents: eeb1bffbced8d09b1a8509ba2a4c1e3add196c13 
  codex-rs/core/src/security/tainted_action.rs       |   4 +
- .../src/security/tainted_action_timing_probe.rs    | 141 ++++++++++++++++++++
- scripts/classifier_timing_probe.sh                 | 147 +++++++++++++++++++++
- 3 files changed, 292 insertions(+)
+ .../security/tainted_action_timing_probe_tests.rs  | 152 ++++++++++++++++
+ docs/qa/classifier-timing.md                       | 194 +++++++++++++++++++++
+ .../macos-15-nested-rerun/environment.txt          |  20 +++
+ .../macos-15-nested-rerun/raw.tsv                  |  81 +++++++++
+ .../macos-15-nested-rerun/status.tsv               |   5 +
+ .../macos-15-nested-rerun/table.md                 |   6 +
+ .../macos-15-nested-rerun/toolchain.txt            |   2 +
+ docs/qa/classifier-timing/macos-15/environment.txt |  20 +++
+ docs/qa/classifier-timing/macos-15/raw.tsv         | 121 +++++++++++++
+ docs/qa/classifier-timing/macos-15/status.tsv      |  20 +++
+ docs/qa/classifier-timing/macos-15/table.md        |  14 ++
+ docs/qa/classifier-timing/macos-15/toolchain.txt   |   2 +
+ .../ubuntu-24.04-below-cap/environment.txt         |  17 ++
+ .../ubuntu-24.04-below-cap/raw.tsv                 | 121 +++++++++++++
+ .../ubuntu-24.04-below-cap/status.tsv              |  20 +++
+ .../ubuntu-24.04-below-cap/table.md                |  14 ++
+ .../ubuntu-24.04-glob-boundary/environment.txt     |  17 ++
+ .../ubuntu-24.04-glob-boundary/raw.tsv             |  13 ++
+ .../ubuntu-24.04-glob-boundary/status.tsv          |   2 +
+ .../ubuntu-24.04-glob-boundary/table.md            |   6 +
+ .../classifier-timing/ubuntu-24.04/environment.txt |  17 ++
+ docs/qa/classifier-timing/ubuntu-24.04/raw.tsv     | 121 +++++++++++++
+ docs/qa/classifier-timing/ubuntu-24.04/status.tsv  |  20 +++
+ docs/qa/classifier-timing/ubuntu-24.04/table.md    |  14 ++
+ .../classifier-timing/ubuntu-24.04/toolchain.txt   |   2 +
+ scripts/classifier_timing_probe.sh                 | 183 +++++++++++++++++++
+ 27 files changed, 1208 insertions(+)
 uname: Linux runnervm7aw5e 7.0.0-1017-azure #17~24.04.1-Ubuntu SMP PREEMPT Thu Sep 24 18:46:57 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
 runner: ubuntu24 image 20261101.360.1
 CARGO_INCREMENTAL=0
@@ -13,5 +37,5 @@ CARGO_PROFILE_RELEASE_LTO=false
 RUST_MIN_STACK=8388608
 model name	: AMD EPYC 7763 64-Core Processor
 4
-Mem:           15983        1129       13069          43        2162       14854
-merged tree: 254f97af7b9e2462a92acac50c6d2a9ff800e420
+Mem:           15983        1130       13067          43        2163       14853
+merged tree: 63644feac8b426af343348eacd0acaf5644900cc
