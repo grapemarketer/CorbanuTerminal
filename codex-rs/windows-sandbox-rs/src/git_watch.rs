@@ -629,6 +629,10 @@ fn unfollowed_print(path: &Path) -> String {
     tests::before_read(path);
     let (file, links) = match open_unfollowed(path) {
         Opened::File(file, links) => (file, links),
+        // Marked as before when the name has others (or can't be counted).
+        Opened::Refused if link_count(path).is_none_or(|count| count > 1) => {
+            return "unreadable hard link".to_string();
+        }
         Opened::Refused => return "unreadable".to_string(),
         Opened::Unsure => return truncated(),
     };
