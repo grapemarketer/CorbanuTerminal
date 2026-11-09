@@ -22,7 +22,7 @@ const HOME: &str = "/home/fixture/.corbanu";
 const USER_HOME: &str = "/home/fixture";
 
 /// The patterns, by `PROBE_PATTERN` name.
-pub(super) const PATTERNS: &[&str] = &[
+const PATTERNS: &[&str] = &[
     "nested_substitution",
     "alias_chain",
     "arithmetic",
@@ -56,13 +56,15 @@ fn script(line: &str) -> Option<ProtectedActionKind> {
 }
 
 /// The line for `pattern` with `n` units.
-pub(super) fn line(pattern: &str, n: usize) -> String {
+fn line(pattern: &str, n: usize) -> String {
     match pattern {
         // Unit: one nesting level. `cat $(cat $(… $(cat f) …))`.
         "nested_substitution" => {
             format!("cat {}f{}", "$(cat ".repeat(n), ")".repeat(n))
         }
         // Unit: one definition. `alias a0=a1; …; alias a<n-1>=./x; a0`.
+        // A chain for the classifier only: non-interactive bash does not
+        // expand aliases, and same-line definitions would not apply anyway.
         "alias_chain" => {
             let mut line = String::new();
             for i in 0..n {
@@ -80,10 +82,12 @@ pub(super) fn line(pattern: &str, n: usize) -> String {
             let terms: Vec<String> = (0..n).map(|i| format!("v{i}")).collect();
             format!("echo $(({}))", terms.join("+"))
         }
-        // Unit: one alternative. `cat ./@(f0|f1|…)` (extglob).
+        // Unit: one alternative. `cat ./@(f0|f1|…)` (extglob). The newline
+        // matters: bash parses a whole line before running `shopt`, so with
+        // `;` the pattern would be a syntax error.
         "glob_alternatives" => {
             let alternatives: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
-            format!("shopt -s extglob; cat ./@({})", alternatives.join("|"))
+            format!("shopt -s extglob\ncat ./@({})", alternatives.join("|"))
         }
         // Unit: one quote level. `echo "${a:-"${a:-"…x…"}"}"`.
         "nested_quotes" => {
@@ -110,7 +114,7 @@ fn lines_have_the_units_asked_for() {
     assert_eq!(line("arithmetic", /*n*/ 3), "echo $((v0+v1+v2))");
     assert_eq!(
         line("glob_alternatives", /*n*/ 2),
-        "shopt -s extglob; cat ./@(f0|f1)"
+        "shopt -s extglob\ncat ./@(f0|f1)"
     );
     assert_eq!(line("nested_quotes", /*n*/ 2), "echo \"${a:-\"${a:-x}\"}\"");
 }
