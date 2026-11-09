@@ -29,9 +29,17 @@
 /codex-rs/windows-sandbox-rs/ @corbanu-security
 /codex-rs/process-hardening/ @corbanu-security
 /codex-rs/cli/src/debug_sandbox/ @corbanu-security
+/codex-rs/cli/src/debug_sandbox.rs @corbanu-security
 /codex-rs/core/src/sandboxing/ @corbanu-security
 /codex-rs/core/src/spawn.rs @corbanu-security
 /codex-rs/core/src/exec.rs @corbanu-security
+/codex-rs/core/src/exec_env.rs @corbanu-security
+/codex-rs/core/src/windows_sandbox* @corbanu-security
+/codex-rs/core/src/tools/runtimes/ @corbanu-security
+/codex-rs/exec-server/src/fs_sandbox.rs @corbanu-security
+/codex-rs/exec-server/src/process_sandbox.rs @corbanu-security
+/codex-rs/exec-server/src/sandboxed_file_system.rs @corbanu-security
+/codex-rs/protocol/src/secretless_launch.rs @corbanu-security
 # Exec policy and approval decisions.
 /codex-rs/execpolicy/ @corbanu-security
 /codex-rs/execpolicy-legacy/ @corbanu-security
@@ -42,6 +50,20 @@
 /codex-rs/core/src/tools/network_approval* @corbanu-security
 /codex-rs/core/src/safety* @corbanu-security
 /codex-rs/core/src/guardian/ @corbanu-security
+/codex-rs/core/src/tools/approvals.rs @corbanu-security
+/codex-rs/core/src/tools/handlers/request_permissions.rs @corbanu-security
+/codex-rs/core/src/state/granted_permissions.rs @corbanu-security
+/codex-rs/hooks/src/events/permission_request.rs @corbanu-security
+/codex-rs/telegram/src/approvals.rs @corbanu-security
+# Filesystem/permission policy and built-in permission profiles.
+/codex-rs/protocol/src/permissions.rs @corbanu-security
+/codex-rs/protocol/src/permissions/ @corbanu-security
+/codex-rs/core/src/config/permissions* @corbanu-security
+/codex-rs/core/src/config/resolved_permission_profile.rs @corbanu-security
+/codex-rs/core/src/config/permission_profile_catalog.rs @corbanu-security
+/codex-rs/config/src/permissions_toml.rs @corbanu-security
+/codex-rs/config/src/requirements_layers/ @corbanu-security
+/codex-rs/config/src/security_state.rs @corbanu-security
 # Network proxy policy, MITM and credential injection.
 /codex-rs/network-proxy/ @corbanu-security
 # Security levels, policy, audit and untrusted-content boundaries.
@@ -61,6 +83,10 @@
 /codex-rs/secret-broker-fixture/ @corbanu-security
 /codex-rs/wallet/ @corbanu-security
 /codex-rs/wallet-daemon/ @corbanu-security
+/codex-rs/login/src/auth/storage* @corbanu-security
+/codex-rs/login/src/auth/provider_key_vault.rs @corbanu-security
+/codex-rs/core/src/config/auth_keyring.rs @corbanu-security
+/codex-rs/core/src/config/network_proxy_credential* @corbanu-security
 # Dependency and advisory policy.
 /codex-rs/deny.toml @corbanu-security
 /codex-rs/.cargo/audit.toml @corbanu-security
