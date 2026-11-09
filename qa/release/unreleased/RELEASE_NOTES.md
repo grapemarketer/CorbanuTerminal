@@ -797,6 +797,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   there gets the same warning right after the command, at startup and in the
   TUI prompt. Nothing is refused. Processes a command leaves running aren't
   waited for.
+- **Default (elevated) sandbox: starting a command no longer holds up
+  other work** (#1896). Its preparation, which includes walking the
+  writable folders for the planted-folder records (about 0.06 s on a
+  38,000-file repository, 0.5 s on a `repo` client with 100 projects),
+  ran on the thread that drives other tasks; it now runs on its own, as
+  the non-admin sandbox's does. What is flagged is unchanged.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only
