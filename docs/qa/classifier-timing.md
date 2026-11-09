@@ -96,7 +96,8 @@ branch at `63644feac8b426af343348eacd0acaf5644900cc` merged in (review 1
 fixes, extglob on its own line, runner script that times the test
 executable directly). These replace the first round's numbers (`main`
 `16dcfa301e`, one-line extglob), which are in the PR history and in the
-logs linked at the end; every row came out linear in both rounds.
+logs linked at the end. Every 1k–8k row in this round is linear, and no
+ratio in either round reached 3.0.
 
 Raw data for each run (`environment.txt`, `raw.tsv` with every timed run and
 its verdict, `status.tsv` with the exit state and wall seconds per process,
@@ -151,8 +152,8 @@ the 2.5 line; a 15-run rerun then gave 1.43–2.10, and this round gives
 | glob_alternatives | linear at 1k–8k; below the byte cap, ratios of 2.3–2.5 from 128 to 512 (see below) | `None` at 1000 and 2000, `Some(UnseenCode)` at 4000 and 8000 |
 | nested_quotes | linear | `Some(UnseenCode)` at every size |
 
-**No super-linear case was found, so no issue was opened.** No ratio
-reached 3.0 on either runner. No size was skipped and no run timed out.
+**No case reached the probe's 3.0 super-linear threshold on either runner,
+so no issue was opened.** No size was skipped and no run timed out.
 
 ## What these sizes do and do not exercise
 
