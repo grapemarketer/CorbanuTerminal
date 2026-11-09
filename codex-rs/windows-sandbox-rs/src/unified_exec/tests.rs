@@ -93,13 +93,17 @@ fn sandbox_cwd() -> PathBuf {
 
 fn sandbox_home(name: &str) -> SandboxHome {
     let id = TEST_HOME_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let real_temp = std::env::temp_dir();
-    let path = real_temp.join(format!("codex-windows-sandbox-{name}-{id}"));
+    let path = std::env::temp_dir().join(format!("codex-windows-sandbox-{name}-{id}"));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).expect("create sandbox home");
     SandboxHome {
         home: tempfile::TempDir::new_in(&path).expect("create sandbox home tempdir"),
-        real_temp,
+        // Both: a legacy session grants each.
+        real_temps: ["TEMP", "TMP"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .collect(),
     }
 }
 
@@ -113,7 +117,7 @@ fn sandbox_home(name: &str) -> SandboxHome {
 /// and dropping the home checks that the real one got no entry for its SIDs.
 pub(crate) struct SandboxHome {
     home: TempDir,
-    real_temp: PathBuf,
+    real_temps: Vec<PathBuf>,
 }
 
 impl std::ops::Deref for SandboxHome {
@@ -126,13 +130,17 @@ impl std::ops::Deref for SandboxHome {
 
 impl Drop for SandboxHome {
     fn drop(&mut self) {
-        let granted = real_temp_grants(self.home.path(), &self.real_temp);
+        let granted: Vec<(&PathBuf, Vec<String>)> = self
+            .real_temps
+            .iter()
+            .map(|temp| (temp, real_temp_grants(self.home.path(), temp)))
+            .filter(|(_, sids)| !sids.is_empty())
+            .collect();
         let _ = fs::remove_dir_all(session_temp_dir(self.home.path()));
         if !granted.is_empty() && !std::thread::panicking() {
             panic!(
-                "a legacy session granted the real temp folder {} to this test's SIDs {granted:?} \
-                 for good (#1890): give it `session_temp_env(codex_home)`",
-                self.real_temp.display()
+                "a legacy session granted the real temp folder to this test's SIDs for good \
+                 (#1890): {granted:?}; give it `session_temp_env(codex_home)`"
             );
         }
     }
