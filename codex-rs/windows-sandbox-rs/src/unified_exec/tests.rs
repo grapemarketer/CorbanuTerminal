@@ -104,6 +104,7 @@ fn sandbox_home(name: &str) -> SandboxHome {
             .filter_map(std::env::var_os)
             .map(PathBuf::from)
             .collect(),
+        checkout: sandbox_cwd(),
     }
 }
 
@@ -115,9 +116,13 @@ fn sandbox_home(name: &str) -> SandboxHome {
 /// made there later inherited them all (#1870). So the tests give their
 /// legacy sessions a temp folder of the home's own ([`session_temp_env`]),
 /// and dropping the home checks that the real one got no entry for its SIDs.
+/// The same goes for the checkout's `codex-rs` folder ([`sandbox_cwd`]) as a
+/// workspace (#1906): tests use a folder of their own
+/// ([`user_owned_test_root`]), and the drop checks the checkout too.
 pub(crate) struct SandboxHome {
     home: TempDir,
     real_temps: Vec<PathBuf>,
+    checkout: PathBuf,
 }
 
 impl std::ops::Deref for SandboxHome {
@@ -136,11 +141,22 @@ impl Drop for SandboxHome {
             .map(|temp| (temp, real_temp_grants(self.home.path(), temp)))
             .filter(|(_, sids)| !sids.is_empty())
             .collect();
+        let checkout = real_temp_grants(self.home.path(), &self.checkout);
         let _ = fs::remove_dir_all(session_temp_dir(self.home.path()));
-        if !granted.is_empty() && !std::thread::panicking() {
+        if std::thread::panicking() {
+            return;
+        }
+        if !granted.is_empty() {
             panic!(
                 "a legacy session granted the real temp folder to this test's SIDs for good \
                  (#1890): {granted:?}; give it `session_temp_env(codex_home)`"
+            );
+        }
+        if !checkout.is_empty() {
+            panic!(
+                "a legacy session granted the checkout {} to this test's SIDs for good \
+                 (#1906): {checkout:?}; give it a workspace of its own (`user_owned_test_root()`)",
+                self.checkout.display()
             );
         }
     }
@@ -412,7 +428,10 @@ fn legacy_non_tty_cmd_emits_output() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-non-tty-cmd");
         println!("cmd codex_home={}", codex_home.path().display());
         let permission_profile = PermissionProfile::workspace_write();
@@ -451,7 +470,10 @@ fn elevated_non_tty_cmd_forwards_env_output_and_exit() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("elevated-non-tty-cmd");
         let permission_profile = PermissionProfile::workspace_write();
         let env_map = HashMap::from([(
@@ -497,7 +519,10 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-non-tty-deny-read");
         let secret_path =
             AbsolutePathBuf::from_absolute_path(cwd.join("legacy-non-tty-deny-read-secret.env"))
@@ -539,7 +564,10 @@ fn legacy_non_tty_powershell_interrupt_terminates_process() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-non-tty-pwsh");
         println!("pwsh codex_home={}", codex_home.path().display());
         let permission_profile = PermissionProfile::workspace_write();
@@ -763,7 +791,10 @@ fn check_legacy_command_returns_while_descendant_runs(
         return;
     };
     let _guard = legacy_process_test_guard();
-    let cwd = sandbox_cwd();
+    // #1906: a folder of its own, not the checkout: a legacy session's
+    // grant on its workspace lasts.
+    let workspace = user_owned_test_root();
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home(&format!("legacy-{}-pwsh", label.replace(' ', "-")));
     // What the sandboxed commands write goes in the folder they may write
     // (#1890): the home is not one.
@@ -2832,7 +2863,10 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
         return;
     };
     let _guard = legacy_process_test_guard();
-    let cwd = sandbox_cwd();
+    // #1906: a folder of its own, not the checkout: a legacy session's
+    // grant on its workspace lasts.
+    let workspace = user_owned_test_root();
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home("legacy-capture-cancel");
     // What the sandboxed commands write goes in the folder they may write
     // (#1890): the home is not one.
@@ -2921,7 +2955,10 @@ async fn assert_legacy_tty_descendant_lifecycle(
     pwsh: &Path,
     lifecycle: LegacyTtyDescendantLifecycle,
 ) {
-    let cwd = sandbox_cwd();
+    // #1906: a folder of its own, not the checkout: a legacy session's
+    // grant on its workspace lasts.
+    let workspace = user_owned_test_root();
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home(match lifecycle {
         LegacyTtyDescendantLifecycle::Terminate => "legacy-tty-descendant-terminate",
         LegacyTtyDescendantLifecycle::Preserve => "legacy-tty-descendant-preserve",
@@ -3039,7 +3076,10 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-tty-pwsh");
         println!("tty pwsh codex_home={}", codex_home.path().display());
         let permission_profile = PermissionProfile::workspace_write();
@@ -3093,7 +3133,10 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
 fn legacy_tty_cmd_emits_output_and_accepts_input() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-tty-cmd");
         println!("tty cmd codex_home={}", codex_home.path().display());
         let permission_profile = PermissionProfile::workspace_write();
@@ -3144,7 +3187,10 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
 fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-tty-cmd-default-desktop");
         println!(
             "tty cmd default desktop codex_home={}",
@@ -3233,7 +3279,10 @@ fn legacy_command_log_redacts_credentials() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("legacy-398-redact");
         let spawned = spawn_windows_sandbox_session_legacy(
             &PermissionProfile::workspace_write(),
@@ -3271,7 +3320,10 @@ fn elevated_command_log_redacts_credentials() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
-        let cwd = sandbox_cwd();
+        // #1906: a folder of its own, not the checkout: a legacy session's
+        // grant on its workspace lasts.
+        let workspace = user_owned_test_root();
+        let cwd = workspace.path().to_path_buf();
         let codex_home = sandbox_home("elevated-398-redact");
         let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
             &PermissionProfile::workspace_write(),
@@ -3312,7 +3364,10 @@ fn elevated_command_log_redacts_credentials() {
 #[test]
 fn legacy_capture_command_log_redacts_credentials() {
     let _guard = legacy_process_test_guard();
-    let cwd = sandbox_cwd();
+    // #1906: a folder of its own, not the checkout: a legacy session's
+    // grant on its workspace lasts.
+    let workspace = user_owned_test_root();
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home("capture-398-redact");
     let result = run_windows_sandbox_capture(
         &PermissionProfile::workspace_write(),

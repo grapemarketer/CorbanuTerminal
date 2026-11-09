@@ -5,6 +5,7 @@ use crate::capture_pipes::finish_each;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
+use crate::integrity_leases::IntegrityLease;
 use crate::logging::log_failure;
 use crate::logging::log_note;
 use crate::logging::log_success;
@@ -13,6 +14,7 @@ use crate::process::StderrMode;
 use crate::process::StdinMode;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
+use crate::spawn_prep::SpawnContext;
 use crate::spawn_prep::SpawnPrepOptions;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
@@ -331,28 +333,36 @@ fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HANDLE>>>, size: TerminalSize)
     }
 }
 
+/// A legacy session prepared for its command.
+struct PreparedLegacySession {
+    common: SpawnContext,
+    h_token: HANDLE,
+    /// Held until the command has exited (#158).
+    integrity_lease: Option<IntegrityLease>,
+    env_map: HashMap<String, String>,
+}
+
+/// A legacy session's preparation before its command starts: the spawn
+/// context, the restricted token, and the ACL rules with the lease that holds
+/// them.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn spawn_windows_sandbox_session_legacy(
+fn prepare_legacy_session(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    command: Vec<String>,
+    command: &[String],
     cwd: &Path,
     mut env_map: HashMap<String, String>,
-    timeout_ms: Option<u64>,
     additional_deny_read_paths: &[AbsolutePathBuf],
     additional_deny_write_paths: &[AbsolutePathBuf],
-    tty: bool,
-    stdin_open: bool,
-    use_private_desktop: bool,
-) -> Result<SpawnedProcess> {
+) -> Result<PreparedLegacySession> {
     let common = prepare_legacy_spawn_context(
         permission_profile,
         workspace_roots,
         codex_home,
         cwd,
         &mut env_map,
-        &command,
+        command,
         SpawnPrepOptions {
             inherit_path: false,
             add_git_safe_directory: false,
@@ -407,6 +417,60 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             return Err(err);
         }
     };
+    Ok(PreparedLegacySession {
+        common,
+        h_token: security.h_token,
+        integrity_lease,
+        env_map,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_windows_sandbox_session_legacy(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
+    codex_home: &Path,
+    command: Vec<String>,
+    cwd: &Path,
+    env_map: HashMap<String, String>,
+    timeout_ms: Option<u64>,
+    additional_deny_read_paths: &[AbsolutePathBuf],
+    additional_deny_write_paths: &[AbsolutePathBuf],
+    tty: bool,
+    stdin_open: bool,
+    use_private_desktop: bool,
+) -> Result<SpawnedProcess> {
+    // #1909: preparing a session (its capability SIDs and token, ACLs, and
+    // the planted-folder watch's start, which walks the writable roots)
+    // blocks for a while, so it runs off the async thread, in the same order.
+    let PreparedLegacySession {
+        common,
+        h_token,
+        integrity_lease,
+        env_map,
+    } = {
+        let permission_profile = permission_profile.clone();
+        let workspace_roots = workspace_roots.to_vec();
+        let codex_home = codex_home.to_path_buf();
+        let cwd = cwd.to_path_buf();
+        let command = command.clone();
+        let additional_deny_read_paths = additional_deny_read_paths.to_vec();
+        let additional_deny_write_paths = additional_deny_write_paths.to_vec();
+        tokio::task::spawn_blocking(move || {
+            prepare_legacy_session(
+                &permission_profile,
+                &workspace_roots,
+                &codex_home,
+                &command,
+                &cwd,
+                env_map,
+                &additional_deny_read_paths,
+                &additional_deny_write_paths,
+            )
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("legacy spawn preparation task failed: {err}"))??
+    };
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stdout_tx, stdout_rx) = broadcast::channel::<Vec<u8>>(256);
@@ -417,6 +481,41 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     };
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
 
+    // Starting the process (its desktop, console and pipes) runs off the
+    // async thread too.
+    let (spawned, integrity_lease) = {
+        let command = command.clone();
+        let cwd = cwd.to_path_buf();
+        let stderr_tx = stderr_rx.as_ref().map(|(tx, _rx)| tx.clone());
+        let logs_base_dir = common.logs_base_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            match spawn_legacy_process(
+                h_token,
+                &command,
+                &cwd,
+                &env_map,
+                use_private_desktop,
+                tty,
+                stdin_open,
+                stdout_tx,
+                stderr_tx,
+                writer_rx,
+                logs_base_dir.as_deref(),
+            ) {
+                Ok(handles) => (Ok(handles), integrity_lease),
+                Err(err) => {
+                    unsafe {
+                        CloseHandle(h_token);
+                    }
+                    // Ending the watch walks the writable roots again.
+                    drop(integrity_lease);
+                    (Err(err), None)
+                }
+            }
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("legacy spawn task failed: {err}"))?
+    };
     let LegacyProcessHandles {
         process: pi,
         job,
@@ -426,27 +525,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         mut conpty_owner,
         token_handle,
         desktop,
-    } = match spawn_legacy_process(
-        security.h_token,
-        &command,
-        cwd,
-        &env_map,
-        use_private_desktop,
-        tty,
-        stdin_open,
-        stdout_tx,
-        stderr_rx.as_ref().map(|(tx, _rx)| tx.clone()),
-        writer_rx,
-        common.logs_base_dir.as_deref(),
-    ) {
-        Ok(handles) => handles,
-        Err(err) => {
-            unsafe {
-                CloseHandle(security.h_token);
-            }
-            return Err(err);
-        }
-    };
+    } = spawned?;
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
