@@ -1,6 +1,83 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::cell::RefCell;
 use std::fs;
+
+type Hook = Box<dyn Fn(&Path)>;
+
+thread_local! {
+    static BEFORE_READ: RefCell<Option<Hook>> = const { RefCell::new(None) };
+}
+
+/// #1909: called with each file just before it is opened for its print.
+pub(crate) fn before_read(path: &Path) {
+    BEFORE_READ.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook(path);
+        }
+    });
+}
+
+/// Runs `body` with `hook` called on each file just before it is read.
+pub(crate) fn with_before_read<T>(hook: impl Fn(&Path) + 'static, body: impl FnOnce() -> T) -> T {
+    BEFORE_READ.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    let result = body();
+    BEFORE_READ.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+/// Whether this process may make a symbolic link (Developer Mode or the
+/// privilege; CI runs as an administrator).
+#[cfg(windows)]
+pub(crate) fn symlinks_allowed(dir: &Path) -> bool {
+    let probe = dir.join("symlink-probe");
+    match std::os::windows::fs::symlink_file(dir.join("none"), &probe) {
+        Ok(()) => {
+            fs::remove_file(&probe).expect("remove probe");
+            true
+        }
+        Err(err) if err.raw_os_error() == Some(1314) => {
+            eprintln!("skipped: making a symbolic link needs Developer Mode or the privilege");
+            false
+        }
+        Err(err) => panic!("symlink probe: {err}"),
+    }
+}
+
+/// Swaps the file `path` for a link to `target`, as a process a command
+/// left running could.
+#[cfg(windows)]
+pub(crate) fn swap_for_link(path: &Path, target: &Path) {
+    fs::remove_file(path).expect("remove");
+    std::os::windows::fs::symlink_file(target, path).expect("link");
+}
+
+/// #1909: a file swapped for a link after it was looked at is not read
+/// through; reading through the link now would give the target's content.
+#[cfg(windows)]
+#[test]
+fn file_print_does_not_read_a_link_swapped_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    if !symlinks_allowed(dir.path()) {
+        return;
+    }
+    let secret = dir.path().join("secret");
+    fs::write(&secret, "secret\n").expect("write");
+    let file = dir.path().join("config");
+    fs::write(&file, "x\n").expect("write");
+    let target = secret.clone();
+    let print = with_before_read(
+        move |path| swap_for_link(path, &target),
+        || file_print(&file),
+    );
+    assert_eq!(
+        (
+            print.as_str(),
+            content_print(&file) == content_print(&secret)
+        ),
+        ("unreadable", true)
+    );
+}
 
 const INIT_CONFIG: &str = "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = true\n\tsymlinks = false\n\tignorecase = true\n";
 const CLONE_CONFIG: &str = "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = true\n\tsymlinks = false\n\tignorecase = true\n[remote \"origin\"]\n\turl = https://example.com/a.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n";

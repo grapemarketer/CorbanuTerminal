@@ -322,6 +322,64 @@ fn contents_stay_equal_until_something_inside_changes() {
     );
 }
 
+/// #1909: a file inside a `.codex` folder swapped for a link after it was
+/// looked at is never read through.
+#[test]
+fn contents_do_not_read_a_link_swapped_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    if !crate::git_watch::tests::symlinks_allowed(&root) {
+        return;
+    }
+    let folder = root.join("a\\.codex");
+    std::fs::create_dir_all(&folder).expect("create");
+    std::fs::write(folder.join("p.md"), "p\n").expect("write");
+    let secret = root.join("secret");
+    std::fs::write(&secret, "secret\n").expect("write");
+    let secret_print = contents(&secret);
+
+    let prints = crate::git_watch::tests::with_before_read(
+        move |path| {
+            if path.ends_with("p.md") {
+                crate::git_watch::tests::swap_for_link(path, &secret);
+            }
+        },
+        || contents(&folder),
+    );
+
+    assert_eq!(
+        (
+            prints.get("p.md").map(String::as_str),
+            prints.values().any(|print| Some(print) == secret_print.get("")),
+        ),
+        (Some("unreadable"), false)
+    );
+}
+
+/// #1909 (#1902 item 5): a junction inside a `.codex` folder is recorded by
+/// its target, and nothing behind it is read.
+#[test]
+fn contents_record_a_junction_by_its_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let folder = root.join("a\\.codex");
+    std::fs::create_dir_all(&folder).expect("create");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&outside).expect("create");
+    std::fs::write(outside.join("s.md"), "s\n").expect("write");
+    junction(&folder.join("j"), &outside);
+
+    let prints = contents(&folder)
+        .into_iter()
+        .map(|(name, print)| (name, print.replace(r"\\?\", "")))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        prints,
+        vec![("j".to_string(), format!("link to {}", outside.display()))]
+    );
+}
+
 /// #1896 item 3: a legacy entry is written without `contents`, and a record
 /// from before it reads back as one.
 #[test]
