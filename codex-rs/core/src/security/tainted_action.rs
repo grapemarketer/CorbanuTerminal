@@ -3918,5 +3918,5 @@ mod tainted_action_reading_tests;
 mod tainted_action_linear_tests;
 
 #[cfg(test)]
-#[path = "tainted_action_timing_probe.rs"]
-mod tainted_action_timing_probe;
+#[path = "tainted_action_timing_probe_tests.rs"]
+mod tainted_action_timing_probe_tests;

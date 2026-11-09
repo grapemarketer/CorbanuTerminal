@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Wall-clock timings of the command-safety classifier for the input shapes
-# in codex-rs/core/src/security/tainted_action_timing_probe.rs, at
+# in codex-rs/core/src/security/tainted_action_timing_probe_tests.rs, at
 # 1k/2k/4k/8k units each, on a release build.
 #
 # Usage: scripts/classifier_timing_probe.sh [OUT_DIR]
@@ -20,7 +20,7 @@ sizes=${PROBE_SIZES:-1000 2000 4000 8000}
 reps=${PROBE_REPS:-5}
 limit=${PROBE_TIMEOUT:-600}
 patterns=${PROBE_PATTERNS:-nested_substitution alias_chain arithmetic glob_alternatives nested_quotes}
-filter=security::tainted_action::tainted_action_timing_probe::classifier_timing_probe
+filter=security::tainted_action::tainted_action_timing_probe_tests::classifier_timing_probe
 
 mkdir -p "$out"
 cd "$repo/codex-rs" || exit 1

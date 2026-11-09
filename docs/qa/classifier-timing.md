@@ -4,8 +4,13 @@ Wall-clock timings of the command-safety classifier
 (`codex-rs/core/src/security/tainted_action`) for five input shapes that
 #1804's linearity tests do not cover, at 1k, 2k, 4k and 8k units each, on a
 release build. Nothing in the classifier changes; the probe is an ignored
-test (`tainted_action_timing_probe.rs`, never runs in CI) and a runner script
-(`scripts/classifier_timing_probe.sh`).
+test (`tainted_action_timing_probe_tests.rs`, never runs in CI) and a runner
+script (`scripts/classifier_timing_probe.sh`).
+
+The raw logs below were recorded when the file and module were still named
+`tainted_action_timing_probe` (see each `environment.txt`). They were renamed
+to `*_tests` afterwards, with no other change, so that `work.rs`'s
+`every_classifier_module_is_checked` treats the probe as a test module.
 
 ## Patterns
 
@@ -42,7 +47,7 @@ then runs one process per pattern and size:
 PROBE_PATTERN=arithmetic PROBE_UNITS=4000 PROBE_REPS=5 \
   cargo test --release -q -p codex-core --lib -- \
   --ignored --exact --nocapture \
-  security::tainted_action::tainted_action_timing_probe::classifier_timing_probe
+  security::tainted_action::tainted_action_timing_probe_tests::classifier_timing_probe
 ```
 
 Each process does one warm-up classification and `PROBE_REPS` (5) timed ones
