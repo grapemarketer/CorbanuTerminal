@@ -93,12 +93,23 @@ fn stage_windows_sandbox_helpers() {
 
 /// `command/exec` of a command writing `ran.txt` in the UNC working folder,
 /// by its full UNC path (cmd doesn't use a UNC working folder: it falls back
-/// to the Windows folder): the error it returned, or what it printed.
+/// to the Windows folder): the error it returned, or what it printed. The
+/// non-admin sandbox gets `temp` as its `TEMP` and `TMP`: it grants its temp
+/// folder to this test's new capability SID for good, so the real one would
+/// gain an entry on every run (#1890).
 async fn command_exec(
     level: WindowsSandboxLevel,
     cwd: &AbsolutePathBuf,
     profile: &PermissionProfile,
+    temp: &Path,
 ) -> Result<String, String> {
+    let env = if level == WindowsSandboxLevel::RestrictedToken {
+        ["TEMP", "TMP"]
+            .map(|key| (key.to_string(), temp.display().to_string()))
+            .into()
+    } else {
+        HashMap::new()
+    };
     let request = build_exec_request(
         ExecParams {
             command: vec![
@@ -110,7 +121,7 @@ async fn command_exec(
             cwd: cwd.clone(),
             expiration: ExecExpiration::from(120_000),
             capture_policy: ExecCapturePolicy::ShellTool,
-            env: HashMap::new(),
+            env,
             network: None,
             network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -151,6 +162,7 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
     }
 
     let temp = tempfile::tempdir().expect("workspace parent");
+    let session_temp = tempfile::tempdir().expect("session temp");
     let real = dunce::canonicalize(temp.path())
         .expect("canonical workspace parent")
         .join("Workspace Folder");
@@ -167,14 +179,15 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
         for (sandbox, level) in &levels {
             let _ = std::fs::remove_file(real.join("ran.txt"));
             // Record a panic as an outcome rather than end the probe.
-            let outcome = match AssertUnwindSafe(command_exec(*level, &cwd, &profile))
-                .catch_unwind()
-                .await
-            {
-                Ok(Ok(output)) => format!("ran: {}", output.trim()),
-                Ok(Err(err)) => err,
-                Err(_) => "panicked".to_string(),
-            };
+            let outcome =
+                match AssertUnwindSafe(command_exec(*level, &cwd, &profile, session_temp.path()))
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(output)) => format!("ran: {}", output.trim()),
+                    Ok(Err(err)) => err,
+                    Err(_) => "panicked".to_string(),
+                };
             let written = real.join("ran.txt").exists();
             eprintln!(
                 "sec-win-1863 {sandbox}, cwd {}: {outcome} (ran.txt written: {written})",

@@ -289,3 +289,54 @@ fn top_level_git_is_reported_and_compared() {
         )
     );
 }
+
+/// #1896 item 3: what is inside a folder is the same until something below
+/// it changes; a `.codex` that is a file is its content, also stable.
+#[test]
+fn contents_stay_equal_until_something_inside_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let folder = root.join("a\\.codex");
+    std::fs::create_dir_all(folder.join("deep\\er")).expect("create");
+    std::fs::write(folder.join("config.toml"), "x\n").expect("write");
+    std::fs::write(folder.join("deep\\er\\p.md"), "p\n").expect("write");
+    std::fs::create_dir_all(root.join("b")).expect("create");
+    std::fs::write(root.join("b\\.codex"), "file\n").expect("write");
+
+    let before = contents(&folder);
+    let file_before = contents(&root.join("b\\.codex"));
+    let unchanged = (
+        contents(&folder) == before,
+        contents(&root.join("b\\.codex")) == file_before,
+    );
+    std::fs::remove_file(folder.join("deep\\er\\p.md")).expect("delete");
+    let deleted = contents(&folder) != before;
+    std::fs::write(folder.join("deep\\er\\p.md"), "p\n").expect("restore");
+    let restored = contents(&folder) == before;
+    std::fs::write(folder.join("deep\\er\\p.md"), "q\n").expect("change");
+    let changed = contents(&folder) != before;
+
+    assert_eq!(
+        (unchanged, deleted, restored, changed),
+        ((true, true), true, true, true)
+    );
+}
+
+/// #1896 item 3: a legacy entry is written without `contents`, and a record
+/// from before it reads back as one.
+#[test]
+fn entries_without_contents_serialize_as_before() {
+    let entry = NestedMetadata {
+        path: PathBuf::from("C:\\w\\a\\.codex"),
+        identity: None,
+        contents: None,
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let read: NestedMetadata =
+        serde_json::from_str(r#"{"path":"C:\\w\\a\\.codex","identity":null}"#)
+            .expect("deserialize");
+    assert_eq!(
+        (json.as_str(), read),
+        (r#"{"path":"C:\\w\\a\\.codex","identity":null}"#, entry)
+    );
+}

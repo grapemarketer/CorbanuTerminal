@@ -264,7 +264,13 @@ fn start(
     // here on counts as planted.
     let mut found = crate::nested_metadata::find(nested_roots);
     let walk = take_repo_walk(&mut found);
-    let nested_metadata = found.entries;
+    // #1896 item 3: an elevated session doesn't protect them, so it records
+    // what is inside each too.
+    let nested_metadata = if records_only {
+        crate::nested_metadata::with_contents(found.entries)
+    } else {
+        found.entries
+    };
     // D332: every root, `%TEMP%` too, as D262 does: one look per root.
     let git_dirs = crate::nested_metadata::top_level_git(roots);
     // D420: the repositories below the top of the watched roots, and the

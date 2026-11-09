@@ -276,3 +276,324 @@ fn sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link() {
     assert!(!session.exists());
     record_setup(home.path());
 }
+
+/// #1871: what an older version's commands made in the temp folder stays
+/// their accounts', with any entry they gave themselves there, so taking
+/// back the folder's grant alone leaves later commands able to change it.
+/// The upgrade step first makes the user its owner and removes those
+/// entries.
+#[test]
+fn sec_win_d377_old_leftovers_in_temp_are_taken_for_the_user() {
+    let _guard = legacy_process_test_guard();
+    let Some(home) = elevated_home("d377-left") else {
+        return;
+    };
+    let root = user_owned_test_root();
+    let runtime = current_thread_runtime();
+    let cmd = |script: &Path| {
+        vec![
+            system32_exe("cmd.exe").display().to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            script.display().to_string(),
+        ]
+    };
+    // A temp folder secured like a user's, with the grant older setups left
+    // on it (the sandbox's group exists once its setup ran), and a `CREATOR
+    // OWNER` entry as shared temp folders have (`C:\Temp`): what an account
+    // makes there inherits an entry naming that account.
+    let temp = user_owned_test_root();
+    let creator_owner = std::process::Command::new(system32_exe("icacls.exe"))
+        .arg(temp.path())
+        .args(["/grant", "*S-1-3-0:(OI)(CI)(IO)F"])
+        .output()
+        .expect("icacls");
+    assert!(creator_owner.status.success(), "{creator_owner:?}");
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&system32_exe("hostname.exe")),
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers setup: exit={code} stdout={stdout:?}");
+    // Recorded now, so a normal session can run this test even when the
+    // administrator's run fails below.
+    record_setup(home.path());
+    let group = crate::winutil::string_from_sid_bytes(
+        &crate::winutil::resolve_sid(crate::token::SANDBOX_USERS_GROUP).expect("group"),
+    )
+    .expect("group sid");
+    // SAFETY: the SID is freed below; the folder exists.
+    unsafe {
+        let psid = crate::token::convert_string_sid_to_sid(&group).expect("psid");
+        crate::acl::ensure_allow_write_aces(temp.path(), &[psid]).expect("old grant");
+        windows_sys::Win32::Foundation::LocalFree(psid as _);
+    }
+    let file = temp.path().join("left.txt");
+    let dir = temp.path().join("left-dir");
+    let open_to_all = temp.path().join("open-to-all.txt");
+    // One whose owner keeps the user from taking it: set aside, not taken.
+    let refused = temp.path().join("refused.txt");
+    let user = crate::deny_read_sessions::current_user_sid().expect("user");
+    let users = temp.path().join("other-program.txt");
+    fs::write(&users, "other").expect("other program's file");
+    // An older version's command in the workspace, with the temp folder one
+    // of its writable roots, as older versions made it. It also gives entries
+    // on what it made there to its account, the sandbox's group and its
+    // workspace's capability SID, which later commands in that workspace
+    // carry too.
+    let workspace_sid =
+        crate::cap::workspace_cap_sid_for_cwd(home.path(), root.path()).expect("workspace sid");
+    // `icacls` cannot name a SID no account has; PowerShell can.
+    let keep = root.path().join("d377-keep.ps1");
+    fs::write(
+        &keep,
+        format!(
+            "$ErrorActionPreference = 'Stop'\r\n\
+             $sids = @([Security.Principal.WindowsIdentity]::GetCurrent().User, \
+             (New-Object Security.Principal.SecurityIdentifier('{group}')), \
+             (New-Object Security.Principal.SecurityIdentifier('{workspace_sid}')))\r\n\
+             foreach ($p in @('{file}', '{dir}')) {{\r\n\
+               $item = Get-Item -LiteralPath $p\r\n\
+               $inherit = if ($item.PSIsContainer) {{ 'ContainerInherit, ObjectInherit' }} else {{ 'None' }}\r\n\
+               $acl = $item.GetAccessControl('Access')\r\n\
+               foreach ($sid in $sids) {{\r\n\
+                 $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Modify', $inherit, 'None', 'Allow')))\r\n\
+               }}\r\n\
+               $item.SetAccessControl($acl)\r\n\
+             }}\r\n\
+             $item = Get-Item -LiteralPath '{refused}'\r\n\
+             $acl = $item.GetAccessControl('Access')\r\n\
+             $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(\
+             (New-Object Security.Principal.SecurityIdentifier('{user}')), 'ChangePermissions, TakeOwnership', 'Deny')))\r\n\
+             $item.SetAccessControl($acl)\r\n\
+             'KEPT'\r\n",
+            file = file.display(),
+            dir = dir.display(),
+            refused = refused.display()
+        ),
+    )
+    .expect("write script");
+    let make = root.path().join("d377-make.cmd");
+    fs::write(
+        &make,
+        format!(
+            "@echo off\r\n\
+             (echo made>\"{file}\") 2>nul && echo FILE-MADE\r\n\
+             (echo made>\"{open_to_all}\") 2>nul && echo OPEN-MADE\r\n\
+             (echo made>\"{refused}\") 2>nul && echo REFUSED-MADE\r\n\
+             mkdir \"{dir}\" 2>nul && (echo made>\"{dir}\\inner.txt\") 2>nul && echo DIR-MADE\r\n\
+             \"{powershell}\" -NoProfile -ExecutionPolicy Bypass -File \"{keep}\" 2>&1\r\n",
+            file = file.display(),
+            dir = dir.display(),
+            open_to_all = open_to_all.display(),
+            refused = refused.display(),
+            powershell = system32_exe("WindowsPowerShell\\v1.0\\powershell.exe").display(),
+            keep = keep.display()
+        ),
+    )
+    .expect("write script");
+    let write_roots = [root.path().to_path_buf(), temp.path().to_path_buf()];
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let (stdout, code) = runtime.block_on(async {
+        let spawned = spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &PermissionProfile::workspace_write(),
+            workspace_roots_for(root.path()).as_slice(),
+            home.path(),
+            cmd(&make),
+            root.path(),
+            env_map,
+            /*proxy_enforced*/ false,
+            /*network_proxy_restricting_sid*/ None,
+            Some(90_000),
+            /*read_roots_override*/ None,
+            /*read_roots_include_platform_defaults*/ true,
+            Some(&write_roots),
+            &crate::DenyReadTargets::default(),
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn the older version's command");
+        let (stdout, code) =
+            collect_stdout_and_exit(spawned, home.path(), Duration::from_secs(120)).await;
+        (String::from_utf8_lossy(&stdout).into_owned(), code)
+    });
+    println!("d377 leftovers made: exit={code} stdout={stdout:?}");
+    for done in ["FILE-MADE", "OPEN-MADE", "REFUSED-MADE", "DIR-MADE", "KEPT"] {
+        assert!(stdout.contains(done), "{done}: {stdout}");
+    }
+    // What its owner may also do: a NULL DACL (everyone may do anything).
+    // Set here by the user, who may as well (round-2 review).
+    // SAFETY: a valid path; a NULL DACL is what is asked for.
+    let code = unsafe {
+        windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW(
+            crate::winutil::to_wide(&open_to_all).as_ptr(),
+            1, // SE_FILE_OBJECT
+            windows_sys::Win32::Security::DACL_SECURITY_INFORMATION
+                | windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(code, 0, "set a NULL DACL");
+    let owner = |path: &Path| {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0x2_0000) // READ_CONTROL
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(path)
+            .expect("open");
+        crate::deny_read_sessions::owner_sid(&file).expect("owner")
+    };
+    assert_ne!(
+        owner(&file),
+        user,
+        "the sandbox's file is the user's already"
+    );
+    // The upgrade step: the first command with this temp folder.
+    let value = temp.path().display().to_string();
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&system32_exe("hostname.exe")),
+        &[("TEMP", value.clone()), ("TMP", value)],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers upgrade: exit={code} stdout={stdout:?}");
+    let log = sandbox_log(home.path());
+    for line in log.lines().filter(|line| line.contains("D377")) {
+        println!("d377 leftovers log: {line}");
+    }
+    // The file whose owner kept the user from taking it is renamed in place,
+    // not deleted. An administrator's process holding privileges that
+    // override its DACL (all the `sec_win_` tests in one process do) takes it
+    // instead, as the log shows; never a normal session.
+    let aside: Vec<PathBuf> = fs::read_dir(temp.path())
+        .expect("list")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name().is_some_and(|name| {
+                name.to_string_lossy()
+                    .starts_with("refused.txt.corbanu-sandbox-leftover-")
+            })
+        })
+        .collect();
+    let (refused_now, refused_taken) = if refused.exists() {
+        assert!(
+            crate::setup::is_elevated().expect("elevation") && aside.is_empty(),
+            "{} was not set aside: {aside:?}",
+            refused.display()
+        );
+        let line = log
+            .lines()
+            .find(|line| line.contains(&format!("D377: in {}:", temp.path().display())))
+            .expect("the leftovers' log line");
+        assert!(line.contains(", not taken 0 "), "{line}");
+        assert_eq!(owner(&refused), user, "{}", refused.display());
+        (refused, true)
+    } else {
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        (aside[0].clone(), false)
+    };
+    assert_eq!(
+        fs::read_to_string(&refused_now).expect("read").trim(),
+        "made"
+    );
+    // Taken, no allow entry is left there for the sandbox's accounts or group
+    // with rights to write, delete or change it. (Set aside, it keeps its
+    // DACL, which the user may not change, under a name nothing uses.)
+    let mut sandbox_sids = crate::session_temp_leftovers::sandbox_account_sids().expect("accounts");
+    sandbox_sids.push(group);
+    let sandbox_sids: Vec<crate::token::LocalSid> = sandbox_sids
+        .iter()
+        .map(|sid| crate::token::LocalSid::from_string(sid).expect("sid"))
+        .collect();
+    let psids: Vec<_> = sandbox_sids
+        .iter()
+        .map(crate::token::LocalSid::as_ptr)
+        .collect();
+    // FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER
+    let mask = 0x2 | 0x4 | 0x1_0000 | 0x4_0000 | 0x8_0000;
+    assert!(
+        !refused_taken
+            || !crate::acl::path_mask_allows(
+                &refused_now,
+                &psids,
+                mask,
+                /*require_all_bits*/ false
+            )
+            .expect("dacl"),
+        "{} still lets the sandbox change it",
+        refused_now.display()
+    );
+    let refused_lines = if refused_taken {
+        format!(
+            "(echo x>>\"{path}\") 2>nul && echo REFUSED-WRITTEN\r\n\
+             del /f /q \"{path}\" >nul 2>nul\r\n",
+            path = refused_now.display()
+        )
+    } else {
+        String::new()
+    };
+    // A later command writes there (granting itself access first, as an
+    // owner may).
+    let tamper = root.path().join("d377-tamper.cmd");
+    fs::write(
+        &tamper,
+        format!(
+            "@echo off\r\n\
+             echo TAMPER-RAN\r\n\
+             (echo x>>\"{open_to_all}\") 2>nul && echo OPEN-WRITTEN\r\n\
+             icacls \"{file}\" /grant \"%USERNAME%:(M)\" >nul 2>nul\r\n\
+             (echo x>>\"{file}\") 2>nul && echo FILE-WRITTEN\r\n\
+             icacls \"{dir}\" /grant \"%USERNAME%:(OI)(CI)(M)\" >nul 2>nul\r\n\
+             (echo x>\"{dir}\\new.txt\") 2>nul && echo DIR-WRITTEN\r\n\
+             (echo x>>\"{dir}\\inner.txt\") 2>nul && echo INNER-WRITTEN\r\n\
+             {refused_lines}",
+            file = file.display(),
+            dir = dir.display(),
+            open_to_all = open_to_all.display()
+        ),
+    )
+    .expect("write script");
+    let (stdout, code) = runtime.block_on(run_elevated(
+        root.path(),
+        home.path(),
+        cmd(&tamper),
+        &[],
+        /*tty*/ false,
+    ));
+    println!("d377 leftovers tamper: exit={code} stdout={stdout:?}");
+    assert!(stdout.contains("TAMPER-RAN"), "{stdout}");
+    for written in [
+        "OPEN-WRITTEN",
+        "FILE-WRITTEN",
+        "DIR-WRITTEN",
+        "INNER-WRITTEN",
+        "REFUSED-WRITTEN",
+    ] {
+        assert!(!stdout.contains(written), "{written}: {stdout}");
+    }
+    // Not deleted (by the command, or by the upgrade).
+    assert_eq!(
+        fs::read_to_string(&refused_now).expect("read").trim(),
+        "made"
+    );
+    // Taken, not deleted.
+    for path in [&file, &open_to_all, &dir, &dir.join("inner.txt")] {
+        assert_eq!(owner(path), user, "{}", path.display());
+    }
+    assert_eq!(fs::read_to_string(&file).expect("read").trim(), "made");
+    assert_eq!(fs::read_to_string(&users).expect("read"), "other");
+    crate::session_temp::end_session_temp_in(temp.path());
+    crate::session_temp::end_session_temp_in(
+        &dunce::canonicalize(std::env::var_os("TEMP").expect("TEMP")).expect("TEMP"),
+    );
+}

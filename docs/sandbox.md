@@ -166,9 +166,16 @@ the list the sandbox knows.
 shows the same warnings (D425, #1846), with three differences. They are
 written when the command itself ends: Corbanu Terminal can't see the
 processes a command leaves running there, so what those change later isn't
-flagged. Nested `.codex`/`.agents` folders that already exist get no extra
-protection: a command can change what is inside them unflagged; only moving
-or replacing one is flagged. And the records themselves (in
+flagged. Nested `.codex`/`.agents` folders that already exist aren't
+protected, so a command can change what is inside them; such a change is
+flagged instead (#1896), by content, like moving or replacing the folder.
+A file rewritten with the same content isn't a change, but your own edit
+made while such a command runs counts like the command's. A folder with
+more than 20,000 entries or 64 MiB of files, with a subfolder that can't be
+listed, or with a name that isn't valid Unicode, is flagged after every
+command. A link inside one is recorded by its target only: a change to the
+file or folder it points to isn't flagged (the non-admin sandbox doesn't
+protect those either). And the records themselves (in
 `%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
 whose writable folder contains them, such as your whole user folder.
 Its commands run as their own Windows account, so what they create is owned
