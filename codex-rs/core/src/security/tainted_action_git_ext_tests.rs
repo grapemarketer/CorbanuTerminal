@@ -122,8 +122,9 @@ fn issue_1876_unresolved_remote_asks() {
         "git clone -qb main \"$r\" dst",
         "git clone --bra main \"$r\" dst",
         "git clone --rem \"$r\" dst",
-        // `--pr` is `--prune` here, not `--prefix`: the value is doubted.
-        "git push --pr \"$r\"",
+        // A prefix of another subcommand's valued option (`--pre`, of
+        // archive's `--prefix`) takes no value here: the word is an operand.
+        "git push --pre \"$r\"",
         // Codex review round 3: a valued option of ls-remote, and archive's
         // `--remote` after its tree-ish.
         "git ls-remote --sort refname \"$r\"",
@@ -168,6 +169,15 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         "git push origin refs/heads/\"$branch\"",
         "git push origin origin/\"$branch\"",
         "git push origin -- \"$branch\"",
+        // Quoted expansions do not split, visible starts do not glob into
+        // options, and redirections are not git's words.
+        "git push . HEAD:\"$b\"",
+        "git fetch --depth=\"$n\" .",
+        "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
+        "git fetch origin refs/heads/*:refs/remotes/origin/*",
+        "git fetch origin >\"$log\" 2>&1",
+        "git fetch origin 2>\"$err\"",
+        "git fetch --multiple origin upstream",
         "sudo -u git git fetch origin",
         "git clone https://x.example/r -- \"$dir\"",
         "git clone -b \"$b\" https://x.example/r d",
@@ -246,6 +256,44 @@ fn issue_1876_review_1_lines_ask() {
     );
 }
 
+/// Review round 2 on #1897. Each of these asks; each was quiet on the
+/// head reviewed (e81e45f9).
+#[test]
+fn issue_1876_review_2_lines_ask() {
+    let lines = [
+        // Item 1: upper- and mixed-case git words (see the linear test).
+        "git fetch GIT \"$v\"",
+        "Git fetch origin \"$v\"",
+        // Item 2: an unquoted expansion splits, so a visible start protects
+        // only its first piece (`b='x --receive-pack=./y'`).
+        "git push . HEAD:$b",
+        "git push origin refs/heads/$b",
+        "git fetch --depth=$n .",
+        "git fetch --depth $n .",
+        "git fetch -q origin $B",
+        // Item 3: every operand may be a remote: `fetch --multiple`'s and
+        // an alias's, after `--` too.
+        "git fetch --multiple origin -- \"$r\"",
+        "git fetch -m origin e\"$r\"",
+        "git fetch --mult origin e\"$r\"",
+        "git f o -- \"$url\"",
+        "git f o e\"$url\"",
+        // Item 4: a `--` that is an option's value does not end options.
+        "git fetch git log --refmap -- \"$v\"",
+        "git-fetch git log --refmap -- \"$v\"",
+        "git remote add -f -t git log -- \"$url\"",
+        // Item 5: an unquoted glob may match a file named `--upload-pack=…`.
+        "git fetch origin *",
+        "git push . *",
+        "git fetch origin ?",
+        "git clone ../src [d]*",
+    ];
+    assert_eq!(
+        wrong(&lines, Some(ProtectedActionKind::UnseenCode)),
+        Vec::<String>::new()
+    );
+}
+
 /// Route 2: a remote stored in `.git/config` or `.gitmodules` is not on the
 /// line, so these stay as on main: quiet, since git refuses `ext` unless
 /// config allows it. A line that itself allows `ext` asks (on main too).
@@ -285,7 +333,7 @@ fn issue_1876_stored_remotes_ask_only_when_the_line_allows_ext() {
 fn issue_1876_remote_scan_is_linear() {
     for (label, word, line) in [
         (
-            "git words after the remote",
+            "refspecs after the remote",
             "\"$r\" ",
             "git fetch origin {}",
         ),
@@ -323,6 +371,20 @@ fn issue_1876_remote_scan_is_linear() {
         // case (`GIT`) and a finder's attached command (`--exec=git`).
         ("upper-case git words", "-C GIT ", "git {}fetch \"$r\""),
         ("attached execs", "fd --exec=git ", "git fetch {}\"$r\""),
+        // Review round 2 item 1: each `GIT`/`Git` starts a scan, which ends
+        // at the next.
+        (
+            "upper-case git words as remotes",
+            "GIT fetch ",
+            "echo GIT; git fetch {}origin",
+        ),
+        ("mixed-case git words", "Git fetch ", "git fetch {}\"$v\""),
+        (
+            "unquoted words after the remote",
+            "HEAD:$b ",
+            "git push origin {}",
+        ),
+        ("globs after the remote", "refs/* ", "git push origin {}"),
         (
             "global options before the subcommand",
             "-C d ",

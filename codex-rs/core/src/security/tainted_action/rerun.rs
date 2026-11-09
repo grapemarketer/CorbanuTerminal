@@ -927,23 +927,44 @@ pub(super) fn git_may_contact_remote(sub: &str) -> bool {
 /// `--upload-pack=…` (`git fetch origin "$v"`). Such a word stays quiet when a
 /// visible start means it is no option (`HEAD:"$b"`, `refs/heads/"$b"`), or
 /// after `--`. The remote is the first operand; `remote add|set-url <name>`
-/// and `submodule add` name it after their verb, their other verbs take none,
-/// and `archive`'s is only `--remote`'s value. `subcommand`: a dashed
+/// and `submodule add` name it after their verb (`submodule set-url` writes
+/// its URL to config, which asks as persistence; their other verbs take
+/// none), and `archive`'s is only `--remote`'s value. `subcommand`: a dashed
 /// helper's (`git-fetch`); git's own is found in `args`, and one git does not
 /// know may be an alias of a transport (#1528). The words read end at the
 /// next git word (`sudo -u git git fetch "$r"`: the user name is not the git
 /// that runs), so each word is read by one scan: `args` end where the
 /// caller's next git command starts.
-/// `options_after[i]`: whether the command's words from `args[i]` on hold,
-/// before any `--`, an unseen word that may be an option (see
-/// [`git_options_after`]); a scan cut at the next git command (`git fetch
-/// git log "$v"`, a remote named `git`) asks on it.
+/// #1876: what a reading knows of a git command's word, for
+/// [`git_remote_unseen`]. The word lexer knows only `held`; the quote-aware
+/// reading knows `loose` too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct GitWordMark {
+    /// A redirection holds it (`>"$log"`): git never reads it.
+    pub(super) held: bool,
+    /// The shell may make it into words that start with `-`: an unquoted
+    /// expansion splits (`HEAD:$b`, `--depth=$n` with `b='x --upload-pack=…'`)
+    /// and an unquoted glob first may match a file named `--upload-pack=…`
+    /// (`*`).
+    pub(super) loose: bool,
+    /// The reading knows its value although its text holds `$` (`r=origin;
+    /// git fetch "$r"`): it is not unseen.
+    pub(super) seen: bool,
+}
+
+/// `options_after[i]`: whether the command's words from `args[i]` on hold an
+/// unseen word git may read (see [`git_options_after`]); a scan cut at the
+/// next git command (`git fetch git log "$v"`, a remote named `git`) asks on
+/// it, since this command's options and remotes may run past the cut.
+/// `marks`: what the reading knows of each of `args` (missing: nothing).
 pub(super) fn git_remote_unseen(
     args: &[String],
     subcommand: Option<&str>,
     options_after: &[bool],
+    marks: &[GitWordMark],
 ) -> bool {
     let cut = options_after.get(args.len()).copied().unwrap_or(false);
+    let mark = |at: usize| marks.get(at).copied().unwrap_or_default();
     // A dashed helper (`git-fetch`) names its subcommand; its words start
     // right after its name. Otherwise the subcommand is git's first word
     // after its global options and their values (`-C x fetch`).
@@ -951,9 +972,9 @@ pub(super) fn git_remote_unseen(
         Some(sub) => (sub.to_ascii_lowercase(), 0),
         None => {
             let mut value_next = false;
-            let Some(at) = args.iter().position(|word| {
+            let Some(at) = args.iter().enumerate().position(|(at, word)| {
                 work::step();
-                if std::mem::take(&mut value_next) {
+                if mark(at).held || std::mem::take(&mut value_next) {
                     return false;
                 }
                 if word.starts_with('-') {
@@ -973,23 +994,27 @@ pub(super) fn git_remote_unseen(
         return false;
     }
     let unseen = git_word_unseen;
-    if unseen(&sub) {
+    if unseen(&sub) && !start.checked_sub(1).is_some_and(|at| mark(at).seen) {
         return false; // a subcommand the line does not show already asks (simple_command)
     }
     let may_be_option = git_word_may_be_option;
     let rest = args.get(start..).unwrap_or_default();
+    let mark = |at: usize| mark(start + at);
+    let unseen_at = |at: usize, word: &str| !mark(at).seen && unseen(word);
     let before = match sub.as_str() {
         "remote" | "submodule" => {
-            let verb = rest.iter().find(|word| {
+            let verb = rest.iter().enumerate().find(|(at, word)| {
                 work::step();
-                !word.starts_with('-')
+                !mark(*at).held && !word.starts_with('-')
             });
-            match (sub.as_str(), verb.map(String::as_str)) {
-                (_, None) => return false,
+            match (sub.as_str(), verb.map(|(_, verb)| verb.as_str())) {
+                (_, None) => return cut,
                 // A verb the line does not show may be `add`.
-                (_, Some(verb)) if unseen(verb) => return true,
+                (_, Some(verb)) if git_word_unseen(verb) => return true,
                 ("remote", Some("add" | "set-url")) => 2,
                 ("submodule", Some("add")) => 1,
+                // `submodule set-url <path> <url>` writes config, which
+                // asks as persistence.
                 _ => return false,
             }
         }
@@ -998,26 +1023,40 @@ pub(super) fn git_remote_unseen(
         "archive" => usize::MAX,
         _ => 0,
     };
+    // Every operand may be a remote: an alias's (`f = remote add -f`
+    // makes `git f o -- "$url"` add one) and `fetch --multiple`'s.
+    let every = !GIT_COMMANDS.contains(&sub.as_str())
+        || (sub == "fetch"
+            && rest.iter().any(|word| {
+                work::step();
+                (word.len() >= "--mu".len() && "--multiple".starts_with(word.as_str()))
+                    || (!word.starts_with("--") && word.starts_with('-') && word.contains('m'))
+            }));
     let mut operands = 0;
     let mut value_next = false;
     let mut doubted = false;
     let mut after_dashes = false;
-    for word in rest {
+    for (at, word) in rest.iter().enumerate() {
         work::step();
+        let mark = mark(at);
+        if mark.held {
+            continue;
+        }
         // An option's value (`--depth "$n"`) is not the remote, unless it
-        // is doubted (`git archive --remote "$r"`, an abbreviation).
-        // Program-running options (`--upload-pack "$x"`) ask whatever their
-        // value (`git_runs_program`).
+        // is doubted (`git archive --remote "$r"`, an abbreviation) or may
+        // split into more words (`--depth $n`). Program-running options
+        // (`--upload-pack "$x"`) ask whatever their value (`git_runs_program`).
         if std::mem::take(&mut value_next) {
-            if std::mem::take(&mut doubted) && unseen(word) {
+            if (std::mem::take(&mut doubted) && unseen_at(at, word)) || mark.loose {
                 return true;
             }
             continue;
         }
+        let remote = every || (before != usize::MAX && operands <= before);
         if after_dashes {
-            // Operands only, none an option: one up to the remote may
-            // still be the remote (`git fetch -- "$r"`).
-            if unseen(word) && before != usize::MAX && operands <= before {
+            // Operands only, none an option: one up to the remote, or any
+            // with `every`, may still be a remote (`git fetch -- "$r"`).
+            if unseen_at(at, word) && remote {
                 return true;
             }
             operands += 1;
@@ -1028,8 +1067,9 @@ pub(super) fn git_remote_unseen(
             continue;
         }
         if word.starts_with('-') {
-            if unseen(word) && git_attached_value_doubted(&sub, word, unseen) {
-                return true; // it may be `--remote=$r` or `--$x`
+            if (unseen_at(at, word) && git_attached_value_doubted(&sub, word, unseen)) || mark.loose
+            {
+                return true; // it may be `--remote=$r`, `--$x` or split
             }
             if !word.contains('=') {
                 (value_next, doubted) = git_transport_option(&sub, word);
@@ -1038,15 +1078,15 @@ pub(super) fn git_remote_unseen(
         }
         // An operand up to the remote may be the remote (archive's are not:
         // they are a tree-ish and paths); any may be an option.
-        let remote_or_before = before != usize::MAX && operands <= before;
-        if unseen(word) && (remote_or_before || may_be_option(word)) {
+        if mark.loose || (unseen_at(at, word) && (remote || may_be_option(word))) {
             return true;
         }
         operands += 1;
     }
     // Cut at a git word that may be this command's operand: a later word
-    // may still be its option.
-    cut && !after_dashes
+    // may still be its option or remote (a `--` there may be an option's
+    // value: `git fetch git log --refmap -- "$v"`).
+    cut
 }
 
 /// Whether `word` holds text the line does not show.
@@ -1062,14 +1102,16 @@ fn git_word_may_be_option(word: &str) -> bool {
 }
 
 /// #1876: for each of a command's words (and the end), whether it or a
-/// later word, before any `--`, is unseen and may be an option. Worked out
-/// once per command, right to left, for [`git_remote_unseen`].
-pub(super) fn git_options_after(words: &[String]) -> Vec<bool> {
+/// later word is one git may read that the line does not show (unseen, or
+/// loose), `--` or not: it may be an option's value. Worked out once per
+/// command, right to left, for [`git_remote_unseen`]. `marks`: as there.
+pub(super) fn git_options_after(words: &[String], marks: &[GitWordMark]) -> Vec<bool> {
     let mut after = vec![false; words.len() + 1];
     for (at, word) in words.iter().enumerate().rev() {
         work::step();
-        after[at] = word != "--"
-            && (after[at + 1] || (git_word_unseen(word) && git_word_may_be_option(word)));
+        let mark = marks.get(at).copied().unwrap_or_default();
+        after[at] =
+            after[at + 1] || (!mark.held && (mark.loose || (!mark.seen && git_word_unseen(word))));
     }
     after
 }

@@ -2823,7 +2823,14 @@ impl Classifier {
         // are read once in all (`sudo -u git git fetch "$r"`: the scan from
         // the user name `git` ends at the git that runs).
         if !git_starts.is_empty() {
-            let options_after = rerun::git_options_after(words);
+            // A redirection's words are not git's (`git fetch origin >"$log"`).
+            let marks: Vec<rerun::GitWordMark> = (0..words.len())
+                .map(|at| rerun::GitWordMark {
+                    held: simple.held(at),
+                    ..rerun::GitWordMark::default()
+                })
+                .collect();
+            let options_after = rerun::git_options_after(words, &marks);
             for (at, (index, subcommand)) in git_starts.iter().enumerate() {
                 work::step();
                 let end = git_starts
@@ -2833,6 +2840,7 @@ impl Classifier {
                     &words[index + 1..end],
                     subcommand.as_deref(),
                     &options_after[index + 1..],
+                    &marks[index + 1..],
                 ) {
                     self.note(ProtectedActionKind::UnseenCode);
                     break;
