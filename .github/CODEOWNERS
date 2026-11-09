@@ -19,6 +19,7 @@
 # BEGIN Corbanu security owners (D318). Main requires a code-owner approval for
 # these paths; @corbanu-security posts it only after an independent read-only
 # security review approved the exact head. Later lines win, so keep this block last.
+# Procedure: docs/management/managementHandoff.html section 4 (Code-owner approval).
 # Ownership itself.
 /.github/CODEOWNERS @corbanu-security
 # OS sandbox enforcement (Seatbelt .sbpl profiles, Landlock, bubblewrap, Windows sandbox).
