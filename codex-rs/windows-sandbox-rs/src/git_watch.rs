@@ -79,7 +79,8 @@ fn valid_head(head: &Path) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
-    let Ok(bytes) = std::fs::read(head) else {
+    // Read without following (#1909): one swapped in since is a link.
+    let Some(bytes) = read_unfollowed(head) else {
         return true;
     };
     if let Some(rest) = bytes.strip_prefix(b"ref:") {
@@ -597,18 +598,104 @@ pub(crate) fn file_print(path: &Path) -> String {
     if metadata.is_dir() {
         return "dir".to_string();
     }
-    let mut text = content_print(path);
-    if link_count(path).is_none_or(|count| count > 1) {
+    unfollowed_print(path)
+}
+
+/// #1909: [`file_print`], but a link is recorded by its target only and
+/// never read through: `link to <target>`.
+pub(crate) fn unfollowed_file_print(path: &Path) -> String {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return "unreadable".to_string();
+    };
+    if metadata.file_type().is_symlink() {
+        let target =
+            std::fs::read_link(path).map_or_else(|_| "?".to_string(), |t| t.display().to_string());
+        return format!("link to {target}");
+    }
+    if metadata.is_dir() {
+        return "dir".to_string();
+    }
+    unfollowed_print(path)
+}
+
+/// The content hash of the file at `path` itself (with ` hard link` when
+/// it has more than one name), or `unreadable`, also when it has become a
+/// link or a folder since the caller looked (#1909): a process a command
+/// left running can't steer the read through a link it swaps in. A
+/// reparse point other than a link that can't be read as itself differs
+/// every time, so a change to it is never missed.
+fn unfollowed_print(path: &Path) -> String {
+    #[cfg(test)]
+    tests::before_read(path);
+    let (file, links) = match open_unfollowed(path) {
+        Opened::File(file, links) => (file, links),
+        // Marked as before when the name has others (or can't be counted).
+        Opened::Refused if link_count(path).is_none_or(|count| count > 1) => {
+            return "unreadable hard link".to_string();
+        }
+        Opened::Refused => return "unreadable".to_string(),
+        Opened::Unsure => return truncated(),
+    };
+    let mut text = hash(file);
+    if links.is_none_or(|count| count > 1) {
         text.push_str(" hard link");
     }
     text
 }
 
+/// What [`open_unfollowed`] found.
+enum Opened {
+    /// The file itself, with how many names it has.
+    File(std::fs::File, Option<u64>),
+    /// A folder or a link, or unreadable.
+    Refused,
+    /// A reparse point other than a link that couldn't be read as itself.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Unsure,
+}
+
+/// The file at `path` itself, not followed if it is a link.
+#[cfg(windows)]
+fn open_unfollowed(path: &Path) -> Opened {
+    match crate::acl::open_unfollowed(path) {
+        crate::acl::Unfollowed::File(file, links) => Opened::File(file, Some(u64::from(links))),
+        crate::acl::Unfollowed::Refused => Opened::Refused,
+        crate::acl::Unfollowed::Unsure => Opened::Unsure,
+    }
+}
+
+/// Elsewhere (tests only) a link is refused as it is found; the open
+/// itself follows.
+#[cfg(not(windows))]
+fn open_unfollowed(path: &Path) -> Opened {
+    let is_file = std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file());
+    match std::fs::File::open(path) {
+        Ok(file) if is_file => Opened::File(file, link_count(path)),
+        _ => Opened::Refused,
+    }
+}
+
+/// The bytes of the file at `path` itself, `None` when it is a link or a
+/// folder or can't be read (#1909).
+fn read_unfollowed(path: &Path) -> Option<Vec<u8>> {
+    let Opened::File(mut file, _) = open_unfollowed(path) else {
+        return None;
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// The SHA-256 of the file at `path` (followed), or `unreadable`.
 fn content_print(path: &Path) -> String {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return "unreadable".to_string();
-    };
+    match std::fs::File::open(path) {
+        Ok(file) => hash(file),
+        Err(_) => "unreadable".to_string(),
+    }
+}
+
+/// The SHA-256 of what `file` holds, or `unreadable`.
+fn hash(mut file: std::fs::File) -> String {
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
@@ -689,7 +776,7 @@ pub(crate) fn is_plain(entry: &Path) -> bool {
     if !only_samples {
         return false;
     }
-    let Ok(config) = std::fs::read(entry.join("config")) else {
+    let Some(config) = read_unfollowed(&entry.join("config")) else {
         return false;
     };
     plain_config(&String::from_utf8_lossy(&config)) && no_links_inside(entry)
@@ -838,4 +925,4 @@ fn section_name(header: &str) -> Option<String> {
 
 #[cfg(test)]
 #[path = "git_watch_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -1,6 +1,179 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::cell::RefCell;
 use std::fs;
+
+type Hook = Box<dyn Fn(&Path)>;
+
+thread_local! {
+    static BEFORE_READ: RefCell<Option<Hook>> = const { RefCell::new(None) };
+}
+
+/// #1909: called with each file just before it is opened for its print.
+pub(crate) fn before_read(path: &Path) {
+    BEFORE_READ.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook(path);
+        }
+    });
+}
+
+/// Runs `body` with `hook` called on each file just before it is read.
+pub(crate) fn with_before_read<T>(hook: impl Fn(&Path) + 'static, body: impl FnOnce() -> T) -> T {
+    BEFORE_READ.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    let result = body();
+    BEFORE_READ.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+/// Whether this process may make a symbolic link (Developer Mode or the
+/// privilege; CI runs as an administrator).
+#[cfg(windows)]
+pub(crate) fn symlinks_allowed(dir: &Path) -> bool {
+    let probe = dir.join("symlink-probe");
+    match std::os::windows::fs::symlink_file(dir.join("none"), &probe) {
+        Ok(()) => {
+            fs::remove_file(&probe).expect("remove probe");
+            true
+        }
+        Err(err) if err.raw_os_error() == Some(1314) => {
+            eprintln!("skipped: making a symbolic link needs Developer Mode or the privilege");
+            false
+        }
+        Err(err) => panic!("symlink probe: {err}"),
+    }
+}
+
+/// Swaps the file `path` for a link to `target`, as a process a command
+/// left running could.
+#[cfg(windows)]
+pub(crate) fn swap_for_link(path: &Path, target: &Path) {
+    fs::remove_file(path).expect("remove");
+    std::os::windows::fs::symlink_file(target, path).expect("link");
+}
+
+/// #1909: a file Windows compresses (`compact /exe`, whose filter serves
+/// the content and hides its reparse point) gets the same print.
+#[cfg(windows)]
+#[test]
+fn file_print_reads_a_compressed_file() {
+    // The first folder whose volume can compress (CI's temp folder is on
+    // a volume that can't; `Public` is on the system drive).
+    let candidates = [Some(std::env::temp_dir()), dirs_next::public_dir()];
+    let (_dir, file, before) = candidates
+        .into_iter()
+        .flatten()
+        .find_map(|base| {
+            let dir = tempfile::tempdir_in(base).ok()?;
+            let file = dir.path().join("config");
+            fs::write(&file, "[core]\n\tbare = false\n".repeat(8192)).expect("write");
+            let before = file_print(&file);
+            let output = std::process::Command::new("compact")
+                .args(["/c", "/exe:xpress4k"])
+                .arg(&file)
+                .output()
+                .expect("compact");
+            println!("compact: {}", String::from_utf8_lossy(&output.stdout));
+            output.status.success().then_some((dir, file, before))
+        })
+        .expect("no folder on a volume that can compress");
+    assert_eq!(
+        (
+            file_print(&file),
+            before.len(),
+            before.contains("hard link")
+        ),
+        (before.clone(), 64, false)
+    );
+}
+
+/// Makes the file `path` a reparse point with the Microsoft tag `tag`
+/// (not a link) that no filter serves; false when this process may not.
+#[cfg(windows)]
+fn set_reparse_tag(path: &Path, tag: u32) -> bool {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut buffer = [0_u8; 16];
+    buffer[0..4].copy_from_slice(&tag.to_le_bytes());
+    buffer[4..6].copy_from_slice(&8_u16.to_le_bytes());
+    buffer[8..16].copy_from_slice(b"corbanu1");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .expect("open");
+    let mut returned = 0_u32;
+    // SAFETY: a valid handle and buffer.
+    let ok = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            file.as_raw_handle() as _,
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        // Access denied or a privilege not held (CI runs as an administrator).
+        assert!(matches!(err.raw_os_error(), Some(5 | 1314)), "{err}");
+        eprintln!("skipped: setting a reparse point needs more rights: {err}");
+    }
+    ok != 0
+}
+
+/// #1909: a reparse point other than a link that can't be read as itself
+/// (its filter is missing) differs every time, so a change is never missed.
+#[cfg(windows)]
+#[test]
+fn file_print_of_an_unserved_reparse_point_differs_every_time() {
+    const TAG_HSM: u32 = 0xC000_0004;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("config");
+    fs::write(&file, "x\n").expect("write");
+    if !set_reparse_tag(&file, TAG_HSM) {
+        return;
+    }
+    let (first, second) = (file_print(&file), file_print(&file));
+    assert_eq!(
+        (first == second, first.starts_with("truncated at")),
+        (false, true),
+        "{first}"
+    );
+}
+
+/// #1909: a file swapped for a link after it was looked at is not read
+/// through; reading through the link now would give the target's content.
+#[cfg(windows)]
+#[test]
+fn file_print_does_not_read_a_link_swapped_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    if !symlinks_allowed(dir.path()) {
+        return;
+    }
+    let secret = dir.path().join("secret");
+    fs::write(&secret, "secret\n").expect("write");
+    let file = dir.path().join("config");
+    fs::write(&file, "x\n").expect("write");
+    let target = secret.clone();
+    let print = with_before_read(
+        move |path| swap_for_link(path, &target),
+        || file_print(&file),
+    );
+    assert_eq!(
+        (
+            print.as_str(),
+            content_print(&file) == content_print(&secret)
+        ),
+        ("unreadable", true)
+    );
+}
 
 const INIT_CONFIG: &str = "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = true\n\tsymlinks = false\n\tignorecase = true\n";
 const CLONE_CONFIG: &str = "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = true\n\tsymlinks = false\n\tignorecase = true\n[remote \"origin\"]\n\turl = https://example.com/a.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n";
