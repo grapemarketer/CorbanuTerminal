@@ -4,9 +4,8 @@ expression: "render_bottom_popup(&chat, 100)"
 ---
   Possibly planted project folders
 
-  These .git folders appeared or changed while a non-admin Windows sandbox command ran, so a
-  command may have planted them. Git runs their hooks and config outside the sandbox whenever you
-  run git there:
+  These git folders appeared or changed while a Windows sandbox command ran, so a command may have
+  planted them. Git runs their hooks and config outside the sandbox whenever you run git there:
     project/.git
   Check their hooks and config before you confirm them.
 

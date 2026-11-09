@@ -82,7 +82,7 @@ static PLANTED_TOLD: LazyLock<Mutex<HashMap<ThreadId, PlantedTold>>> =
 type PlantedTold = (u64, HashSet<u64>);
 
 /// D424 (#1775): the notice for the folders recorded as possibly planted
-/// since `mark` (taken before a run in the non-admin Windows sandbox), or
+/// since `mark` (taken before a run in either Windows sandbox), or
 /// since the thread's first such run if that is earlier (a command it left
 /// running may have ended meanwhile), that lie at or below one of the run's
 /// own `writable` roots (canonical). Each record is told once per thread;
@@ -100,12 +100,28 @@ pub(crate) fn planted_after_run_notice(
     )
 }
 
+/// Whether any record this thread wasn't told about lies after its first
+/// mark (or `mark`), so [`planted_after_run_notice`] is worth asking (it
+/// needs the run's writable roots, which cost a look at each). Notes the
+/// thread's first mark.
+pub(crate) fn planted_notice_pending(thread_id: ThreadId, mark: u64) -> bool {
+    let mut told = PLANTED_TOLD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (first, told) = told
+        .entry(thread_id)
+        .or_insert_with(|| (mark, HashSet::new()));
+    codex_windows_sandbox::planted_records_since((*first).min(mark))
+        .iter()
+        .any(|record| !told.contains(&record.seq))
+}
+
 /// [`planted_after_run_notice`] with the planted-records log passed in.
 fn planted_notice_from(
     thread_id: ThreadId,
     mark: u64,
     writable: &[PathBuf],
-    records_since: impl FnOnce(u64) -> Vec<(u64, PathBuf)>,
+    records_since: impl FnOnce(u64) -> Vec<codex_windows_sandbox::PlantedRecord>,
 ) -> Option<String> {
     let mut told = PLANTED_TOLD
         .lock()
@@ -114,15 +130,36 @@ fn planted_notice_from(
         .entry(thread_id)
         .or_insert_with(|| (mark, HashSet::new()));
     let mut paths: Vec<PathBuf> = Vec::new();
-    for (seq, path) in records_since((*first).min(mark)) {
-        if writable.iter().any(|root| is_at_or_below(&path, root))
-            && told.insert(seq)
-            && !paths.contains(&path)
+    let mut git_changes: Vec<codex_config::PlantedGitChange> = Vec::new();
+    for record in records_since((*first).min(mark)) {
+        if !writable
+            .iter()
+            .any(|root| is_at_or_below(&record.path, root))
+            || !told.insert(record.seq)
         {
-            paths.push(path);
+            continue;
+        }
+        if record.git_changes.is_empty() {
+            if !paths.contains(&record.path) {
+                paths.push(record.path);
+            }
+        } else if let Some(change) = git_changes
+            .iter_mut()
+            .find(|change| change.path == record.path)
+        {
+            for what in record.git_changes {
+                if !change.changes.contains(&what) {
+                    change.changes.push(what);
+                }
+            }
+        } else {
+            git_changes.push(codex_config::PlantedGitChange {
+                path: record.path,
+                changes: record.git_changes,
+            });
         }
     }
-    codex_config::planted_after_command_notice(&paths)
+    codex_config::planted_after_command_notice(&paths, &git_changes)
 }
 
 /// `path` is `base` or below it, ignoring ASCII case (Windows paths).

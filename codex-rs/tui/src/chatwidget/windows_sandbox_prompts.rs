@@ -518,7 +518,7 @@ impl ChatWidget {
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
     /// #1506 item 2 (D262): at startup, asks whether to load the `.codex` or
-    /// `.agents` folders of this project that appeared while a non-admin
+    /// `.agents` folders of this project that appeared while a Windows
     /// sandbox command ran. Until confirmed, Core ignores them. D332: the
     /// same for a `.git` that appeared or changed, which Core warns about.
     pub(crate) fn maybe_prompt_planted_project_metadata(&mut self) {
@@ -529,12 +529,26 @@ impl ChatWidget {
             return;
         };
         let here = planted_to_ask_about(planted, &self.config);
-        if !here.is_empty() {
-            self.open_planted_project_metadata_prompt(here);
+        // D420 (#1775): repositories that appeared or changed, same scope as
+        // a `.git`.
+        let git_changes = git_changes_to_ask_about(&self.config);
+        if !here.is_empty() || !git_changes.is_empty() {
+            self.open_planted_prompt(here, git_changes);
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn open_planted_project_metadata_prompt(&mut self, paths: Vec<PathBuf>) {
+        self.open_planted_prompt(paths, Vec::new());
+    }
+
+    /// The startup prompt for `paths` (recorded folders) and (D420)
+    /// `git_changes`.
+    pub(crate) fn open_planted_prompt(
+        &mut self,
+        mut paths: Vec<PathBuf>,
+        git_changes: Vec<codex_config::PlantedGitChange>,
+    ) {
         use ratatui_macros::line;
 
         // D332 (#1682): a `.git` isn't loaded by Corbanu Terminal, but git
@@ -542,11 +556,20 @@ impl ChatWidget {
         let (git_dirs, folders): (Vec<&PathBuf>, Vec<&PathBuf>) = paths
             .iter()
             .partition(|path| codex_config::is_git_dir(path));
+        let git_dirs: Vec<String> = git_dirs
+            .iter()
+            .map(|path| path.display().to_string())
+            .chain(
+                git_changes
+                    .iter()
+                    .map(codex_config::PlantedGitChange::describe),
+            )
+            .collect();
         let mut lines = vec![line!["Possibly planted project folders".bold()]];
         if !folders.is_empty() {
             lines.push(line![""]);
             lines.push(line![
-                "These folders appeared while a non-admin Windows sandbox command ran, so a command may have planted them. Corbanu Terminal isn't loading their config, hooks or skills:"
+                "These folders appeared while a Windows sandbox command ran, so a command may have planted them. Corbanu Terminal isn't loading their config, hooks or skills:"
             ]);
             for path in &folders {
                 lines.push(line![format!("  {}", path.display()).cyan()]);
@@ -567,10 +590,14 @@ impl ChatWidget {
         if !git_dirs.is_empty() {
             lines.push(line![""]);
             lines.push(line![
-                "These .git folders appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
+                "These git folders appeared or changed while a Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
             ]);
-            for path in &git_dirs {
-                lines.push(line![format!("  {}", path.display()).cyan()]);
+            // At most 20, as the startup warning (rule 4).
+            for item in git_dirs.iter().take(20) {
+                lines.push(line![format!("  {item}").cyan()]);
+            }
+            if git_dirs.len() > 20 {
+                lines.push(line![format!("  and {} more", git_dirs.len() - 20).cyan()]);
             }
         }
         let git_only = folders.is_empty();
@@ -584,6 +611,8 @@ impl ChatWidget {
                     .bold()
             ]
         });
+        // Confirming covers the changed repositories too.
+        paths.extend(git_changes.into_iter().map(|change| change.path));
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
 
@@ -635,10 +664,26 @@ impl ChatWidget {
     }
 }
 
+/// D420 (#1775): the repositories that appeared or changed that the startup
+/// prompt asks about, in the scope of [`planted_to_ask_about`]'s `.git`s.
+fn git_changes_to_ask_about(config: &Config) -> Vec<codex_config::PlantedGitChange> {
+    let changes = codex_config::planted_git_changes();
+    if changes.is_empty() {
+        return changes;
+    }
+    let cwd = config.cwd.as_path();
+    let writable = codex_windows_sandbox::legacy_writable_roots(
+        &config.permissions.file_system_sandbox_policy(),
+        config.permissions.workspace_roots(),
+        cwd,
+    );
+    codex_config::git_changes_to_show(changes, &writable, cwd)
+}
+
 /// The recorded folders the startup prompt asks about: those in the working
 /// folder or a folder above it (where Core loads `.codex`/`.agents` from),
 /// and (D424, #1775) any `.git` below the working folder or in a folder
-/// non-admin sandbox commands may write to, since git runs anywhere.
+/// Windows sandbox commands may write to, since git runs anywhere.
 pub(super) fn planted_to_ask_about(planted: Vec<PathBuf>, config: &Config) -> Vec<PathBuf> {
     let cwd = config.cwd.as_path();
     let writable = codex_windows_sandbox::legacy_writable_roots(

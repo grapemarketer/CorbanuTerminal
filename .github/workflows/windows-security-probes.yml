@@ -33,6 +33,8 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/exec_windows_unc_tests.rs"
+      - "codex-rs/utils/path-uri/src/**"
       - "codex-rs/core/src/unified_exec/process_manager*.rs"
       - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
@@ -74,6 +76,8 @@ on:
       - "codex-rs/core/src/model_broker_auth_tests.rs"
       - "codex-rs/core/src/security/**"
       - "codex-rs/core/src/exec.rs"
+      - "codex-rs/core/src/exec_windows_unc_tests.rs"
+      - "codex-rs/utils/path-uri/src/**"
       - "codex-rs/core/src/unified_exec/process_manager*.rs"
       - "codex-rs/protocol/src/shell_environment*.rs"
       - "codex-rs/core/src/tools/sandboxing.rs"
@@ -130,6 +134,7 @@ env:
     nested_metadata::legacy_nested_project_metadata_survives_a_crash
     nested_metadata::legacy_workspace_write_cannot_change_nested_project_metadata
     nested_metadata::legacy_unlistable_folder_counts_as_planted
+    nested_metadata::legacy_metadata_below_names_that_are_not_unicode_counts_as_planted
     nested_metadata::legacy_temp_root_is_not_watched_for_nested_metadata
     nested_metadata::legacy_workspace_stays_watched_when_temp_resolves_to_it
     nested_metadata::legacy_configured_project_metadata_the_sandbox_makes_is_not_planted
@@ -184,7 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
-          grep -q "test result: ok. 4 passed" d283-1541.log
+          grep -q "test result: ok. 6 passed" d283-1541.log
           rm d283-1541.log
       - name: Configured read-only paths the legacy backend makes (#1686, #1708, #1780)
         if: ${{ !cancelled() }}
@@ -347,11 +352,12 @@ jobs:
             grep -q "test result: ok. 1 passed" legacy-158.log
           done
           rm legacy-158.log
-      - name: Legacy capture returns while a descendant runs (#1826)
+      - name: Capture returns while a descendant runs (#1826, #1830, #1861)
         if: ${{ !cancelled() }}
         shell: bash
-        # A descendant left running holds the output pipes; the capture must
-        # return once the command exits, leaving it running.
+        # A descendant left running holds the output pipes; the legacy capture
+        # and sessions and the elevated runner must return once the command
+        # exits, leaving it running.
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- capture_pipes::tests:: --nocapture --test-threads=1 2>&1 | tee capture-1826.log
@@ -360,6 +366,23 @@ jobs:
           grep -q "test result: ok. 1 passed" capture-1826.log
           # The test passes without running when pwsh 7 is missing.
           grep -q "capture pwsh exit_code=0" capture-1826.log
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact unified_exec::tests::legacy_session_exits_and_preserves_descendant_after_normal_exit --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+          grep -q "test result: ok. 1 passed" capture-1826.log
+          # The test passes without running when pwsh 7 is missing.
+          grep -q "legacy session pwsh exit_code=0" capture-1826.log
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          for kind in capture session; do
+            case "$kind" in
+              capture) t=elevated_capture_emits_output_and_preserves_descendant_after_normal_exit ;;
+              session) t=elevated_session_exits_and_preserves_descendant_after_normal_exit ;;
+            esac
+            cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- --exact "unified_exec::tests::$t" --nocapture --test-threads=1 2>&1 | tee capture-1826.log
+            grep -q "test result: ok. 1 passed" capture-1826.log
+            # The test passes without running when pwsh 7 or elevation is missing.
+            grep -q "elevated $kind pwsh exit_code=0" capture-1826.log
+          done
           rm capture-1826.log
       - name: Job breakaway limits (#733)
         if: ${{ !cancelled() }}
@@ -402,16 +425,18 @@ jobs:
       - name: Launch contract probes under the elevated sandbox
         if: ${{ !cancelled() }}
         shell: bash
-        # #1801's symbolic link and subst cases may not skip here.
+        # #1801's symbolic link and subst cases may not skip here. #1863 runs
+        # both sandboxes here.
         env:
           CORBANU_TEST_REQUIRE_SYMLINKS: "1"
           CORBANU_TEST_REQUIRE_SUBST: "1"
+          CODEX_TEST_1863_ELEVATED: "1"
         run: |
           set -euo pipefail
           bin_dir="${CARGO_TARGET_DIR}/debug"
           export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
           export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
-          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_d331 sec_win_1506 --nocapture --test-threads=1
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- pf_27_s06 pf_27_s07 sec_win_300 sec_win_d331 sec_win_1506 sec_win_1863 --nocapture --test-threads=1
           # #1801: the D331 check compares by real path in all three resolvers.
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_1801 --nocapture --test-threads=1 2>&1 | tee d1801.log
           grep -q "test result: ok. 1 passed" d1801.log
@@ -506,7 +531,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 59
+            Assert-Tests $sandbox 'sec_win_' 62
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
@@ -575,6 +600,21 @@ jobs:
             # like a user's), and the grant older setups left is taken back.
             foreach ($t in @('sec_win_d377_elevated_command_gets_its_own_temp_folder', 'sec_win_d377_old_temp_folder_grant_is_taken_back', 'sec_win_d377_command_cannot_turn_its_temp_folder_into_a_link')) {
               $t = "unified_exec::tests::command_identity::elevated::d377::$t"
+              Assert-Tests $sandbox $t 1
+              & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
+              $env:CODEX_SEC_WIN_1648_REQUIRE = '1'
+              $out = & $medium -Program $sandbox -Arguments @('--exact', $t, '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              Remove-Item Env:CODEX_SEC_WIN_1648_REQUIRE
+              $out
+              if ($code -ne 0) { throw "$t failed in a normal session" }
+              if (-not ($out -match 'test result: ok\. 1 passed')) { throw "$t did not run in a normal session" }
+            }
+            # D425 (#1846): from a normal session too, an elevated session and
+            # capture record what their command planted.
+            foreach ($t in @('sec_win_1846_elevated_session_records_what_its_command_plants', 'sec_win_1846_elevated_capture_records_what_its_command_plants')) {
+              $t = "unified_exec::tests::command_identity::elevated::d425::$t"
               Assert-Tests $sandbox $t 1
               & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null
               if ($LASTEXITCODE -ne 0) { throw "recording the elevated setup for $t failed" }
@@ -702,6 +742,21 @@ jobs:
             Assert-Tests $core 'sec_win_d331' 3
             & $medium -Program $core -Arguments @('sec_win_d331', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "D331 agent-path refusal failed in a normal session" }
+            # #1863: command/exec with a \\localhost UNC working folder. A share
+            # of this step's temp folder: a normal session may not use the
+            # administrative share.
+            Assert-Tests $core 'sec_win_1863' 1
+            New-SmbShare -Name sec1863 -Path $temp -FullAccess 'Everyone' -ErrorAction Stop | Out-Null
+            try {
+              $env:CODEX_TEST_UNC_SHARE = 'sec1863'
+              $env:CODEX_TEST_UNC_SHARE_DIR = $temp
+              & $medium -Program $core -Arguments @('sec_win_1863', '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+            } finally {
+              Remove-SmbShare -Name sec1863 -Force
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_TEST_UNC_SHARE, Env:CODEX_TEST_UNC_SHARE_DIR
+            }
+            if ($code -ne 0) { throw "#1863 UNC working folder failed in a normal session" }
             $sandboxing = Get-TestExe @('-p', 'codex-sandboxing', '--lib')
             Assert-Tests $sandboxing 'sec_win_1801' 1
             & $medium -Program $sandboxing -Arguments @('sec_win_1801', '--nocapture', '--test-threads=1')

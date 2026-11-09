@@ -56,6 +56,17 @@ pub(crate) fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Whether a test in this process holds `legacy_process_test_guard()`. The
+/// elevated setup checks it (#1827): it sets the sandbox users' passwords, so
+/// two tests running it at once make one's logons fail (1326). Under nextest,
+/// where each test has its own process, this is exact.
+pub(crate) fn legacy_process_test_guard_is_held() -> bool {
+    matches!(
+        LEGACY_PROCESS_TEST_LOCK.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    )
+}
+
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread()
         .enable_all()
@@ -624,15 +635,22 @@ fn runner_resizer_sends_resize_frame() {
     });
 }
 
-#[test]
-fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+/// #1826, #1861: a legacy capture or session returns once the command exits
+/// while a descendant it left running holds the output pipes, and leaves that
+/// descendant running. `run` runs the argv it is given in the legacy sandbox
+/// with the cwd and codex home it is given, returning the command's stdout
+/// and exit code.
+fn check_legacy_command_returns_while_descendant_runs(
+    label: &str,
+    run: impl FnOnce(&Path, &Path, Vec<String>) -> (String, i32),
+) {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
     let _guard = legacy_process_test_guard();
     let cwd = sandbox_cwd();
-    let codex_home = sandbox_home("legacy-capture-pwsh");
-    println!("capture pwsh codex_home={}", codex_home.path().display());
+    let codex_home = sandbox_home(&format!("legacy-{}-pwsh", label.replace(' ', "-")));
+    println!("{label} pwsh codex_home={}", codex_home.path().display());
     let ready_marker = codex_home.path().join("descendant-started");
     let release_marker = codex_home.path().join("release-descendant");
     let survival_marker = codex_home.path().join("descendant-survived");
@@ -648,53 +666,50 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     );
     let parent_command = format!(
         "Write-Output LEGACY-CAPTURE-DIRECT; {}",
-        start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail,),
+        start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail),
     );
-    let permission_profile = PermissionProfile::workspace_write();
-    let result = run_windows_sandbox_capture(
-        &permission_profile,
-        workspace_roots_for(cwd.as_path()).as_slice(),
-        codex_home.path(),
-        vec![
-            pwsh.display().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            parent_command,
-        ],
-        cwd.as_path(),
-        HashMap::new(),
-        Some(10_000),
-        /*cancellation*/ None,
-        /*use_private_desktop*/ true,
-    )
-    .expect("run legacy capture powershell");
-    let descendant_pid = fs::read_to_string(&ready_marker)
-        .expect("read descendant pid")
-        .trim()
-        .parse()
-        .expect("parse descendant pid");
-    let descendant_process = open_process_for_wait(descendant_pid);
-    fs::write(&release_marker, "release").expect("release descendant after root exit");
-    let descendant_process = descendant_process.expect("open descendant after normal capture exit");
-
-    println!("capture pwsh exit_code={}", result.exit_code);
-    println!("capture pwsh timed_out={}", result.timed_out);
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    println!("capture pwsh stderr={stderr:?}");
-    assert_eq!(result.exit_code, 0, "stdout={stdout:?} stderr={stderr:?}");
+    let argv = vec![
+        pwsh.display().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        parent_command,
+    ];
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(cwd.as_path(), codex_home.path(), argv)
+    }));
+    let took = started.elapsed();
+    // Opened before the release so its exit can be awaited; `None` if it has
+    // already exited (it gives up after its own deadline).
+    let descendant_process = fs::read_to_string(&ready_marker)
+        .ok()
+        .and_then(|pid| pid.trim().parse().ok())
+        .and_then(|pid| open_process_for_wait(pid).ok());
+    // Released before any check, so the descendant never outlives the test
+    // by more than its own deadline.
+    let release = fs::write(&release_marker, "release");
+    let (stdout, exit_code) = match result {
+        Ok(output) => output,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    release.expect("release descendant after root exit");
+    println!("{label} pwsh returned after {took:?}");
+    println!("{label} pwsh exit_code={exit_code}");
+    assert_eq!(exit_code, 0, "stdout={stdout:?}");
     assert!(
         stdout.contains("LEGACY-CAPTURE-DIRECT"),
         "stdout={stdout:?}"
     );
     assert!(
         wait_for_path(&survival_marker, Duration::from_secs(10)),
-        "sandbox descendant did not survive normal capture exit"
+        "the {label} descendant did not survive the command's exit; \
+         the command returned after {took:?}"
     );
+    let descendant_process = descendant_process.expect("open descendant after normal legacy exit");
     wait_for_process_exit(&descendant_process, Duration::from_secs(10))
         .expect("sandbox descendant did not exit after release");
-    // #1826: the capture now returns while the descendant runs, so the
-    // session's labels (#158) are put back on a thread of the capture's once
+    // #1826: the command now returns while the descendant runs, so the
+    // session's labels (#158) are put back on a thread of the backend's once
     // it exits. Wait for that before the test (and maybe its process) ends.
     let temp_roots = ["TEMP", "TMP"]
         .into_iter()
@@ -717,6 +732,212 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     }
     // The release goes on (the recorded denies) after the labels.
     crate::integrity_leases::wait_for_release_in_progress().expect("wait for the release");
+}
+
+#[test]
+fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+    check_legacy_command_returns_while_descendant_runs("capture", |cwd, codex_home, argv| {
+        let permission_profile = PermissionProfile::workspace_write();
+        let result = run_windows_sandbox_capture(
+            &permission_profile,
+            workspace_roots_for(cwd).as_slice(),
+            codex_home,
+            argv,
+            cwd,
+            HashMap::new(),
+            Some(10_000),
+            /*cancellation*/ None,
+            /*use_private_desktop*/ true,
+        )
+        .expect("run legacy capture powershell");
+        println!("capture pwsh timed_out={}", result.timed_out);
+        println!(
+            "capture pwsh stderr={:?}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        (
+            String::from_utf8_lossy(&result.stdout).into_owned(),
+            result.exit_code,
+        )
+    });
+}
+
+/// #1861: the same for a legacy unified exec session (pipes, not a ConPTY),
+/// whose exit is reported once its output readers finish.
+#[test]
+fn legacy_session_exits_and_preserves_descendant_after_normal_exit() {
+    check_legacy_command_returns_while_descendant_runs(
+        "legacy session",
+        |cwd, codex_home, argv| {
+            current_thread_runtime().block_on(async {
+                let permission_profile = PermissionProfile::workspace_write();
+                let spawned = spawn_windows_sandbox_session_legacy(
+                    &permission_profile,
+                    workspace_roots_for(cwd).as_slice(),
+                    codex_home,
+                    argv,
+                    cwd,
+                    HashMap::new(),
+                    Some(10_000),
+                    &[],
+                    &[],
+                    /*tty*/ false,
+                    /*stdin_open*/ false,
+                    /*use_private_desktop*/ true,
+                )
+                .await
+                .expect("spawn legacy session powershell");
+                // Longer than the descendant's own deadline, so the old wait
+                // shows as a late return rather than a timeout.
+                let (stdout, exit_code) =
+                    collect_stdout_and_exit(spawned, codex_home, Duration::from_secs(60)).await;
+                (String::from_utf8_lossy(&stdout).into_owned(), exit_code)
+            })
+        },
+    );
+}
+
+/// #1830: the elevated runner, like the legacy capture (#1826), returns once
+/// the command exits while a descendant it left running holds the output
+/// pipes, and leaves that descendant running. `run` runs the argv it is given
+/// in the elevated sandbox on the root it is given, returning the command's
+/// stdout and exit code.
+fn check_elevated_command_returns_while_descendant_runs(
+    backend: &str,
+    run: impl FnOnce(&Path, &Path, Vec<String>) -> (String, i32),
+) {
+    let Some(pwsh) = pwsh_path() else {
+        return;
+    };
+    let Some(codex_home) =
+        command_identity::elevated::elevated_home(&format!("elevated-{backend}-pwsh"))
+    else {
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    // The sandbox account may write here, not in its codex home.
+    let root = user_owned_test_root();
+    let ready_marker = root.path().join("descendant-started");
+    let release_marker = root.path().join("release-descendant");
+    let survival_marker = root.path().join("descendant-survived");
+    let descendant_command = format!(
+        "$deadline=(Get-Date).AddSeconds(30); Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
+        powershell_literal(&ready_marker),
+        powershell_literal(&release_marker),
+        powershell_literal(&survival_marker),
+    );
+    let parent_tail = format!(
+        "while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}",
+        powershell_literal(&ready_marker),
+    );
+    let parent_command = format!(
+        "Write-Output ELEVATED-CAPTURE-DIRECT; {}",
+        start_powershell_child(&pwsh, root.path(), &descendant_command, &parent_tail),
+    );
+    let argv = vec![
+        pwsh.display().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        parent_command,
+    ];
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(root.path(), codex_home.path(), argv)
+    }));
+    let took = started.elapsed();
+    // Released before any check, so the descendant never outlives the test
+    // by more than its own deadline.
+    let release = fs::write(&release_marker, "release");
+    let (stdout, exit_code) = match result {
+        Ok(output) => output,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    release.expect("release descendant after root exit");
+    println!("elevated {backend} pwsh returned after {took:?}");
+    println!("elevated {backend} pwsh exit_code={exit_code}");
+    let survived = wait_for_path(&survival_marker, Duration::from_secs(10));
+    // The root is in the repository: remove it once the descendant has let
+    // go of its files (its redirected output), which it may hold a moment
+    // after writing the marker.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while let Err(err) = fs::remove_dir_all(root.path()) {
+        assert!(
+            Instant::now() < deadline,
+            "remove {}: {err}",
+            root.path().display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        exit_code,
+        0,
+        "stdout={stdout:?}\n{}",
+        sandbox_log(codex_home.path())
+    );
+    assert!(
+        stdout.contains("ELEVATED-CAPTURE-DIRECT"),
+        "stdout={stdout:?}"
+    );
+    assert!(
+        survived,
+        "#1830: the elevated {backend} descendant did not survive the command's exit; \
+         the command returned after {took:?}"
+    );
+}
+
+#[test]
+fn elevated_capture_emits_output_and_preserves_descendant_after_normal_exit() {
+    check_elevated_command_returns_while_descendant_runs("capture", |root, codex_home, argv| {
+        let permission_profile = PermissionProfile::workspace_write();
+        let workspace_roots = workspace_roots_for(root);
+        let result = crate::run_windows_sandbox_capture_for_permission_profile_elevated(
+            crate::ElevatedSandboxProfileCaptureRequest {
+                permission_profile: &permission_profile,
+                workspace_roots: workspace_roots.as_slice(),
+                codex_home,
+                command: argv,
+                cwd: root,
+                // Core passes its environment on; PowerShell needs it.
+                env_map: std::env::vars().collect(),
+                timeout_ms: Some(10_000),
+                cancellation: None,
+                use_private_desktop: true,
+                proxy_enforced: false,
+                network_proxy_restricting_sid: None,
+                read_roots_override: None,
+                read_roots_include_platform_defaults: true,
+                write_roots_override: None,
+                deny_read_override: &crate::DenyReadTargets::default(),
+                deny_write_paths_override: &[],
+            },
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "run elevated capture powershell: {err:#}\n{}",
+                sandbox_log(codex_home)
+            )
+        });
+        println!("elevated capture pwsh timed_out={}", result.timed_out);
+        (
+            String::from_utf8_lossy(&result.stdout).into_owned(),
+            result.exit_code,
+        )
+    });
+}
+
+/// The same for an elevated unified exec session (pipes, not a ConPTY), which
+/// reports its exit when the runner sends it.
+#[test]
+fn elevated_session_exits_and_preserves_descendant_after_normal_exit() {
+    check_elevated_command_returns_while_descendant_runs("session", |root, codex_home, argv| {
+        current_thread_runtime().block_on(command_identity::elevated::run_elevated(
+            root,
+            codex_home,
+            argv,
+            &[],
+            /*tty*/ false,
+        ))
+    });
 }
 
 /// Observed state after a legacy workspace-write session tries to delete one
@@ -3026,6 +3247,10 @@ mod acl_cost;
 /// D283 (#1541): nested `.codex`/`.agents` folders.
 #[path = "nested_metadata_tests.rs"]
 mod nested_metadata;
+
+/// D420/D421 (#1775): repositories below the top of the writable roots.
+#[path = "repo_watch_tests.rs"]
+mod repo_watch;
 
 /// D293 (#1542 items 1 and 2): links above explicit read-only paths.
 #[path = "carve_out_link_tests.rs"]

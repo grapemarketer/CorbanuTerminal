@@ -6069,6 +6069,10 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker/child")
         .await
         .expect("child path should resolve");
+    // D404: only a running agent is interrupted. The spawn's own turn may
+    // already have ended or not yet started, so give the worker a turn of
+    // the test's own (#1875).
+    let _worker_turn = start_agent_turn(&manager, agent_id).await;
 
     let output = InterruptAgentHandler
         .handle(invocation(
@@ -6082,7 +6086,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     let (content, success) = expect_text_output(output);
     let result: InterruptAgentResult =
         serde_json::from_str(&content).expect("interrupt_agent result should be json");
-    assert_ne!(result.previous_status, AgentStatus::NotFound);
+    assert_eq!(result.previous_status, AgentStatus::Running);
     assert_eq!(success, Some(true));
     assert_eq!(
         session

@@ -211,12 +211,11 @@ impl Classifier {
         let mut argv = Command::default();
         let mut scripts = Vec::new();
         let mut previous: Option<&str> = None;
+        // #1774: whether a word so far names a shell, kept as words are
+        // added rather than checked again for each argument.
+        let mut in_shell = false;
         for arg in command {
             work::step();
-            let in_shell = argv
-                .words
-                .iter()
-                .any(|word| SHELLS.contains(&name(&word.text).as_str()));
             let script = in_shell
                 && previous.is_some_and(|flag| {
                     flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c')
@@ -224,6 +223,7 @@ impl Classifier {
             if script {
                 scripts.push(arg.as_str());
             } else {
+                in_shell |= SHELLS.contains(&name(arg).as_str());
                 argv.words.push(Word {
                     text: arg.clone(),
                     quoted: true,

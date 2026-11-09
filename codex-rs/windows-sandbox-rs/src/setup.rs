@@ -878,6 +878,14 @@ fn run_setup_exe(
     needs_elevation: bool,
     codex_home: &Path,
 ) -> Result<()> {
+    // #1827: this setup resets the sandbox users' passwords, which other
+    // tests' logons use, so tests run it only under the shared lock (and in
+    // the nextest group that serializes its holders).
+    #[cfg(test)]
+    assert!(
+        crate::unified_exec::tests::legacy_process_test_guard_is_held(),
+        "the sandbox's setup ran in a test without legacy_process_test_guard() (#1827)"
+    );
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,

@@ -5,6 +5,9 @@ the `windows_sandbox_legacy_sessions` nextest group (#1790).
 The lock (`legacy_process_test_guard()`) serializes these tests only within
 one process. Nextest runs each test in its own process, so it serializes
 them only through the test group, which selects tests by name.
+
+codex-core's tests that run the elevated setup (they stage its helpers) must
+be in the group too, through a Windows-only override (#1873).
 """
 
 import functools
@@ -21,7 +24,14 @@ CRATE_DIR = CODEX_RS / "windows-sandbox-rs"
 PACKAGE = "codex-windows-sandbox"
 GROUP = "windows_sandbox_legacy_sessions"
 GUARD = "legacy_process_test_guard"
+# Only checks whether the lock is held (#1827); it never holds it.
+HELD_CHECK = "legacy_process_test_guard_is_held"
 LOCK = "LEGACY_PROCESS_TEST_LOCK"
+CORE_PACKAGE = "codex-core"
+CORE_DIR = CODEX_RS / "core"
+# A codex-core test runs the elevated setup only with its helpers staged.
+CORE_ELEVATED_MARK = "stage_windows_sandbox_helpers"
+WINDOWS = "cfg(windows)"
 
 FN_RE = re.compile(
     r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?"
@@ -32,12 +42,12 @@ IMPL_RE = re.compile(r"^[ \t]*(?:unsafe\s+)?impl\b", re.MULTILINE)
 TEST_ATTR_RE = re.compile(r"#\[\s*(?:\w+::)*test\s*[\](]")
 RAW_STRING_RE = re.compile(r'(?:b|c)?r(#*)"')
 CHAR_RE = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^\\'\n])'")
+BRACE_RE = re.compile(r"[{}]")
+NEXT_SPECIAL_RE = re.compile(r"[/\"'rbc]")
 USE_RE = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s[^;]*;", re.MULTILINE | re.DOTALL)
 # The only filter shape the check understands, so it cannot misjudge one:
-# `package(codex-windows-sandbox) & (test(a) | test(b) | ...)`.
-FILTER_RE = re.compile(
-    rf"^package\({re.escape(PACKAGE)}\)\s*&\s*\((?P<terms>[^()]*(?:\([^()]*\)[^()]*)*)\)$"
-)
+# `package(<package>) & (test(a) | test(b) | ...)`.
+FILTER_RE = r"^package\({}\)\s*&\s*\((?P<terms>[^()]*(?:\([^()]*\)[^()]*)*)\)$"
 TERM_RE = re.compile(r"^test\(([A-Za-z0-9_:]+)\)$")
 
 
@@ -83,8 +93,11 @@ def code_only(source: str) -> tuple[str, list[str]]:
         elif char := CHAR_RE.match(source, i):
             j = char.end()
         else:
-            out.append(source[i])
-            i += 1
+            # Up to the next character that could start a comment or literal.
+            j = NEXT_SPECIAL_RE.search(source, i + 1)
+            j = n if j is None else j.start()
+            out.append(source[i:j])
+            i = j
             continue
         out.append(blank(source[i:j]))
         i = j
@@ -94,13 +107,12 @@ def code_only(source: str) -> tuple[str, list[str]]:
 
 
 def block_end(code: str, open_brace: int) -> int:
-    depth, j = 0, open_brace
-    while j < len(code):
-        depth += {"{": 1, "}": -1}.get(code[j], 0)
+    depth = 0
+    for brace in BRACE_RE.finditer(code, open_brace):
+        depth += 1 if brace.group() == "{" else -1
         if depth == 0:
-            break
-        j += 1
-    return j
+            return brace.start()
+    return len(code)
 
 
 def fn_spans(code: str) -> list[tuple[str, int, int, int]]:
@@ -132,9 +144,9 @@ def is_test_fn(code: str, fn_start: int) -> bool:
     return TEST_ATTR_RE.search(code[item_start:fn_start]) is not None
 
 
-def guard_users(sources: dict[str, str]) -> dict[str, str]:
-    """Maps each test that takes the guard, directly or through helpers or
-    other tests, to its file. Callers are followed by name. Raises ScanError
+def guard_users(sources: dict[str, str], root: str = GUARD) -> dict[str, str]:
+    """Maps each test that takes the guard (or calls `root`), directly or
+    through helpers or other tests, to its file. Callers are followed by name. Raises ScanError
     for a use it cannot follow: the lock used outside the guard, a mention
     that is not a call, a call outside a function, or a helper that nothing
     calls."""
@@ -150,13 +162,13 @@ def guard_users(sources: dict[str, str]) -> dict[str, str]:
         for match in re.finditer(rf"\b{LOCK}\b", code):
             inside = [span for span in spans[path] if span[3] < match.start() < span[2]]
             before = code[max(0, match.start() - 80) : match.start()]
-            in_guard = inside and max(inside, key=lambda span: span[1])[0] == GUARD
+            in_guard = inside and max(inside, key=lambda span: span[1])[0] in (GUARD, HELD_CHECK)
             if not re.search(r"\bstatic\s+$", before) and not in_guard:
                 line = code.count("\n", 0, match.start()) + 1
                 raise ScanError(f"{path}:{line}: {LOCK} is used outside {GUARD}")
     tests: dict[str, str] = {}
     seen: set[str] = set()
-    pending = [GUARD]
+    pending = [root]
     while pending:
         callee = pending.pop()
         if callee in seen:
@@ -201,11 +213,24 @@ def crate_guard_users() -> dict[str, str]:
     return guard_users(crate_sources())
 
 
-def crate_sources() -> dict[str, str]:
+@functools.cache
+def core_elevated_tests() -> dict[str, str]:
+    return guard_users(crate_sources(CORE_DIR), CORE_ELEVATED_MARK)
+
+
+def crate_sources(crate_dir: Path = CRATE_DIR) -> dict[str, str]:
     return {
         str(path.relative_to(REPO_ROOT)): path.read_text(encoding="utf-8")
-        for path in sorted(CRATE_DIR.rglob("*.rs"))
+        for path in sorted(crate_dir.rglob("*.rs"))
     }
+
+
+def is_ours(override: dict, package: str, platform: str | None) -> bool:
+    return (
+        override.get("test-group") == GROUP
+        and override.get("platform") == platform
+        and f"package({package})" in override.get("filter", "")
+    )
 
 
 def has_top_level_or(filter_: str) -> bool:
@@ -218,8 +243,10 @@ def has_top_level_or(filter_: str) -> bool:
     return re.search(r"\bor\b", re.sub(r"\([^()]*\)", "", filter_)) is not None
 
 
-def other_groups_claiming_the_crate(config: dict) -> list[str]:
-    """Overrides that could put the crate's tests in another group first.
+def other_groups_claiming_the_crate(
+    config: dict, package: str = PACKAGE, platform: str | None = None
+) -> list[str]:
+    """Overrides that could put the package's tests in another group first.
 
     Nextest uses the first matching override that sets a test group, and
     evaluates a profile's own overrides before the default profile's.
@@ -232,9 +259,7 @@ def other_groups_claiming_the_crate(config: dict) -> list[str]:
             ours = [
                 i
                 for i, override in enumerate(overrides)
-                if override.get("test-group") == GROUP
-                and "platform" not in override
-                and f"package({PACKAGE})" in override.get("filter", "")
+                if is_ours(override, package, platform)
             ]
             overrides = overrides[: ours[0]] if ours else overrides
         for override in overrides:
@@ -244,23 +269,23 @@ def other_groups_claiming_the_crate(config: dict) -> list[str]:
                 continue
             scoped = re.match(r"^\s*package\(([\w-]+)\)\s*&", filter_)
             # `&` binds tighter than `|`, so a top-level `|` unscopes it.
-            if scoped is None or scoped.group(1) == PACKAGE or has_top_level_or(filter_):
+            if scoped is None or scoped.group(1) == package or has_top_level_or(filter_):
                 claims.append(f"profile.{profile}: {group}: {filter_}")
     return claims
 
 
-def group_terms(config: dict) -> list[str]:
-    """The name substrings that put a test of the crate into the group."""
+def group_terms(
+    config: dict, package: str = PACKAGE, platform: str | None = None
+) -> list[str]:
+    """The name substrings that put a test of the package into the group."""
     filters = [
         override["filter"]
         for override in config.get("profile", {}).get("default", {}).get("overrides", [])
-        if override.get("test-group") == GROUP
-        and "platform" not in override
-        and f"package({PACKAGE})" in override.get("filter", "")
+        if is_ours(override, package, platform)
     ]
     if len(filters) != 1:
-        raise ValueError(f"expected one {PACKAGE} override for {GROUP}, found {filters!r}")
-    match = FILTER_RE.match(filters[0].strip())
+        raise ValueError(f"expected one {package} override for {GROUP}, found {filters!r}")
+    match = re.match(FILTER_RE.format(re.escape(package)), filters[0].strip())
     if match is None:
         raise ValueError(f"unsupported {GROUP} filter shape: {filters[0]!r}")
     terms = []
@@ -296,6 +321,32 @@ class WindowsSandboxNextestGroupTest(unittest.TestCase):
             [],
             f"tests that take {GUARD}() are missing from the {GROUP} filter in "
             f"{NEXTEST_TOML.relative_to(REPO_ROOT)}",
+        )
+
+    def test_every_core_elevated_test_is_in_the_group_on_windows(self) -> None:
+        tests = core_elevated_tests()
+        config = tomllib.loads(NEXTEST_TOML.read_text(encoding="utf-8"))
+        self.assertEqual(other_groups_claiming_the_crate(config, CORE_PACKAGE, WINDOWS), [])
+        terms = group_terms(config, CORE_PACKAGE, WINDOWS)
+        self.assertEqual(
+            missing_from_group(tests, terms),
+            [],
+            f"codex-core tests that call {CORE_ELEVATED_MARK}() are missing from the "
+            f"Windows codex-core {GROUP} override in {NEXTEST_TOML.relative_to(REPO_ROOT)}",
+        )
+
+    def test_core_scan_finds_the_elevated_tests(self) -> None:
+        # Both the integration tests' helper and the unit tests' one, which
+        # another file imports.
+        self.assertEqual(
+            sorted(core_elevated_tests()),
+            [
+                "pf_27_s06_d2_vault_unreadable_through_tool_launch_under_workspace_write",
+                "pf_27_s06_elevated_launch_cannot_read_protected_files_or_core_memory",
+                "sec_win_1863_command_exec_localhost_unc_cwd_fails_closed",
+                "windows_elevated_does_not_create_missing_workspace_metadata",
+                "windows_elevated_enforces_deny_read_and_protects_setup_marker",
+            ],
         )
 
     def test_scan_finds_direct_helper_and_nested_helper_users(self) -> None:
@@ -380,6 +431,17 @@ fn through_an_extern_helper() {
             ],
         )
 
+    def test_scan_accepts_the_held_check(self) -> None:
+        source = """
+static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+fn legacy_process_test_guard() -> MutexGuard<'static, ()> { LEGACY_PROCESS_TEST_LOCK.lock().unwrap() }
+fn legacy_process_test_guard_is_held() -> bool { LEGACY_PROCESS_TEST_LOCK.try_lock().is_err() }
+fn setup() { assert!(legacy_process_test_guard_is_held()); }
+#[test]
+fn legacy_one() { let _guard = legacy_process_test_guard(); setup(); }
+"""
+        self.assertEqual(sorted(guard_users({"x.rs": source})), ["legacy_one"])
+
     def test_scan_fails_on_uses_it_cannot_follow(self) -> None:
         for case, source in {
             "pointer": "fn h() { let _g = legacy_process_test_guard(); }\n#[test]\nfn t() { run(h); }",
@@ -440,6 +502,29 @@ fn through_an_extern_helper() {
             }
             with self.subTest(filter=filter_), self.assertRaises(ValueError):
                 group_terms(config)
+
+    def test_core_override_must_be_windows_only_and_first(self) -> None:
+        core = {
+            "platform": WINDOWS,
+            "filter": "package(codex-core) & (test(windows_elevated_x))",
+            "test-group": GROUP,
+        }
+        apply_patch = {
+            "filter": "package(codex-core) & kind(test) & test(apply_patch_cli)",
+            "test-group": "core_apply_patch_cli_integration",
+        }
+        for overrides, claims in (
+            ([core, apply_patch], []),
+            ([apply_patch, core], [f"profile.default: {apply_patch['test-group']}: {apply_patch['filter']}"]),
+        ):
+            config = {"profile": {"default": {"overrides": overrides}}}
+            with self.subTest(order=[o["test-group"] for o in overrides]):
+                self.assertEqual(other_groups_claiming_the_crate(config, CORE_PACKAGE, WINDOWS), claims)
+                self.assertEqual(group_terms(config, CORE_PACKAGE, WINDOWS), ["windows_elevated_x"])
+        # Without the platform it is not the Windows override.
+        config = {"profile": {"default": {"overrides": [{**core, "platform": None}]}}}
+        with self.assertRaises(ValueError):
+            group_terms(config, CORE_PACKAGE, WINDOWS)
 
 
 if __name__ == "__main__":

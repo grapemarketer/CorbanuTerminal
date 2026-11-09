@@ -1995,10 +1995,11 @@ async fn warn_unlabelled_writable_roots<Rq, Out, T>(
     }
 }
 
-/// D424 (#1775): after a run in the non-admin Windows sandbox, tells the
-/// person right away about the folders recorded as possibly planted in the
-/// run's writable roots (a `.git` git would run hooks from, a `.codex` or
-/// `.agents`), rather than only at the next start. Display only.
+/// D424 (#1775): after a run in the Windows sandbox (non-admin, or D425
+/// (#1846) elevated), tells the person right away about the folders
+/// recorded as possibly planted in the run's writable roots (a `.git` git
+/// would run hooks from, a `.codex` or `.agents`), rather than only at the
+/// next start. Display only.
 async fn warn_planted_after_run<Rq, Out, T>(
     tool: &T,
     req: &Rq,
@@ -2008,10 +2009,17 @@ async fn warn_planted_after_run<Rq, Out, T>(
 ) where
     T: ToolRuntime<Rq, Out>,
 {
-    // Only non-admin sessions record them.
+    // Both Windows sandboxes record them (the elevated one since D425).
     if attempt.sandbox != SandboxType::WindowsRestrictedToken
-        || attempt.windows_sandbox_level != WindowsSandboxLevel::RestrictedToken
+        || attempt.windows_sandbox_level == WindowsSandboxLevel::Disabled
     {
+        return;
+    }
+    // Usually nothing was recorded: then the writable roots aren't needed.
+    if !crate::tools::writable_root_notices::planted_notice_pending(
+        tool_ctx.session.thread_id(),
+        mark,
+    ) {
         return;
     }
     let Ok(cwd) = attempt.sandbox_cwd.to_abs_path() else {

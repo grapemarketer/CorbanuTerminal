@@ -1247,6 +1247,26 @@ pub(crate) unsafe fn file_identity(handle: HANDLE) -> std::io::Result<(u64, [u8;
     Ok((info.VolumeSerialNumber, info.FileId.Identifier))
 }
 
+/// D420 (#1775): how many names the file at `path` has (hard links), the
+/// file itself if it is a link; `None` when it can't be read.
+pub(crate) fn link_count(path: &Path) -> Option<u32> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(0x7)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    // SAFETY: the handle is open for the call.
+    unsafe { file_info(file.as_raw_handle() as _) }
+        .ok()
+        .map(|info| info.nNumberOfLinks)
+}
+
 unsafe fn file_info(handle: HANDLE) -> std::io::Result<BY_HANDLE_FILE_INFORMATION> {
     let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
     if GetFileInformationByHandle(handle, &mut info) == 0 {
