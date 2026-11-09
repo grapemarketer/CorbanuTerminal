@@ -395,13 +395,16 @@ fn shared_folder_prints_match_one_look_per_repository() {
         .iter()
         .map(|entry| fingerprint(entry, &roots))
         .collect();
+    // One look per git folder: three, not six.
+    let looks = folders.0.lock().expect("looks").len();
     assert_eq!(
         (
             shared == alone,
+            looks,
             shared[1]
                 .keys()
                 .any(|name| name.starts_with("gitdir/hooks/"))
         ),
-        (true, true)
+        (true, 3, true)
     );
 }

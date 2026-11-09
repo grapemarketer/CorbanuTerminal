@@ -381,10 +381,10 @@ together with decision 1.
    either way.
    Profiled (#1909, same runner type): the `repo` client's walk is slow
    because the fixture has 47,141 folders (the 38k-file tree has 3,946),
-   not because it is a `repo` client. The walk takes 0.39–0.56 s and is
-   within about 5% of only opening and listing each folder (0.35–0.37 s
-   on 4 threads; more threads don't help, and listing through handles
-   instead of paths isn't faster). Of the rest, the repositories took
+   not because it is a `repo` client. The walk takes 0.39–0.56 s
+   (runners vary); in one run it took 0.39 s against 0.37 s for only
+   opening and listing each folder on 4 threads. More threads don't help,
+   and listing through handles instead of paths isn't faster. Of the rest, the repositories took
    46 ms because each `.repo\projects` git folder was looked through
    twice (as a repository and through its work tree's `.git` file); one
    look per folder brings that to 29.5 ms and the start and end to about

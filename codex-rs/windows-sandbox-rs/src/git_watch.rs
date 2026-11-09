@@ -3,7 +3,7 @@
 //! makes there can be told apart from git's own bookkeeping.
 //!
 //! Git reads a repository's config and runs its hooks with the person's
-//! full rights whenever they (or an editor) run git there. [`fingerprint`]
+//! full rights whenever they (or an editor) run git there. [`fingerprint_with`]
 //! records, by content, the small files git reads programs from (`config`,
 //! `config.worktree`, `commondir`, `gitdir`, `hooks\*`, rebase and sequencer
 //! steps, the legacy `remotes`/`branches` definitions), whether the files
