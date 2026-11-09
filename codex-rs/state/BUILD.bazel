@@ -13,6 +13,16 @@ codex_rust_crate(
     crate_name = "codex_state",
     # Several integration tests share this helper through `#[path]`.
     integration_compile_data_extra = ["src/runtime/accounting_late_import_test_support.rs"],
+    # Two of the wall-clock bounds `unit_test_tags` reserves cores for (below)
+    # still failed on the native Windows runner while other work kept its
+    # four cores busy (#905, #1881): the state unit tests took 750 s there,
+    # not the usual 100-210 s. These two run in `state-unit-tests-alone`, one
+    # at a time and `exclusive` (after every build action and every other
+    # test), and are skipped here.
+    unit_test_alone = [
+        "runtime::accounting::store::tests::expiry_at_the_detail_horizon_never_holds_up_another_writer",
+        "runtime::accounting::store::writer::tests::ten_sessions_on_one_home_wait_briefly_and_lose_no_record",
+    ],
     # Several unit tests bound how long a request waits on the state DB, and
     # use more than the one core Bazel reserves per test by default: libtest
     # runs one test per core unless RUST_TEST_THREADS says otherwise, and
