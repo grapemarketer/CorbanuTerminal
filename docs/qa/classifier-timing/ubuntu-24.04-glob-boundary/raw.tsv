@@ -1,0 +1,13 @@
+pattern	units	bytes	run	ns	verdict
+glob_alternatives	2038	11144	warmup	43146191	None
+glob_alternatives	2038	11144	1	41457116	None
+glob_alternatives	2038	11144	2	40896101	None
+glob_alternatives	2038	11144	3	40889228	None
+glob_alternatives	2038	11144	4	41119477	None
+glob_alternatives	2038	11144	5	41400530	None
+glob_alternatives	2039	11150	warmup	43490312	Some(UnseenCode)
+glob_alternatives	2039	11150	1	41429484	Some(UnseenCode)
+glob_alternatives	2039	11150	2	41082338	Some(UnseenCode)
+glob_alternatives	2039	11150	3	40936386	Some(UnseenCode)
+glob_alternatives	2039	11150	4	41136819	Some(UnseenCode)
+glob_alternatives	2039	11150	5	41398226	Some(UnseenCode)
