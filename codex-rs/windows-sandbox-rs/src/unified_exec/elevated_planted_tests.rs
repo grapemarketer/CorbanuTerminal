@@ -287,7 +287,7 @@ fn sec_win_1896_elevated_capture_flags_changes_inside_nested_metadata() {
 /// rewritten with the same contents, or left alone, doesn't count. (No
 /// elevation needed.)
 #[test]
-fn sec_win_1896_records_only_watch_flags_changes_inside_nested_metadata() {
+fn sec_win_1896_elevated_records_only_watch_flags_changes_inside_nested_metadata() {
     let _guard = legacy_process_test_guard();
     let test_root = user_owned_test_root();
     let root = canonical(test_root.path());
