@@ -78,6 +78,7 @@ use crate::oauth::StoredOAuthTokens;
 use crate::oauth::resolve_oauth_tokens_from_store_policy;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::protocol_mode::McpProtocolMode;
+use crate::startup_error::auth_error_with_reason;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -1359,7 +1360,8 @@ async fn create_oauth_transport_and_runtime(
             &initial_tokens.client_id,
             initial_tokens.token_response.0.clone(),
         )
-        .await?;
+        .await
+        .map_err(auth_error_with_reason)?;
 
     let manager = match oauth_state {
         OAuthState::Authorized(manager) => manager,

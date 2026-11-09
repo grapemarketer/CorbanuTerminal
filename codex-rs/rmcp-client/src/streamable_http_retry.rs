@@ -120,6 +120,9 @@ impl RmcpClient {
 
     fn is_retryable_client_initialize_error(error: &rmcp::service::ClientInitializeError) -> bool {
         match error {
+            rmcp::service::ClientInitializeError::LegacyFallbackFailed { fallback, .. } => {
+                Self::is_retryable_client_initialize_error(fallback)
+            }
             rmcp::service::ClientInitializeError::TransportError { error, context }
                 if matches!(
                     context.as_ref(),
@@ -240,10 +243,25 @@ pub(super) async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("handshaking with MCP server failed: {source}")]
+#[error("handshaking with MCP server failed: {}", initialize_error_message(.source))]
 pub(super) struct HandshakeError {
     #[source]
     pub(super) source: rmcp::service::ClientInitializeError,
+}
+
+/// rmcp's `LegacyFallbackFailed` displays a fixed string without either phase's
+/// reason; name both so startup errors (e.g. "Auth required") stay readable.
+fn initialize_error_message(error: &rmcp::service::ClientInitializeError) -> String {
+    match error {
+        rmcp::service::ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
+            format!(
+                "{} (legacy initialize after server/discover failed: {})",
+                initialize_error_message(fallback),
+                initialize_error_message(discover)
+            )
+        }
+        error => error.to_string(),
+    }
 }
 
 #[cfg(test)]
