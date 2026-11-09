@@ -397,3 +397,218 @@ fn sec_win_1810_legacy_format_profile_with_writable_inside_protected_folder_is_r
         Ok(None)
     );
 }
+
+/// D398 (#1766): the non-admin resolver (`command/exec`, the exec server)
+/// compares writable roots by real path, so a working folder spelled through
+/// a `subst` drive, an 8.3 short name or in lower case resolves as its real
+/// path does, with the same extra deny-write paths (by real path). A
+/// junction did already. A working folder leading out of the workspace, or a
+/// `subst` drive at another folder, is still refused. The agent path and the
+/// elevated resolver accept every spelling, as before.
+#[cfg(windows)]
+#[test]
+fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
+    use std::process::Command;
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let base = dunce::canonicalize(temp_dir.path()).expect("canonical temp dir");
+    let parent = base.join("Long Parent Folder");
+    let workspace = parent.join("Workspace Folder");
+    let outside = base.join("Outside Folder");
+    for dir in [
+        workspace.join("docs"),
+        workspace.join(".git"),
+        outside.clone(),
+    ] {
+        std::fs::create_dir_all(&dir).expect("create fixture folders");
+    }
+    let junction = |name: &str, target: &Path| {
+        let link = base.join(name);
+        let output = Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        assert!(output.status.success(), "mklink /J: {output:?}");
+        link
+    };
+    // (drive, made): removed at the end.
+    let subst = |target: &Path| {
+        let drive = ('M'..='Z')
+            .rev()
+            .map(|letter| format!("{letter}:"))
+            .find(|drive| !Path::new(&format!("{drive}\\")).exists())
+            .expect("a free drive letter");
+        let made = Command::new("subst")
+            .arg(&drive)
+            .arg(target)
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(
+            made || std::env::var_os("CORBANU_TEST_REQUIRE_SUBST").is_none(),
+            "subst {drive} failed"
+        );
+        made.then_some(drive)
+    };
+    let workspace_drive = subst(&parent);
+    // Only where the volume makes 8.3 names (CI's temp drive doesn't); the
+    // `codex-core` probe covers them on the system drive.
+    let short = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('{}').ShortPath",
+            workspace.display()
+        ))
+        .output()
+        .ok()
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+        .filter(|short| short != &workspace && short.is_dir());
+
+    let absolute = |path: &Path| AbsolutePathBuf::from_absolute_path(path).expect("absolute");
+    let entry = |path: FileSystemPath, access| FileSystemSandboxEntry::new(path, access);
+    let special = |value| FileSystemPath::Special { value };
+    let profiles = |workspace: &Path| {
+        let workspace = absolute(workspace);
+        let with = |extra: Vec<FileSystemSandboxEntry>| {
+            let mut entries = vec![
+                entry(
+                    special(FileSystemSpecialPath::Root),
+                    FileSystemAccessMode::Read,
+                ),
+                entry(
+                    special(FileSystemSpecialPath::project_roots(None)),
+                    FileSystemAccessMode::Write,
+                ),
+            ];
+            entries.extend(extra);
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(entries),
+                NetworkSandboxPolicy::Restricted,
+            )
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace))
+        };
+        [
+            with(Vec::new()),
+            with(vec![entry(
+                special(FileSystemSpecialPath::project_roots(Some(
+                    "docs".to_string(),
+                ))),
+                FileSystemAccessMode::Read,
+            )]),
+            // A read-only folder that doesn't exist yet.
+            with(vec![entry(
+                special(FileSystemSpecialPath::project_roots(Some(
+                    "missing".to_string(),
+                ))),
+                FileSystemAccessMode::Read,
+            )]),
+        ]
+    };
+    // The non-admin resolver's answer, deny-write paths by real path.
+    let non_admin = |profile: &PermissionProfile, cwd: &Path| {
+        resolve_windows_restricted_token_filesystem_overrides(
+            SandboxType::WindowsRestrictedToken,
+            profile,
+            &absolute(cwd),
+            WindowsSandboxLevel::RestrictedToken,
+        )
+        .map(|overrides| {
+            overrides.map(|overrides| {
+                let mut paths: Vec<PathBuf> = overrides
+                    .additional_deny_write_paths
+                    .iter()
+                    .map(|path| {
+                        canonicalize_allowing_missing(path.as_path()).expect("real deny path")
+                    })
+                    .collect();
+                paths.sort();
+                (paths, overrides.write_roots_override.is_some())
+            })
+        })
+    };
+    let others_accept = |profile: &PermissionProfile, cwd: &Path| {
+        refuse_unenforceable_windows_restricted_token_profile(
+            SandboxType::WindowsRestrictedToken,
+            profile,
+            &absolute(cwd),
+            WindowsSandboxLevel::RestrictedToken,
+        )
+        .is_ok()
+            && resolve_windows_elevated_filesystem_overrides(
+                SandboxType::WindowsRestrictedToken,
+                profile,
+                &absolute(cwd),
+                /*use_windows_elevated_backend*/ true,
+            )
+            .is_ok()
+    };
+
+    let canonical: Vec<_> = profiles(&workspace)
+        .iter()
+        .map(|profile| non_admin(profile, &workspace))
+        .collect();
+    // What the canonical folder gets: no extra deny-write path for the plain
+    // profile (the backend protects `.git` itself), and the read-only folder,
+    // existing or not, for the others.
+    assert_eq!(
+        canonical,
+        vec![
+            Ok(None),
+            Ok(Some((vec![workspace.join("docs")], false))),
+            Ok(Some((vec![workspace.join("missing")], false))),
+        ]
+    );
+    let mut forms = vec![
+        (
+            "lower case",
+            PathBuf::from(workspace.display().to_string().to_lowercase()),
+        ),
+        ("junction", junction("cwd-junction", &workspace)),
+    ];
+    if let Some(drive) = &workspace_drive {
+        forms.push(("subst", PathBuf::from(format!("{drive}\\Workspace Folder"))));
+    }
+    if let Some(short) = short {
+        forms.push(("8.3 short name", short));
+    }
+    for (form, cwd) in &forms {
+        // The workspace as spelled by the working folder, and by its real
+        // path (two spellings of one root in the legacy projection).
+        for profile_root in [cwd, &workspace] {
+            let profiles = profiles(profile_root);
+            let answers: Vec<_> = profiles.iter().map(|p| non_admin(p, cwd)).collect();
+            assert_eq!(
+                &answers,
+                &canonical,
+                "{form} {}, workspace {}",
+                cwd.display(),
+                profile_root.display()
+            );
+            assert!(
+                profiles.iter().all(|p| others_accept(p, cwd)),
+                "{form} {}",
+                cwd.display()
+            );
+        }
+    }
+
+    // Leading out of the workspace: refused, as before.
+    let outside_drive = subst(&outside);
+    let mut leading_out = vec![junction("out-junction", &outside)];
+    if let Some(drive) = &outside_drive {
+        leading_out.push(PathBuf::from(format!("{drive}\\")));
+    }
+    for cwd in &leading_out {
+        for profile in profiles(&workspace) {
+            let refusal = non_admin(&profile, cwd).expect_err("refused");
+            assert!(
+                refusal.contains("cannot enforce split writable root sets directly"),
+                "{}: {refusal}",
+                cwd.display()
+            );
+        }
+    }
+    for drive in workspace_drive.iter().chain(&outside_drive) {
+        let _ = Command::new("subst").args([drive.as_str(), "/d"]).status();
+    }
+}

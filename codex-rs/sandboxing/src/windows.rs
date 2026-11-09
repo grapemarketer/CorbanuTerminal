@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -252,14 +253,21 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         sandbox_policy_cwd.as_path(),
     );
     let legacy_writable_roots = legacy_projection.get_writable_roots_with_cwd(sandbox_policy_cwd);
-    let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
+    // D398 (#1766): both sets compare by real path. The split roots are
+    // already partly resolved (a `subst` or mapped drive, an 8.3 name or the
+    // letter case), the legacy roots are as spelled, so a working folder
+    // spelled one of those ways differed by spelling only. Real paths are
+    // equal only for the same folders, where both grants land.
+    let legacy_real_roots: Vec<PathBuf> = legacy_writable_roots
         .iter()
-        .map(|root| normalize_windows_override_path(root.root.as_path()))
+        .map(|root| real_windows_override_path(root.root.as_path()))
         .collect::<std::result::Result<_, _>>()?;
-    let split_root_paths: BTreeSet<PathBuf> = split_writable_roots
+    let legacy_root_paths: BTreeSet<&PathBuf> = legacy_real_roots.iter().collect();
+    let split_real_roots: Vec<PathBuf> = split_writable_roots
         .iter()
-        .map(|root| normalize_windows_override_path(root.root.as_path()))
+        .map(|root| real_windows_override_path(root.root.as_path()))
         .collect::<std::result::Result<_, _>>()?;
+    let split_root_paths: BTreeSet<&PathBuf> = split_real_roots.iter().collect();
 
     if legacy_root_paths != split_root_paths {
         return Err(
@@ -268,24 +276,31 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         );
     }
 
+    // The legacy read-only paths by real path. Two spellings of one root
+    // (the workspace by its real path, the working folder through a `subst`
+    // drive) each bring theirs; the backend denies all of them, whichever
+    // root brought it.
+    let mut legacy_read_only: BTreeMap<&PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    for (legacy_root, real_root) in legacy_writable_roots.iter().zip(&legacy_real_roots) {
+        let paths = legacy_read_only.entry(real_root).or_default();
+        for read_only_subpath in &legacy_root.read_only_subpaths {
+            paths.insert(real_windows_override_path(read_only_subpath.as_path())?);
+        }
+    }
+
     let mut additional_deny_write_paths = BTreeSet::new();
-    for split_root in &split_writable_roots {
-        let split_root_path = normalize_windows_override_path(split_root.root.as_path())?;
-        let Some(legacy_root) = legacy_writable_roots.iter().find(|candidate| {
-            normalize_windows_override_path(candidate.root.as_path())
-                .is_ok_and(|candidate_path| candidate_path == split_root_path)
-        }) else {
+    for (split_root, real_root) in split_writable_roots.iter().zip(&split_real_roots) {
+        let Some(already_read_only) = legacy_read_only.get(real_root) else {
             return Err(
                 "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
                     .to_string(),
             );
         };
-
         for read_only_subpath in &split_root.read_only_subpaths {
-            if !legacy_root
-                .read_only_subpaths
-                .iter()
-                .any(|candidate| candidate == read_only_subpath)
+            // Any other read-only path is passed on as an extra deny-write
+            // path, as spelled.
+            if !already_read_only
+                .contains(&real_windows_override_path(read_only_subpath.as_path())?)
             {
                 additional_deny_write_paths.insert(normalize_windows_override_path(
                     read_only_subpath.as_path(),
@@ -464,6 +479,16 @@ fn normalize_windows_override_path(path: &Path) -> std::result::Result<PathBuf, 
     AbsolutePathBuf::from_absolute_path(dunce::simplified(path))
         .map(AbsolutePathBuf::into_path_buf)
         .map_err(|err| err.to_string())
+}
+
+/// D398: `path` by its real location ([`canonicalize_allowing_missing`]),
+/// or as [`normalize_windows_override_path`] has it when that can't be
+/// resolved.
+fn real_windows_override_path(path: &Path) -> std::result::Result<PathBuf, String> {
+    match canonicalize_allowing_missing(path) {
+        Some(real) => normalize_windows_override_path(&real),
+        None => normalize_windows_override_path(path),
+    }
 }
 
 fn windows_policy_has_root_read_access(

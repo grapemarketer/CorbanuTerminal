@@ -441,6 +441,31 @@ jobs:
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_1801 --nocapture --test-threads=1 2>&1 | tee d1801.log
           grep -q "test result: ok. 1 passed" d1801.log
           rm d1801.log
+      - name: command/exec with a non-canonical working folder (D398, #1766)
+        if: ${{ !cancelled() }}
+        shell: bash
+        # Every spelling must be made here: subst, mapped drive (the
+        # administrative share), 8.3 short name (turned on for C:, which the
+        # normal-session step below reuses) and folder symbolic links. The
+        # elevated sandbox runs the same spellings for comparison.
+        env:
+          CORBANU_TEST_REQUIRE_SYMLINKS: "1"
+          CORBANU_TEST_REQUIRE_SUBST: "1"
+          CORBANU_TEST_REQUIRE_MAPPED_DRIVE: "1"
+          CORBANU_TEST_REQUIRE_8DOT3: "1"
+          CODEX_TEST_D398_ELEVATED: "1"
+        run: |
+          set -euo pipefail
+          bin_dir="${CARGO_TARGET_DIR}/debug"
+          export CARGO_BIN_EXE_codex_windows_sandbox_setup="$(cygpath -w "${bin_dir}/codex-windows-sandbox-setup.exe")"
+          export CARGO_BIN_EXE_codex_command_runner="$(cygpath -w "${bin_dir}/codex-command-runner.exe")"
+          fsutil 8dot3name set C: 0
+          # Both probes run before a failure stops the step.
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-core --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-core.log || true
+          cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-sandboxing --lib -- sec_win_d398 --nocapture --test-threads=1 2>&1 | tee d398-sandboxing.log || true
+          grep -q "test result: ok. 1 passed" d398-core.log
+          grep -q "test result: ok. 1 passed" d398-sandboxing.log
+          rm d398-core.log d398-sandboxing.log
       # The runners are elevated, which hid #294/#295. This reruns those probes
       # with the token of an administrator's normal session (medium integrity).
       # Not covered here: a separate non-administrator account, and the
@@ -762,6 +787,27 @@ jobs:
             Assert-Tests $sandboxing 'sec_win_1801' 1
             & $medium -Program $sandboxing -Arguments @('sec_win_1801', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "#1801 resolver refusals failed in a normal session" }
+            # D398 (#1766): command/exec with a non-canonical working folder.
+            # The mapped drive uses a share of this step's temp folder (a
+            # normal session may not use the administrative share); subst
+            # may not be made in a normal session and is reported as such.
+            Assert-Tests $core 'sec_win_d398' 1
+            New-SmbShare -Name d398 -Path $temp -FullAccess 'Everyone' -ErrorAction Stop | Out-Null
+            try {
+              $env:CODEX_TEST_D398_SHARE = '\\localhost\d398'
+              $env:CODEX_TEST_D398_SHARE_DIR = $temp
+              $env:CORBANU_TEST_REQUIRE_8DOT3 = '1'
+              $out = & $medium -Program $core -Arguments @('sec_win_d398', '--nocapture', '--test-threads=1')
+              $code = $LASTEXITCODE
+              $out
+            } finally {
+              Remove-SmbShare -Name d398 -Force
+              Remove-Item -ErrorAction SilentlyContinue Env:CODEX_TEST_D398_SHARE, Env:CODEX_TEST_D398_SHARE_DIR, Env:CORBANU_TEST_REQUIRE_8DOT3
+            }
+            if ($code -ne 0 -or -not ($out -match 'test result: ok\. 1 passed')) { throw "D398 command/exec failed in a normal session" }
+            Assert-Tests $sandboxing 'sec_win_d398' 1
+            & $medium -Program $sandboxing -Arguments @('sec_win_d398', '--nocapture', '--test-threads=1')
+            if ($LASTEXITCODE -ne 0) { throw "D398 resolver failed in a normal session" }
             # #1506 item 2: planted .codex/.agents aren't loaded until confirmed.
             Assert-Tests $core 'sec_win_1506' 1
             & $medium -Program $core -Arguments @('sec_win_1506', '--nocapture', '--test-threads=1')

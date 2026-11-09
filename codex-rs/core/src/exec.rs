@@ -1255,3 +1255,7 @@ mod windows_unc_tests;
 #[cfg(test)]
 #[path = "exec_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "exec_windows_d398_tests.rs"]
+mod windows_d398_tests;
