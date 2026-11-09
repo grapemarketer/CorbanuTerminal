@@ -1235,18 +1235,15 @@ impl Classifier {
             let marks: Vec<rerun::GitWordMark> = words
                 .iter()
                 .map(|word| rerun::GitWordMark {
-                    held: false,
                     // Other unseen words are `simple_command`'s, which knows
                     // the values the line sets (`r=origin; git fetch "$r"`).
                     seen: true,
                     loose: (word.dynamic && word.splits)
                         // A glob whose first characters may match `-` (`*`,
                         // `-*`, `"-"*`).
-                        || (word.globs
-                            && word
-                                .text
-                                .trim_start_matches('-')
-                                .starts_with(['*', '?', '[', '^'])),
+                        // A glob that starts with `-` or a glob character may
+                        // match `--upload-pack=…` (`*`, `--up*`, `"-"*`).
+                        || (word.globs && word.text.starts_with(['-', '*', '?', '[', '^'])),
                 })
                 .collect();
             let options_after = rerun::git_options_after(texts, &marks);

@@ -169,14 +169,12 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         "git push origin refs/heads/\"$branch\"",
         "git push origin origin/\"$branch\"",
         "git push origin -- \"$branch\"",
-        // Quoted expansions do not split, visible starts do not glob into
-        // options, and redirections are not git's words.
+        // Quoted expansions do not split, and visible starts do not glob
+        // into options.
         "git push . HEAD:\"$b\"",
         "git fetch --depth=\"$n\" .",
         "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
         "git fetch origin refs/heads/*:refs/remotes/origin/*",
-        "git fetch origin >\"$log\" 2>&1",
-        "git fetch origin 2>\"$err\"",
         "git fetch --multiple origin upstream",
         "sudo -u git git fetch origin",
         "git clone https://x.example/r -- \"$dir\"",
@@ -191,6 +189,9 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         "git archive -o \"$out\" HEAD",
         "git remote -v",
         "git remote rename a \"$b\"",
+        "git remote show origin",
+        "git remote update",
+        "git remote set-head origin -a",
         "git submodule update --init \"$path\"",
         "git log \"$range\"",
         "git checkout \"$branch\"",
@@ -300,6 +301,41 @@ fn issue_1876_review_2_lines_ask() {
     );
 }
 
+/// Review round 3 on #1897. Each of these asks; items 2 and 3 were quiet
+/// on the head reviewed (45b4229b), item 1 there only.
+#[test]
+fn issue_1876_review_3_lines_ask() {
+    let lines = [
+        // Item 1: a quoted or escaped `>` is no redirection.
+        "git fetch origin 'x>' \"$v\"",
+        "git fetch origin \"x>\" \"$v\"",
+        "git fetch origin x\\> \"$v\"",
+        "git fetch --refmap='x>' \"$r\"",
+        "git fetch origin 'x<' \"$v\"",
+        // An unseen redirection target asks again, as on e81e45f9.
+        "git fetch origin >\"$log\" 2>&1",
+        // Item 2: a glob that starts with `-` and then text.
+        "git fetch origin --up*",
+        "git clone --upload-pac[k]=sh u",
+        "git push . --rec*",
+        // Item 3: these `remote` verbs connect to their remote or URL.
+        "git remote show \"$r\"",
+        "git remote prune \"$r\"",
+        "git remote set-head \"$r\" -a",
+        "git remote show -n \"$r\"",
+        // Optional: a cut before the subcommand (`alias.git=fetch`).
+        "git git log \"$v\"",
+        // Accepted new prompts.
+        "b=main; git push origin HEAD:$b",
+        "URL=https://x; git clone $URL",
+        "git push origin $1",
+    ];
+    assert_eq!(
+        wrong(&lines, Some(ProtectedActionKind::UnseenCode)),
+        Vec::<String>::new()
+    );
+}
+
 /// Route 2: a remote stored in `.git/config` or `.gitmodules` is not on the
 /// line, so these stay as on main: quiet, since git refuses `ext` unless
 /// config allows it. A line that itself allows `ext` asks (on main too).
@@ -391,6 +427,11 @@ fn issue_1876_remote_scan_is_linear() {
             "git push origin {}",
         ),
         ("globs after the remote", "refs/* ", "git push origin {}"),
+        (
+            "dashed globs after the remote",
+            "--up* ",
+            "git fetch origin {}",
+        ),
         (
             "global options before the subcommand",
             "-C d ",
