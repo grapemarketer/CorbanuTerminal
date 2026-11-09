@@ -12,6 +12,10 @@ pub(crate) struct Handler;
 const NOT_RUNNING_EFFECT: &str =
     "not running: nothing was interrupted and the agent was not started";
 
+/// What an interrupt does to a just-spawned agent whose first turn has not
+/// started yet (D435).
+const PENDING_EFFECT: &str = "pending: interrupt sent to stop its first turn; a first turn still held back (by the agent limit, the kill switch or its account) is not cancelled; no new turn was started";
+
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("interrupt_agent")
@@ -127,14 +131,19 @@ async fn handle_interrupt_agent(
     // D404 (#1796): an agent without a running turn is neither interrupted
     // nor woken (the audit message below would start a turn): the call only
     // reports its status, at every security level.
-    if status != AgentStatus::Running {
+    // D435: a just-spawned agent whose first turn hasn't started still gets
+    // the interrupt, which stops that turn, but not the message, which would
+    // start another. A session reloaded without a turn also reads
+    // `PendingInit`; it is idle, so D404 applies.
+    let pending = status == AgentStatus::PendingInit
+        && session
+            .services
+            .agent_control
+            .spawned_with_first_turn(agent_id)
+            .await;
+    if !pending && status != AgentStatus::Running {
         return Ok(not_running);
     }
-    let process_effect = "model turn aborted; active turn-owned tool processes receive SIGTERM cleanup before abort; durable unified-exec background processes are preserved and remain inspectable in /ps".to_string();
-    let audit_copy = format!(
-        "Actor: {actor}\nTarget: {target}\nReason: {reason}\nSuperseding task/dispatch: {}\nProcess effect: {process_effect}",
-        superseding_task.as_deref().unwrap_or("none")
-    );
     match session
         .services
         .agent_control
@@ -156,11 +165,29 @@ async fn handle_interrupt_agent(
         }
         Err(err) => return Err(collab_agent_error(agent_id, err)),
     }
+    let interrupted = SubAgentActivityItem {
+        id: call_id.clone(),
+        agent_thread_id: agent_id,
+        agent_path: receiver_agent_path.clone(),
+        kind: SubAgentActivityKind::Interrupted,
+    };
+    if pending {
+        emit_sub_agent_activity(&session, &turn, interrupted).await;
+        return Ok(InterruptAgentResult {
+            process_effect: PENDING_EFFECT.to_string(),
+            ..not_running
+        });
+    }
+    let process_effect = "model turn aborted; active turn-owned tool processes receive SIGTERM cleanup before abort; durable unified-exec background processes are preserved and remain inspectable in /ps".to_string();
+    let audit_copy = format!(
+        "Actor: {actor}\nTarget: {target}\nReason: {reason}\nSuperseding task/dispatch: {}\nProcess effect: {process_effect}",
+        superseding_task.as_deref().unwrap_or("none")
+    );
     // The runtime owns this plaintext audit record. Keep it typed as a control request so the
     // target pane and durable mailbox retain the full actor/reason/process tuple.
     let mut communication = InterAgentCommunication::new(
         actor_path,
-        receiver_agent_path.clone(),
+        receiver_agent_path,
         Vec::new(),
         format!("CONTROL EVENT — INTERRUPT\n{audit_copy}"),
         /*trigger_turn*/ true,
@@ -169,7 +196,7 @@ async fn handle_interrupt_agent(
     communication
         .metadata
         .get_or_insert_with(ResponseItemMetadata::default)
-        .source_call_id = Some(call_id.clone());
+        .source_call_id = Some(call_id);
     let context =
         AgentCommunicationContext::new(AgentCommunicationKind::Message, session.thread_id);
     session
@@ -178,17 +205,7 @@ async fn handle_interrupt_agent(
         .send_inter_agent_communication(agent_id, communication, context, Some(turn.sub_id.clone()))
         .await
         .map_err(|err| collab_agent_error(agent_id, err))?;
-    emit_sub_agent_activity(
-        &session,
-        &turn,
-        SubAgentActivityItem {
-            id: call_id,
-            agent_thread_id: agent_id,
-            agent_path: receiver_agent_path,
-            kind: SubAgentActivityKind::Interrupted,
-        },
-    )
-    .await;
+    emit_sub_agent_activity(&session, &turn, interrupted).await;
 
     Ok(InterruptAgentResult {
         previous_status: status,

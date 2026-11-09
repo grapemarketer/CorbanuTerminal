@@ -6231,6 +6231,313 @@ async fn d404_interrupting_an_agent_that_is_not_running_only_reports_its_status(
     assert_eq!(reaches_agent(), before + 2, "interrupt and its notice");
 }
 
+/// D435: interrupting a pending agent (just spawned, its first turn not yet
+/// begun) sends the interrupt, which stops that first turn, but not the
+/// notice, which would start another.
+#[tokio::test]
+async fn d435_interrupting_a_pending_agent_stops_its_first_turn_without_waking_it() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let count = |pick: fn(&Op) -> bool| {
+        manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(thread_id, op)| *thread_id == agent_id && pick(op))
+            .count()
+    };
+    let interrupts = || count(|op| matches!(op, Op::Interrupt));
+    let notices = || count(|op| matches!(op, Op::InterAgentCommunication { .. }));
+
+    // The spawn's real turn would leave `PendingInit` at any moment, so stop
+    // it and hold the agent at the status a just-spawned agent reads.
+    settle_agent(&manager, agent_id).await;
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    thread
+        .session
+        .set_agent_status_for_test(AgentStatus::PendingInit);
+    let (interrupts_before, notices_before) = (interrupts(), notices());
+
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker", "reason": "Reply with exactly ok-i"})),
+        ))
+        .await
+        .expect("interrupt_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    assert_eq!(success, Some(true));
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "pending: interrupt sent to stop its first turn; a first turn still held back (by the agent limit, the kill switch or its account) is not cancelled; no new turn was started"
+    );
+    assert_eq!(interrupts(), interrupts_before + 1, "the interrupt is sent");
+    assert_eq!(notices(), notices_before, "no notice wakes it");
+
+    // A session `spawn_agent` didn't create with a first turn (one reloaded
+    // later) reads `PendingInit` while idle: D404, nothing reaches it.
+    thread
+        .session
+        .spawned_with_first_turn
+        .store(false, std::sync::atomic::Ordering::Release);
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should report the status");
+    let (content, _) = expect_text_output(output);
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(interrupts(), interrupts_before + 1, "no second interrupt");
+    assert_eq!(notices(), notices_before, "no notice wakes it");
+}
+
+/// D435 keeps D404 for an idle agent that reads `PendingInit` only because
+/// `send_message` reloaded it without a turn: its new session isn't marked
+/// as spawned with a first turn, so nothing reaches it.
+#[tokio::test]
+async fn d435_a_reloaded_idle_agent_reading_pending_only_reports_its_status() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.multi_agent_v2.max_concurrent_threads_per_session = 4;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    settle_agent(&manager, agent_id).await;
+    let unloaded = manager
+        .remove_thread(&agent_id)
+        .await
+        .expect("worker thread should be loaded before removal");
+    unloaded
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed worker should accept shutdown");
+    unloaded.wait_until_terminated().await;
+    SendMessageHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_message",
+            function_payload(json!({"target": "worker", "message": "for later"})),
+        ))
+        .await
+        .expect("send_message should reload the worker");
+    // The reloaded session is a new one, which `spawn_agent` didn't mark.
+    let reloaded = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker should be resident again");
+    assert!(
+        !reloaded
+            .session
+            .spawned_with_first_turn
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    // Mailbox recovery may hand the reloaded agent its interrupted first
+    // message again, which starts a turn; only an idle one is checked here.
+    if manager.agent_control().get_status(agent_id).await != AgentStatus::PendingInit {
+        return;
+    }
+    let reaches_agent = || {
+        manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(thread_id, op)| {
+                *thread_id == agent_id
+                    && matches!(op, Op::Interrupt | Op::InterAgentCommunication { .. })
+            })
+            .count()
+    };
+    let before = reaches_agent();
+
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should report the status");
+    let (content, _) = expect_text_output(output);
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(
+        reaches_agent(),
+        before,
+        "nothing reaches a reloaded idle agent"
+    );
+}
+
+/// D435, end to end: an agent interrupted right after its spawn, while its
+/// first turn is queued, ends interrupted rather than running that turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d435_interrupting_a_just_spawned_agent_stops_its_first_turn() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let notices = || {
+        manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(thread_id, op)| {
+                *thread_id == agent_id && matches!(op, Op::InterAgentCommunication { .. })
+            })
+            .count()
+    };
+    let notices_before = notices();
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let settled = loop {
+        let status = manager.agent_control().get_status(agent_id).await;
+        if !matches!(status, AgentStatus::PendingInit | AgentStatus::Running) {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "agent did not settle: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    match result.previous_status {
+        // Before D435 nothing reached it, so its first turn ran (and here
+        // ended on the dummy key's 401).
+        AgentStatus::PendingInit => {
+            assert_eq!(settled, AgentStatus::Interrupted);
+            assert_eq!(notices(), notices_before, "no notice wakes it");
+        }
+        // A loaded machine may already have started the turn: it is
+        // interrupted and told why, as before.
+        AgentStatus::Running => {
+            assert_eq!(notices(), notices_before + 1, "interrupt notice");
+        }
+        // Its first turn already ended: only its status is reported (D404).
+        _ => assert_eq!(notices(), notices_before, "nothing wakes it"),
+    }
+}
+
 #[tokio::test]
 async fn multi_agent_v2_interrupt_shutdown_agent_is_idempotent_and_preserves_identity() {
     let (mut session, mut turn) = make_session_and_context().await;

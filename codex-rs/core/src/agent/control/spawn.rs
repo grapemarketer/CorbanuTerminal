@@ -746,6 +746,18 @@ impl AgentControl {
         )
         .await?;
 
+        // D435: until its first turn starts, an interrupt must still reach it.
+        let starts_turn = match &initial_input {
+            SpawnInitialInput::UserInput(_) => true,
+            SpawnInitialInput::InterAgentCommunication(communication, _) => {
+                communication.trigger_turn
+            }
+        };
+        new_thread
+            .thread
+            .session
+            .spawned_with_first_turn
+            .store(starts_turn, std::sync::atomic::Ordering::Release);
         match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 // The spawning agent wrote this task; it carries that agent's standing.
