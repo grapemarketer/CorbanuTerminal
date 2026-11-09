@@ -7,6 +7,9 @@
 //! `\\localhost\<drive>$` (an elevated session), or through the share
 //! `\\localhost\<CODEX_TEST_UNC_SHARE>` over `CODEX_TEST_UNC_SHARE_DIR` (a
 //! normal session, where administrative shares are refused).
+//!
+//! `\\127.0.0.1` reaches the same folder past #1863's check: D446 refuses it
+//! under the non-admin sandbox; the elevated sandbox starts the command.
 
 // The probe's output is the evidence of the measured runs (`--nocapture`).
 #![allow(clippy::print_stderr, clippy::expect_used)]
@@ -205,6 +208,14 @@ async fn sec_win_1863_command_exec_localhost_unc_cwd_fails_closed() {
                 "{sandbox}: {outcome}"
             );
             assert!(!written, "{sandbox}: the command ran");
+        } else if sandbox == "non-admin" {
+            // D446: the non-admin sandbox refuses a network working folder
+            // with a clear message, before the command runs.
+            assert!(
+                outcome.starts_with("refused: ") && outcome.contains("is a network folder"),
+                "{host}, {sandbox}: {outcome}"
+            );
+            assert!(!written, "{host}, {sandbox}: the command ran");
         } else {
             // Unchanged: the command starts sandboxed. Whether it could
             // write through the share is measured only (printed above).
