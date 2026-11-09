@@ -2762,6 +2762,13 @@ impl Session {
         self.deliver_event_raw(event).await;
     }
 
+    /// Sets the agent status a later event would set, for tests that need a
+    /// status (`PendingInit`, say) a real turn would leave at any moment.
+    #[cfg(test)]
+    pub(crate) fn set_agent_status_for_test(&self, status: AgentStatus) {
+        self.agent_status.send_replace(status);
+    }
+
     async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {

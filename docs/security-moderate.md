@@ -48,7 +48,9 @@ without them Corbanu refuses every model request under Moderate, so
   classified. Waiting on an agent, closing it, `send_message`, and
   `send_input` to a running agent never ask, under any of the agent tools'
   names. Interrupting an agent that isn't running only reports its status,
-  at every level; it never starts it (D404).
+  at every level; it never starts it (D404). An agent that is still pending
+  (just started, its first turn not yet begun) gets the interrupt, which
+  stops that first turn, but no notice that would start another (D435).
   Where approving can't unlock a file, the prompt names it and says what it
   is: under `secretless_agent_launch`, Corbanu's own
   files (such as its sign-in, vault, config and history), CLI tokens (`~/.aws/credentials`, `~/.netrc`,
