@@ -2713,6 +2713,8 @@ impl Classifier {
         }
         let mut later = LaterWords::new(&lower);
         let mut git_programs_read = false;
+        // #1876: the git commands' first words and dashed helpers' subcommands.
+        let mut git_starts: Vec<(usize, Option<String>)> = Vec::new();
         // Not only at command position: wrappers (`nice -n 5`, `sudo -u x`,
         // `timeout 9`, `eval`, `npx`, nested `sh -c`) put the real command later.
         for (index, word) in lower.iter().enumerate() {
@@ -2798,6 +2800,10 @@ impl Classifier {
             let hidden_git = (is_git || helper.is_some())
                 && self.quoted_text
                 && hidden.get(index).copied().unwrap_or(false);
+            // #1876: where a git command starts, for the remote scan below.
+            if is_git || helper.is_some() {
+                git_starts.push((index, subcommand.map(str::to_string)));
+            }
             if (is_git && code_variables::git_runs_code_after_git(git_args.0, git_args.1))
                 || (helper == Some(None) && code_variables::git_runs_code(git_args.0, git_args.1))
                 || git_program
@@ -2809,6 +2815,31 @@ impl Classifier {
                 work::step();
                 if name == *credential_command && later.holds(index + 1, verbs) {
                     self.note(ProtectedActionKind::Credentials);
+                }
+            }
+        }
+        // #1876: a transport subcommand whose remote the line does not show.
+        // Each git command's scan ends where the next starts, so the words
+        // are read once in all (`sudo -u git git fetch "$r"`: the scan from
+        // the user name `git` ends at the git that runs).
+        if !git_starts.is_empty() {
+            // The word lexer knows no marks: it does not skip redirection
+            // words, since a quoted `>` may look like one to it (`git fetch
+            // origin 'x>' "$v"`).
+            let options_after = rerun::git_options_after(words, &[]);
+            for (at, (index, subcommand)) in git_starts.iter().enumerate() {
+                work::step();
+                let end = git_starts
+                    .get(at + 1)
+                    .map_or(words.len(), |(next, _)| *next);
+                if rerun::git_remote_unseen(
+                    &words[index + 1..end],
+                    subcommand.as_deref(),
+                    &options_after[index + 1..],
+                    &[],
+                ) {
+                    self.note(ProtectedActionKind::UnseenCode);
+                    break;
                 }
             }
         }
@@ -3916,3 +3947,7 @@ mod tainted_action_reading_tests;
 #[cfg(test)]
 #[path = "tainted_action_linear_tests.rs"]
 mod tainted_action_linear_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_git_ext_tests.rs"]
+mod tainted_action_git_ext_tests;
