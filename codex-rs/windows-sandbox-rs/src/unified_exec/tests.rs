@@ -3335,15 +3335,10 @@ fn legacy_timeout_kill_logs_the_limit_and_a_normal_exit_does_not() {
             roots.as_slice(),
             timed_out_home.path(),
             vec![
-                system32_exe("WindowsPowerShell")
-                    .join("v1.0")
-                    .join("powershell.exe")
-                    .display()
-                    .to_string(),
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-Command".to_string(),
-                "Start-Sleep -Seconds 30".to_string(),
+                system32_exe("cmd.exe").display().to_string(),
+                "/d".to_string(),
+                "/c".to_string(),
+                "for /l %i in (0,0,1) do @rem".to_string(),
             ],
             cwd.as_path(),
             session_temp_env(timed_out_home.path()),
