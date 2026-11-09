@@ -1,4 +1,4 @@
-//! Reads a capture's output pipes (#1826, #1830).
+//! Reads a capture's output pipes (#1826, #1830, #1861).
 //!
 //! A process the command leaves running can hold the pipes' write ends: a
 //! child started with handle inheritance gets them (PowerShell's
@@ -6,7 +6,8 @@
 //! file only when it exits. Once the command's own process has exited, the
 //! readers get [`OUTPUT_DRAIN_TIMEOUT`] to read what is left; then their
 //! reads are cancelled and the capture keeps what they read. The legacy
-//! capture and the elevated command runner both read this way.
+//! capture, the legacy unified exec sessions and the elevated command runner
+//! all read this way.
 
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;

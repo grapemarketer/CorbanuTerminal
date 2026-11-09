@@ -518,7 +518,7 @@ impl ChatWidget {
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
     /// #1506 item 2 (D262): at startup, asks whether to load the `.codex` or
-    /// `.agents` folders of this project that appeared while a non-admin
+    /// `.agents` folders of this project that appeared while a Windows
     /// sandbox command ran. Until confirmed, Core ignores them. D332: the
     /// same for a `.git` that appeared or changed, which Core warns about.
     pub(crate) fn maybe_prompt_planted_project_metadata(&mut self) {
@@ -569,7 +569,7 @@ impl ChatWidget {
         if !folders.is_empty() {
             lines.push(line![""]);
             lines.push(line![
-                "These folders appeared while a non-admin Windows sandbox command ran, so a command may have planted them. Corbanu Terminal isn't loading their config, hooks or skills:"
+                "These folders appeared while a Windows sandbox command ran, so a command may have planted them. Corbanu Terminal isn't loading their config, hooks or skills:"
             ]);
             for path in &folders {
                 lines.push(line![format!("  {}", path.display()).cyan()]);
@@ -590,7 +590,7 @@ impl ChatWidget {
         if !git_dirs.is_empty() {
             lines.push(line![""]);
             lines.push(line![
-                "These git folders appeared or changed while a non-admin Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
+                "These git folders appeared or changed while a Windows sandbox command ran, so a command may have planted them. Git runs their hooks and config outside the sandbox whenever you run git there:"
             ]);
             // At most 20, as the startup warning (rule 4).
             for item in git_dirs.iter().take(20) {
@@ -683,7 +683,7 @@ fn git_changes_to_ask_about(config: &Config) -> Vec<codex_config::PlantedGitChan
 /// The recorded folders the startup prompt asks about: those in the working
 /// folder or a folder above it (where Core loads `.codex`/`.agents` from),
 /// and (D424, #1775) any `.git` below the working folder or in a folder
-/// non-admin sandbox commands may write to, since git runs anywhere.
+/// Windows sandbox commands may write to, since git runs anywhere.
 pub(super) fn planted_to_ask_about(planted: Vec<PathBuf>, config: &Config) -> Vec<PathBuf> {
     let cwd = config.cwd.as_path();
     let writable = codex_windows_sandbox::legacy_writable_roots(

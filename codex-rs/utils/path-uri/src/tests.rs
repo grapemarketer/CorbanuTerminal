@@ -268,6 +268,27 @@ fn file_uri_falls_back_for_windows_prefixes_without_a_uri_representation() {
     }
 }
 
+/// #1863: `\\localhost\share` loses `localhost` in the URI, and `url`
+/// panicked (debug builds) converting what is left. It's an error instead.
+#[cfg(windows)]
+#[test]
+fn localhost_unc_path_is_refused_with_a_clear_error() {
+    let path = AbsolutePathBuf::from_absolute_path_checked(r"\\localhost\C$\Workspace Folder")
+        .expect("UNC path should be absolute");
+
+    let err = PathUri::from_abs_path(&path)
+        .to_abs_path()
+        .expect_err("a localhost UNC path should be refused");
+
+    assert_eq!(
+        (err.kind(), err.to_string()),
+        (
+            io::ErrorKind::InvalidInput,
+            r"`\\localhost\C$\Workspace Folder` is a network (UNC) path on \\localhost, which isn't supported; use the folder's local path instead".to_string(),
+        )
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn file_uri_fallback_round_trips_non_unicode_windows_paths() {
