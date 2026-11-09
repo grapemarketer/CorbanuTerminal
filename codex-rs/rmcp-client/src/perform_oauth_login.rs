@@ -30,6 +30,7 @@ use crate::WrappedOAuthTokenResponse;
 use crate::oauth::compute_expires_at_millis;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::save_oauth_tokens;
+use crate::startup_error::auth_error_with_reason;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -664,11 +665,16 @@ async fn start_authorization(
                     .with_scopes(scopes.iter().copied())
                     .with_client_name("Codex"),
             )
-            .await?;
+            .await
+            .map_err(auth_error_with_reason)?;
         return Ok(oauth_state);
     };
 
-    let metadata = auth_manager.resolve_metadata().await?.metadata;
+    let metadata = auth_manager
+        .resolve_metadata()
+        .await
+        .map_err(auth_error_with_reason)?
+        .metadata;
     auth_manager.set_metadata(metadata);
     auth_manager.configure_client(
         OAuthClientConfig::new(oauth_client_id, redirect_uri)

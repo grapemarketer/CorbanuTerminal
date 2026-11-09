@@ -680,7 +680,7 @@ fn legacy_discovery_fallback_response(
     {
         return ServerJsonRpcMessage::error(
             ErrorData::new(
-                ErrorCode::INVALID_REQUEST,
+                ErrorCode::HEADER_MISMATCH,
                 "server/discover method-not-found response did not match its request ID",
                 None,
             ),
@@ -733,6 +733,21 @@ fn legacy_discovery_fallback_response(
             Some(request.id.clone()),
         )
     } else {
+        let mut response = response;
+        if let JsonRpcMessage::Error(error) = &mut response
+            && !matches!(
+                error.error.code,
+                ErrorCode::METHOD_NOT_FOUND
+                    | ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+                    | ErrorCode::HEADER_MISMATCH
+                    | ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
+            )
+        {
+            // rmcp >= 3.1.3 falls back to legacy initialize on any other correlated
+            // discovery error, so mark unproven rejections as modern failures while
+            // preserving their diagnostics (same shim as upstream Codex).
+            error.error.code = ErrorCode::HEADER_MISMATCH;
+        }
         response
     }
 }
