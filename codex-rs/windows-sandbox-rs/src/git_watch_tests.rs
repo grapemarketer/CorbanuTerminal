@@ -60,26 +60,32 @@ pub(crate) fn swap_for_link(path: &Path, target: &Path) {
 fn file_print_reads_a_reparse_point_that_is_not_a_link() {
     use std::os::windows::fs::MetadataExt as _;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let file = dir.path().join("config");
-    fs::write(&file, "[core]\n\tbare = false\n".repeat(8192)).expect("write");
-    let before = file_print(&file);
-    let output = std::process::Command::new("compact")
-        .args(["/c", "/exe:xpress4k"])
-        .arg(&file)
-        .output()
-        .expect("compact");
+    // The first folder whose volume can compress (CI's temp folder is on
+    // a volume that can't; `Public` is on the system drive).
+    let candidates = [Some(std::env::temp_dir()), dirs_next::public_dir()];
+    let (_dir, file, before) = candidates
+        .into_iter()
+        .flatten()
+        .find_map(|base| {
+            let dir = tempfile::tempdir_in(base).ok()?;
+            let file = dir.path().join("config");
+            fs::write(&file, "[core]\n\tbare = false\n".repeat(8192)).expect("write");
+            let before = file_print(&file);
+            let output = std::process::Command::new("compact")
+                .args(["/c", "/exe:xpress4k"])
+                .arg(&file)
+                .output()
+                .expect("compact");
+            println!("compact: {}", String::from_utf8_lossy(&output.stdout));
+            output.status.success().then_some((dir, file, before))
+        })
+        .expect("no folder on a volume that can compress");
     let reparse = fs::symlink_metadata(&file)
         .expect("metadata")
         .file_attributes()
         & FILE_ATTRIBUTE_REPARSE_POINT
         != 0;
-    assert_eq!(
-        (output.status.success(), reparse, file_print(&file)),
-        (true, true, before.clone()),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+    assert_eq!((reparse, file_print(&file)), (true, before.clone()));
     assert_eq!((before.len(), before.contains("hard link")), (64, false));
 }
 
