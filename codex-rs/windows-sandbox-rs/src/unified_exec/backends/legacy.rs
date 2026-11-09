@@ -481,6 +481,41 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     };
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
 
+    // Starting the process (its desktop, console and pipes) runs off the
+    // async thread too.
+    let (spawned, integrity_lease) = {
+        let command = command.clone();
+        let cwd = cwd.to_path_buf();
+        let stderr_tx = stderr_rx.as_ref().map(|(tx, _rx)| tx.clone());
+        let logs_base_dir = common.logs_base_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            match spawn_legacy_process(
+                h_token,
+                &command,
+                &cwd,
+                &env_map,
+                use_private_desktop,
+                tty,
+                stdin_open,
+                stdout_tx,
+                stderr_tx,
+                writer_rx,
+                logs_base_dir.as_deref(),
+            ) {
+                Ok(handles) => (Ok(handles), integrity_lease),
+                Err(err) => {
+                    unsafe {
+                        CloseHandle(h_token);
+                    }
+                    // Ending the watch walks the writable roots again.
+                    drop(integrity_lease);
+                    (Err(err), None)
+                }
+            }
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("legacy spawn task failed: {err}"))?
+    };
     let LegacyProcessHandles {
         process: pi,
         job,
@@ -490,31 +525,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         mut conpty_owner,
         token_handle,
         desktop,
-    } = match spawn_legacy_process(
-        h_token,
-        &command,
-        cwd,
-        &env_map,
-        use_private_desktop,
-        tty,
-        stdin_open,
-        stdout_tx,
-        stderr_rx.as_ref().map(|(tx, _rx)| tx.clone()),
-        writer_rx,
-        common.logs_base_dir.as_deref(),
-    ) {
-        Ok(handles) => handles,
-        Err(err) => {
-            unsafe {
-                CloseHandle(h_token);
-            }
-            // Ending the watch walks the writable roots again.
-            if let Some(lease) = integrity_lease {
-                let _ = tokio::task::spawn_blocking(move || drop(lease)).await;
-            }
-            return Err(err);
-        }
-    };
+    } = spawned?;
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
