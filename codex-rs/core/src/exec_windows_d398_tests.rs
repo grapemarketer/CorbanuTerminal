@@ -467,11 +467,7 @@ fn fixture() -> Fixture {
     leading_in.push(("mapped drive", mapped_form, workspace.clone()));
     // D446: a UNC path through the computer's name (`\\localhost` is
     // refused before the sandbox, #1863).
-    leading_in.push((
-        "UNC path",
-        computer_name_unc(&workspace),
-        workspace.clone(),
-    ));
+    leading_in.push(("UNC path", computer_name_unc(&workspace), workspace.clone()));
     leading_in.push((
         "canonical, system drive (8.3 control)",
         Ok(system_workspace.clone()),

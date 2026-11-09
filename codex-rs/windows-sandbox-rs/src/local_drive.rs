@@ -83,7 +83,10 @@ pub fn is_local_fixed(_letter: char) -> bool {
 /// drive paths (`\\?\C:\`) are judged by their drive.
 pub fn is_network_path(path: &std::path::Path) -> bool {
     let text = path.to_string_lossy();
-    let rest = match text.strip_prefix(r"\\?\").or_else(|| text.strip_prefix(r"\\.\")) {
+    let rest = match text
+        .strip_prefix(r"\\?\")
+        .or_else(|| text.strip_prefix(r"\\.\"))
+    {
         Some(rest) => {
             if rest
                 .get(..4)
@@ -150,6 +153,8 @@ mod network_path_tests {
     fn d446_the_system_drive_is_not_a_network_path() {
         let drive = std::env::var("SystemDrive").expect("SystemDrive");
         assert!(!is_network_path(Path::new(&format!(r"{drive}\Windows"))));
-        assert!(!is_network_path(Path::new(&format!(r"\\?\{drive}\Windows"))));
+        assert!(!is_network_path(Path::new(&format!(
+            r"\\?\{drive}\Windows"
+        ))));
     }
 }
