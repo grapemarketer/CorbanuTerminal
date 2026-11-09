@@ -621,12 +621,16 @@ pub(crate) fn unfollowed_file_print(path: &Path) -> String {
 /// The content hash of the file at `path` itself (with ` hard link` when
 /// it has more than one name), or `unreadable`, also when it has become a
 /// link or a folder since the caller looked (#1909): a process a command
-/// left running can't steer the read through a link it swaps in.
+/// left running can't steer the read through a link it swaps in. A
+/// reparse point other than a link that can't be read as itself differs
+/// every time, so a change to it is never missed.
 fn unfollowed_print(path: &Path) -> String {
     #[cfg(test)]
     tests::before_read(path);
-    let Some((file, links)) = open_unfollowed(path) else {
-        return "unreadable".to_string();
+    let (file, links) = match open_unfollowed(path) {
+        Opened::File(file, links) => (file, links),
+        Opened::Refused => return "unreadable".to_string(),
+        Opened::Unsure => return truncated(),
     };
     let mut text = hash(file);
     if links.is_none_or(|count| count > 1) {
@@ -635,28 +639,44 @@ fn unfollowed_print(path: &Path) -> String {
     text
 }
 
-/// The file at `path` itself, not followed if it is a link, with how many
-/// names it has.
+/// What [`open_unfollowed`] found.
+enum Opened {
+    /// The file itself, with how many names it has.
+    File(std::fs::File, Option<u64>),
+    /// A folder or a link, or unreadable.
+    Refused,
+    /// A reparse point other than a link that couldn't be read as itself.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Unsure,
+}
+
+/// The file at `path` itself, not followed if it is a link.
 #[cfg(windows)]
-fn open_unfollowed(path: &Path) -> Option<(std::fs::File, Option<u64>)> {
-    crate::acl::open_unfollowed(path).map(|(file, links)| (file, Some(u64::from(links))))
+fn open_unfollowed(path: &Path) -> Opened {
+    match crate::acl::open_unfollowed(path) {
+        crate::acl::Unfollowed::File(file, links) => Opened::File(file, Some(u64::from(links))),
+        crate::acl::Unfollowed::Refused => Opened::Refused,
+        crate::acl::Unfollowed::Unsure => Opened::Unsure,
+    }
 }
 
 /// Elsewhere (tests only) a link is refused as it is found; the open
 /// itself follows.
 #[cfg(not(windows))]
-fn open_unfollowed(path: &Path) -> Option<(std::fs::File, Option<u64>)> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.is_file() {
-        return None;
+fn open_unfollowed(path: &Path) -> Opened {
+    let is_file = std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file());
+    match std::fs::File::open(path) {
+        Ok(file) if is_file => Opened::File(file, link_count(path)),
+        _ => Opened::Refused,
     }
-    Some((std::fs::File::open(path).ok()?, link_count(path)))
 }
 
 /// The bytes of the file at `path` itself, `None` when it is a link or a
 /// folder or can't be read (#1909).
 fn read_unfollowed(path: &Path) -> Option<Vec<u8>> {
-    let (mut file, _) = open_unfollowed(path)?;
+    let Opened::File(mut file, _) = open_unfollowed(path) else {
+        return None;
+    };
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
     Some(bytes)

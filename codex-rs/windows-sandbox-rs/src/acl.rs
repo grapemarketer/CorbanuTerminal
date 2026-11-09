@@ -1267,34 +1267,47 @@ pub(crate) fn link_count(path: &Path) -> Option<u32> {
         .map(|info| info.nNumberOfLinks)
 }
 
-/// #1909: the file at `path` itself open for reading, with how many names it
-/// has, or `None` when `path` is a folder or a link (a name-surrogate
-/// reparse point) or can't be read. Nothing is followed, so a link swapped
-/// in after a caller looked can't steer the read elsewhere (such as to a
-/// network share). Another reparse point (a cloud placeholder ...) is the
-/// file itself: it is reopened from the same handle, so its filter supplies
-/// the content, and must still be the same file.
-pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
+/// #1909: what [`open_unfollowed`] found at a path.
+pub(crate) enum Unfollowed {
+    /// The file itself, open for reading, with how many names it has.
+    File(std::fs::File, u32),
+    /// A folder or a link (a name-surrogate reparse point), or unreadable.
+    Refused,
+    /// Another reparse point that couldn't be reopened as the same file.
+    Unsure,
+}
+
+/// #1909: the file at `path` itself open for reading. Nothing is followed,
+/// so a link swapped in after a caller looked can't steer the read
+/// elsewhere (such as to a network share). Another reparse point (a cloud
+/// placeholder ...) is the file itself: it is reopened from the same
+/// handle, so its filter supplies the content, and must still be the same
+/// file.
+pub(crate) fn open_unfollowed(path: &Path) -> Unfollowed {
     use std::os::windows::fs::OpenOptionsExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use std::os::windows::io::FromRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::FileAttributeTagInfo;
     use windows_sys::Win32::Storage::FileSystem::ReOpenFile;
     const NAME_SURROGATE: u32 = 0x2000_0000;
-    let file = std::fs::OpenOptions::new()
+    let Ok(file) = std::fs::OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
-        .ok()?;
+    else {
+        return Unfollowed::Refused;
+    };
     let handle = file.as_raw_handle() as HANDLE;
     // SAFETY: the handle is open for the call.
-    let info = unsafe { file_info(handle) }.ok()?;
+    let Ok(info) = (unsafe { file_info(handle) }) else {
+        return Unfollowed::Refused;
+    };
     if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        return None;
+        return Unfollowed::Refused;
     }
     if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return Some((file, info.nNumberOfLinks));
+        return Unfollowed::File(file, info.nNumberOfLinks);
     }
     let mut tag = [0_u32; 2];
     // SAFETY: `tag` is a `FILE_ATTRIBUTE_TAG_INFO`-sized buffer.
@@ -1308,7 +1321,7 @@ pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
     } == 0
         || tag[1] & NAME_SURROGATE != 0
     {
-        return None;
+        return Unfollowed::Refused;
     }
     // SAFETY: the handle is open for the call.
     let reopened = unsafe {
@@ -1320,7 +1333,7 @@ pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
         )
     };
     if reopened == INVALID_HANDLE_VALUE {
-        return None;
+        return Unfollowed::Unsure;
     }
     // SAFETY: `ReOpenFile` returned a handle this function now owns.
     let reopened = unsafe { std::fs::File::from_raw_handle(reopened as _) };
@@ -1331,7 +1344,11 @@ pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
             (Ok(a), Ok(b)) if a == b
         )
     };
-    same.then_some((reopened, info.nNumberOfLinks))
+    if same {
+        Unfollowed::File(reopened, info.nNumberOfLinks)
+    } else {
+        Unfollowed::Unsure
+    }
 }
 
 unsafe fn file_info(handle: HANDLE) -> std::io::Result<BY_HANDLE_FILE_INFORMATION> {

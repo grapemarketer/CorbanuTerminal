@@ -52,14 +52,11 @@ pub(crate) fn swap_for_link(path: &Path, target: &Path) {
     std::os::windows::fs::symlink_file(target, path).expect("link");
 }
 
-/// #1909: a file that is a reparse point but not a link (here compressed by
-/// Windows' WOF, as `compact /exe` does; cloud placeholders are alike) is
-/// still read, through its filter, with the same print as before.
+/// #1909: a file Windows compresses (`compact /exe`, whose filter serves
+/// the content and hides its reparse point) gets the same print.
 #[cfg(windows)]
 #[test]
-fn file_print_reads_a_reparse_point_that_is_not_a_link() {
-    use std::os::windows::fs::MetadataExt as _;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+fn file_print_reads_a_compressed_file() {
     // The first folder whose volume can compress (CI's temp folder is on
     // a volume that can't; `Public` is on the system drive).
     let candidates = [Some(std::env::temp_dir()), dirs_next::public_dir()];
@@ -80,13 +77,67 @@ fn file_print_reads_a_reparse_point_that_is_not_a_link() {
             output.status.success().then_some((dir, file, before))
         })
         .expect("no folder on a volume that can compress");
-    let reparse = fs::symlink_metadata(&file)
-        .expect("metadata")
-        .file_attributes()
-        & FILE_ATTRIBUTE_REPARSE_POINT
-        != 0;
-    assert_eq!((reparse, file_print(&file)), (true, before.clone()));
-    assert_eq!((before.len(), before.contains("hard link")), (64, false));
+    assert_eq!(
+        (
+            file_print(&file),
+            before.len(),
+            before.contains("hard link")
+        ),
+        (before.clone(), 64, false)
+    );
+}
+
+/// Makes the file `path` a reparse point with the Microsoft tag `tag`
+/// (not a link) that no filter serves.
+#[cfg(windows)]
+fn set_reparse_tag(path: &Path, tag: u32) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut buffer = [0_u8; 16];
+    buffer[0..4].copy_from_slice(&tag.to_le_bytes());
+    buffer[4..6].copy_from_slice(&8_u16.to_le_bytes());
+    buffer[8..16].copy_from_slice(b"corbanu1");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .expect("open");
+    let mut returned = 0_u32;
+    // SAFETY: a valid handle and buffer.
+    let ok = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            file.as_raw_handle() as _,
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+}
+
+/// #1909: a reparse point other than a link that can't be read as itself
+/// (its filter is missing) differs every time, so a change is never missed.
+#[cfg(windows)]
+#[test]
+fn file_print_of_an_unserved_reparse_point_differs_every_time() {
+    const TAG_HSM: u32 = 0xC000_0004;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("config");
+    fs::write(&file, "x\n").expect("write");
+    set_reparse_tag(&file, TAG_HSM);
+    let (first, second) = (file_print(&file), file_print(&file));
+    assert_eq!(
+        (first == second, first.starts_with("truncated at")),
+        (false, true),
+        "{first}"
+    );
 }
 
 /// #1909: a file swapped for a link after it was looked at is not read
