@@ -802,7 +802,9 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   keeps such a folder (below the top of a writable folder) unchanged; the
   default sandbox doesn't protect it, so it now records what is inside each
   one when a command starts and reports the folder, like a planted one,
-  when its contents differ after the command. Nothing is refused.
+  when its contents differ after the command. Nothing is refused. A folder
+  too large to compare (over 20,000 entries or 64 MiB) is reported after
+  every command.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only

@@ -401,12 +401,26 @@ pub(crate) fn with_contents(entries: Vec<NestedMetadata>) -> Vec<NestedMetadata>
 
 /// What is inside the `.codex`/`.agents` folder `folder`: each entry at any
 /// depth by its path from `folder`, a file by its content
-/// ([`crate::git_watch::file_print`], which marks hard links), a link as
-/// one (not followed), a folder as `dir`. A folder that can't be listed, a
-/// name that isn't valid Unicode, or more than [`MAX_CONTENT_ENTRIES`]
-/// entries or [`MAX_CONTENT_BYTES`] of files make it differ every time.
+/// ([`crate::git_watch::file_print`], which marks hard links), a link by its
+/// target (and a file link by the content read through it; a folder link
+/// isn't walked), a folder as `dir`. A `folder` that is a file is its
+/// content. A folder that can't be listed, a name that isn't valid Unicode,
+/// or more than [`MAX_CONTENT_ENTRIES`] entries or [`MAX_CONTENT_BYTES`] of
+/// files make it differ every time.
 pub(crate) fn contents(folder: &Path) -> crate::git_watch::Prints {
     let mut prints = crate::git_watch::Prints::new();
+    // A `.codex`/`.agents` that is a file: its content.
+    if let Ok(metadata) = std::fs::symlink_metadata(folder)
+        && !metadata.is_dir()
+    {
+        let print = if metadata.len() > MAX_CONTENT_BYTES {
+            crate::git_watch::truncated()
+        } else {
+            crate::git_watch::file_print(folder)
+        };
+        prints.insert(String::new(), print);
+        return prints;
+    }
     let (mut seen, mut bytes) = (0_usize, 0_u64);
     let mut stack = vec![(folder.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
@@ -436,7 +450,13 @@ pub(crate) fn contents(folder: &Path) -> crate::git_watch::Prints {
                     stack.push((path, format!("{child}\\")));
                 }
                 Ok(metadata) => {
-                    bytes = bytes.saturating_add(metadata.len());
+                    // A file link's target is read through it: its size counts.
+                    let size = if metadata.file_type().is_symlink() {
+                        std::fs::metadata(&path).map_or(0, |target| target.len())
+                    } else {
+                        metadata.len()
+                    };
+                    bytes = bytes.saturating_add(size);
                     let print = if bytes > MAX_CONTENT_BYTES {
                         crate::git_watch::truncated()
                     } else {

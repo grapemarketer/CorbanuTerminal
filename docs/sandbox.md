@@ -169,10 +169,12 @@ processes a command leaves running there, so what those change later isn't
 flagged. Nested `.codex`/`.agents` folders that already exist aren't
 protected, so a command can change what is inside them; such a change is
 flagged instead (#1896), by content, like moving or replacing the folder.
-A file rewritten with the same content isn't a change. A folder with more
-than 20,000 entries or 64 MiB of files, or one that can't be read through,
-is flagged after every command, and a link inside one is recorded but not
-followed. And the records themselves (in
+A file rewritten with the same content isn't a change, but your own edit
+made while such a command runs counts like the command's. A folder with
+more than 20,000 entries or 64 MiB of files, or with a subfolder that can't
+be listed, is flagged after every command. A link inside one is recorded
+with its target (and a file link with the content read through it); what
+is inside a folder it points to isn't checked. And the records themselves (in
 `%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
 whose writable folder contains them, such as your whole user folder.
 Its commands run as their own Windows account, so what they create is owned
