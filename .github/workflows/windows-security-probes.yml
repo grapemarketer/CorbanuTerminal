@@ -189,7 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path codex-rs/Cargo.toml -p codex-windows-sandbox --lib -- nested_metadata::tests:: --nocapture --test-threads=1 2>&1 | tee d283-1541.log
-          grep -q "test result: ok. 6 passed" d283-1541.log
+          grep -q "test result: ok. 8 passed" d283-1541.log
           rm d283-1541.log
       - name: Configured read-only paths the legacy backend makes (#1686, #1708, #1780)
         if: ${{ !cancelled() }}
