@@ -171,10 +171,11 @@ protected, so a command can change what is inside them; such a change is
 flagged instead (#1896), by content, like moving or replacing the folder.
 A file rewritten with the same content isn't a change, but your own edit
 made while such a command runs counts like the command's. A folder with
-more than 20,000 entries or 64 MiB of files, or with a subfolder that can't
-be listed, is flagged after every command. A link inside one is recorded
-with its target (and a file link with the content read through it); what
-is inside a folder it points to isn't checked. And the records themselves (in
+more than 20,000 entries or 64 MiB of files, with a subfolder that can't be
+listed, or with a name that isn't valid Unicode, is flagged after every
+command. A link inside one is recorded by its target only: a change to the
+file or folder it points to isn't flagged (the non-admin sandbox doesn't
+protect those either). And the records themselves (in
 `%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
 whose writable folder contains them, such as your whole user folder.
 Its commands run as their own Windows account, so what they create is owned
