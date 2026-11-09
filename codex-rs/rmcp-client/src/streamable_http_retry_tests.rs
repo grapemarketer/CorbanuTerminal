@@ -27,6 +27,25 @@ fn retryable_initialize_error_includes_discovery_and_initialized_notification_co
 }
 
 #[test]
+fn retryable_initialize_error_looks_through_a_failed_legacy_fallback() {
+    let fallback_failed = |fallback| rmcp::service::ClientInitializeError::LegacyFallbackFailed {
+        discover: Box::new(rmcp::service::ClientInitializeError::ConnectionClosed(
+            "discover".to_string(),
+        )),
+        fallback: Box::new(fallback),
+    };
+
+    assert_eq!(
+        [
+            fallback_failed(retryable_initialize_error("send initialize request")),
+            fallback_failed(retryable_initialize_error("receive initialize response")),
+        ]
+        .map(|error| RmcpClient::is_retryable_client_initialize_error(&error)),
+        [true, false],
+    );
+}
+
+#[test]
 fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
     let errors = [
         StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
