@@ -103,7 +103,10 @@ fn env_usize(name: &str, default: usize) -> usize {
 #[test]
 fn lines_have_the_units_asked_for() {
     assert_eq!(line("nested_substitution", /*n*/ 2), "cat $(cat $(cat f))");
-    assert_eq!(line("alias_chain", /*n*/ 2), "alias a0=a1; alias a1=./x; a0");
+    assert_eq!(
+        line("alias_chain", /*n*/ 2),
+        "alias a0=a1; alias a1=./x; a0"
+    );
     assert_eq!(line("arithmetic", /*n*/ 3), "echo $((v0+v1+v2))");
     assert_eq!(
         line("glob_alternatives", /*n*/ 2),
@@ -114,7 +117,10 @@ fn lines_have_the_units_asked_for() {
 
 #[test]
 #[ignore = "timing probe: run by hand, see the module docs"]
-#[expect(clippy::print_stdout, reason = "the probe lines are the probe's output")]
+#[expect(
+    clippy::print_stdout,
+    reason = "the probe lines are the probe's output"
+)]
 fn classifier_timing_probe() {
     let pattern = std::env::var("PROBE_PATTERN").expect("PROBE_PATTERN");
     let n = env_usize("PROBE_UNITS", /*default*/ 1000);
