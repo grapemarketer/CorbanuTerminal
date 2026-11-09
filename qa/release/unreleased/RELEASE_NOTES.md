@@ -829,6 +829,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   command can't either, as in the non-admin sandbox. The same holds for a
   `.codex` or `.agents` folder made this way. A deeper one, such as
   `sub\.git` for `sub\.git\hooks`, still has only `hooks` protected.
+- **Default (elevated) sandbox: starting a command no longer holds up
+  other work** (#1896). Its preparation, which includes walking the
+  writable folders for the planted-folder records (about 0.06–0.08 s on a
+  38,000-file repository, 0.5–0.7 s on a `repo` client with 100 projects) and
+  the credential watch's first scan, ran on the thread that drives other
+  tasks; it now runs on its own. What is flagged is unchanged.
 - **Default (elevated) sandbox setup no longer fails now and then where
   Windows requires complex passwords** (#1776). Setup gives the sandbox's
   user accounts a fresh random password, and about one setup in 4,500 drew

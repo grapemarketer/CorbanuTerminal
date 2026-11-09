@@ -5,6 +5,7 @@ use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
 use crate::identity::SandboxCreds;
 use crate::identity::refresh_logon_sandbox_creds;
+use crate::integrity_leases::IntegrityLease;
 use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
@@ -91,17 +92,22 @@ fn spawn_runner_transport_with_retry<T>(
     )
 }
 
+/// The runner, started off the async thread. `planted_watch` comes back with
+/// it; if the runner can't start (or the caller is gone), it ends there too
+/// (#1896 item 4: ending it walks the writable roots).
 async fn spawn_runner_transport_task(
     sandbox_creds: SandboxCreds,
     request: RunnerTransportRequest,
-) -> Result<RunnerTransport> {
+    planted_watch: Option<IntegrityLease>,
+) -> Result<(RunnerTransport, Option<IntegrityLease>)> {
     tokio::task::spawn_blocking(move || -> Result<_> {
-        spawn_runner_transport_with_retry(
+        let transport = spawn_runner_transport_with_retry(
             sandbox_creds,
             &request,
             spawn_runner_transport,
             refresh_logon_sandbox_creds,
-        )
+        )?;
+        Ok((transport, planted_watch))
     })
     .await
     .map_err(|err| anyhow::anyhow!("runner handshake task failed: {err}"))?
@@ -142,44 +148,62 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     // its stop is queued for the runner if it comes first. It starts before the
     // sandbox (and the deny ACEs) are set up for this command.
     let (outbound_tx, outbound_rx) = std::sync::mpsc::channel::<FramedMessage>();
-    let credential_watch = {
-        let outbound_tx = outbound_tx.clone();
+    // #1896 item 4: the credential watch's first scan, setup's checks and the
+    // start of the planted-folder watch (D425), which walks the writable
+    // roots, block for a while, so they run off the async thread, in the same
+    // order.
+    let (credential_watch, elevated, prepared_env) = {
+        let stop_tx = outbound_tx.clone();
         let (file_system, _) = permission_profile.to_runtime_permissions();
         let known: Vec<PathBuf> = deny_read_override
             .paths()
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf)
             .collect();
-        crate::credential_watch::CredentialWatch::start(
-            &file_system,
-            cwd,
-            &known,
-            Box::new(move || {
-                let _ = outbound_tx.send(FramedMessage {
-                    version: IPC_PROTOCOL_VERSION,
-                    message: Message::Terminate {
-                        payload: EmptyPayload::default(),
-                    },
-                });
-            }),
-        )
-        .map_err(anyhow::Error::msg)?
+        let permissions = permissions.clone();
+        let codex_home = codex_home.to_path_buf();
+        let cwd = cwd.to_path_buf();
+        let command = command.clone();
+        let read_roots_override = read_roots_override.map(<[PathBuf]>::to_vec);
+        let write_roots_override = write_roots_override.map(<[PathBuf]>::to_vec);
+        let deny_read_override = deny_read_override.clone();
+        let deny_write_paths_override = deny_write_paths_override.clone();
+        let mut env_map = std::mem::take(&mut env_map);
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let credential_watch = crate::credential_watch::CredentialWatch::start(
+                &file_system,
+                &cwd,
+                &known,
+                Box::new(move || {
+                    let _ = stop_tx.send(FramedMessage {
+                        version: IPC_PROTOCOL_VERSION,
+                        message: Message::Terminate {
+                            payload: EmptyPayload::default(),
+                        },
+                    });
+                }),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let elevated = prepare_elevated_spawn_context_for_permissions(
+                permissions,
+                &codex_home,
+                &cwd,
+                &mut env_map,
+                &command,
+                read_roots_override.as_deref(),
+                read_roots_include_platform_defaults,
+                write_roots_override.as_deref(),
+                &deny_read_override,
+                &deny_write_paths_override,
+                proxy_enforced,
+                proxy_settings_mode,
+            )?;
+            Ok((credential_watch, elevated, env_map))
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("elevated spawn preparation task failed: {err}"))??
     };
-
-    let elevated = prepare_elevated_spawn_context_for_permissions(
-        permissions.clone(),
-        codex_home,
-        cwd,
-        &mut env_map,
-        &command,
-        read_roots_override,
-        read_roots_include_platform_defaults,
-        write_roots_override,
-        deny_read_override,
-        &deny_write_paths_override,
-        proxy_enforced,
-        proxy_settings_mode,
-    )?;
+    env_map = prepared_env;
 
     let sandbox_creds = elevated.sandbox_creds;
     let planted_watch = elevated.planted_watch;
@@ -212,7 +236,8 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         proxy_enforced,
         proxy_settings_mode,
     };
-    let transport = spawn_runner_transport_task(sandbox_creds, request).await?;
+    let (transport, planted_watch) =
+        spawn_runner_transport_task(sandbox_creds, request, planted_watch).await?;
     let (pipe_write, pipe_read) = transport.into_files();
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
