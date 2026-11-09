@@ -61,7 +61,11 @@ pub(super) fn run_script(
                 script_path.display().to_string(),
             ],
             workspace,
-            env_map,
+            // The caller's `TEMP`/`TMP`, if it gives them, else the home's.
+            session_temp_env(codex_home.path())
+                .into_iter()
+                .chain(env_map)
+                .collect(),
             /*timeout_ms*/ Some(10_000),
             &[],
             carve_outs,

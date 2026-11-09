@@ -682,7 +682,7 @@ async fn run_legacy_with_tty(
     env: &[(&str, String)],
     tty: bool,
 ) -> (String, i32) {
-    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    let mut env_map = with_session_temp(codex_home, std::env::vars().collect());
     for (key, value) in env {
         env_map.insert((*key).to_string(), value.clone());
     }
@@ -741,7 +741,7 @@ async fn with_holder<T>(root: &Path, codex_home: &Path, probe: impl AsyncFnOnce(
     let hold_dir = root.join("hold");
     fs::create_dir_all(&hold_dir).expect("create hold dir");
     let release = Release(hold_dir.join("hold.release"));
-    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    let mut env_map = with_session_temp(codex_home, std::env::vars().collect());
     env_map.insert(HOLD_ENV.to_string(), hold_dir.display().to_string());
     let holder = spawn_windows_sandbox_session_legacy(
         &PermissionProfile::workspace_write(),

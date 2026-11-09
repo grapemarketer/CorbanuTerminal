@@ -91,12 +91,106 @@ fn sandbox_cwd() -> PathBuf {
         .to_path_buf()
 }
 
-fn sandbox_home(name: &str) -> TempDir {
+fn sandbox_home(name: &str) -> SandboxHome {
     let id = TEST_HOME_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("codex-windows-sandbox-{name}-{id}"));
+    let real_temp = std::env::temp_dir();
+    let path = real_temp.join(format!("codex-windows-sandbox-{name}-{id}"));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).expect("create sandbox home");
-    tempfile::TempDir::new_in(&path).expect("create sandbox home tempdir")
+    SandboxHome {
+        home: tempfile::TempDir::new_in(&path).expect("create sandbox home tempdir"),
+        real_temp,
+    }
+}
+
+/// A test's Codex home (#1890). A legacy (non-admin) session grants its
+/// writable roots, `TEMP`/`TMP` among them, to capability SIDs recorded in
+/// the home, and the grants stay: one lasting entry per root for a user's
+/// one home. Each test's home is new, so a test whose session used the real
+/// temp folder left a new lasting entry there on every run, and everything
+/// made there later inherited them all (#1870). So the tests give their
+/// legacy sessions a temp folder of the home's own ([`session_temp_env`]),
+/// and dropping the home checks that the real one got no entry for its SIDs.
+pub(crate) struct SandboxHome {
+    home: TempDir,
+    real_temp: PathBuf,
+}
+
+impl std::ops::Deref for SandboxHome {
+    type Target = TempDir;
+
+    fn deref(&self) -> &TempDir {
+        &self.home
+    }
+}
+
+impl Drop for SandboxHome {
+    fn drop(&mut self) {
+        let granted = real_temp_grants(self.home.path(), &self.real_temp);
+        let _ = fs::remove_dir_all(session_temp_dir(self.home.path()));
+        if !granted.is_empty() && !std::thread::panicking() {
+            panic!(
+                "a legacy session granted the real temp folder {} to this test's SIDs {granted:?} \
+                 for good (#1890): give it `session_temp_env(codex_home)`",
+                self.real_temp.display()
+            );
+        }
+    }
+}
+
+/// The capability SIDs recorded in `codex_home` that may write `real_temp`.
+fn real_temp_grants(codex_home: &Path, real_temp: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(crate::cap::cap_sid_file(codex_home)) else {
+        return Vec::new();
+    };
+    let Ok(caps) = serde_json::from_str::<crate::cap::CapSids>(&text) else {
+        return Vec::new();
+    };
+    [caps.workspace, caps.readonly]
+        .into_iter()
+        .chain(caps.workspace_by_cwd.into_values())
+        .chain(caps.writable_root_by_path.into_values())
+        .filter(|sid| {
+            crate::token::LocalSid::from_string(sid).is_ok_and(|psid| {
+                crate::acl::path_mask_allows(
+                    real_temp,
+                    &[psid.as_ptr()],
+                    windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA,
+                    /*require_all_bits*/ true,
+                )
+                .unwrap_or(false)
+            })
+        })
+        .collect()
+}
+
+/// The temp folder of the test home `codex_home` (from [`sandbox_home`]):
+/// beside it, not in it, and removed with it.
+fn session_temp_dir(codex_home: &Path) -> PathBuf {
+    let mut name = codex_home.file_name().expect("home name").to_os_string();
+    name.push("-temp");
+    codex_home.with_file_name(name)
+}
+
+/// `TEMP` and `TMP` for a legacy session of the test home `codex_home`: its
+/// own temp folder, not the real one (#1890).
+pub(crate) fn session_temp_env(codex_home: &Path) -> HashMap<String, String> {
+    with_session_temp(codex_home, HashMap::new())
+}
+
+/// `env_map` with `TEMP` and `TMP` (in any spelling) replaced by the test
+/// home's own temp folder (#1890).
+pub(crate) fn with_session_temp(
+    codex_home: &Path,
+    mut env_map: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let temp = session_temp_dir(codex_home);
+    fs::create_dir_all(&temp).expect("create session temp folder");
+    let temp = temp.to_string_lossy().into_owned();
+    env_map.retain(|key, _| !["TEMP", "TMP"].iter().any(|k| key.eq_ignore_ascii_case(k)));
+    env_map.insert("TEMP".to_string(), temp.clone());
+    env_map.insert("TMP".to_string(), temp);
+    env_map
 }
 
 fn system32_exe(name: &str) -> PathBuf {
@@ -311,7 +405,7 @@ fn legacy_non_tty_cmd_emits_output() {
                 "echo LEGACY-NONTTY-CMD".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(5_000),
             &[],
             &[],
@@ -398,7 +492,7 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
                 "echo deny-read".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(5_000),
             std::slice::from_ref(&secret_path),
             &[],
@@ -439,7 +533,7 @@ fn legacy_non_tty_powershell_interrupt_terminates_process() {
                 "Write-Output LEGACY-NONTTY-DIRECT; [System.Threading.ManualResetEvent]::new($false).WaitOne()".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             /*timeout_ms*/ None,
             &[],
             &[],
@@ -711,11 +805,7 @@ fn check_legacy_command_returns_while_descendant_runs(
     // #1826: the command now returns while the descendant runs, so the
     // session's labels (#158) are put back on a thread of the backend's once
     // it exits. Wait for that before the test (and maybe its process) ends.
-    let temp_roots = ["TEMP", "TMP"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from);
-    for root in temp_roots.chain([cwd]) {
+    for root in [session_temp_dir(codex_home.path()), cwd] {
         let deadline = Instant::now() + Duration::from_secs(15);
         // SAFETY: an existing folder.
         while !matches!(
@@ -744,7 +834,7 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
             codex_home,
             argv,
             cwd,
-            HashMap::new(),
+            session_temp_env(codex_home),
             Some(10_000),
             /*cancellation*/ None,
             /*use_private_desktop*/ true,
@@ -777,7 +867,7 @@ fn legacy_session_exits_and_preserves_descendant_after_normal_exit() {
                     codex_home,
                     argv,
                     cwd,
-                    HashMap::new(),
+                    session_temp_env(codex_home),
                     Some(10_000),
                     &[],
                     &[],
@@ -1362,7 +1452,7 @@ fn legacy_workspace_write_cannot_delete_or_replace_protected_git_dir() {
                 script.display().to_string(),
             ],
             workspace.as_path(),
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(5_000),
             &[],
             &[],
@@ -1466,7 +1556,7 @@ fn legacy_workspace_write_cannot_move_ancestor_of_nested_carve_out() {
                 script.display().to_string(),
             ],
             workspace.as_path(),
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(5_000),
             &[],
             &carve_outs,
@@ -1982,7 +2072,7 @@ fn legacy_command_cannot_break_away_from_its_job() {
                 "--test-threads=1".to_string(),
             ],
             test_root.path(),
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(60_000),
             &[],
             &[],
@@ -2445,7 +2535,7 @@ fn legacy_delete_child_denies_are_removed_after_the_session() {
                 script.display().to_string(),
             ],
             workspace.as_path(),
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(5_000),
             &[],
             &carve_outs,
@@ -2765,7 +2855,7 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
             parent_command,
         ],
         cwd.as_path(),
-        HashMap::new(),
+        session_temp_env(codex_home.path()),
         Some(30_000),
         /*cancellation*/ Some(cancellation),
         /*use_private_desktop*/ true,
@@ -2845,7 +2935,7 @@ async fn assert_legacy_tty_descendant_lifecycle(
             parent_command,
         ],
         cwd.as_path(),
-        HashMap::new(),
+        session_temp_env(codex_home.path()),
         Some(30_000),
         &[],
         &[],
@@ -2937,7 +3027,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
                 "$PID; Write-Output ready".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(10_000),
             &[],
             &[],
@@ -2988,7 +3078,7 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
                 "echo ready".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(10_000),
             &[],
             &[],
@@ -3042,7 +3132,7 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
                 "echo ready".to_string(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(10_000),
             &[],
             &[],
@@ -3127,7 +3217,7 @@ fn legacy_command_log_redacts_credentials() {
                 credential_command_line(),
             ],
             cwd.as_path(),
-            HashMap::new(),
+            session_temp_env(codex_home.path()),
             Some(5_000),
             &[],
             &[],
@@ -3206,7 +3296,7 @@ fn legacy_capture_command_log_redacts_credentials() {
             credential_command_line(),
         ],
         cwd.as_path(),
-        HashMap::new(),
+        session_temp_env(codex_home.path()),
         Some(10_000),
         /*cancellation*/ None,
         /*use_private_desktop*/ true,

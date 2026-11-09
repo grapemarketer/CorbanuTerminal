@@ -20,7 +20,7 @@ const SETUP_FILES: [(&str, &str); 2] = [
 ];
 
 /// A codex home for an elevated-backend test, or `None` to skip it.
-pub(in crate::unified_exec::tests) fn elevated_home(name: &str) -> Option<TempDir> {
+pub(in crate::unified_exec::tests) fn elevated_home(name: &str) -> Option<SandboxHome> {
     // Bazel gives unit tests no staged sandbox helpers (#691).
     if option_env!("BAZEL_PACKAGE").is_some() {
         return None;
