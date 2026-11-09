@@ -155,32 +155,29 @@ fn issue_1876_remote_ext_helper_asks() {
     );
 }
 
-/// What stays as on main: visible remotes and values, words after the
-/// remote (refspecs), option values, subcommands that contact no remote,
-/// and launcher input to other subcommands.
+/// What stays as on main: visible remotes and values, unseen words after
+/// the remote that cannot start with `-` (`HEAD:"$b"`) or follow `--`,
+/// option values, subcommands that contact no remote, and launcher input to
+/// other subcommands.
 #[test]
 fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
     let lines = [
         "git fetch origin",
         "git pull origin main",
-        "git push origin \"$branch\"",
         "git push origin HEAD:\"$branch\"",
-        "git fetch origin \"$ref\"",
+        "git push origin refs/heads/\"$branch\"",
+        "git push origin origin/\"$branch\"",
+        "git push origin -- \"$branch\"",
+        "git clone https://x.example/r -- \"$dir\"",
+        "git clone -b \"$b\" https://x.example/r d",
+        "git fetch --depth=\"$DEPTH\" origin",
+        "git clone --branch=\"$b\" https://x.example/r",
         "r=origin; git fetch \"$r\"",
         "git fetch --depth \"$n\" origin",
-        "git push -u origin \"$branch\"",
-        "git push --set-upstream origin \"$branch\"",
         "git push -o \"$opt\" origin",
         "git pull -s \"$s\" origin main",
         "git clone -b \"$b\" https://x.example/r",
-        "git clone -qb \"$b\" https://x.example/r \"$dir\"",
-        "git clone -bmain https://x.example/r \"$dir\"",
-        "git clone --depth=1 https://x.example/r \"$dir\"",
-        "git fetch -j4 origin \"$ref\"",
-        "git archive --format=tar \"$rev\" \"$path\"",
         "git archive -o \"$out\" HEAD",
-        "git ls-remote --sort refname origin \"$pattern\"",
-        "git clone https://x.example/r \"$dir\"",
         "git remote -v",
         "git remote rename a \"$b\"",
         "git submodule update --init \"$path\"",
@@ -195,6 +192,53 @@ fn issue_1876_visible_remotes_and_other_words_stay_quiet() {
         "find . -type d -name .git -execdir git pull \\;",
     ];
     assert_eq!(wrong(&lines, /*expected*/ None), Vec::<String>::new());
+}
+
+/// Review round 1 on #1897. Each of these asks; each was quiet on the
+/// head reviewed (895ae6fa).
+#[test]
+fn issue_1876_review_1_lines_ask() {
+    let lines = [
+        // Item 1: git reads options after operands, so an unseen word
+        // after the remote may be `--upload-pack=…`, `--receive-pack=…`,
+        // `--config=…` or `--template=…` (archive's: `--exec=…`).
+        "git fetch origin \"$v\"",
+        "git pull origin \"$v\"",
+        "git push origin HEAD:refs/heads/z \"$v\"",
+        "git clone ../src d1 \"$v\"",
+        "git archive --remote=. \"$x\" HEAD",
+        "git push origin \"$branch\"",
+        "git fetch origin $(cat f)",
+        "git clone https://x.example/r \"$dir\"",
+        "git archive --format=tar \"$rev\" \"$path\"",
+        "git fetch -- \"$r\"",
+        // Item 2: a wrapper's value named `git` is not the git that runs.
+        "sudo -u git git fetch \"$r\"",
+        "env -u git git fetch \"$r\"",
+        "git log git; git fetch \"$r\"",
+        // Item 3: a case-insensitive filesystem finds the helper.
+        "git REMOTE-EXT x ./e.sh",
+        "git Remote-Ext x ./e.sh",
+        "git -C sub REMOTE-EXT x ./e.sh",
+        // Item 4: valued options missing from the tables.
+        "git push --recurse-submodules check \"$r\"",
+        "git clone --revision v1 \"$r\" d",
+        "git ls-remote --exec x \"$r\"",
+        // Item 5: ls-remote's hidden `--exec` runs its program.
+        "git ls-remote --exec=./e.sh .",
+        "git ls-remote --exec ./e.sh .",
+        "git ls-remote --ex=./e.sh .",
+        // An attached value still asks where it may name the remote or the
+        // option is not named in full.
+        "git archive --remote=\"$r\" HEAD",
+        "git push --repo=\"$r\"",
+        "git clone --bra=\"$b\" \"$r\"",
+        "git fetch --$o=1 origin",
+    ];
+    assert_eq!(
+        wrong(&lines, Some(ProtectedActionKind::UnseenCode)),
+        Vec::<String>::new()
+    );
 }
 
 /// Route 2: a remote stored in `.git/config` or `.gitmodules` is not on the
@@ -259,6 +303,16 @@ fn issue_1876_remote_scan_is_linear() {
             "option groups before the remote",
             "-qvb x ",
             "git clone {}\"$r\"",
+        ),
+        (
+            "git words in one command",
+            "git fetch --depth git ",
+            "{}\"$r\"",
+        ),
+        (
+            "unseen words after the remote",
+            "\"$v\" -- ",
+            "git push origin HEAD:x {}",
         ),
         (
             "global options before the subcommand",

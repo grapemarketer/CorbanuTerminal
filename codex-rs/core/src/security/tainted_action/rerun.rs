@@ -662,7 +662,9 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
     let unknown = unknown_at.is_some();
     let clone = has("clone");
     let creates = clone || has("init");
-    let exec = has("push") || has("archive") || has("send-pack") || has("fetch-pack");
+    // #1876: ls-remote takes a hidden `--exec` (`git ls-remote --exec=./x .`).
+    let exec =
+        has("push") || has("archive") || has("send-pack") || has("fetch-pack") || has("ls-remote");
     let grep = has("grep");
     let long = |word: &str, option: &str, shortest: usize| {
         let name = word.split_once('=').map_or(word, |(name, _)| name);
@@ -681,8 +683,14 @@ pub(super) fn git_runs_program(args: &[String], subcommand: Option<&str>) -> boo
     }
     // #1876: git's `ext::` helper run by itself (`git remote-ext x 'sh -c
     // id'`) runs its second operand when its input asks it to connect,
-    // whatever `protocol.ext.allow` says.
-    if has("remote-ext") {
+    // whatever `protocol.ext.allow` says. In any case: a case-insensitive
+    // filesystem (macOS) finds the helper for `git REMOTE-EXT` too.
+    if has("remote-ext")
+        || args.iter().any(|arg| {
+            work::step();
+            arg.eq_ignore_ascii_case("remote-ext")
+        })
+    {
         return true;
     }
     args.iter().enumerate().any(|(at, word)| {
@@ -724,9 +732,9 @@ pub(super) const GIT_TRANSPORTS: &[&str] = &[
 
 /// #1876: the options of each transport subcommand that take the next word
 /// as their value (`--depth 1`), long and short, as `git <subcommand> -h`
-/// lists them (git 2.43; `--[no-]x[=<v>]` takes no next word), plus hidden
-/// and newer ones (`ls-remote -u`, `clone --ref-format`). A subcommand git
-/// does not know (an alias) may be any of them.
+/// lists them (git 2.43 and 2.56; `--[no-]x[=<v>]` takes no next word), plus
+/// hidden and newer ones (`ls-remote --exec`, `clone --revision`). A
+/// subcommand git does not know (an alias) may be any of them.
 fn git_transport_valued(sub: &str) -> (&'static [&'static str], &'static str) {
     match sub {
         "fetch" => (
@@ -781,12 +789,22 @@ fn git_transport_valued(sub: &str) -> (&'static [&'static str], &'static str) {
                 "--filter",
                 "--bundle-uri",
                 "--ref-format",
+                "--revision",
             ],
             "jobuc",
         ),
-        "ls-remote" => (&["--upload-pack", "--sort", "--server-option"], "ou"),
+        "ls-remote" => (
+            &["--upload-pack", "--exec", "--sort", "--server-option"],
+            "o",
+        ),
         "push" => (
-            &["--repo", "--receive-pack", "--exec", "--push-option"],
+            &[
+                "--repo",
+                "--receive-pack",
+                "--exec",
+                "--push-option",
+                "--recurse-submodules",
+            ],
             "o",
         ),
         "archive" => (
@@ -842,6 +860,8 @@ const GIT_TRANSPORT_ANY_VALUED: &[&str] = &[
     "--config",
     "--bundle-uri",
     "--ref-format",
+    "--revision",
+    "--recurse-submodules",
     "--sort",
     "--repo",
     "--format",
@@ -897,18 +917,33 @@ pub(super) fn git_may_contact_remote(sub: &str) -> bool {
     GIT_TRANSPORTS.contains(&sub) || !GIT_COMMANDS.contains(&sub)
 }
 
-/// #1876: whether a transport subcommand's remote, or a word before it (which
-/// may be an option such as `--upload-pack=…`), is text the line does not
-/// show: a variable it does not resolve (`git fetch "$r"` with `r` read from
-/// input, set to a quoted value with spaces, or from the environment), a
-/// substitution's output or a backtick. Git would read that value as the
-/// remote, and an `ext::` remote runs a program (#1841 judges the visible
-/// ones). The remote is the first operand; `remote add|set-url <name>` and
-/// `submodule add` name it after their verb, and their other verbs take none.
-/// Words after the remote (refspecs: `git push origin "$branch"`) stay quiet.
-/// `subcommand`: a dashed helper's (`git-fetch`); git's own is found in
-/// `args`, and one git does not know may be an alias of a transport (#1528).
+/// #1876: whether a transport subcommand's remote, or another word git may
+/// read as one of its options, is text the line does not show: a variable it
+/// does not resolve (`git fetch "$r"` with `r` read from input, set to a
+/// quoted value with spaces, or from the environment), a substitution's
+/// output or a backtick. Git would read that value as the remote, and an
+/// `ext::` remote runs a program (#1841 judges the visible ones); git reads
+/// options after operands too, so a value after the remote may be
+/// `--upload-pack=…` (`git fetch origin "$v"`). Such a word stays quiet when a
+/// visible start means it is no option (`HEAD:"$b"`, `refs/heads/"$b"`), or
+/// after `--`. The remote is the first operand; `remote add|set-url <name>`
+/// and `submodule add` name it after their verb, their other verbs take none,
+/// and `archive`'s is only `--remote`'s value. `subcommand`: a dashed
+/// helper's (`git-fetch`); git's own is found in `args`, and one git does not
+/// know may be an alias of a transport (#1528). The words read end at the
+/// next git word (`sudo -u git git fetch "$r"`: the user name is not the git
+/// that runs), so each word is read by one scan.
 pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bool {
+    let end = args
+        .iter()
+        .position(|word| {
+            work::step();
+            basename(word) == "git"
+                || indirect::equals_git(word)
+                || git_helpers::git_name(word).is_some()
+        })
+        .unwrap_or(args.len());
+    let args = &args[..end];
     // A dashed helper (`git-fetch`) names its subcommand; its words start
     // right after its name. Otherwise the subcommand is git's first word
     // after its global options and their values (`-C x fetch`).
@@ -941,6 +976,12 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
     if unseen(&sub) {
         return false; // a subcommand the line does not show already asks (simple_command)
     }
+    // Whether a word the line does not show may start with `-`: nothing
+    // visible comes before its first unseen text (`"$v"`, `$(…)x`).
+    let may_be_option = |word: &str| {
+        let word = word.trim_start_matches(['"', '\'']);
+        word.starts_with(['$', '`', '-']) || word.starts_with(UNSEEN_OUTPUT)
+    };
     let rest = args.get(start..).unwrap_or_default();
     let before = match sub.as_str() {
         "remote" | "submodule" => {
@@ -965,6 +1006,7 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
     let mut operands = 0;
     let mut value_next = false;
     let mut doubted = false;
+    let mut after_dashes = false;
     for word in rest {
         work::step();
         // An option's value (`--depth "$n"`) is not the remote, unless it
@@ -977,27 +1019,55 @@ pub(super) fn git_remote_unseen(args: &[String], subcommand: Option<&str>) -> bo
             }
             continue;
         }
-        if word.starts_with('-') && word != "--" {
-            if unseen(word) {
-                return true; // it may be `--remote=$r` or `--upload-pack=…`
+        if after_dashes {
+            // Operands only, none an option: one up to the remote may
+            // still be the remote (`git fetch -- "$r"`).
+            if unseen(word) && before != usize::MAX && operands <= before {
+                return true;
             }
-            (value_next, doubted) = git_transport_option(&sub, word);
+            operands += 1;
             continue;
-        }
-        // Each operand up to the remote may be the remote (archive's are
-        // not: they are a tree-ish and paths).
-        if unseen(word) && before != usize::MAX {
-            return true;
         }
         if word == "--" {
+            after_dashes = true;
             continue;
         }
-        operands += 1;
-        if operands > before {
-            return false;
+        if word.starts_with('-') {
+            if unseen(word) && git_attached_value_doubted(&sub, word, unseen) {
+                return true; // it may be `--remote=$r` or `--$x`
+            }
+            if !word.contains('=') {
+                (value_next, doubted) = git_transport_option(&sub, word);
+            }
+            continue;
         }
+        // An operand up to the remote may be the remote (archive's are not:
+        // they are a tree-ish and paths); any may be an option.
+        let remote_or_before = before != usize::MAX && operands <= before;
+        if unseen(word) && (remote_or_before || may_be_option(word)) {
+            return true;
+        }
+        operands += 1;
     }
     false
+}
+
+/// For an option word the line does not fully show (`--depth="$n"`,
+/// `--remote=$r`, `-j"$n"`): whether it asks. A valued long option named
+/// in full, whose value cannot name the remote (`--depth`, `--branch`),
+/// keeps a value the line does not show quiet; `--remote`, `--repo`,
+/// abbreviations, short options, an alias's options and an option named by
+/// text the line does not show may be anything. Program-running options
+/// (`--upload-pack=$x`) ask in `git_runs_program`.
+fn git_attached_value_doubted(sub: &str, word: &str, unseen: impl Fn(&str) -> bool) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return true;
+    };
+    if unseen(name) || !name.starts_with("--") || !GIT_COMMANDS.contains(&sub) {
+        return true;
+    }
+    let (long_valued, _) = git_transport_valued(sub);
+    !long_valued.contains(&name) || matches!(name, "--remote" | "--repo")
 }
 
 /// Whether `word` names a git remote using the `ext::` smart transport, whose

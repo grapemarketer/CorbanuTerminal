@@ -2697,8 +2697,6 @@ impl Classifier {
         }
         let mut later = LaterWords::new(&lower);
         let mut git_programs_read = false;
-        // #1876: the remote of a transport subcommand, read once per command.
-        let mut git_remotes_read = false;
         // Not only at command position: wrappers (`nice -n 5`, `sudo -u x`,
         // `timeout 9`, `eval`, `npx`, nested `sh -c`) put the real command later.
         for (index, word) in lower.iter().enumerate() {
@@ -2784,10 +2782,11 @@ impl Classifier {
             let hidden_git = (is_git || helper.is_some())
                 && self.quoted_text
                 && hidden.get(index).copied().unwrap_or(false);
-            // #1876: a transport subcommand whose remote the line does not show.
-            let unseen_remote = (is_git || helper.is_some())
-                && !std::mem::replace(&mut git_remotes_read, true)
-                && rerun::git_remote_unseen(git_args.0, subcommand);
+            // #1876: a transport subcommand whose remote the line does not
+            // show. Each scan ends at the next git word, so the words are
+            // read once in all (`sudo -u git git fetch "$r"` reads both).
+            let unseen_remote =
+                (is_git || helper.is_some()) && rerun::git_remote_unseen(git_args.0, subcommand);
             if (is_git && code_variables::git_runs_code_after_git(git_args.0, git_args.1))
                 || (helper == Some(None) && code_variables::git_runs_code(git_args.0, git_args.1))
                 || git_program
