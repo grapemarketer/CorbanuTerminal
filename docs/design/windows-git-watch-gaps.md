@@ -367,17 +367,18 @@ together with decision 1.
 3. The added cost of gap 1 B and gap 2 B on this repository (38k files)
    and on a `repo` client with about 100 projects. Measured for the
    elevated sandbox's watch (#1896, native Windows CI, windows-2022, debug
-   build, median of 9, two rounds; #1902's nested `.codex`/`.agents`
-   contents included): on 38,000 files in one repository the start takes 56–58 ms
-   (the walk 46 ms, the contents of 15 nested folders 1.6 ms) and the end
-   57–59 ms; on a `repo` client (`.repo` with 100 project git folders, 100
-   work trees of 350 files with `gitdir:` files, 201 repositories found)
-   the start takes 516–521 ms (the walk 386–393 ms) and the end 520 ms.
-   Until #1896 the elevated session ran its preparation, this start
-   included, on the async thread: a current-thread runtime's other tasks
-   stalled for 152–199 ms (38k files) and 612–624 ms (`repo` client) per
-   command; with it moved off, 16–22 ms (the timer's resolution). What is
-   flagged is byte-identical either way.
+   build, median of 9, two runs of two rounds each; #1902's nested
+   `.codex`/`.agents` contents included): on 38,000 files in one
+   repository the start takes 56–79 ms (the walk 46–77 ms, the contents of
+   15 nested folders 1.6–2.2 ms) and the end 57–79 ms; on a `repo` client
+   (`.repo` with 100 project git folders, 100 work trees of 350 files with
+   `gitdir:` files, 201 repositories found) the start takes 516–709 ms (the
+   walk 386–541 ms) and the end 520–704 ms. Until #1896 the elevated
+   session ran its preparation, this start included, on the async thread:
+   a current-thread runtime's other tasks stalled for 152–279 ms (38k
+   files) and 612–835 ms (`repo` client) per command; with it moved off,
+   16–22 ms (the timer's resolution). What is flagged is byte-identical
+   either way.
 4. Whether `npm install` with Husky v9 inside the sandbox rewrites
    `.husky\_` with identical content (gap 3 silence).
 5. Warnings per start in a `repo` client after `repo sync` in the sandbox,
