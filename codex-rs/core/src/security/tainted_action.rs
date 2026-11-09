@@ -3951,3 +3951,7 @@ mod tainted_action_linear_tests;
 #[cfg(test)]
 #[path = "tainted_action_git_ext_tests.rs"]
 mod tainted_action_git_ext_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_timing_probe_tests.rs"]
+mod tainted_action_timing_probe_tests;

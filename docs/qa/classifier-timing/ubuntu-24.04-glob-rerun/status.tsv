@@ -1,0 +1,5 @@
+glob_alternatives	64	ok	0.04
+glob_alternatives	128	ok	0.07
+glob_alternatives	256	ok	0.13
+glob_alternatives	512	ok	0.28
+glob_alternatives	1024	ok	0.26

@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Wall-clock timings of the command-safety classifier for the input shapes
+# in codex-rs/core/src/security/tainted_action_timing_probe_tests.rs, at
+# 1k/2k/4k/8k units each, on a release build.
+#
+# Usage: scripts/classifier_timing_probe.sh [OUT_DIR]
+#        (default codex-rs/target/classifier-timing, which git ignores)
+# Env:   PROBE_SIZES (default "1000 2000 4000 8000"), PROBE_REPS (5),
+#        PROBE_TIMEOUT seconds per pattern and size (600),
+#        PROBE_PATTERNS (default: all five).
+#
+# Writes OUT_DIR/raw.tsv (every timed run), OUT_DIR/table.md (median per
+# size, doubling ratios, verdict) and one log per run. A run that times out
+# or crashes is listed in the table as TIMEOUT / EXIT <code>; any EXIT makes
+# the script exit 1. Needs bash, perl and python3 (Linux and macOS).
+#
+# The test binary is built once and then run directly, one process per
+# pattern and size, so the time limit applies to the process that does the
+# work (not to a cargo parent that would leave it running).
+set -uo pipefail
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+out=${1:-$repo/codex-rs/target/classifier-timing}
+sizes=${PROBE_SIZES:-1000 2000 4000 8000}
+reps=${PROBE_REPS:-5}
+limit=${PROBE_TIMEOUT:-600}
+patterns=${PROBE_PATTERNS:-nested_substitution alias_chain arithmetic glob_alternatives nested_quotes}
+filter=security::tainted_action::tainted_action_timing_probe_tests::classifier_timing_probe
+
+mkdir -p "$out" || exit 1
+# Absolute, so a relative OUT_DIR still means the caller's directory after
+# the cd below.
+out=$(cd "$out" && pwd) || exit 1
+cd "$repo/codex-rs" || exit 1
+
+# GNU timeout (124 on expiry); macOS has none, so gtimeout from coreutils or
+# perl's alarm (SIGALRM, 142). The alarm survives exec, so it ends the test
+# binary itself.
+limited() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$limit" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$limit" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$limit" "$@"
+  fi
+}
+
+# Seconds with a fraction (BSD date has no %N).
+now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
+
+echo "== build: cargo test --release -p codex-core --lib --no-run"
+cargo test --release -p codex-core --lib --no-run --message-format=json \
+  >"$out/build.json" 2> >(tee "$out/build.log" >&2)
+build_status=$?
+if [ "$build_status" -ne 0 ]; then
+  echo "build failed (exit $build_status)" >&2
+  exit "$build_status"
+fi
+# The codex-core lib test executable, from cargo's own build messages.
+python3 - "$out/build.json" >"$out/test-binary.txt" <<'PY' || exit 1
+import json
+import sys
+
+found = []
+with open(sys.argv[1]) as f:
+    for row in f:
+        if not row.startswith("{"):
+            continue
+        msg = json.loads(row)
+        target = msg.get("target", {})
+        if (
+            msg.get("reason") == "compiler-artifact"
+            and msg.get("profile", {}).get("test")
+            and target.get("name") == "codex_core"
+            and "lib" in target.get("kind", [])
+            and msg.get("executable")
+        ):
+            found.append(msg["executable"])
+if len(found) != 1:
+    sys.exit(f"expected one codex_core lib test executable, found {found}")
+print(found[0])
+PY
+bin=$(cat "$out/test-binary.txt")
+echo "== test binary: $bin"
+
+printf 'pattern\tunits\tbytes\trun\tns\tverdict\n' >"$out/raw.tsv"
+: >"$out/status.tsv"
+for pattern in $patterns; do
+  for n in $sizes; do
+    log="$out/run-$pattern-$n.log"
+    start=$(now)
+    # In the package directory, as cargo test runs it.
+    (cd core && PROBE_PATTERN=$pattern PROBE_UNITS=$n PROBE_REPS=$reps \
+      limited "$bin" --ignored --exact --nocapture "$filter") >"$log" 2>&1
+    status=$?
+    end=$(now)
+    grep '^probe' "$log" | cut -f2- >>"$out/raw.tsv"
+    case $status in
+      0) state=ok ;;
+      124 | 142) state=TIMEOUT ;;
+      *) state="EXIT $status" ;;
+    esac
+    printf '%s\t%s\t%s\t%s\n' "$pattern" "$n" "$state" \
+      "$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.2f", b - a }')" >>"$out/status.tsv"
+    echo "$pattern $n: $state"
+  done
+done
+
+python3 - "$out" "$reps" <<'PY'
+import collections
+import statistics
+import sys
+
+out, reps = sys.argv[1], int(sys.argv[2])
+runs = collections.defaultdict(list)
+verdicts = {}
+with open(f"{out}/raw.tsv") as f:
+    next(f)
+    for row in f:
+        pattern, units, _bytes, run, ns, verdict = row.rstrip("\n").split("\t")
+        if run != "warmup":
+            runs[(pattern, int(units))].append(int(ns))
+        verdicts[(pattern, int(units))] = verdict
+status = {}
+order = []
+with open(f"{out}/status.tsv") as f:
+    for row in f:
+        pattern, units, state, _secs = row.rstrip("\n").split("\t")
+        status[(pattern, int(units))] = state
+        if pattern not in order:
+            order.append(pattern)
+sizes = sorted({units for _, units in status})
+
+lines = [
+    "| pattern | " + " | ".join(f"{s} median ms" for s in sizes)
+    + " | doubling ratios | verdict |",
+    "|---" * (len(sizes) + 3) + "|",
+]
+for pattern in order:
+    cells, medians = [], []
+    for s in sizes:
+        state = status.get((pattern, s), "untested")
+        times = runs.get((pattern, s), [])
+        if state == "ok" and len(times) == reps:
+            median = statistics.median(times) / 1e6
+            medians.append(median)
+            cells.append(f"{median:.3f}")
+        else:
+            medians.append(None)
+            cells.append(state)
+    ratios = [
+        b / a
+        for a, b in zip(medians, medians[1:])
+        if a is not None and b is not None and a > 0
+    ]
+    if None in medians or not ratios:
+        verdict = "incomplete (see cells)"
+    elif max(ratios) >= 3.0:
+        verdict = "super-linear"
+    elif max(ratios) <= 2.5:
+        verdict = "linear"
+    else:
+        verdict = "unclear (ratio between 2.5 and 3.0)"
+    lines.append(
+        f"| {pattern} | " + " | ".join(cells)
+        + " | " + ", ".join(f"{r:.2f}" for r in ratios) + f" | {verdict} |"
+    )
+lines.append("")
+lines.append("Verdicts on each line (classifier result):")
+for pattern in order:
+    seen = sorted({verdicts[(pattern, s)] for s in sizes if (pattern, s) in verdicts})
+    lines.append(f"- {pattern}: {', '.join(seen) or 'none'}")
+with open(f"{out}/table.md", "w") as f:
+    f.write("\n".join(lines) + "\n")
+print("\n".join(lines))
+PY
+
+# A crashed run (not a timeout) is a broken probe, not a data point.
+if cut -f3 "$out/status.tsv" | grep -q '^EXIT'; then
+  echo "some runs exited with an error; see $out/status.tsv" >&2
+  exit 1
+fi
