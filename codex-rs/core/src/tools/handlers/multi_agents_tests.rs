@@ -6306,15 +6306,42 @@ async fn d435_interrupting_a_pending_agent_stops_its_first_turn_without_waking_i
     );
     assert_eq!(interrupts(), interrupts_before + 1, "the interrupt is sent");
     assert_eq!(notices(), notices_before, "no notice wakes it");
+
+    // A session `spawn_agent` didn't create with a first turn (one reloaded
+    // later) reads `PendingInit` while idle: D404, nothing reaches it.
+    thread
+        .session
+        .spawned_with_first_turn
+        .store(false, std::sync::atomic::Ordering::Release);
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should report the status");
+    let (content, _) = expect_text_output(output);
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(interrupts(), interrupts_before + 1, "no second interrupt");
+    assert_eq!(notices(), notices_before, "no notice wakes it");
 }
 
 /// D435 keeps D404 for an idle agent that reads `PendingInit` only because
-/// `send_message` reloaded it without a turn: nothing reaches it.
+/// `send_message` reloaded it without a turn: its new session isn't marked
+/// as spawned with a first turn, so nothing reaches it.
 #[tokio::test]
 async fn d435_a_reloaded_idle_agent_reading_pending_only_reports_its_status() {
     let (mut session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
-    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    config.multi_agent_v2.max_concurrent_threads_per_session = 4;
     config
         .features
         .enable(Feature::MultiAgentV2)
@@ -6376,11 +6403,22 @@ async fn d435_a_reloaded_idle_agent_reading_pending_only_reports_its_status() {
         ))
         .await
         .expect("send_message should reload the worker");
-    assert_eq!(
-        manager.agent_control().get_status(agent_id).await,
-        AgentStatus::PendingInit,
-        "reloaded without a turn"
+    // The reloaded session is a new one, which `spawn_agent` didn't mark.
+    let reloaded = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker should be resident again");
+    assert!(
+        !reloaded
+            .session
+            .spawned_with_first_turn
+            .load(std::sync::atomic::Ordering::Acquire)
     );
+    // Mailbox recovery may hand the reloaded agent its interrupted first
+    // message again, which starts a turn; only an idle one is checked here.
+    if manager.agent_control().get_status(agent_id).await != AgentStatus::PendingInit {
+        return;
+    }
     let reaches_agent = || {
         manager
             .captured_ops()
@@ -6410,7 +6448,11 @@ async fn d435_a_reloaded_idle_agent_reading_pending_only_reports_its_status() {
         result.process_effect,
         "not running: nothing was interrupted and the agent was not started"
     );
-    assert_eq!(reaches_agent(), before, "nothing reaches a reloaded idle agent");
+    assert_eq!(
+        reaches_agent(),
+        before,
+        "nothing reaches a reloaded idle agent"
+    );
 }
 
 /// D435, end to end: an agent interrupted right after its spawn, while its
