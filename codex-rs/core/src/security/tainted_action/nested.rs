@@ -1240,7 +1240,13 @@ impl Classifier {
                     // the values the line sets (`r=origin; git fetch "$r"`).
                     seen: true,
                     loose: (word.dynamic && word.splits)
-                        || (word.globs && word.text.starts_with(['*', '?', '[', '^'])),
+                        // A glob whose first characters may match `-` (`*`,
+                        // `-*`, `"-"*`).
+                        || (word.globs
+                            && word
+                                .text
+                                .trim_start_matches('-')
+                                .starts_with(['*', '?', '[', '^'])),
                 })
                 .collect();
             let options_after = rerun::git_options_after(texts, &marks);

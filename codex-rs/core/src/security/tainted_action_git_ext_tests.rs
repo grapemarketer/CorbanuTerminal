@@ -287,6 +287,12 @@ fn issue_1876_review_2_lines_ask() {
         "git push . *",
         "git fetch origin ?",
         "git clone ../src [d]*",
+        // Codex review: a glob after a literal `-`, and globbed remotes
+        // after `--` with `--multiple`.
+        "git fetch origin --*",
+        "git fetch origin -*",
+        "git fetch origin \"-\"*",
+        "git fetch --multiple origin -- *",
     ];
     assert_eq!(
         wrong(&lines, Some(ProtectedActionKind::UnseenCode)),

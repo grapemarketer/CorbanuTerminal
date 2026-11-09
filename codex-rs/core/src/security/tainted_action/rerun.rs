@@ -1056,7 +1056,7 @@ pub(super) fn git_remote_unseen(
         if after_dashes {
             // Operands only, none an option: one up to the remote, or any
             // with `every`, may still be a remote (`git fetch -- "$r"`).
-            if unseen_at(at, word) && remote {
+            if (unseen_at(at, word) || mark.loose) && remote {
                 return true;
             }
             operands += 1;
