@@ -166,20 +166,41 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         .map_err(anyhow::Error::msg)?
     };
 
-    let elevated = prepare_elevated_spawn_context_for_permissions(
-        permissions.clone(),
-        codex_home,
-        cwd,
-        &mut env_map,
-        &command,
-        read_roots_override,
-        read_roots_include_platform_defaults,
-        write_roots_override,
-        deny_read_override,
-        &deny_write_paths_override,
-        proxy_enforced,
-        proxy_settings_mode,
-    )?;
+    // #1896 item 4: setup's checks and the start of the planted-folder watch
+    // (D425), which walks the writable roots, block for a while, so they run
+    // off the async thread, as the legacy backend's preparation does.
+    let (elevated, prepared_env) = {
+        let permissions = permissions.clone();
+        let codex_home = codex_home.to_path_buf();
+        let cwd = cwd.to_path_buf();
+        let command = command.clone();
+        let read_roots_override = read_roots_override.map(<[PathBuf]>::to_vec);
+        let write_roots_override = write_roots_override.map(<[PathBuf]>::to_vec);
+        let deny_read_override = deny_read_override.clone();
+        let deny_write_paths_override = deny_write_paths_override.clone();
+        let mut env_map = std::mem::take(&mut env_map);
+        tokio::task::spawn_blocking(move || {
+            let elevated = prepare_elevated_spawn_context_for_permissions(
+                permissions,
+                &codex_home,
+                &cwd,
+                &mut env_map,
+                &command,
+                read_roots_override.as_deref(),
+                read_roots_include_platform_defaults,
+                write_roots_override.as_deref(),
+                &deny_read_override,
+                &deny_write_paths_override,
+                proxy_enforced,
+                proxy_settings_mode,
+            );
+            (elevated, env_map)
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("elevated spawn preparation task failed: {err}"))?
+    };
+    env_map = prepared_env;
+    let elevated = elevated?;
 
     let sandbox_creds = elevated.sandbox_creds;
     let planted_watch = elevated.planted_watch;
