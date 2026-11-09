@@ -549,9 +549,12 @@ impl UnifiedExecRuntime<'_> {
             }
             None => (env, None, None),
         };
-        let explicit_env_overrides = req.explicit_env_overrides.clone();
-        #[cfg(unix)]
         let mut env = env;
+        let mut explicit_env_overrides = req.explicit_env_overrides.clone();
+        // D447: no git `ext::` transport after untrusted content.
+        if crate::security::git_ext_guard::applies(&ctx.session) {
+            crate::security::git_ext_guard::apply(&mut env, &mut explicit_env_overrides);
+        }
         #[cfg(unix)]
         let runtime_path_prepends = {
             let mut runtime_path_prepends = RuntimePathPrepends::default();

@@ -303,8 +303,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         );
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions);
-        let env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
-        let explicit_env_overrides = req.explicit_env_overrides.clone();
+        let mut env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
+        let mut explicit_env_overrides = req.explicit_env_overrides.clone();
+        // D447: no git `ext::` transport after untrusted content.
+        if crate::security::git_ext_guard::applies(&ctx.session) {
+            crate::security::git_ext_guard::apply(&mut env, &mut explicit_env_overrides);
+        }
         #[cfg(unix)]
         let (env, runtime_path_prepends) = {
             let mut env = env;

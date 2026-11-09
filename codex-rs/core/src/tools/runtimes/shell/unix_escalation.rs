@@ -131,6 +131,11 @@ pub(super) async fn try_run_zsh_fork(
     };
     let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
     prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
+    // D447: as `ShellRuntime::run` does for the other backends; the snapshot
+    // overrides are already in `command`.
+    if crate::security::git_ext_guard::applies(&ctx.session) {
+        crate::security::git_ext_guard::apply(&mut env, &mut std::collections::HashMap::new());
+    }
     let command =
         build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
