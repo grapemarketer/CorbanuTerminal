@@ -1374,7 +1374,7 @@ fn assert_permission_preset_request(
 }
 
 /// #1506 item 2 (D262): the startup prompt for project folders that appeared
-/// while a non-admin sandbox command ran.
+/// while a Windows sandbox command ran.
 #[tokio::test]
 async fn planted_project_metadata_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -1387,6 +1387,59 @@ async fn planted_project_metadata_prompt_snapshot() {
 
     assert_chatwidget_snapshot!(
         "planted_project_metadata_prompt",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+}
+
+/// D424 (#1775): the startup prompt asks about a recorded `.git` below the
+/// working folder too (git runs anywhere), not only one at or above it;
+/// recorded `.codex`/`.agents` folders below it stay out (Core doesn't load
+/// them from there), and so does a `.git` elsewhere.
+#[tokio::test]
+async fn planted_prompt_covers_git_below_the_working_folder() {
+    let mut config = test_config().await;
+    // A real folder, canonical, so the result doesn't depend on the host.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dunce::canonicalize(dir.path()).expect("canonical");
+    let cwd = base.join("project");
+    std::fs::create_dir_all(&cwd).expect("create project");
+    config.cwd = cwd.abs();
+    let other = base.join("other");
+    let planted = vec![
+        cwd.join(".git"),
+        cwd.join("vendor").join(".git"),
+        cwd.join("vendor").join(".codex"),
+        other.join(".git"),
+    ];
+    assert_eq!(
+        crate::chatwidget::windows_sandbox_prompts::planted_to_ask_about(planted, &config),
+        vec![cwd.join(".git"), cwd.join("vendor").join(".git")]
+    );
+}
+
+/// D420 (#1775): the same prompt for repositories that appeared or whose
+/// config or hooks changed, with what changed.
+#[tokio::test]
+async fn planted_repo_changes_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_planted_prompt(
+        vec![PathBuf::from("project/.git")],
+        vec![
+            codex_config::PlantedGitChange {
+                path: PathBuf::from("project/vendor/.git"),
+                changes: vec!["new repository".to_string()],
+            },
+            codex_config::PlantedGitChange {
+                path: PathBuf::from("scratch"),
+                changes: vec![
+                    "hooks/post-checkout added".to_string(),
+                    "config changed".to_string(),
+                ],
+            },
+        ],
+    );
+    assert_chatwidget_snapshot!(
+        "planted_repo_changes_prompt",
         render_bottom_popup(&chat, /*width*/ 100)
     );
 }

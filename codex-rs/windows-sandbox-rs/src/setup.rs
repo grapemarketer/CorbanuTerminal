@@ -878,6 +878,14 @@ fn run_setup_exe(
     needs_elevation: bool,
     codex_home: &Path,
 ) -> Result<()> {
+    // #1827: this setup resets the sandbox users' passwords, which other
+    // tests' logons use, so tests run it only under the shared lock (and in
+    // the nextest group that serializes its holders).
+    #[cfg(test)]
+    assert!(
+        crate::unified_exec::tests::legacy_process_test_guard_is_held(),
+        "the sandbox's setup ran in a test without legacy_process_test_guard() (#1827)"
+    );
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -1122,10 +1130,42 @@ pub fn run_elevated_provisioning_setup(
     run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
 }
 
+/// D377: the request's environment with the session's own temp folder as
+/// the temp folder, never the user's whole `%TEMP%` (unchanged where the
+/// command's environment already has it). Where the folder cannot be made
+/// (logged), with no temp folder, so none is granted: unlike a command's
+/// launch, which then fails, a setup refresh goes on without it.
+fn env_with_session_temp(request: &SandboxSetupRequest<'_>) -> HashMap<String, String> {
+    let mut env_map = request.env_map.clone();
+    if let Err(err) =
+        crate::session_temp::use_session_temp(request.permissions, &mut env_map, request.codex_home)
+    {
+        log_note(
+            &format!("D377: no session temp folder: {err:#}"),
+            Some(&sandbox_dir(request.codex_home)),
+        );
+        for key in ["TEMP", "TMP"] {
+            env_map.retain(|name, _| !name.eq_ignore_ascii_case(key));
+            env_map.insert(key.to_string(), String::new());
+        }
+    }
+    env_map
+}
+
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let env_map = if overrides.write_roots.is_none() || overrides.read_roots.is_none() {
+        env_with_session_temp(request)
+    } else {
+        request.env_map.clone()
+    };
+    let request = SandboxSetupRequest {
+        env_map: &env_map,
+        ..*request
+    };
+    let request = &request;
     let write_roots = effective_write_roots_for_setup(
         request.permissions,
         request.command_cwd,
@@ -1167,11 +1207,9 @@ fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
     explicit_deny_write_paths: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
-    let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
-        request.permissions,
-        request.command_cwd,
-        request.env_map,
-    );
+    let env_map = env_with_session_temp(request);
+    let allow_deny_paths: AllowDenyPaths =
+        compute_allow_paths_for_permissions(request.permissions, request.command_cwd, &env_map);
     let deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()
@@ -2248,7 +2286,12 @@ mod tests {
         );
         let workspace_roots = workspace_roots_for(command_cwd.as_path());
         let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
-        let env_map = HashMap::from([("TEMP".to_string(), temp.display().to_string())]);
+        // Both, so the session temp folder (D377) is made in `temp`, not in
+        // this process's temp folder.
+        let env_map = HashMap::from([
+            ("TEMP".to_string(), temp.display().to_string()),
+            ("TMP".to_string(), temp.display().to_string()),
+        ]);
         let request = super::SandboxSetupRequest {
             permissions: &permissions,
             command_cwd: &command_cwd,
@@ -2259,6 +2302,7 @@ mod tests {
 
         let deny_write_paths =
             super::build_payload_deny_write_paths(&request, Some(explicit.clone()));
+        crate::session_temp::end_session_temp_in(&temp);
 
         let mut expected: HashSet<PathBuf> = explicit.into_iter().collect();
         expected.extend([command_cwd.join(".git"), other.join(".Agents")]);

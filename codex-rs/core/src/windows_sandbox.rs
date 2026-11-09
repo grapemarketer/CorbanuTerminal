@@ -229,6 +229,33 @@ pub fn run_setup_refresh_with_extra_read_roots(
     anyhow::bail!("Windows sandbox read-root refresh is only supported on Windows")
 }
 
+/// D424 (#1775): the startup warnings for possibly planted `.git` entries
+/// beyond the project root's way down to `cwd` (which the config loader
+/// covers): those in the folders Windows sandbox commands may write to
+/// under `policy` (`%TEMP%` included) and those below `cwd`; and (D420) for
+/// the repositories there (or in `cwd` or above it) that appeared or changed.
+/// Empty off Windows.
+pub fn planted_git_startup_warnings(
+    policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
+    workspace_roots: &[AbsolutePathBuf],
+    cwd: &Path,
+) -> Vec<String> {
+    let planted = codex_config::planted_project_metadata();
+    // D420: repositories that appeared or changed.
+    let git_changes = codex_config::planted_git_changes();
+    if git_changes.is_empty()
+        && matches!(&planted, codex_config::PlantedProjectMetadata::Known(paths) if paths.is_empty())
+    {
+        return Vec::new();
+    }
+    let writable = codex_windows_sandbox::legacy_writable_roots(policy, workspace_roots, cwd);
+    let mut warnings = planted.git_warnings_beyond_project(&writable, cwd);
+    warnings.extend(codex_config::git_changes_warning(
+        &codex_config::git_changes_to_show(git_changes, &writable, cwd),
+    ));
+    warnings
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowsSandboxSetupMode {
     Elevated,

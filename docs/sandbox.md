@@ -68,7 +68,9 @@ may write to) doesn't exist when a non-admin sandbox command starts and
 exists when it ends, a command may have planted it. Corbanu Terminal then
 doesn't load its config, hooks or skills, warns you at startup, and asks in
 the TUI whether to load it (once the command, and anything it left running,
-has ended). Check its contents before you choose to load it. Such folders
+has ended); a warning follows the command too (or a later command, if it
+left processes running). Check its
+contents before you choose to load it. Such folders
 deeper in your workspace are covered too. One that is new, or was replaced,
 when the command ends is treated the same way. A read-only `.codex` or
 `.agents` folder your permission profile names that doesn't exist yet (or
@@ -76,25 +78,120 @@ one on the way to a read-only folder inside it) is created by Corbanu
 Terminal before the command starts, so that command doesn't count it as
 planted; another command that was already running still does. Commands
 can't change, move or delete the ones that existed when they started, or
-the folders above them. A folder the sandbox can't list counts as planted. Folders inside
+the folders above them. A folder the sandbox can't list counts as planted,
+and so does one holding a folder whose name isn't valid Unicode (when that is
+the workspace itself, its top-level `.codex`/`.agents` count as planted until
+that folder is renamed or removed). Folders inside
 `.git` and the temporary folder (`%TEMP%`) aren't checked.
 
 **A `.git` created while a command runs.** Git runs a `.git` folder's hooks
 and config outside the sandbox whenever you run git there. So if the `.git`
 at the top of a folder non-admin sandbox commands may write to appears, or
-is replaced, while a command runs, Corbanu Terminal warns you at startup and
-asks in the TUI whether you have checked it. Commands can still create a
+is replaced, while a command runs, Corbanu Terminal warns you right after
+that command ends (for one that leaves processes running, after a later
+command once they have ended), warns you again at startup and asks in the TUI whether you
+have checked it. Since git runs anywhere, the startup warning and the TUI
+prompt cover every folder commands may write to (`%TEMP%` included) and
+anything below the working folder, not only the working folder and the
+folders above it. Commands can still create a
 `.git` (`git init` works). A `.git` that is a link (a junction or symbolic
-link) is flagged after every command. Only that top-level `.git` is checked,
-not `.git` folders deeper inside.
+link) is flagged after every command.
+
+**Repositories deeper inside, and bare ones.** The same warnings cover the
+repositories deeper in a folder non-admin commands may write to (a nested
+`.git` folder, file or link, and a folder that is itself a bare
+repository), and a writable folder that is itself a bare repository. One is
+flagged when it is new or replaced, or when what git would run from it
+changes: its `config`, `config.worktree`, `commondir` or `gitdir` file, its
+`hooks`, rebase or sequencer steps, legacy `remotes`/`branches`
+definitions, a link or hard link among those files, at the top of its git
+folder or in its `logs`, or the same in its submodules (`modules`), its
+worktrees and the folders a `gitdir:` line or `commondir` names inside the
+writable folders. Files are compared
+by content, so rewriting one with the same content isn't a change. A new
+repository with exactly the shape `git init` or `git clone` leave (only
+the config keys they write and no `ext::` URL, only `*.sample` hooks, no
+links, no other repositories inside) isn't flagged, so cloning a project
+to look at it doesn't ask; a later change to it is, and so is a repository
+that replaced another. A repository reached through a folder link is
+checked too: one that was there when the command started and was moved
+elsewhere and linked back, one directly behind a link, and one deeper behind
+a link into a folder the walk doesn't cover (`%TEMP%`). A folder too large
+to look through (over 20,000 entries, more than 2,000 or six levels of
+nested repositories, or a link into `%TEMP%` with more than 20,000 entries
+behind it), or one holding an entry whose name isn't valid Unicode, counts
+as changed after every command. The warning names what
+changed. Nested repositories in the temporary folder (`%TEMP%`) aren't
+checked, and a nested `.git` link is flagged after every command, as at the
+top.
+
+**Hooks folders and files a git config names.** Many projects point
+`core.hooksPath` at a folder in the project (Husky's `.husky` or
+`.husky\_`, a team `.githooks`). The repository's config may be protected,
+but that folder is ordinary project content, so a command could add a hook
+there for your next `git commit`. The non-admin sandbox reads the configs
+git would read for each repository it watches (the top-level `.git`
+included, plus the global and system git configs in their usual places and
+the files their `include` lines name; a repository the writable folder is
+inside of isn't read) and records, by content, each such hooks
+folder, each included config file, and each file a program setting names
+(such as `core.fsmonitor`, a credential helper or an alias set to a script
+in the project: a first word that looks like a path, and every later word),
+when it lies in a folder commands may write to. A path a config or a
+`.git` file names on a network share or a device (`\\server\share`,
+`\\?\`, `CON` ...) is never opened (a link in the project is still
+followed; a device name written with a superscript digit, such as `COM¹`,
+isn't recognized as one). For the same reason, in a writable folder that is
+itself on a network share or written with a `\\?\` prefix, the config of
+a repository whose git folder lies there isn't read and paths relative to
+that folder aren't recorded, and no warning says so; only a path a config
+names by drive letter, or through a link, is. A global or system
+git config that lies in such a folder is recorded too. A new, changed or
+removed file there is flagged like a changed repository, and so is one
+that appears where a config points (a new repository's `.githooks`, say).
+For Husky, the files named after git hooks in the folder above `_` count,
+and so does the `_` folder below any hooks folder. Rewriting a file with
+the same content (as `npm install` does when it reruns Husky) isn't a
+change. A hooks folder with more than 1,024 entries, or configs too large to
+read (over 1 MB in one file, 100,000 entries, 4,096 files, more than
+eight `core.worktree` values or 4,096 named paths), count as changed after
+every command. Other scripts those hooks call are ordinary project files
+and aren't checked. That includes `node_modules\.bin`: Husky v9 puts it
+first on `PATH` for its hooks, so a hook that runs `npx …` runs whatever is
+there. Husky's own startup files (`init.sh` in its config folder, v8's
+`~/.huskyrc`) aren't checked either, and nor are program settings outside
+the list the sandbox knows.
+
+**The default (elevated) Windows sandbox** keeps the same records and
+shows the same warnings (D425, #1846), with three differences. They are
+written when the command itself ends: Corbanu Terminal can't see the
+processes a command leaves running there, so what those change later isn't
+flagged. Nested `.codex`/`.agents` folders that already exist aren't
+protected, so a command can change what is inside them; such a change is
+flagged instead (#1896), by content, like moving or replacing the folder.
+A file rewritten with the same content isn't a change, but your own edit
+made while such a command runs counts like the command's. A folder with
+more than 20,000 entries or 64 MiB of files, with a subfolder that can't be
+listed, or with a name that isn't valid Unicode, is flagged after every
+command. A link inside one is recorded by its target only: a change to the
+file or folder it points to isn't flagged (the non-admin sandbox doesn't
+protect those either). And the records themselves (in
+`%LOCALAPPDATA%\CorbanuTerminalSandbox`) aren't protected from a command
+whose writable folder contains them, such as your whole user folder.
+Its commands run as their own Windows account, so what they create is owned
+by that account, and git refuses such a repository ("dubious ownership")
+unless a `safe.directory` setting trusts it. Corbanu Terminal flags these
+anyway: many git setups trust every folder (`safe.directory = *`), and a
+change inside one of your own repositories (a hook, `core.hooksPath`) is
+never refused.
 
 **Bare repositories a command plants.** Git also uses a folder that holds
 `HEAD`, `objects` and `refs` as a repository (a bare repository), and reads
 its config and hooks. A sandboxed command can make one in any folder it may
 write to, and git run there or in a folder below it later runs whatever
-that config names. Corbanu Terminal doesn't check for these (#1775), on
-Windows or elsewhere. We recommend making git refuse a bare repository it
-finds by searching:
+that config names. Both Windows sandboxes check for these (see above);
+macOS and Linux don't (#1775, #1846).
+We recommend making git refuse a bare repository it finds by searching:
 
 ```shell
 git config --global safe.bareRepository explicit

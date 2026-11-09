@@ -31,6 +31,7 @@ use std::cell::Cell;
 thread_local! {
     static STEPS: Cell<u64> = const { Cell::new(0) };
     static BYTES: Cell<u64> = const { Cell::new(0) };
+    static PARSES: Cell<u64> = const { Cell::new(0) };
 }
 
 /// One loop iteration (or recursive call) of classifier work.
@@ -38,6 +39,24 @@ thread_local! {
 pub(super) fn step() {
     #[cfg(test)]
     STEPS.with(|steps| steps.set(steps.get() + 1));
+}
+
+/// #1774: an unbounded parse by the bash grammar (`SedScope::of`). Its
+/// cost is outside our loops and allocator (the grammar's here-document
+/// scanner grows with the square of the here-documents left open), so tests
+/// count the parses themselves.
+#[inline(always)]
+pub(super) fn parse() {
+    #[cfg(test)]
+    PARSES.with(|parses| parses.set(parses.get() + 1));
+}
+
+/// The unbounded parses `run` makes on this thread (see [`parse`]).
+#[cfg(test)]
+pub(super) fn parses(run: impl FnOnce()) -> u64 {
+    let before = PARSES.with(Cell::get);
+    run();
+    PARSES.with(Cell::get) - before
 }
 
 /// A reverse substring search whose scan is visible to the work counter.
@@ -370,6 +389,52 @@ mod tests {
             }
         }
         found
+    }
+
+    /// #1774: the index lists a redirection fills (`SimpleCommand::writes_to`,
+    /// `stdin_from`, `here_string`, `redirect_words`) hold one entry per
+    /// redirection, so `.contains(&position)` once per word is quadratic in a
+    /// run of them (`>a >a … ./x`), and a slice `contains` steps no counter.
+    fn per_word_index_scans(file: &str, source: &str) -> Vec<String> {
+        const LISTS: &[&str] = &["writes_to", "stdin_from", "here_string", "redirect_words"];
+        let mut found = Vec::new();
+        for (at, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("mod tests") || code.starts_with("#[path = ") {
+                break;
+            }
+            let code = code.split("//").next().unwrap_or_default();
+            if LISTS
+                .iter()
+                .any(|list| code.contains(&format!(".{list}.contains(")))
+            {
+                found.push(format!("{file}:{}", at + 1));
+            }
+        }
+        found
+    }
+
+    /// #1774: a redirection index list is never searched once per word: mark
+    /// its positions once (`writes_here` in `simple_command`) or use
+    /// `binary_search` on the sorted list.
+    #[test]
+    fn classifier_redirection_lists_are_not_scanned_per_word() {
+        let found: Vec<String> = SOURCES
+            .iter()
+            .flat_map(|(file, source)| per_word_index_scans(file, source))
+            .collect();
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "mark the positions once (`writes_here`) or use `binary_search` (see work.rs)"
+        );
+        let source = "let a = writes_here[at];\nif simple.writes_to.contains(&at) {}\n\
+                      // simple.writes_to.contains(&at)\nlet b = c.stdin_from.binary_search(&at);\n\
+                      let d = c.redirect_words.contains(&at); // why\nmod tests {\nlet e = c.writes_to.contains(&at);\n";
+        assert_eq!(
+            per_word_index_scans("f.rs", source),
+            vec!["f.rs:2", "f.rs:5"]
+        );
     }
 
     /// #1112: reverse string searches stay visible to the counter (#1399).

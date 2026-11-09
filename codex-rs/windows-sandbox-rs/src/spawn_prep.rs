@@ -62,6 +62,8 @@ pub(crate) struct ElevatedSpawnContext {
     pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) sandbox_creds: SandboxCreds,
     pub(crate) cap_sids: Vec<String>,
+    /// D425 (#1846): dropped when the command ends ([`watch_elevated_write_roots`]).
+    pub(crate) planted_watch: Option<IntegrityLease>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -308,6 +310,40 @@ unsafe fn deny_moving_ancestors_below_roots(
             path.display()
         )
     })
+}
+
+/// D425 (#1846): an elevated session's records of what appears or changes
+/// in its `write_roots` while its command runs ([`crate::integrity_leases::watch`]),
+/// with D283's nested watch in the same roots a legacy session walks. Taken
+/// after setup, so what setup makes isn't counted. They only flag: when they
+/// can't be kept, the command runs without them, as before D425.
+pub(crate) fn watch_elevated_write_roots(
+    permissions: &ResolvedWindowsSandboxPermissions,
+    cwd: &Path,
+    write_roots: &[PathBuf],
+    log_dir: Option<&Path>,
+) -> Option<IntegrityLease> {
+    if write_roots.is_empty() {
+        return None;
+    }
+    let mut roots: Vec<PathBuf> = write_roots
+        .iter()
+        .map(|root| canonicalize_path(root))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    let allow: HashSet<PathBuf> = roots.iter().cloned().collect();
+    let nested_roots = nested_metadata_roots(permissions, cwd, &allow);
+    crate::integrity_leases::watch(&roots, &nested_roots, log_dir)
+        .inspect_err(|err| {
+            crate::logging::log_note(
+                &format!(
+                    "planted metadata: this command's writable roots aren't watched, so what it plants isn't flagged: {err:#}"
+                ),
+                log_dir,
+            );
+        })
+        .ok()
 }
 
 /// D283: the writable roots watched for nested `.codex`/`.agents` folders:
@@ -825,6 +861,10 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     ensure_non_interactive_pager(env_map);
     inherit_path_env(env_map);
     inject_git_safe_directory(env_map, cwd);
+    // D377: the session's own temp folder, never the user's whole `%TEMP%`.
+    // Without it the command does not start: it would get no writable
+    // temp folder (setup refreshes outside a launch go on without one).
+    crate::session_temp::use_session_temp(&permissions, env_map, codex_home)?;
 
     // Use a temp-based log dir that the sandbox user can write.
     let sandbox_base = codex_home.join(".sandbox");
@@ -877,6 +917,12 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         proxy_enforced,
         proxy_settings_mode,
     )?;
+    let planted_watch = watch_elevated_write_roots(
+        &permissions,
+        cwd,
+        &effective_write_roots,
+        logs_base_dir.as_deref(),
+    );
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = if uses_write_capabilities {
         let cap_sids = root_capability_sids(codex_home, cwd, effective_write_roots)?
@@ -903,6 +949,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         logs_base_dir,
         sandbox_creds,
         cap_sids,
+        planted_watch,
     })
 }
 

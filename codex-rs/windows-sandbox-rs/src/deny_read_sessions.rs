@@ -232,10 +232,10 @@ fn ensure_dir(dir: &Path, sddl: &str) -> Result<()> {
 }
 
 /// A parsed security descriptor.
-struct Descriptor(*mut c_void);
+pub(crate) struct Descriptor(*mut c_void);
 
 impl Descriptor {
-    fn parse(sddl: &str) -> Result<Self> {
+    pub(crate) fn parse(sddl: &str) -> Result<Self> {
         use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
         let sddl = to_wide(sddl);
         let mut descriptor: *mut c_void = std::ptr::null_mut();
@@ -254,7 +254,7 @@ impl Descriptor {
         Ok(Self(descriptor))
     }
 
-    fn create_dir(&self, dir: &Path) -> Result<()> {
+    pub(crate) fn create_dir(&self, dir: &Path) -> Result<()> {
         use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
         use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
         let attributes = SECURITY_ATTRIBUTES {
@@ -269,6 +269,41 @@ impl Descriptor {
                 .with_context(|| format!("create {}", dir.display()));
         }
         Ok(())
+    }
+
+    /// Makes the new file `path` with this descriptor and returns it open
+    /// with `access` and `share`.
+    pub(crate) fn create_new_file(&self, path: &Path, access: u32, share: u32) -> Result<File> {
+        use std::os::windows::io::FromRawHandle as _;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::CREATE_NEW;
+        use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        };
+        let wide = to_wide(path);
+        // SAFETY: valid path and attributes; the handle is owned by the file.
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                access,
+                share,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                0,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("create {}", path.display()));
+        }
+        // SAFETY: a new handle owned by nothing else.
+        Ok(unsafe { File::from_raw_handle(handle as _) })
     }
 
     /// Sets this descriptor's owner, DACL (protected) and label on `dir`.
@@ -335,7 +370,7 @@ fn open_no_follow(path: &Path, access: u32, flags: u32) -> std::io::Result<File>
         .open(path)
 }
 
-fn is_link(file: &File) -> Result<bool> {
+pub(crate) fn is_link(file: &File) -> Result<bool> {
     Ok(file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
@@ -354,7 +389,7 @@ fn owner_is_trusted(file: &File, trust_this_user: bool) -> Result<bool> {
 }
 
 /// The owner of `file` (open with `READ_CONTROL`), as a SID string.
-fn owner_sid(file: &File) -> Result<String> {
+pub(crate) fn owner_sid(file: &File) -> Result<String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
     use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
@@ -389,7 +424,7 @@ fn owner_sid(file: &File) -> Result<String> {
     owner.context("no owner")?.map_err(anyhow::Error::msg)
 }
 
-fn current_user_sid() -> Result<String> {
+pub(crate) fn current_user_sid() -> Result<String> {
     use windows_sys::Win32::Foundation::CloseHandle;
     // SAFETY: the token is closed right after reading its user.
     let sid = unsafe {

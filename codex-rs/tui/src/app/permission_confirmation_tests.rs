@@ -2,6 +2,17 @@ use super::super::test_support::pending_confirmation;
 use super::*;
 use pretty_assertions::assert_eq;
 
+/// Whether `selection_id` is the pending selection's. Every request arms its
+/// own 20 s deadline (`request_permission_confirmation`), so once a test has
+/// run that long, an earlier selection's deadline arrives while a later one
+/// is pending (#1854: loaded Windows CI). The app ignores such a completion
+/// (`finish_permission_confirmation`), so the checks below do too.
+fn is_pending(app: &App, selection_id: uuid::Uuid) -> bool {
+    app.pending_permission_confirmation
+        .as_ref()
+        .is_some_and(|pending| pending.selection_id == selection_id)
+}
+
 #[tokio::test]
 async fn permission_confirmation_native_requests_carry_effective_defaults() {
     Box::pin(async {
@@ -68,7 +79,9 @@ async fn permission_confirmation_native_requests_carry_effective_defaults() {
                 while app.pending_permission_confirmation.is_some() {
                     tokio::select! {
                         event = events.recv() => {
-                            if let Some(AppEvent::PermissionConfirmationCompleted { selection_id, result }) = event {
+                            if let Some(AppEvent::PermissionConfirmationCompleted { selection_id, result }) = event
+                                && is_pending(&app, selection_id)
+                            {
                             assert!(matches!(
                                 (&result, profile),
                                 (PermissionConfirmationResult::Failed(_), "missing-profile")
@@ -165,7 +178,9 @@ async fn permission_confirmation_f07_conflicts_are_refused_and_old_completion_ca
                     while app.pending_permission_confirmation.is_some() {
                         tokio::select! {
                             event = events.recv() => match event {
-                                Some(AppEvent::PermissionConfirmationCompleted { selection_id, result }) => {
+                                Some(AppEvent::PermissionConfirmationCompleted { selection_id, result })
+                                    if is_pending(&app, selection_id) =>
+                                {
                                     assert!(matches!(result, PermissionConfirmationResult::Applied));
                                     app.finish_permission_confirmation(selection_id, result);
                                 }

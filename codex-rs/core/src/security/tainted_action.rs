@@ -379,6 +379,8 @@ const PATH_BUILTINS: &[&str] = &[
 ];
 /// Bytes of command text one classification lexes; more fail closed.
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+/// #1774: `<<` in a line beyond which `SedScope::of` does not parse it.
+const MAX_SED_SCOPE_HEREDOCS: usize = 256;
 /// Script files one classification reads; more fail closed.
 const MAX_SCRIPT_FILES: usize = 16;
 /// Bytes of variable values one classification substitutes (#1065): a
@@ -463,9 +465,9 @@ fn classified(
     user_home: Option<&Path>,
     as_named: bool,
 ) -> Classifier {
-    let mut classifier = judged(action, Homes::new(codex_home, user_home), as_named);
+    let mut classifier = judged_both(action, || Homes::new(codex_home, user_home), as_named);
     if cfg!(windows) {
-        let windows = judged(action, Homes::windows(codex_home, user_home), as_named);
+        let windows = judged_both(action, || Homes::windows(codex_home, user_home), as_named);
         if let Some(kind) = windows.found {
             classifier.note(kind);
         }
@@ -525,24 +527,56 @@ pub(super) fn classify_as_windows(
     codex_home: &Path,
     user_home: Option<&Path>,
 ) -> Option<ProtectedActionKind> {
+    indirect::reset_sudo_option_boundary_changed();
     let mut classifier = Classifier::new(
         Homes::windows_first(codex_home, user_home),
         /*avoids_zsh*/ false,
     );
     classifier.judge_command(command, cwd);
+    if indirect::sudo_option_boundary_changed() {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
+    indirect::reset_sudo_option_boundary_changed();
     let mut windows = Classifier::new(
         Homes::windows(codex_home, user_home),
         /*avoids_zsh*/ false,
     );
     windows.judge_command(command, cwd);
+    if indirect::sudo_option_boundary_changed() {
+        windows.note(ProtectedActionKind::UnseenCode);
+    }
+    indirect::reset_sudo_option_boundary_changed();
     if let Some(kind) = windows.found {
         classifier.note(kind);
     }
     classifier.found
 }
 
+/// #1772 review 1: [`judged`], and when it read some text where main reads
+/// it otherwise (`shell::simple_commands_read`), the action judged again
+/// with main's reading: the stronger finding is kept, so the new reading
+/// only adds findings (`echo '>"'; ./x; echo '"'`, `sh -c 'true &>f ./x'`).
+/// #1772 review 2: the second judgment is main's reading exactly (every
+/// change of reading sets `read_newly`, and the helper lexers read as
+/// main), so the verdict is never quieter than main's.
+fn judged_both(action: &ApprovalAction, homes: impl Fn() -> Homes, as_named: bool) -> Classifier {
+    let mut classifier = judged(action, homes(), as_named, /*main_reading*/ false);
+    if classifier.read_newly {
+        let main = judged(action, homes(), as_named, /*main_reading*/ true);
+        if let Some(kind) = main.found {
+            classifier.note(kind);
+        }
+    }
+    classifier
+}
+
 /// One judgment of the action, under the path rules of `homes`.
-fn judged(action: &ApprovalAction, homes: Homes, as_named: bool) -> Classifier {
+/// `main_reading`: redirections are lexed as on main
+/// (`shell::simple_commands_read`).
+fn judged(action: &ApprovalAction, homes: Homes, as_named: bool, main_reading: bool) -> Classifier {
+    // `avoids_zsh` reads command words too, so reset before any reader can
+    // observe a changed #1773 sudo option boundary.
+    indirect::reset_sudo_option_boundary_changed();
     let avoids_zsh = as_named
         && match action {
             ApprovalAction::Shell { command, .. } | ApprovalAction::ExecCommand { command, .. } => {
@@ -550,13 +584,41 @@ fn judged(action: &ApprovalAction, homes: Homes, as_named: bool) -> Classifier {
             }
             ApprovalAction::ApplyPatch { .. } => false,
         };
-    judged_avoiding(action, homes, avoids_zsh)
+    judged_avoiding_read(action, homes, avoids_zsh, main_reading)
 }
 
 /// [`judged`] with the zsh-only checks skipped at the top level when
-/// `avoids_zsh` (#932's measuring harness also judges with it forced).
-fn judged_avoiding(action: &ApprovalAction, homes: Homes, avoids_zsh: bool) -> Classifier {
+/// `avoids_zsh` (#932's measuring harness also judges with it forced), and
+/// judged again with main's reading as [`judged_both`] does.
+#[cfg(test)]
+fn judged_avoiding(
+    action: &ApprovalAction,
+    homes: impl Fn() -> Homes,
+    avoids_zsh: bool,
+) -> Classifier {
+    indirect::reset_sudo_option_boundary_changed();
+    let mut classifier =
+        judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ false);
+    if classifier.read_newly {
+        indirect::reset_sudo_option_boundary_changed();
+        let main = judged_avoiding_read(action, homes(), avoids_zsh, /*main_reading*/ true);
+        if let Some(kind) = main.found {
+            classifier.note(kind);
+        }
+    }
+    classifier
+}
+
+/// One judgment, with the zsh-only checks skipped at the top level when
+/// `avoids_zsh`, and `main_reading` (see [`judged`]).
+fn judged_avoiding_read(
+    action: &ApprovalAction,
+    homes: Homes,
+    avoids_zsh: bool,
+    main_reading: bool,
+) -> Classifier {
     let mut classifier = Classifier::new(homes, avoids_zsh);
+    classifier.main_reading = main_reading;
     match action {
         ApprovalAction::Shell { command, cwd, .. }
         | ApprovalAction::ExecCommand { command, cwd, .. } => {
@@ -607,6 +669,12 @@ fn judged_avoiding(action: &ApprovalAction, homes: Homes, avoids_zsh: bool) -> C
     if classifier.homes.exhausted() {
         classifier.note(ProtectedActionKind::UnseenCode);
     }
+    // #1773: a reader actually crossed a sudo option boundary that main read
+    // differently. Preserve its old prompt without scanning past sudo's own
+    // command (which would turn ordinary command options into sudo options).
+    if indirect::sudo_option_boundary_changed() {
+        classifier.note(ProtectedActionKind::UnseenCode);
+    }
     // D191: an action that asks anyway asks as on main.
     if classifier.found.is_some()
         && let Some(kind) = classifier.held.take()
@@ -622,6 +690,8 @@ impl Classifier {
             avoids_zsh,
             homes,
             found: None,
+            main_reading: false,
+            read_newly: false,
             scripts_read: 0,
             rebuilt: 0,
             not_shell: 0,
@@ -1369,6 +1439,11 @@ struct Folders {
 struct Classifier {
     homes: Homes,
     found: Option<ProtectedActionKind>,
+    /// #1772 review 1: lex redirections as on main (`judged`).
+    main_reading: bool,
+    /// #1772 review 1: some lexed text was read where main reads it
+    /// otherwise (`shell::Lexed::read_newly`).
+    read_newly: bool,
     scripts_read: usize,
     /// #1261: under Windows path rules, whether the first judgment lexed
     /// text holding a backslash. Its POSIX lexer drops every backslash
@@ -1504,9 +1579,25 @@ impl SedScope {
     /// command there has a text-only program, and the line's other words
     /// carry no backslash or brace.
     fn of(command: &[String]) -> Option<Self> {
+        // #1774: a scope needs a command named `sed` or `gsed`, and the
+        // parse takes a command's name as written (a plain word, never a
+        // quoted one), so a script without `sed` has none. Skipping the parse
+        // then gives the same answer without its cost, which grows faster
+        // than the text for some inputs (long runs of `<<E`).
+        let (_, script) = codex_shell_command::bash::extract_bash_command(command)?;
+        let piped = script.contains('|');
+        if !script.contains("sed") {
+            return None;
+        }
+        // The bash grammar takes time growing with the square of the
+        // here-documents left open (`sed 1d f <<E <<E …`), and the parse
+        // finds no plain line in a here-document anyway: past
+        // `MAX_SED_SCOPE_HEREDOCS` `<<`, no word is sed's data (stricter).
+        if script.matches("<<").count() > MAX_SED_SCOPE_HEREDOCS {
+            return None;
+        }
+        work::parse();
         let commands = codex_shell_command::bash::parse_shell_lc_plain_commands(command)?;
-        let piped = codex_shell_command::bash::extract_bash_command(command)
-            .is_some_and(|(_, script)| script.contains('|'));
         let mut scope = Self {
             programs: Vec::new(),
             others: Vec::new(),
@@ -1789,7 +1880,8 @@ impl Classifier {
             .any(|part| unknown_folder::may_redefine_sudo(part));
         // #841: this line's own sed programs (nested lines have theirs).
         let outer_scope = std::mem::replace(&mut self.sed_scope, SedScope::of(command));
-        let lexed = shell::simple_commands(command);
+        let lexed = shell::simple_commands_read(command, self.main_reading);
+        self.read_newly |= lexed.read_newly;
         if !self.stat_builtin {
             self.stat_builtin = code_tables::may_load_stat(command, &lexed.commands);
         }
@@ -2013,16 +2105,32 @@ impl Classifier {
                     simple.after
                 },
                 &simple.words,
-                simple.stdin_from.is_some()
-                    || simple.here_string.is_some()
+                !simple.stdin_from.is_empty()
+                    || !simple.here_string.is_empty()
                     || !simple.writes_to.is_empty(),
             );
             // #1422: an alias the line defines runs text neither reading
             // reads as the shell does (`alias b=bash` then `b run.sh`).
             // #1704: so does a command writing such a table by name, its
             // name known from a value (`t=functions; zparseopts -a $t`).
-            let tables = code_tables::writes_table(&words, &simple.words, /*seen*/ None);
-            self.stat_pending |= tables == code_tables::Writes::StatIfLoaded;
+            // #1845: command walks skip redirection operands and zsh `[[ … ]]`
+            // tests; keep main's unfiltered reading as a compatibility floor,
+            // then consider both shells where their redirections differ.
+            let table_readings = [
+                code_tables::writes_table(&words, &simple.words, /*seen*/ None),
+                code_tables::writes_table(
+                    &code_tables::run_words(&words, simple, /*zsh*/ false),
+                    &code_tables::run_words(&simple.words, simple, /*zsh*/ false),
+                    /*seen*/ None,
+                ),
+                code_tables::writes_table(
+                    &code_tables::run_words(&words, simple, /*zsh*/ true),
+                    &code_tables::run_words(&simple.words, simple, /*zsh*/ true),
+                    /*seen*/ None,
+                ),
+            ];
+            self.stat_pending |= table_readings.contains(&code_tables::Writes::StatIfLoaded);
+            let tables = table_readings.contains(&code_tables::Writes::Table);
             // D410: with known values substituted (`a=zmod b=load; $a$b`).
             if !self.stat_builtin {
                 self.stat_builtin = words.iter().any(|word| {
@@ -2030,7 +2138,7 @@ impl Classifier {
                     code_tables::names_stat_load(word)
                 });
             }
-            if aliases.read(&words) || tables == code_tables::Writes::Table {
+            if aliases.read(&words) || tables {
                 self.note(ProtectedActionKind::UnseenCode);
             }
             self.simple_command(
@@ -2357,6 +2465,12 @@ impl Classifier {
             .as_ref()
             .filter(|(_, name)| name == "eval")
             .map(|(index, _)| index + 1);
+        // #1773: the compatibility floor runs once over every quote-blind
+        // word, not at individual command-word readers. It therefore covers
+        // direct, carried, `-exec`, precommand, and redirection paths alike.
+        if indirect::sudo_option_boundaries_differ(simple, words) {
+            self.note(ProtectedActionKind::UnseenCode);
+        }
         if indirect::redirect_hides_command(simple, words, /*from*/ 0)
             || indirect::sudo_runs_helper(simple, words, /*from*/ 0)
             || operands.is_some_and(|from| {
@@ -2599,6 +2713,8 @@ impl Classifier {
         }
         let mut later = LaterWords::new(&lower);
         let mut git_programs_read = false;
+        // #1876: the git commands' first words and dashed helpers' subcommands.
+        let mut git_starts: Vec<(usize, Option<String>)> = Vec::new();
         // Not only at command position: wrappers (`nice -n 5`, `sudo -u x`,
         // `timeout 9`, `eval`, `npx`, nested `sh -c`) put the real command later.
         for (index, word) in lower.iter().enumerate() {
@@ -2684,6 +2800,10 @@ impl Classifier {
             let hidden_git = (is_git || helper.is_some())
                 && self.quoted_text
                 && hidden.get(index).copied().unwrap_or(false);
+            // #1876: where a git command starts, for the remote scan below.
+            if is_git || helper.is_some() {
+                git_starts.push((index, subcommand.map(str::to_string)));
+            }
             if (is_git && code_variables::git_runs_code_after_git(git_args.0, git_args.1))
                 || (helper == Some(None) && code_variables::git_runs_code(git_args.0, git_args.1))
                 || git_program
@@ -2698,8 +2818,34 @@ impl Classifier {
                 }
             }
         }
-        let stdin_fed =
-            simple.pipe_from.is_some() || simple.stdin_from.is_some() || simple.reads_outer_output;
+        // #1876: a transport subcommand whose remote the line does not show.
+        // Each git command's scan ends where the next starts, so the words
+        // are read once in all (`sudo -u git git fetch "$r"`: the scan from
+        // the user name `git` ends at the git that runs).
+        if !git_starts.is_empty() {
+            // The word lexer knows no marks: it does not skip redirection
+            // words, since a quoted `>` may look like one to it (`git fetch
+            // origin 'x>' "$v"`).
+            let options_after = rerun::git_options_after(words, &[]);
+            for (at, (index, subcommand)) in git_starts.iter().enumerate() {
+                work::step();
+                let end = git_starts
+                    .get(at + 1)
+                    .map_or(words.len(), |(next, _)| *next);
+                if rerun::git_remote_unseen(
+                    &words[index + 1..end],
+                    subcommand.as_deref(),
+                    &options_after[index + 1..],
+                    &[],
+                ) {
+                    self.note(ProtectedActionKind::UnseenCode);
+                    break;
+                }
+            }
+        }
+        let stdin_fed = simple.pipe_from.is_some()
+            || !simple.stdin_from.is_empty()
+            || simple.reads_outer_output;
         // #1685: and the command `eval` or `trap` text runs.
         for (index, _) in command.iter().chain(&carried) {
             work::step();
@@ -2779,8 +2925,8 @@ impl Classifier {
         }
         if !self.interactive_shell {
             let fed = simple.pipe_from.is_some()
-                || simple.stdin_from.is_some()
-                || simple.here_string.is_some()
+                || !simple.stdin_from.is_empty()
+                || !simple.here_string.is_empty()
                 || simple.reads_outer_output;
             self.interactive_shell = loader_variables::starts_interactive_shell(&lower, fed);
         }
@@ -2852,9 +2998,19 @@ impl Classifier {
         let mut other_bases = std::borrow::Cow::Borrowed(folders.others.as_slice());
         // D217: sudo's `-C N` names no folder.
         let closes = unknown_folder::sudo_close_from(words, self.sudo_unsure());
+        // #1774: which words are written to (`>file`), marked once: looking
+        // each word up in `writes_to`, which holds one index per output
+        // redirection, made a long run of them (`>a >a … ./x`) quadratic.
+        let mut writes_here = vec![false; words.len()];
+        for at in &simple.writes_to {
+            work::step();
+            if let Some(written) = writes_here.get_mut(*at) {
+                *written = true;
+            }
+        }
         for (position, word) in words.iter().enumerate() {
             work::step();
-            let written = simple.writes_to.contains(&position)
+            let written = writes_here[position]
                 || writer.is_some_and(|(index, writes)| writes && position > index);
             // A folder flag's value is where the command runs, not what it reads.
             let mut folder_value = false;
@@ -2884,10 +3040,10 @@ impl Classifier {
             previous = Some(word.as_str());
             // #1159: a file written whose name holds output the classifier
             // cannot see (`tee "$(cat f)"`, `> $(cat f)`) may be any file.
-            if (simple.writes_to.contains(&position)
+            if (writes_here[position]
                 || (path_writer.is_some_and(|index| position > index)
-                    && simple.stdin_from != Some(position)
-                    && simple.here_string != Some(position)))
+                    && simple.stdin_from.binary_search(&position).is_err()
+                    && simple.here_string.binary_search(&position).is_err()))
                 && outputs::unseen_place(word)
             {
                 self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(word));
@@ -2971,6 +3127,13 @@ impl Classifier {
                 unknown_folder::elsewhere_at(words, self.sudo_unsure())
                     .is_some_and(|from| from < *index)
             });
+        // #1661: and a `submodule foreach` or `bisect run` runs its inner
+        // git in the submodule or an unknown folder, so the inner git's
+        // relative outputs ask even where the outer git was told a folder.
+        let wrapped = carried
+            .as_ref()
+            .or(command.as_ref())
+            .is_some_and(|(index, _)| git_helpers::runs_wrapped_git(words, *index));
         // #1607: zsh's file after a `>!`, with the line's variables
         // substituted as in the words.
         let zsh_writes: Vec<String> = simple
@@ -3008,7 +3171,7 @@ impl Classifier {
                 // ~`, `--output-directory ~/`) may be the home's.
                 if self.homes.is_persistence(&resolved)
                     || (file.ends_with('/') && self.homes.holds_a_home(&resolved))
-                    || self.unknown_folder_file(folders, moved, file)
+                    || self.unknown_folder_file(folders, moved || wrapped, file)
                 {
                     self.note_or_hold(ProtectedActionKind::Persistence, self.temp_place(file));
                 }
@@ -3290,13 +3453,14 @@ impl Classifier {
                 }
             }
             Code::Stdin => {
-                // #1436: the file the shell opens, in its folder.
-                if let Some(at) = simple.stdin_from
+                // #1436: the file the shell opens, in its folder (the
+                // last `<` is its stdin: `bash <a <b` reads `b`).
+                if let Some(&at) = simple.stdin_from.last()
                     && !self.runs_elsewhere(/*from*/ None, at, &words[at])
                 {
                     self.required_script(&words[at], cwd, depth, shell);
                 }
-                if simple.here_string.is_some_and(|at| unseen[at]) {
+                if simple.here_string.iter().any(|at| unseen[*at]) {
                     self.note(ProtectedActionKind::UnseenCode);
                 }
             }
@@ -3765,5 +3929,25 @@ fn level_name(level: SecurityLevel) -> &'static str {
 mod tests;
 
 #[cfg(test)]
+#[path = "tainted_action_sudo_tests.rs"]
+mod sudo_tests;
+
+#[cfg(test)]
 #[path = "tainted_action_refusal_tests.rs"]
 mod tainted_action_refusal_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_redirect_tests.rs"]
+mod tainted_action_redirect_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_reading_tests.rs"]
+mod tainted_action_reading_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_linear_tests.rs"]
+mod tainted_action_linear_tests;
+
+#[cfg(test)]
+#[path = "tainted_action_git_ext_tests.rs"]
+mod tainted_action_git_ext_tests;

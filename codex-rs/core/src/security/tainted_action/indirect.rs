@@ -10,6 +10,21 @@ use super::shell::SimpleCommand;
 use super::shell::basename;
 use super::work;
 use base64::Engine;
+use std::cell::Cell;
+
+thread_local! {
+    /// Whether an actual sudo option reader consumed a word differently from
+    /// the pre-#1773 reader during this judgment.
+    static SUDO_OPTION_BOUNDARY_CHANGED: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(super) fn reset_sudo_option_boundary_changed() {
+    SUDO_OPTION_BOUNDARY_CHANGED.with(|changed| changed.set(false));
+}
+
+pub(super) fn sudo_option_boundary_changed() -> bool {
+    SUDO_OPTION_BOUNDARY_CHANGED.with(Cell::get)
+}
 
 /// Bytes of one script file the classifier reads.
 pub(super) const SCRIPT_READ_LIMIT: u64 = 256 * 1024;
@@ -169,20 +184,26 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
     (
         "sudo",
         &[
+            "-a",
+            "-c",
             "-u",
             "-g",
             "-h",
             "-p",
+            "-R",
             "-C",
             "-D",
             "-r",
             "-t",
             "-U",
             "-T",
+            "--auth-type",
+            "--login-class",
             "--user",
             "--group",
             "--host",
             "--prompt",
+            "--chroot",
             "--close-from",
             "--chdir",
             "--role",
@@ -247,11 +268,11 @@ pub(super) const WRAPPERS: &[(&str, &[&str], usize)] = &[
 ];
 
 /// #1482: letters known to take no value, per wrapper. A cluster is read
-/// through these only: a letter not listed here may take a value (`sudo
-/// -R`, `xargs -i`, `nsenter -n`), which would hold the rest of the word,
-/// so a cluster with one is read as one word, as before.
+/// through these only: a letter not listed here may take a value (`xargs -i`,
+/// `nsenter -n`), which would hold the rest of the word, so a cluster with one
+/// is read as one word, as before.
 const FLAG_LETTERS: &[(&str, &str)] = &[
-    ("sudo", "ABbEeHiKklnPSsVv"),
+    ("sudo", "ABbEeHiKkNlnPSsVv"),
     ("doas", "Lns"),
     ("env", "0iv"),
     ("time", "alpqv"),
@@ -267,15 +288,114 @@ const FLAG_LETTERS: &[(&str, &str)] = &[
     ("watch", "bcegptx"),
 ];
 
+/// Sudo's long options, including flags. An unambiguous abbreviation keeps the
+/// option's value-taking behavior; an exact option wins over a longer name
+/// that begins with it (`--login`, not `--login-class`).
+const SUDO_LONG_OPTIONS: &[(&str, bool)] = &[
+    ("askpass", false),
+    ("auth-type", true),
+    ("background", false),
+    ("bell", false),
+    ("chdir", true),
+    ("chroot", true),
+    ("close-from", true),
+    ("command-timeout", true),
+    ("edit", false),
+    ("group", true),
+    ("help", false),
+    ("host", true),
+    ("list", false),
+    ("login", false),
+    ("login-class", true),
+    ("no-update", false),
+    ("non-interactive", false),
+    ("other-user", true),
+    ("preserve-env", false),
+    ("preserve-groups", false),
+    ("prompt", true),
+    ("remove-timestamp", false),
+    ("reset-timestamp", false),
+    ("role", true),
+    ("set-home", false),
+    ("shell", false),
+    ("stdin", false),
+    ("type", true),
+    ("user", true),
+    ("validate", false),
+    ("version", false),
+];
+
+/// Sudo's option parser before #1773. `sudo_runs_helper` keeps a changed
+/// value boundary prompt-only until a separate classifier decision approves
+/// making it quiet.
+const SUDO_LEGACY_VALUE_OPTIONS: &[&str] = &[
+    "-u",
+    "-g",
+    "-h",
+    "-p",
+    "-C",
+    "-D",
+    "-r",
+    "-t",
+    "-U",
+    "-T",
+    "--user",
+    "--group",
+    "--host",
+    "--prompt",
+    "--close-from",
+    "--chdir",
+    "--role",
+    "--type",
+    "--other-user",
+    "--command-timeout",
+];
+const SUDO_LEGACY_FLAGS: &str = "ABbEeHiKklnPSsVv";
+
+/// The option sudo resolves from a non-empty long spelling. An exact name
+/// resolves even if it is a prefix of another option; an ambiguous prefix does
+/// not consume a following word.
+fn sudo_long_option(name: &str) -> Option<(&'static str, bool)> {
+    let mut unique = None;
+    for (known, takes_value) in SUDO_LONG_OPTIONS {
+        work::step();
+        if *known == name {
+            return Some((known, *takes_value));
+        }
+        if known.starts_with(name) {
+            if unique.is_some() {
+                return None;
+            }
+            unique = Some((*known, *takes_value));
+        }
+    }
+    unique
+}
+
+fn sudo_value_letter(letter: char, value_options: &[&str]) -> bool {
+    value_options.iter().any(|value_option| {
+        work::step();
+        value_option
+            .strip_prefix('-')
+            .is_some_and(|name| name.len() == letter.len_utf8() && name.starts_with(letter))
+    })
+}
+
 /// #1482: how many words a wrapper's option word uses: one, or two when
 /// it takes a value that is not attached. A short cluster takes the next
 /// word only when its last letter takes a value and every letter before it
 /// is a known flag of `wrapper` (`sudo -nC 3`, `sudo -nD sub`, `env -iu
-/// X`); any other cluster is one word. A long option takes the next word
-/// only when it is named in full (`sudo --chdir sub`); an abbreviation is
-/// read as before, since some long options take an optional value that is
-/// never a separate word.
+/// X`); any other cluster is one word. Sudo also accepts unambiguous
+/// long-option prefixes and scans a known value letter after an unknown
+/// cluster letter (`sudo --us root`, `sudo -xu root`).
 pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) -> usize {
+    if wrapper == "sudo" {
+        let current = sudo_option_words(option, value_options);
+        if current != sudo_legacy_option_words(option) {
+            SUDO_OPTION_BOUNDARY_CHANGED.with(|changed| changed.set(true));
+        }
+        return current;
+    }
     if value_options.contains(&option) {
         return 2;
     }
@@ -307,6 +427,59 @@ pub(super) fn option_words(wrapper: &str, option: &str, value_options: &[&str]) 
     1
 }
 
+/// #1773: sudo accepts an unambiguous long-option prefix, and its short
+/// parser keeps reading known flags until it reaches a value-taking option.
+/// An unknown short letter stops the scan because sudo rejects that option.
+fn sudo_option_words(option: &str, value_options: &[&str]) -> usize {
+    if let Some(long) = option.strip_prefix("--") {
+        let (name, attached) = long
+            .split_once('=')
+            .map_or((long, false), |(name, _)| (name, true));
+        return 1 + usize::from(
+            !attached && sudo_long_option(name).is_some_and(|(_, takes)| takes),
+        );
+    }
+    let Some(letters) = option.strip_prefix('-') else {
+        return 1;
+    };
+    let flags = FLAG_LETTERS
+        .iter()
+        .find(|(name, _)| *name == "sudo")
+        .map_or("", |(_, flags)| *flags);
+    for (at, letter) in letters.char_indices() {
+        work::step();
+        if sudo_value_letter(letter, value_options) {
+            return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !flags.contains(letter) {
+            return 1;
+        }
+    }
+    1
+}
+
+fn sudo_legacy_option_words(option: &str) -> usize {
+    if SUDO_LEGACY_VALUE_OPTIONS.contains(&option) {
+        return 2;
+    }
+    if option.starts_with("--") {
+        return 1;
+    }
+    let Some(letters) = option.strip_prefix('-') else {
+        return 1;
+    };
+    for (at, letter) in letters.char_indices() {
+        work::step();
+        if sudo_value_letter(letter, SUDO_LEGACY_VALUE_OPTIONS) {
+            return 1 + usize::from(letters[at + letter.len_utf8()..].is_empty());
+        }
+        if !SUDO_LEGACY_FLAGS.contains(letter) {
+            return 1;
+        }
+    }
+    1
+}
+
 /// Lowercase basename of the command a simple command runs, skipping
 /// assignments, shell keywords and wrappers (with their options and
 /// arguments), with the index of that word.
@@ -324,8 +497,79 @@ pub(super) fn programs(words: &[String]) -> Vec<usize> {
     found
 }
 
+fn legacy_programs(words: &[String]) -> Vec<usize> {
+    let mut found = Vec::new();
+    if let Some((index, _)) = legacy_command_chain(words, &mut |at| found.push(at)) {
+        found.push(index);
+    }
+    found
+}
+
+/// Whether any quote-blind sudo word in this simple command crosses a
+/// pre-#1773 option boundary differently. This is a prompt-only compatibility
+/// floor: no caller that discovers a command (carried text, `-exec`, a zsh
+/// precommand, or a redirection-stripped command) needs to remember to apply
+/// it separately.
+///
+/// `different_from[at]` is the answer if sudo starts its option scan at that
+/// word. It is filled once from the end, so overlapping sudo scans remain
+/// linear even when a legacy value option reaches through later `eval` words.
+pub(super) fn sudo_option_boundaries_differ(command: &SimpleCommand, words: &[String]) -> bool {
+    sudo_option_boundaries_differ_in(words)
+        || unredirected(command, words, /*from*/ 0)
+            .is_some_and(|runs| sudo_option_boundaries_differ_in(&runs))
+}
+
+fn sudo_option_boundaries_differ_in(words: &[String]) -> bool {
+    let value_options = WRAPPERS
+        .iter()
+        .find(|(wrapper, _, _)| *wrapper == "sudo")
+        .map_or(&[][..], |(_, options, _)| *options);
+    let mut different_from = vec![false; words.len() + 2];
+    for (at, word) in words.iter().enumerate().rev() {
+        work::step();
+        different_from[at] = if word.starts_with('-') {
+            // This compatibility-only scan must not set the per-judgment
+            // reader flag below; only a reader that actually follows sudo's
+            // options may do that.
+            let current = sudo_option_words(word, value_options);
+            let legacy = sudo_legacy_option_words(word);
+            current != legacy
+                || different_from
+                    .get(at + current)
+                    .copied()
+                    .unwrap_or_default()
+        } else if word.contains('=') {
+            different_from[at + 1]
+        } else {
+            false
+        };
+    }
+    words.iter().enumerate().any(|(at, word)| {
+        work::step();
+        basename(word).eq_ignore_ascii_case("sudo") && different_from[at + 1]
+    })
+}
+
 /// `command_word`, telling `wrapper` the position of each wrapper skipped.
 fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(usize, String)> {
+    command_chain_with(words, wrapper, /*legacy_sudo*/ false)
+}
+
+/// The pre-#1773 command chain. The classifier keeps it as a prompt-only
+/// floor while the current parser identifies the command sudo actually runs.
+fn legacy_command_chain(
+    words: &[String],
+    wrapper: &mut dyn FnMut(usize),
+) -> Option<(usize, String)> {
+    command_chain_with(words, wrapper, /*legacy_sudo*/ true)
+}
+
+fn command_chain_with(
+    words: &[String],
+    wrapper: &mut dyn FnMut(usize),
+    legacy_sudo: bool,
+) -> Option<(usize, String)> {
     const KEYWORDS: &[&str] = &["!", "if", "then", "elif", "else", "do", "while", "until"];
     let mut index = 0;
     while let Some(word) = words.get(index) {
@@ -358,7 +602,11 @@ fn command_chain(words: &[String], wrapper: &mut dyn FnMut(usize)) -> Option<(us
         while let Some(option) = words.get(index) {
             work::step();
             if option.starts_with('-') {
-                index += option_words(&name, option, value_options);
+                index += if legacy_sudo && name == "sudo" {
+                    sudo_legacy_option_words(option)
+                } else {
+                    option_words(&name, option, value_options)
+                };
             } else if option.contains('=') {
                 index += 1;
             } else {
@@ -408,20 +656,23 @@ pub(super) fn misread_command(command: &SimpleCommand, words: &[String]) -> bool
 /// delimiter (`<<EOF ./x`), while the words without those run a command
 /// this reading would judge by more than its name: a program named by a
 /// path, a shell or interpreter, `eval`, `source`, `.` or `trap` (`>log
-/// eval ./x`), or a word starting with `-` (`&>log` is lexed as `&` and
-/// `>log`, so `sudo &>log -u root ./x` leaves `-u root ./x`). The shell
+/// eval ./x`), or a word starting with `-` (main's reading, as `sh` runs
+/// it, lexes `&>log` as `&` and `>log`, so `sudo &>log -u root ./x` leaves
+/// `-u root ./x`; #1772 lexes it as one redirection otherwise). The shell
 /// removes the redirection's words, so that command is never judged.
 /// `2>/dev/null git status`, `exec >out` and foreign text read as shell
 /// (`<?php echo 1;`) are read as before. `from`: the operands of `eval`.
+/// #1772 item 1: the command word is the one as written: the lexer moves
+/// a redirection's words last (`SimpleCommand::written_at`).
 pub(super) fn redirect_hides_command(
     command: &SimpleCommand,
     words: &[String],
     from: usize,
 ) -> bool {
-    let Some(rest) = words.get(from..) else {
+    let Some((rest, rest_held)) = as_written(command, words, from) else {
         return false;
     };
-    if !command_word(rest).is_some_and(|(at, _)| held(command, from + at)) {
+    if !command_word(&rest).is_some_and(|(at, _)| rest_held[at]) {
         return false;
     }
     let Some(runs) = unredirected(command, words, from) else {
@@ -434,15 +685,47 @@ pub(super) fn redirect_hides_command(
     }) || invocation(&runs).is_some()
 }
 
+/// #1772 item 1: the words from `from` on in the order they were written,
+/// and whether a redirection holds each. `from` counts the words as the
+/// lexer left them; the words before it keep their order, so it stands
+/// after the written position of the word before it.
+fn as_written(
+    command: &SimpleCommand,
+    words: &[String],
+    from: usize,
+) -> Option<(Vec<String>, Vec<bool>)> {
+    let rest = words.get(from..)?;
+    if command.written_at.len() != words.len() {
+        let holds = (from..words.len()).map(|at| held(command, at)).collect();
+        return Some((rest.to_vec(), holds));
+    }
+    let start = from
+        .checked_sub(1)
+        .map_or(0, |before| command.written_at[before] + 1);
+    let mut written: Vec<(usize, usize)> = (0..words.len())
+        .map(|now| {
+            work::step();
+            (command.written_at[now], now)
+        })
+        .filter(|(at, _)| *at >= start)
+        .collect();
+    written.sort_unstable();
+    let holds = written.iter().map(|(_, now)| held(command, *now)).collect();
+    let words = written
+        .iter()
+        .map(|(_, now)| {
+            work::step();
+            words[*now].clone()
+        })
+        .collect();
+    Some((words, holds))
+}
+
 /// #1482 item 2: whether the word at `at` is part of a redirection
 /// (`redirect_hides_command`). The lexer adds the indexes in ascending
 /// order, so each lookup is a binary search, not a scan of the line.
 fn held(command: &SimpleCommand, at: usize) -> bool {
-    work::step();
-    command.writes_to.binary_search(&at).is_ok()
-        || command.redirect_words.binary_search(&at).is_ok()
-        || command.stdin_from == Some(at)
-        || command.here_string == Some(at)
+    command.held(at)
 }
 
 /// #1482 items 2 and 4: the words from `from` on without those a
@@ -466,18 +749,21 @@ fn unredirected(command: &SimpleCommand, words: &[String], from: usize) -> Optio
 }
 
 /// #1482 item 4: whether a sudo among the programs of these words runs an
-/// askpass helper or an editor named by the environment (`sudo -A`, `sudo
-/// -e`, `--askpass`, `--edit`, `sudoedit`): code the words do not name.
-/// sudo's own options are read up to its command, with their values (`sudo
-/// -p A ./x` asks for nothing; `sudo -R sub -A ./x` runs a helper).
+/// askpass helper, an editor named by the environment, or code inside a
+/// chroot (`sudo -A`, `sudo -e`, `--askpass`, `--edit`, `sudoedit`,
+/// `sudo -R dir`): code the words do not name. sudo's own options are read
+/// up to its command, with their values (`sudo -p A ./x` asks for nothing;
+/// `sudo -R sub -A ./x` runs a helper).
 /// `sudo -i` (the target user's home) is a folder option of
 /// `unknown_folder`; `sudo -s` runs `$SHELL` and is read as before (#1309).
 /// The words are read as written and, when a redirection holds some of
 /// them, as the shell runs them (`>log sudo -A true`, `sudo 2>&1 -A
 /// true`, `sudo {fd}>log -e f`). `from`: the operands of `eval`.
 pub(super) fn sudo_runs_helper(command: &SimpleCommand, words: &[String], from: usize) -> bool {
-    words.get(from..).is_some_and(sudo_in_words_runs_helper)
-        || unredirected(command, words, from).is_some_and(|runs| sudo_in_words_runs_helper(&runs))
+    let runs_helper =
+        |runs: &[String]| sudo_in_words_runs_helper(runs) || sudo_in_words_runs_legacy_helper(runs);
+    words.get(from..).is_some_and(runs_helper)
+        || unredirected(command, words, from).is_some_and(|runs| runs_helper(&runs))
 }
 
 fn sudo_in_words_runs_helper(words: &[String]) -> bool {
@@ -485,24 +771,104 @@ fn sudo_in_words_runs_helper(words: &[String]) -> bool {
         .iter()
         .find(|(wrapper, _, _)| *wrapper == "sudo")
         .map_or(&[][..], |(_, options, _)| *options);
-    let values: String = options
+    let flags = FLAG_LETTERS
+        .iter()
+        .find(|(name, _)| *name == "sudo")
+        .map_or("", |(_, flags)| *flags);
+    // Whether an option runs untracked code (including a chroot), or changes
+    // a word boundary that the pre-#1773 classifier protected, and whether
+    // its value is the next word.
+    let read = |option: &str| -> (bool, bool) {
+        work::step();
+        let changed_boundary =
+            sudo_option_words(option, options) != sudo_legacy_option_words(option);
+        if let Some(long) = option.strip_prefix("--") {
+            let (name, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            let resolved = sudo_long_option(name);
+            let helper =
+                resolved.is_some_and(|(known, _)| matches!(known, "askpass" | "chroot" | "edit"));
+            let takes = !attached && resolved.is_some_and(|(_, takes)| takes);
+            return (helper || changed_boundary, takes);
+        }
+        let letters = option.strip_prefix('-').unwrap_or_default();
+        for (at, letter) in letters.char_indices() {
+            work::step();
+            if matches!(letter, 'A' | 'R' | 'e') {
+                return (true, false);
+            }
+            // The rest of the word, or the next word, is this letter's value.
+            if sudo_value_letter(letter, options) {
+                return (
+                    changed_boundary,
+                    letters[at + letter.len_utf8()..].is_empty(),
+                );
+            }
+            if !flags.contains(letter) {
+                return (changed_boundary, false);
+            }
+        }
+        (changed_boundary, false)
+    };
+    // Whether sudo's option scan, from each word on, reaches a helper: the
+    // scan from a word only depends on that word and the scan after it
+    // (from the next word, or the one after its value). Read once, from
+    // the end, so chained sudos whose scans run past each other (`sudo -R
+    // sudo -R … ./x`, `--us`, `-xu`) cost one read per word, not one per
+    // sudo and word. Filled at the first sudo.
+    let mut helper_from: Vec<bool> = Vec::new();
+    for at in programs(words) {
+        work::step();
+        let name = basename(&words[at]).to_lowercase();
+        if name == "sudoedit" {
+            return true;
+        }
+        if name != "sudo" {
+            continue;
+        }
+        if helper_from.is_empty() {
+            helper_from = vec![false; words.len() + 2];
+            for (next, option) in words.iter().enumerate().rev() {
+                work::step();
+                if option == "--" || !option.starts_with('-') || option == "-" {
+                    continue;
+                }
+                let (helper, takes) = read(option);
+                helper_from[next] = helper
+                    || helper_from
+                        .get(next + 1 + usize::from(takes))
+                        .copied()
+                        .unwrap_or_default();
+            }
+        }
+        if helper_from[at + 1] {
+            return true;
+        }
+    }
+    false
+}
+
+/// The pre-#1773 helper scan is retained as a prompt-only floor. It is
+/// deliberately looser than sudo's parser: classifier changes must not make a
+/// line quiet merely by reading its options more precisely.
+fn sudo_in_words_runs_legacy_helper(words: &[String]) -> bool {
+    let values: String = SUDO_LEGACY_VALUE_OPTIONS
         .iter()
         .filter_map(|option| option.strip_prefix('-').filter(|name| name.len() == 1))
         .chain(["R"])
         .collect();
-    // Whether the option runs a helper, and whether its value is the next
-    // word.
     let read = |option: &str| -> (bool, bool) {
         work::step();
         if let Some(long) = option.strip_prefix("--") {
-            let (name, value) = long
+            let (name, attached) = long
                 .split_once('=')
                 .map_or((long, false), |(name, _)| (name, true));
             let helper =
                 !name.is_empty() && ("askpass".starts_with(name) || "edit".starts_with(name));
-            let takes = !value
+            let takes = !attached
                 && !name.is_empty()
-                && options.iter().any(|known| {
+                && SUDO_LEGACY_VALUE_OPTIONS.iter().any(|known| {
                     work::step();
                     known
                         .strip_prefix("--")
@@ -516,21 +882,14 @@ fn sudo_in_words_runs_helper(words: &[String]) -> bool {
             if matches!(letter, 'A' | 'e') {
                 return (true, false);
             }
-            // The rest of the word, or the next word, is this letter's value.
             if values.contains(letter) {
                 return (false, letters[at + letter.len_utf8()..].is_empty());
             }
         }
         (false, false)
     };
-    // Whether sudo's option scan, from each word on, reaches a helper: the
-    // scan from a word only depends on that word and the scan after it
-    // (from the next word, or the one after its value). Read once, from
-    // the end, so chained sudos whose scans run past each other (`sudo -R
-    // sudo -R … ./x`, `--us`, `-xu`) cost one read per word, not one per
-    // sudo and word. Filled at the first sudo.
-    let mut helper_from: Vec<bool> = Vec::new();
-    for at in programs(words) {
+    let mut helper_from = Vec::new();
+    for at in legacy_programs(words) {
         work::step();
         let name = basename(&words[at]).to_lowercase();
         if name == "sudoedit" {

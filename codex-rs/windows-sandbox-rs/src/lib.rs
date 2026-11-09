@@ -2,6 +2,13 @@
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod git_config_targets;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod git_watch;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod par_map;
+mod planted_log;
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
 mod unlabelled_roots;
@@ -131,6 +138,11 @@ mod setup;
 mod setup_error;
 
 #[cfg(target_os = "windows")]
+mod session_temp;
+#[cfg(target_os = "windows")]
+mod session_temp_leftovers;
+
+#[cfg(target_os = "windows")]
 mod spawn_prep;
 
 #[cfg(target_os = "windows")]
@@ -196,6 +208,12 @@ pub use cap::workspace_write_root_contains_path;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_write_root_overlaps_path;
 #[cfg(target_os = "windows")]
+pub use capture_pipes::OUTPUT_DRAIN_TIMEOUT;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::PipeReader as OutputPipeReader;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::finish_each as finish_output_readers;
+#[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
@@ -248,6 +266,8 @@ pub use identity::require_logon_sandbox_creds;
 pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::confirm_planted_project_metadata;
+#[cfg(target_os = "windows")]
+pub use integrity_leases::planted_git_changes;
 #[cfg(target_os = "windows")]
 pub use integrity_leases::planted_project_metadata;
 #[cfg(target_os = "windows")]
@@ -312,6 +332,9 @@ pub use logon_launch::run_logon_launcher;
 pub use logon_launch::run_window_access_reaper;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
+pub use planted_log::PlantedRecord;
+pub use planted_log::planted_records_mark;
+pub use planted_log::planted_records_since;
 #[cfg(target_os = "windows")]
 pub use process::ConsoleMode;
 #[cfg(target_os = "windows")]
@@ -332,6 +355,8 @@ pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::token_mode_for_permission_profile;
+#[cfg(target_os = "windows")]
+pub use session_temp::end_session_temp_folders;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]

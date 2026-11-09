@@ -402,12 +402,16 @@ async fn accounting_chat_frame_guard_denies_provider_change_before_client_public
         ) {
             assert_ne!(previous.model_provider, next.model_provider);
             let owner = self.owner.get().unwrap().upgrade().unwrap();
-            let configured = owner.provider().now_or_never().unwrap();
+            // Each lock is polled once, outside tokio's cooperative budget: once
+            // the task has spent its budget, a free tokio lock reports pending,
+            // which a loaded Windows runner hit (#1855). A held lock still does.
+            let configured = tokio::task::unconstrained(owner.provider())
+                .now_or_never()
+                .expect("configuration callback must run outside the state lock");
             // This real callback runs after configuration publication, before the old
             // implementation replaces its ModelClient. Keep state locked during the
             // frame check, as a concurrent session operation can do in that window.
-            let _locked = owner
-                .lock_state_for_accounting_fixture()
+            let _locked = tokio::task::unconstrained(owner.lock_state_for_accounting_fixture())
                 .now_or_never()
                 .expect("configuration callback must run outside the state lock");
             self.observations.lock().unwrap().push((

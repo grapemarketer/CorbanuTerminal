@@ -211,12 +211,11 @@ impl Classifier {
         let mut argv = Command::default();
         let mut scripts = Vec::new();
         let mut previous: Option<&str> = None;
+        // #1774: whether a word so far names a shell, kept as words are
+        // added rather than checked again for each argument.
+        let mut in_shell = false;
         for arg in command {
             work::step();
-            let in_shell = argv
-                .words
-                .iter()
-                .any(|word| SHELLS.contains(&name(&word.text).as_str()));
             let script = in_shell
                 && previous.is_some_and(|flag| {
                     flag.starts_with('-') && !flag.starts_with("--") && flag.contains('c')
@@ -224,6 +223,7 @@ impl Classifier {
             if script {
                 scripts.push(arg.as_str());
             } else {
+                in_shell |= SHELLS.contains(&name(arg).as_str());
                 argv.words.push(Word {
                     text: arg.clone(),
                     quoted: true,
@@ -750,14 +750,41 @@ impl Classifier {
                         // folder; a wrapper before the command moved it
                         // (`sudo -D ~ git config -f .zshenv …`).
                         let moved = elsewhere_from.is_some_and(|from| from < at);
+                        // #1661: and a `submodule foreach` or `bisect run`
+                        // runs its inner git in the submodule or an unknown
+                        // folder, so the inner git's relative outputs ask
+                        // even where the outer git was told a folder (`git
+                        // -C ~/r submodule foreach git log
+                        // --output=../../.zshenv`).
+                        let wrapped = git_helpers::runs_wrapped_git(&texts, at);
                         if files.iter().any(|file| {
-                            self.unknown_folder_file(folders, moved || folders.unchecked, file)
+                            self.unknown_folder_file(
+                                folders,
+                                moved || wrapped || folders.unchecked,
+                                file,
+                            )
                         }) {
                             note_git(found, ProtectedActionKind::Persistence);
                         }
                         if files.iter().any(|file| self.relative_place(file)) {
                             found.relative_outputs += 1;
                         }
+                    }
+                    // #1661: the script a wrapped git runs (`git submodule
+                    // foreach 'git fetch; git log --output=...'`, `git
+                    // bisect run '...'`): its commands run in a submodule
+                    // or an unknown folder, so push it as a script with
+                    // the folder unknown, as `-execdir` does.
+                    if let Some(operand) = git_helpers::wrapped_git_operand(&texts, at)
+                        && operand < texts.len()
+                    {
+                        push_script(
+                            found,
+                            folders,
+                            texts[operand..].join(" "),
+                            replaced(launches[operand]),
+                            /*unknown*/ true,
+                        );
                     }
                     if WRITERS.contains(&resolved_name.as_str())
                         || outputs.is_some()
@@ -1120,6 +1147,8 @@ impl Classifier {
             },
         );
         let mut git_programs_read = false;
+        // #1876: the git commands' first words and dashed helpers' subcommands.
+        let mut git_starts: Vec<(usize, Option<String>)> = Vec::new();
         let mut local_config = git_config::Writes::new(texts);
         let command_at = indirect::command_word(texts);
         // D156/D258: the other lexer may cut this command at quoted text
@@ -1178,6 +1207,10 @@ impl Classifier {
             let inspecting = command_at.as_ref().is_some_and(|(at, _)| {
                 *at == index && git_config::inspection_only_prefix(&texts[..index])
             });
+            // #1876: where a git command starts, for the remote scan below.
+            if is_git || helper.is_some() {
+                git_starts.push((index, subcommand.map(str::to_string)));
+            }
             let launched_kind = launched.judge(index, helper.as_ref());
             if (basename(git_word) == "git" || helper.is_some())
                 && !inspecting
@@ -1191,6 +1224,43 @@ impl Classifier {
             for kind in kinds {
                 work::step();
                 note_git(found, kind);
+            }
+        }
+        // #1876: as `simple_command` scans each transport's words for a
+        // remote or option the line does not show, here for the words the
+        // shell may split or glob into options, which only this reading
+        // knows (`git push . HEAD:$b`, `git fetch --depth=$n .`, `git fetch
+        // origin *`).
+        if !git_starts.is_empty() {
+            let marks: Vec<rerun::GitWordMark> = words
+                .iter()
+                .map(|word| rerun::GitWordMark {
+                    // Other unseen words are `simple_command`'s, which knows
+                    // the values the line sets (`r=origin; git fetch "$r"`).
+                    seen: true,
+                    loose: (word.dynamic && word.splits)
+                        // A glob whose first characters may match `-` (`*`,
+                        // `-*`, `"-"*`).
+                        // A glob that starts with `-` or a glob character may
+                        // match `--upload-pack=…` (`*`, `--up*`, `"-"*`).
+                        || (word.globs && word.text.starts_with(['-', '*', '?', '[', '^'])),
+                })
+                .collect();
+            let options_after = rerun::git_options_after(texts, &marks);
+            for (at, (index, subcommand)) in git_starts.iter().enumerate() {
+                work::step();
+                let end = git_starts
+                    .get(at + 1)
+                    .map_or(texts.len(), |(next, _)| *next);
+                if rerun::git_remote_unseen(
+                    &texts[index + 1..end],
+                    subcommand.as_deref(),
+                    &options_after[index + 1..],
+                    &marks[index + 1..],
+                ) {
+                    note_git(found, ProtectedActionKind::UnseenCode);
+                    break;
+                }
             }
         }
     }

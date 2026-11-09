@@ -338,7 +338,7 @@ sandbox boundary also needs security sign-off.
 | Gap 3 A: watch `core.hooksPath` and same-class targets (decision 4)                                                                       | Yes                                            | Decision (ordinary project folders)                                                                                                                                    |
 | Gap 1 C, gap 3 B: protect instead of flag (decision 5)                                                                                    | Moves the boundary; breaks some agent commands | Decision and security sign-off                                                                                                                                         |
 | When and where warnings appear: a notice right after the command, and showing entries outside the working folder's ancestors (decision 6) | Yes                                            | Decision (new UI); the new checks depend on it                                                                                                                         |
-| The same flags in the elevated sandbox (decision 7)                                                                                       | Yes                                            | Decision; it keeps no planted records at all today                                                                                                                     |
+| The same flags in the elevated sandbox (decision 7)                                                                                       | Yes                                            | D425; done in #1846 (it kept no planted records before)                                                                                                                |
 
 Order: gap 1 A and gap 2 A can be recorded now, but most of what they find
 is only shown once decision 6 is taken. In a `repo` client root, gap 1 A
@@ -354,8 +354,31 @@ together with decision 1.
 2. The owner of files a non-admin and an elevated command create, and
    whether git's `safe.directory` ownership check then refuses them (that
    would already cover much of gaps 1 and 2 in the elevated sandbox).
+   Measured for the elevated sandbox (#1846, native Windows CI, elevated
+   and normal session alike): all 18 new files and folders were owned by
+   `CodexSandboxOffline`; the 2 existing files it appended to kept their
+   owner. With no `safe.directory` setting, git refused 5 of 7 cases
+   (a new nested, bare or top-level repository, and a `.git` file a
+   command wrote, even one pointing at the user's own repository) and
+   allowed the 2 changes inside the user's own repository (`core.hooksPath`
+   and the hooks folder it names). With the runner's system
+   `safe.directory = *` it refused none. D425 (the elevated-sandbox row
+   above) flags all of them anyway.
 3. The added cost of gap 1 B and gap 2 B on this repository (38k files)
-   and on a `repo` client with about 100 projects.
+   and on a `repo` client with about 100 projects. Measured for the
+   elevated sandbox's watch (#1896, native Windows CI, windows-2022, debug
+   build, median of 9, two runs of two rounds each; #1902's nested
+   `.codex`/`.agents` contents included): on 38,000 files in one
+   repository the start takes 56–79 ms (the walk 46–77 ms, the contents of
+   15 nested folders 1.6–2.2 ms) and the end 57–79 ms; on a `repo` client
+   (`.repo` with 100 project git folders, 100 work trees of 350 files with
+   `gitdir:` files, 201 repositories found) the start takes 516–709 ms (the
+   walk 386–541 ms) and the end 520–704 ms. Until #1896 the elevated
+   session ran its preparation, this start included, on the async thread:
+   a current-thread runtime's other tasks stalled for 152–279 ms (38k
+   files) and 612–835 ms (`repo` client) per command; with it moved off,
+   16–22 ms (the timer's resolution). What is flagged is byte-identical
+   either way.
 4. Whether `npm install` with Husky v9 inside the sandbox rewrites
    `.husky\_` with identical content (gap 3 silence).
 5. Warnings per start in a `repo` client after `repo sync` in the sandbox,
