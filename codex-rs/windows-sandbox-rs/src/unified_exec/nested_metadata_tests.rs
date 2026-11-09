@@ -180,7 +180,7 @@ fn legacy_workspace_write_cannot_change_nested_project_metadata() {
                 script_path.display().to_string(),
             ],
             &workspace,
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(10_000),
             &[],
             &[],
@@ -265,6 +265,39 @@ fn legacy_unlistable_folder_counts_as_planted() {
             counts_now(&x.join("y\\.agents")),
         ),
         (false, true, true, true)
+    );
+}
+
+/// #1877 item 2: a `.codex` planted below a folder whose name isn't valid
+/// Unicode (the walk doesn't go there) counts as planted: the folder holding
+/// it does. A folder elsewhere, left alone, doesn't.
+#[test]
+fn legacy_metadata_below_names_that_are_not_unicode_counts_as_planted() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let _guard = legacy_process_test_guard();
+    let test_root = user_owned_test_root();
+    let root = test_root.path().join("root");
+    fs::create_dir_all(root.join("sub")).expect("create sub");
+    fs::create_dir_all(root.join("kept\\.codex")).expect("create kept");
+    let root = canonical(&root);
+    let sub = root.join("sub");
+    // A lone surrogate: valid on NTFS, not valid Unicode.
+    let new = sub
+        .join(std::ffi::OsString::from_wide(&[0xD800, u16::from(b'x')]))
+        .join("y\\.codex");
+    let lease =
+        crate::integrity_leases::acquire(std::slice::from_ref(&root), /*log_dir*/ None)
+            .expect("lease");
+    fs::create_dir_all(&new).expect("plant");
+    drop(lease);
+
+    assert_eq!(
+        (
+            planted(&sub),
+            counts_now(&new),
+            counts_now(&root.join("kept\\.codex"))
+        ),
+        (true, true, false)
     );
 }
 
@@ -610,7 +643,7 @@ fn legacy_command_creating_git_is_recorded_as_planted() {
                 script_path.display().to_string(),
             ],
             &workspace,
-            env_map,
+            with_session_temp(codex_home.path(), env_map),
             /*timeout_ms*/ Some(10_000),
             &[],
             &[],

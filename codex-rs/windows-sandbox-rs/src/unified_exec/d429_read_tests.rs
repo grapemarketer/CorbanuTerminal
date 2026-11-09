@@ -206,7 +206,7 @@ fn read_a_legacy_command(reader: Reader, reader_home: &Path) -> String {
     let runtime = current_thread_runtime();
     let (stdout, exit_code) = runtime.block_on(async {
         let release = Release(hold_dir.join("hold.release"));
-        let mut env_map: HashMap<String, String> = std::env::vars().collect();
+        let mut env_map = with_session_temp(legacy_home.path(), std::env::vars().collect());
         env_map.insert(HOLD_ENV.to_string(), hold_dir.display().to_string());
         env_map.insert(SECRET_ENV.to_string(), secret.clone());
         let holder = spawn_windows_sandbox_session_legacy(
@@ -560,7 +560,7 @@ async fn end_a_running_command(
             "echo d429-running&& ping -n 120 127.0.0.1".to_string(),
         ],
         root,
-        std::env::vars().collect(),
+        with_session_temp(codex_home, std::env::vars().collect()),
         /*timeout_ms*/ None,
         &[],
         &[],

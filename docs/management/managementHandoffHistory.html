@@ -15,7 +15,66 @@ th{background:#f5f5f7}.warn{background:#fff4e5;border-left:4px solid #f0a020;pad
 </head>
 <body>
 <h1>Corbanu Terminal — management handoff: older snapshots of sections 10–12</h1>
-<p><small>Moved verbatim from <code>docs/management/managementHandoff.html</code> by handoff-doc16, handoff-doc17 and handoff-doc18 (all 2026-11-07) and handoff-doc19 and handoff-doc20 (both 2026-11-08) to keep that file under the 512,000-byte blob-size policy. Historical only: these snapshots are superseded by the current sections 10–12 and the current update box in the handoff.</small></p>
+<p><small>Moved verbatim from <code>docs/management/managementHandoff.html</code> by handoff-doc16, handoff-doc17 and handoff-doc18 (all 2026-11-07) and handoff-doc19, handoff-doc20 and handoff-doc21 (all 2026-11-08) to keep that file under the 512,000-byte blob-size policy. Historical only: these snapshots are superseded by the current sections 10–12 and the current update box in the handoff.</small></p>
+<details><summary>Sections 10–12 at 2026-11-08 15:30Z (handoff-doc20; historical, superseded by the sections above)</summary>
+<h2>10. Current state</h2>
+<p><b>Running</b> at about 15:10Z on 2026-11-08, as tmux sessions on <code>$HOME/.corbanu-workers/tmux.sock</code> (7 including this one). States come from <code>todo.md</code>, briefs, logs, interim results and GitHub (checks counted at about 15:05Z), not final reports. The Windows PC is still off; Windows work uses native Windows CI. “Elevated” is the default Windows sandbox, “non-admin” is legacy. Travis's overnight window is 09:30–17:30Z.</p>
+<table><tr><th>Worker (tmux start, UTC)</th><th>Task</th><th>State at the snapshot</th></tr>
+<tr><td>contrib-g (10:21Z)</td><td>citadelculture's #1837 (#1808) and #1831 (#1821); watch #1794 and #1793.</td><td>#1794 and #1781 merged (Task Node notes posted). #1793: round 8 test fix <code>43fd71fd9d</code> approved; conflicts after #1794, author asked to merge main. #1837: round 4 granted; asked to move the <code>issue1808_*</code> tests to a new file (<code>tainted_action_tests.rs</code> is 512,633 bytes) and fix one CI item. #1831: round 2 passes; stacked on #1793.</td></tr>
+<tr><td>win-1775i (12:47Z)</td><td>#1775: D424, then D420–D422; D419 measured first, draft only.</td><td>#1848 merged (D424). Drafts #1849 (D420/D421), #1850 (D422) and #1851 (D419, “needs security sign-off”); CI running, one failure each on #1850/#1851 not yet examined. Filed #1846 (D425).</td></tr>
+<tr><td>win-377 (12:57Z)</td><td>D377 (b): a per-session temp subfolder for elevated commands, measured first.</td><td>Measured (run 42483254814): same workload pass sets; with the subfolder only, <code>%TEMP%</code> isn't listable and user files are denied. #1857 open; CI running (2 failures at 15:05Z, not examined).</td></tr>
+<tr><td>win-398 (13:18Z)</td><td>D398: sign-off-style draft for #1766 (non-admin <code>command/exec</code> compares working folders by spelling).</td><td>In review (review brief written); no PR yet.</td></tr>
+<tr><td>ci-1839 (13:39Z)</td><td>#1839, plus <code>utils/pty</code> and <code>app-server</code> in the PR Windows groups.</td><td>#1853 merged (#1839). #1852 open, CI running. Filed #1856 (Windows integration tests never run).</td></tr>
+<tr><td>win-1830 (14:41Z)</td><td>#1830 (elevated runner may share #1826's unbounded wait) and #1817 (exec-server env case).</td><td>Writing tests; no PR yet.</td></tr>
+<tr><td>handoff-doc20 (14:57Z)</td><td>This refresh.</td><td>—</td></tr>
+</table>
+<p>Finished since doc19 without a running successor: ci-nightly, contrib-d, contrib-f, win-1805, win-1803l, win-1810, win-1819, win-1819f, flake-1790, docs-rn2, win-d429, flake-1825, sec-1704z, docs-1108, dec-agents, ci-1795, win-1798b, win-1800b and handoff-doc19 (section 8.0n).</p>
+<h3>Open items</h3>
+<table><tr><th>Item</th><th>State</th><th>Next</th></tr>
+<tr><td>Windows sign-off drafts</td><td><b>#1798</b> (head <code>2c389703fd</code>; 37 passed; review rounds 3–4 APPROVE, round 5's test-only fix checked by green probes; setup version stays 6). <b>#1800</b> (head <code>d9032e4a7e</code>; 38 passed; rounds 2–3 APPROVE; setup version 6→7). The clash is gone, but #1800's description still says #1798 bumps to 7.</td><td>The desktop test (D396/D416), then merge #1800 first or with #1798 (D438). Neither merges before Travis's sign-off. Fix #1800's stale setup-version line at merge.</td></tr>
+<tr><td>Memory reads between commands</td><td>Elevated: #1800 closes the peer command-memory read (D426); console host after #1800 (D417). Legacy: #1843 closed elevated→legacy; legacy→legacy stays open (#1838, D433); #1560 open.</td><td>D432, D433, D441.</td></tr>
+<tr><td>#1775 git watch</td><td>#1848 merged; drafts #1849, #1850, #1851 (sign-off); #1846 (D425).</td><td>win-1775i.</td></tr>
+<tr><td>Outside PRs</td><td><b>No maintainer comment yet:</b> <b>sendoeth</b>'s #1804 (#1774; 33 checks passed) and <b>white-guy-01</b>'s #1841 (git <code>ext::</code> remotes ask; 14 failing checks, opened during the GitHub incident, likely infra, not checked). In progress (contrib-g): 0xzoz's #1793, citadelculture's #1837 and #1831. Also open, unchanged: citadelculture's #135, #1380, #1055 and drafts; goodalexander's drafts #88 and #28.</td><td>Warm first answers on #1804 and #1841 (SWEEP RULE), then reviews; re-run #1841's infra failures. Task Node notes when each merges or closes.</td></tr>
+<tr><td>Main postmerge</td><td>Green from <code>3abd66a5c4</code> (#1836) through <code>3a4134d320</code> (#1835). Infra-only failures (504s): <code>7218a2db47</code> (two attempts) and <code>7a8c29fb67</code> (its corbanu-terminal-ci went green on attempt 3; postmerge run 42469847904 shows one failed attempt). <b><code>070c7bceda</code> (#1829) failed a real test</b>: <code>d334_followup_task_to_a_finished_agent_asks_like_a_restart</code> (Linux shard 1/4); later runs green; not in <code>todo.md</code>. Runs for <code>6d7c821d47</code>, <code>4d7718fd44</code>, <code>796b06f7d1</code> and <code>5747a31438</code> in progress.</td><td>Check the d334 failure for a flake; install the newest fully green main.</td></tr>
+<tr><td>Nightly</td><td>ci-1795's manual nightly went green after one rerun (#1839, fixed by #1853). New Windows-native flakes filed: #1854, #1855. The 11-08 nightly runs at about 15:45Z.</td><td>Check it; #1610 still needs three green Windows nightlies.</td></tr>
+<tr><td>Upstream sync</td><td>Unchanged since doc18: sync head <code>d28288dd42</code>, 1,718 ledger rows. D379–D385 now accepted (S3b / tier exit). S1b and S1d held for contributors until 11-09 18:00Z.</td><td>After 11-09 18:00Z assign S1b/S1d if unclaimed; then main merge #1 and the S1 exit (#1628).</td></tr>
+<tr><td>Bugs and follow-ups</td><td>#1661 (open after #1781; check what's left), #1704, #1773 (#1793), #1774 (#1804), #1779, #1808 (#1837), #1817 and #1830 (win-1830), #1821 (#1831), #1827, #1842, #1845, #1854–#1856; win-1798b's follow-ups (tests and the release note at merge) in one issue.</td><td>Contributor PRs first.</td></tr>
+<tr><td>noise-n12 (D265–D267)</td><td>Still not relaunched; unpushed work in <code>worktrees/noise-n1</code> and <code>noise-n2</code>.</td><td>Relaunch with a RECOVERY NOTE.</td></tr>
+<tr><td>Accepted, not started</td><td>D417 (after #1800), D380–D385 (S3b), D435 if accepted; carried: D235, D238, D245 (a), D260, D294, D270–D272, D302, D326, D337's and D347's later PRs, D348's pre-sync release.</td><td>As slots free; D260, D294, D302 when the PC is back.</td></tr>
+<tr><td>#368, Task Node</td><td>As doc19 (Sol's price through 11-21; DeepSeek 2027 holidays before 12-01; #1280 and tasknode#347, D237).</td><td>Unchanged.</td></tr>
+</table>
+<p><b>Raw results vs owner acceptance:</b> Travis's 08:33Z acceptance covers decisions (what to build), not results; each accepted change still ships through its own review and CI, and boundary changes still go through PRs titled “needs security sign-off” (#1798, #1800, #1851, win-398's). <b>#1798 and #1800 have green CI and APPROVE verdicts, but no owner sign-off and no desktop test</b>: they stay drafts. The S10 raw record is unchanged (ACC-11 and ACC-14 blocked; 32/0/5 raw, 35/0/2 owner-accepted under D207/D208); the PF-84 Windows gate has no result. win-1803l's, win-d429's, win-377's and win-1800b's numbers are worker measurements on hosted Windows CI with no real desktop. Worker recommendations for D431–D442 are not owner acceptance.</p>
+<p><b>Evidence:</b> worker reports and reviewer outputs in <code>$HOME/.corbanu-workers/</code>; requests and grants in <code>$W</code>; decision log <code>$W/todo.md</code>; sync plan in <code>docs/management/upstreamSyncPlan.md</code> and on #1532; the ledger on the sync branch; decisions recorded on #1766, #1796, #1704, #1561, #1803, #1775, #1721, #1560 and #1791 (08:40Z).</p>
+
+<h2>11. Decisions and remaining external actions</h2>
+<p><b>Pending numbered decisions (12):</b> D431–D442, each in section 9; none was in the 08:33Z acceptance (all raised later). No D443–D445 was in <code>todo.md</code> at this snapshot. Recommended:</p>
+<ul>
+<li><b>Process:</b> D431 per-entry release-note fragments instead of one <code>RELEASE_NOTES</code> file (conflicts cost about 2 h of CI twice): yes.</li>
+<li><b>Windows memory reads:</b> D432 accept #1843's SYNCHRONIZE-only (narrower than D429; the query-limited bits alias resume/suspend): accept. D433 document #1838 next to #1560, point multi-project users at elevated, revisit the token design with #1560: yes. D441 narrow elevated commands' thread-resume (<code>0x1000</code>) like D432, after #1800: yes.</li>
+<li><b>#1798:</b> D438 merge it after or with #1800 (its scan record is tamperable until #1800): yes. D439 if setup is declined after a version change, keep running with the existing denies plus a warning: keep. D440 accept one approval prompt for every existing user after upgrade (plus a sandbox password reset; managed installs re-run setup), said in the release note: yes.</li>
+<li><b>#1800 (D392 (b)):</b> D442 accept the documented limits (standard users keep #1721/#1560/#1803 until #1847; no auto-retry on admin promote/demote, manual steps in D418's uninstall docs; an admin approving another account's prompt on their own desktop grants it the runner): accept.</li>
+<li><b>Classifier:</b> D434 accept sec-1704z's readings (whole action = “same line”; earlier same-session loads not seen, release-noted; bash <code>enable</code> keeps checks; arithmetic <code>stat</code> unchanged): yes.</li>
+<li><b>Agents and TUI:</b> D435 for a pending agent, send the interrupt but not the turn-starting notice: yes. D436 <code>/quit now</code> during startup still waits: leave.</li>
+<li><b>CI:</b> D437 accept ci-1795's test change (no test-support feature; route SID checked in a unit test): accept.</li>
+</ul>
+<p>Repeat the pending ones in every check-in until answered.</p>
+<p><b>Owner actions:</b> <b>D318</b>: Travis creates the security-reviewer GitHub account (until then the sync CODEOWNERS block only requests review). <b>Real-desktop test (D396/D416)</b> on the Windows PC before #1798/#1800 leave draft: the interactive desktop (<code>WinSta0</code>) with #1800's runner account and per-command logons; #1798's denies and setup (one UAC prompt on upgrade, D440); a <b>standard account's</b> setup approved with an <b>admin password</b>, including that account setting <code>USERNAME</code> to the admin's name (it must get no runner account). Then sign off (or not) #1798 and #1800. When the PC is back: D302, D260, D294 and the PF-84 gate (#1080). D237 as before. Not re-checked: D178b and D18.</p>
+<p><b>Optional (Mac memory):</b> Travis's own <code>x-bookmark-backfill</code> node process (<code>pnpm dsh</code>, PID 86129, up about 5 days 18 h) holds about 11.8–11.9 GB RSS, and swap was 23.5 of 24 GB used at about 15:05Z. Not ours and we don't touch it; stopping it when it isn't needed would free memory for builds.</p>
+<p><b>Coordinator-owned follow-ups:</b> answer #1804 and #1841; collect the six running workers; check the d334 postmerge failure and the 11-08 nightly; install the next fully green main and run a QA pass; relaunch noise-n12; land D345/D349 on the sync branch; #368's dates; #1610; D215; #1401's exception review by 2027-01-31.</p>
+
+<h2>12. Resume sequence</h2>
+<ol>
+<li>Read the top box and the <code>todo.md</code> tail; check <code>tmux -S $HOME/.corbanu-workers/tmux.sock ls</code> and each running worker's log before launching anything.</li>
+<li>SWEEP RULE: <b>#1804 (sendoeth) and #1841 (white-guy-01) need a first, warm answer</b>; keep #1793, #1837 and #1831 moving (contrib-g).</li>
+<li>Ask D431–D442, D318's account and the desktop test (Travis is back at about 17:30Z). Don't merge #1798, #1800 or #1851 without sign-off.</li>
+<li>Collect contrib-g, win-1775i, win-377 (#1857), win-398, ci-1839 (#1852) and win-1830.</li>
+<li>Check main postmerge (the d334 failure on <code>070c7bceda</code>) and the 11-08 nightly; under the GitHub incident apply the INFRA RERUN RULE (read each log; up to 5 infra-only reruns per job).</li>
+<li>Rebuild from the newest fully green main; sign with <code>--identifier com.corbanu.corbanu</code>; check <code>codesign -dv</code> and a fresh <code>corbanu exec</code> sign-in; then code-blind QA.</li>
+<li>After 11-09 18:00Z, assign S1b/S1d if unclaimed; land D345/D349; main merge #1 and the S1 exit (#1628).</li>
+<li>Merge guards must abort; check main and open PRs before a coordinator fix; take times from <code>date -u</code>. One live <code>&lt;name&gt;.grant.md</code> per request, written to the exact file the worker polls; build dirs on CorbanuDrive or glitch; no <code>git stash</code>, no <code>pkill</code> (not even <code>pkill -P</code>); the WINDOWS SKIP RULE, CLAIM COMMENT RULE, D328's one-week rule, GLITCH TEST TIP, INFRA RERUN RULE; warm contributor and Task Node notes.</li>
+</ol>
+
+</details>
 <details><summary>Sections 10–12 at 2026-11-08 05:15Z (handoff-doc19; historical, superseded by the sections above)</summary>
 <h2>10. Current state</h2>
 <p><b>Running</b> at about 05:10Z on 2026-11-08, as tmux sessions on <code>$HOME/.corbanu-workers/tmux.sock</code> (6 workers including this one). States are from <code>todo.md</code>, briefs, logs and GitHub (checks counted at about 05:10Z), not final reports. The Windows PC is still off; Windows work uses native Windows CI. Terminology in briefs since 11-07 23:28Z: “elevated” is the default Windows sandbox, “non-admin” is legacy.</p>
@@ -716,8 +775,125 @@ bump by D101.</li>
 
 
 </details>
+<h2>Older install entries from section 7 of the handoff</h2>
+<p><small>Moved verbatim by handoff-doc21 (2026-11-08). Historical only: superseded by the current install in section 7.</small></p>
+<ul>
+<li>Install at 11-07 13:48Z (superseded): main <code>1c85bc2acd</code>, the merge of #1710 (the pf_30 test fix that turned main green again), postmerge green (run 42374740927); installed 13:48Z per <code>todo.md</code> (signed, verified, smoke OK), Rust 1.99.1, developer-accounting marker on, signed with the same Developer ID,
+sha256 begins <code>ad25f910677571d8</code>. <code>INSTALL.json</code> now matches the binary: <code>built_at</code> 13:48:22Z, <code>commit</code> <code>1c85bc2acd</code>, and both <code>sha256</code> and <code>corbanu_sha256</code> equal the binary's. qa-1107b's code-blind QA of it: 5/5 PASS (D320's agent prompt, #1575, #1680, #1662, smoke). Installs since #1657:
+<ul>
+<li><code>da0e2e2ccf</code> (06:52Z; the merge of #1671, postmerge green; adds #1626, #1639, #1284, #1643, #1649, #1645, #1647, #1652, #1659, #1642, #1657, #1664, #1651, #1592, #1663, #1593, #1594, #1579, #1656, #1644, #1634, #1673, #1669, #1670 and #1671). qa-1107 tested it: 4/5 PASS, one minor gap (#1685), Windows smoke PASS (built on the PC).</li>
+<li><code>1c85bc2acd</code> (13:48Z; adds #1591, #1590, #1665, #1674, #1675, #1662, #1646, #1680, #1575, #1683, #1678, #1677, #1684, #1692, #1691, #1687, #1700, #1699, #1688, #1696, #1705, #1707, #1711 and #1710, as <code>INSTALL.json</code>'s <code>what_is_new</code> lists).</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-da0e2e2ccf</code>, <code>corbanu.prev-5902638ad9</code> and <code>corbanu.prev-d8773815b6</code>. Moved to <code>old-binaries/</code>: <code>prev-e09c95d5a8</code> (06:52Z) and <code>prev-f31b4c470e</code> (13:48Z).
+<b>Not in it</b> (merged after #1710): #1703, #1725, and just after the check #1723. Next install: the newest main whose postmerge run is green in every real job (<code>b06efb2d6a</code>, #1703, is green; the run for <code>b47f9f1ba4</code> was still running at 15:00Z).</li>
+<li>Install at 11-07 01:42Z (superseded): main <code>5902638ad9</code>, the merge of #1640 (zsh clobber redirections read as writes), postmerge green (run 42320049818); installed 01:42Z per <code>todo.md</code> (signed, verified, smoke OK),
+Rust 1.99.1, developer-accounting marker on, signed with the same Developer ID, sha256 begins <code>bdefdc4ba3848c73</code> (matches <code>INSTALL.json</code>'s <code>sha256</code>; the binary file dates from 01:36Z). <code>INSTALL.json</code>'s <code>built_at</code> still reads 10-29 02:40Z and its <code>corbanu_sha256</code> field
+(<code>4d177de9…</code>) doesn't match the binary, so both look stale; trust <code>commit</code> and <code>sha256</code>. Installs since #1557:
+<ul>
+<li><code>f31b4c470e</code> (10-29 08:15Z; the merge of #1540, postmerge green; adds the 07:20Z “Not in it” list (#1529, #1533, #1492, #1538, #1373, #1530, #1543, #1534, #1546) plus #1537 and #1540);</li>
+<li><code>d8773815b6</code> (11-06 20:52Z; the merge of #1609, postmerge green; adds #1535, #1549, #1550, #139, #1551, #1555, #1554, #161, #1557, #1559, #1556, #1565, #1564, #1566, #1568, #1569, #1562, #1574, #1600, #1599, #1582, #1589, #1583, #1585, #1584 and #1609);</li>
+<li><code>5902638ad9</code> (11-07 01:42Z; adds #1613, #1614, #1615, #1587, #1616, #1603, #1525, #1612, #1601, #1602, #1621, #1622, #1624, #1625, #1586, #1598, #1580, #1578, #1619, #1572, #1576, #1641 and #1640). <code>INSTALL.json</code>'s <code>what_is_new</code> also names #1599 and #1600, which were already in <code>d8773815b6</code>.</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-d8773815b6</code>, <code>corbanu.prev-f31b4c470e</code> and <code>corbanu.prev-e09c95d5a8</code>. Moved to <code>old-binaries/</code>: <code>prev-c8d56d89d3</code> (10-29 08:15Z), <code>prev-eb2973fe51</code> (11-06 20:52Z) and <code>prev-2daca91fc5</code> (11-07 01:42Z).
+<b>Not in it</b> (merged after #1640): #1626, #1639, #1284, #1643, and just after the check #1649 and #1645. Next install: the newest main whose postmerge run is green in every real job (<code>b1d2ff6b6f</code>, #1639, is green; the runs for #1284 and #1643 were still running at 02:10Z).</li>
+<li>Install at 10-29 05:25Z (superseded): main <code>e09c95d5a8</code>, the merge of #1531 (Plan GLM 5.2 reasoning control), postmerge green (run 40818106307, finished 05:15Z); installed 05:25Z per <code>todo.md</code> (signed, verified, smoke OK),
+Rust 1.99.1, developer-accounting marker on, signed with the same Developer ID, sha256 begins <code>4b4a1ef5d4bddb2a</code> (matches <code>INSTALL.json</code>'s <code>sha256</code>). <code>INSTALL.json</code>'s <code>built_at</code> reads 02:40Z, the time of the <code>2daca91fc5</code> build,
+while the binary file dates from 05:18Z, so that field looks stale; trust the commit and sha256. Installs since #1511 (coordinator times in the fast window corrected, “≈”):
+<ul>
+<li><code>eb2973fe51</code> (logged 02:07Z, ≈01:32Z; the merge of #1520, postmerge green at 00:53Z; adds the 21:30Z “Not in it” list (#1501, #1374, #1502, #1503, #1498) plus #1505, #1509, #1511, #1508, #1510, #1512, #1513 and #1520);</li>
+<li><code>2daca91fc5</code> (logged 03:23Z, ≈02:48Z; the merge of #1521, postmerge green at 02:33Z; adds #1519, #990, #1517, #1524 and #1521);</li>
+<li><code>e09c95d5a8</code> (05:25Z; adds #1523, #1526, #1527 and #1531).</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-2daca91fc5</code>, <code>corbanu.prev-eb2973fe51</code> and <code>corbanu.prev-c8d56d89d3</code>. Moved to <code>old-binaries/</code>: <code>prev-e3a39cc67f</code> (≈01:32Z), <code>prev-82d22facc4</code> (≈02:48Z) and <code>prev-e344afbab7</code> (05:25Z).
+<b>Not in it</b> (merged after #1531): #1529, #1533, #1492, #1538, #1373, #1530, #1543, #1534 and #1546. Next install: the newest main whose postmerge run is green in every real job (<code>71b1733bd0</code>, #1530, was green at 07:08Z; the runs for #1543, #1534 and #1546 were still running at 07:15Z).</li>
+<li>Install at 10-28 21:17Z (superseded): main <code>c8d56d89d3</code>, the merge of #1500 (ripgrep in the rust-ci-full Linux shards), postmerge green (run 40759219551, finished 20:50Z); installed 21:17Z per <code>todo.md</code>
+(<code>INSTALL.json</code> <code>built_at</code> 21:02Z), Rust 1.99.1, developer-accounting marker on, signed with the same Developer ID, sha256 begins <code>2e5f0977e4a5c840</code>, smoke OK. Installs since #1487:
+<ul>
+<li><code>e344afbab7</code> (17:58Z; the merge of #1483, postmerge green; sha256 begins <code>26e55116fd500de2</code>; adds #1469, #1474, #1471, #1364, #1475, #1481 and #1483);</li>
+<li><code>c8d56d89d3</code> (21:17Z; adds #1486, #1487, #1376, #1493, #1488, #1495, #1494, #1499, #1496, #1497 and #1500). Main's postmerge was red from <code>bd494990aa</code> (#1376) to <code>fbbe725af5</code> (#1497) on the missing <code>rg</code>, so none of those was installable.</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-e344afbab7</code>, <code>corbanu.prev-82d22facc4</code> and <code>corbanu.prev-e3a39cc67f</code>. Moved to <code>old-binaries/</code>: <code>prev-21db61709f</code> (17:58Z) and <code>prev-32901550cb</code> (21:17Z).
+<b>Not in it</b> (merged after #1500): #1501, #1374, #1502, #1503 and #1498. Next install: the newest main whose postmerge run is green in every real job (#1501's and #1374's were green; #1502, #1503 and #1498 were running at 21:30Z).</li>
+<li>Install at 10-28 15:41Z (superseded): main <code>82d22facc4</code>, the merge of #1484 (argument-comment lint fix), postmerge green at 15:36Z; installed 15:41Z per <code>todo.md</code>
+(<code>INSTALL.json</code> <code>built_at</code> 15:43Z), Rust 1.99.1, developer-accounting marker on, signed with the same Developer ID, sha256 begins <code>a9676c4f2b0adc70</code>, smoke OK. Installs since #1439:
+<ul>
+<li><code>32901550cb</code> (04:40Z; the merge of #1437; adds the 03:15Z “Not in it” list plus #998 and #1439);</li>
+<li><code>e3a39cc67f</code> (06:57Z; the merge of #1426; adds #1440, #1442, #1444/#994, #1445/#995 and #1426);</li>
+<li><code>82d22facc4</code> (15:41Z; adds #1443, #1447, #1438, #1434, #1361, #1362, #1368, #1446, #1451, #1453, #1456–#1458, #1372, #1313, #1270, #1166, #1360, #1430, #1463, #1460, #1464, #1465, #1363, #1371,
+#1459, #1466, #1366, #1477 and #1484). Main's postmerge failed at <code>2b135d4a66</code> (#1477) on the #1479 lint breakage (todo.md 13:50Z); the next green postmerge noted was <code>82d22facc4</code>.</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-e3a39cc67f</code>, <code>corbanu.prev-32901550cb</code> and <code>corbanu.prev-21db61709f</code>. Moved to <code>old-binaries/</code>: <code>prev-d88d018ab2</code> (04:40Z),
+<code>prev-55ffd0277c</code> (06:57Z) and <code>prev-c1ad482df9</code> (15:41Z). <b>Not in it</b> (merged after #1484): #1469, #1474, #1471, #1364, #1475 and #1481. Next install: the newest main whose postmerge run is
+green in every real job (the run for <code>2619817aef</code> was in progress at 16:15Z).</li>
+<li>Install at 10-28 01:08Z (superseded): main <code>21db61709f</code>, the merge of #1406 (D191), postmerge green at 01:03Z; installed 01:08Z (<code>INSTALL.json</code>
+<code>built_at</code> 01:10Z), Rust 1.99.1, signed with the same Developer ID, sha256 begins <code>c8fc3f61d00a6b7a</code>, smoke OK. Installs since the resume:
+<ul>
+<li><code>55ffd0277c</code> (10-27 17:50Z; the merge of #1318, the pause's last merge);</li>
+<li><code>c1ad482df9</code> (10-27 19:21Z; the merge of #1390; adds the contributor merges of 10-26/27: #1337, #1147, #1342, #1395, #1316, #1389, #1387, #1381, #1378, #1359, #1073, #1063, #1152, #1388, #1386, #1379 and #1390);</li>
+<li><code>21db61709f</code> (10-28 01:08Z; adds #1407/#1408, #1411, #1404, #1397, #1365, #1398, #1161, #1356, #1377, #1419, #1382, #1113, #1399, #1354, #1415, #99, #100, #96 and #1406).</li>
+</ul>
+Kept next to the real binary: <code>corbanu.prev-c1ad482df9</code>, <code>corbanu.prev-55ffd0277c</code> and <code>corbanu.prev-d88d018ab2</code>. Moved to <code>old-binaries/</code>: <code>prev-11443dc2b5</code>
+(17:50Z), <code>prev-0e2c02529d</code> (19:21Z) and <code>prev-b0fa02105f</code> (01:08Z). <b>Not in it</b> (merged after #1406): #1391, #1423, #1417, #1424, #1414, #1418, #1425, #1375, #979, #141, #252, #1029,
+#98, #1429, #1421, #1427 and #1433. Next install: the newest main whose postmerge run is green in every real job.</li>
+<li>Install at the 10-22 pause: main <code>d88d018ab2</code> (installed 2026-10-22 12:59Z per <code>todo.md</code>, just after this update's snapshot; <code>INSTALL.json</code>'s
+<code>built_at</code> reads 13:05Z; the merge of #1319, postmerge fully green; sha256 begins <code>69a609b614de1baa</code>), built with Rust 1.99.1. It is a dev build with
+developer-accounting, signed with Travis's Developer ID (“Developer ID Application: Travis Good”; <code>codesign --force -s DB43D928… -i com.corbanu.corbanu -o runtime</code>), swapped atomically, and the smoke
+<code>exec</code> passed through the launcher. <code>.codex-work/integration-build-20260922a/INSTALL.json</code> is authoritative (commit, time, toolchain, checksum, previous binary). Build target dir:
+<code>.codex-work/corbanu-terminal/target-dev-active</code>. Build script: <code>.codex-work/integration-build-20260922a/dev-build-online.sh</code> (repo checkout at
+<code>.codex-work/integration-build-20260922a/repo</code>, detached at the built commit). Both dev-build scripts put the 1.99.1 toolchain first on <code>PATH</code> since 10-20 15:10Z.</li>
+<li>Install history since #933:
+<ul>
+<li><code>78dd811d6e</code> (10-19 18:46Z, at the restart; #930);</li>
+<li><code>8bf182de43</code> (10-20 03:14Z; the merge of #871; also the qual-mod3 candidate, with #900, #949 and #962);</li>
+<li><code>8c73c8ea80</code> (09:26Z; adds #926, #986, #1014, #1019–#1053, #1024, #1025/#1050 and #1051; also tart-par1's build);</li>
+<li><code>bfa6f7da57</code> (12:12Z; adds #1059, #1060, #1062, #1066, #1067, #1068, #1069, #1071, #1075, #1076, #1078, #1081 and #1083);</li>
+<li><code>16f362f567</code> (18:08Z; the merge of #1119, the first Rust 1.99.1 build; adds #1027, #1061, #1070, #1072, #1086, #1088, #1091, #1092, #1095, #1099, #1103, #1104, #1106, #1110 and #1119);</li>
+<li><code>bc1deda532</code> (21:15Z; the merge of #1096; adds #1090, #1096, #1108, #1109, #1124, #1126, #1127, #1133, #1136 and #1137);</li>
+<li><code>aa35e3f936</code> (10-21 04:09Z; adds #1114, #1115, #1121, #1128, #1135, #1140, #1148 (TLS fixes), #1149, #1151, #1153, #1154, #1156, #1160, #1163 and #1164);</li>
+<li><code>2f9d05c51e</code> (08:43Z; the merge of #1189; adds #1168, #1169, #1171 (D94), #1172 (D85), #1173–#1175 (D95), #1178–#1180, #1184 and #1185–#1189; reel-mod's and pf84-live1's build, and utm-par2's for D94/D95);</li>
+<li><code>9750861c2a</code> (12:20Z; the merge of #1211; adds #1190, #1192 (D86), #1191, #1183, #1195, #1199, #1200, #1167, #1105, #1079, #1123, #1122, #1206, #1204, #1209, #1207 and #1211).</li>
+<li><code>333f0b8db7</code> (10-22 01:21Z; the merge of #1274; adds #1158, #1213, #1216–#1219, #1223, #1228–#1231, #1234 and every PR in section 8.0d up to #1274: #1197 (zsh relief), #1220 (D147), #1249 (Windows classifier view), #1250 (D124/D125), #1230/#1254/#1262 (git checks), #1263, #1238/#1116/#1100 (sandbox sweep) and the contributor merges). The install was deferred at 19:52Z, when main was green at <code>31b9f3cad8</code>, because utm-par3's D139 runs needed <code>9750861c2a</code> unchanged, and then until main was green again after the red episode (section 4).</li>
+<li><code>11443dc2b5</code> (10-22 04:50Z; the merge of #1292; adds #1278, #1279, #1271, #1282, #1272, #1281 (docs), #1273 and #1292).</li>
+<li><code>0e2c02529d</code> (07:15Z; the merge of #1294, postmerge green; adds #1285, #1222, #1295, #1215, #1297 and #1294).</li>
+<li><code>b0fa02105f</code> (12:23Z; the merge of #1322; adds #1307, #1299–#1301, #1304, #1314, #1306, #1310, #1308, #1317, #1320, #1315, #1325, #1327 and #1322).</li>
+<li><code>d88d018ab2</code> (12:59Z; the merge of #1319; adds #1328, #1321 and #1319).</li>
+</ul>
+Next to the real binary in <code>integration-package-dev/bin/</code>: <code>corbanu.prev-b0fa02105f</code> (the previous install), <code>corbanu.prev-0e2c02529d</code> and
+<code>corbanu.prev-11443dc2b5</code>. Moved to <code>.codex-work/integration-build-20260922a/old-binaries/</code> since #1281: <code>corbanu.prev-333f0b8db7</code>, <code>corbanu.31b9f3ca</code> (pf84-cb1's separately signed copy
+of main <code>31b9f3cad8</code>, no longer needed) and <code>2f9d05c51e</code> at 04:50Z, <code>8c73c8ea80</code> at 07:15Z (it was kept for parity runs until D161 was answered), <code>9750861c2a</code> at 12:23Z.
+Workers that need a fixed candidate build and sign their own private copy and never install it: pf84-rerun used main <code>f61397ca41</code>, acct-rerun keeps <code>63c9daca26</code>
+(sha256 begins <code>e942b095</code>) for its resume.</li>
+<li><b>Not in it:</b> #1333 (12:29Z, plugin catalog once) and #1341 (12:51Z, a QA record). (The previous install, <code>b0fa02105f</code>, didn't contain #1328 although its
+<code>INSTALL.json</code> <code>what_is_new</code> named it; <code>d88d018ab2</code> does.)
+<ul>
+<li>Running workers keep the inode they started with; new launches get the new binary. tui-qa2 checked #1327, #1322, #1320 and #1319 in the real TUI (#1319 on a later main, as
+its record #1341 says); the coordinator then rebuilt at <code>d88d018ab2</code> (12:59Z).</li>
+<li>The rollback test to <code>45bfa7d938</code> stays held: #616 has had no episode since 10-15 21:01Z.</li>
+<li>Next install: the newest head whose postmerge run is green in every real job (it would add #1333 and whatever running workers merge). Don't swap under a worker whose brief pins
+the installed build.</li>
+</ul></li>
+</ul>
 <h2>Older update boxes from the top of the handoff</h2>
-<p><small>Moved verbatim by handoff-doc18 (2026-11-07), handoff-doc19 and handoff-doc20 (both 2026-11-08).</small></p>
+<p><small>Moved verbatim by handoff-doc18 (2026-11-07), handoff-doc19, handoff-doc20 and handoff-doc21 (all 2026-11-08).</small></p>
+<details><summary>Update 2026-11-08 ~05:15Z (handoff-doc19; historical, superseded by the box above)</summary>
+<div class="note"><b>Update 2026-11-08 ~05:15Z (handoff-doc19).</b> Sources: <code>$W/todo.md</code> from its 21:50Z line (11-07) through its 05:10Z line (11-08), the worker results in <code>$HOME/.corbanu-workers/*.result.md</code> written since 21:30Z
+(win-1560m2, win-probe, handoff-doc18, docs-rn, win-1758, win-everyone, flake-1776, qa-1108a, win-1791m, sec-1704, win-harness, win-1780, docs-1797, qa-1108b, win-1791pr, win-aprime, contrib-e, ci-nightly, win-1803m, design-1775, win-1780b, docs-1775f, and contrib-d's interim file),
+the running workers' briefs and logs, <code>docs/management/upstreamSyncPlan.md</code>, the sync ledger on <code>sync/upstream-rust-v0.167.0</code>, and GitHub re-checked at about 05:10Z. Main is at <code>c664f0ce9f</code> (#1809, 05:04Z).
+<ul>
+<li><b>12 PRs merged into main</b> after doc18's 21:20Z check, all ours: #1771 (22:02Z, just before doc18's own #1782 at 22:11Z), then #1785, #1777, #1784, #1788, #1789, #1783, #1792, #1799, #1806, #1802 and #1809 (05:04Z). None into the sync branch. No outside PR merged in this stretch; #1785's release notes credit <b>darkmatter-sudo</b> (#1719) and <b>citadelculture</b> (#1744). Section 8.0m lists them by area.</li>
+<li><b>Installed build:</b> main <b><code>e8dcdf6e2a</code></b> (#1799), installed 03:31Z (signed, postmerge green, smoke OK); qa-1108b's code-blind QA of it: <b>3/3 PASS</b>. In between, <code>006da06a34</code> was installed at 00:25Z (qa-1108a: 4/4 PASS, filed #1796).
+<b>Rebuild procedure correction:</b> <code>codesign</code> must pass <code>--identifier com.corbanu.corbanu</code>. The default identifier (<code>corbanu</code>) breaks keychain access with “OS keyring load timed out”; a binary signed that way was live 03:25–03:31Z (section 7).</li>
+<li><b>Overnight window:</b> US clocks are on standard time (PST), so Travis's 01:30–09:30 Pacific window is now <b>09:30–17:30 UTC</b> (it was 08:30–16:30Z in October). This snapshot (05:15Z) is about four hours before it starts.</li>
+<li><b>Windows security:</b> two draft PRs wait for owner sign-off and must not merge before it: <b>#1798</b> (shared-folder denies in elevated setup: #1791 and D400, with D405–D407; 29 checks green; review APPROVE round 5/5) and <b>#1800</b> ((a′) plus <code>pl</code> for #1721/#1560; 33 green; APPROVE round 3/5). Both bump the setup version to 7, so the second to merge uses 8 and re-runs the other's probes.
+win-1803m measured <b>#1803</b> on main: an elevated command in one workspace can read another workspace's ConPTY console-host memory and its running command's memory; #1800 closes only the command route. win-1803l is measuring the non-admin backend.
+Merged: #1771 (weakened-token probe), #1777 (#1758), #1784 (#1776), #1792 (#1780), #1802 (D331 by real path), #1806/#1809 (#1775 design note and docs). Open: #1805 (Start-Process with both <code>Path</code> and <code>PATH</code>; win-1805, draft #1807), #1808 (<code>chroot / ./x</code> quiet after untrusted content), #1810 (win-1810 running).</li>
+<li><b>Contributors:</b> <b>araupooo</b>'s #1781 (changes requested in round 1, waiting on the author), <b>0xzoz</b>'s #1793 (very engaged; round 4 findings posted 05:01Z; a 5th round was granted at about 05:03Z for the next push), <b>darkmatter-sudo</b>'s #1794 (round 1 REQUEST_CHANGES at about 04:20Z; the author replied at about 05:00Z with a new head <code>ec5450e96c</code>, which nobody has re-reviewed yet), and <b>sendoeth</b>'s #1804 (#1774, opened 03:19Z, CI green) with <b>no maintainer comment yet</b> (SWEEP RULE). Section 10.</li>
+<li><b>Still pending (50 plus one owner action):</b> D377–D385, D387–D390, D391–D401 and D403–D428 (D386 was never assigned; D402 was done by filing #1791), each with options and a recommendation in section 9. <b>D392 is revised:</b> (b) allow the runner privilege only where the user is already an admin, now, and (d) a SYSTEM-service broker later. Plus <b>D318's action</b>: Travis creates the security-reviewer account. Summary in section 11.</li>
+<li><b>Upstream sync:</b> unchanged since doc18 (sync head <code>d28288dd42</code>, 1,718 ledger rows, 398 resolved). S1b and S1d stay held for contributors until 2026-11-09 18:00Z; no claims on #1628.</li>
+<li><b>Nightly:</b> ci-nightly fixed both 11-07 failures (#1788, #1789). A manual nightly on <code>43702d8d73</code> is red only because of <b>#1795</b>, a D324 test regression. <b>Just after the snapshot</b> (<code>todo.md</code> 05:14Z): ci-nightly logged done, and the coordinator decided #1795 within D324 (ci-nightly's option 1: an inner token builder taking the group, reachable from other crates only through a non-default test-support feature, no production change) and launched <b>ci-1795</b>, which also adds a nightly check that it runs main's current commit and the Windows-native PR path filter for <code>windows-sandbox-rs</code>/<code>network-proxy</code>. Don't decide it again (section 10).</li>
+<li><b>Running:</b> ci-nightly (finishing; logged done at 05:14Z), contrib-d (#1781, #1793), win-1805 (#1807), win-1803l, win-1810 and this handoff-doc19 (section 10); ci-1795 launched at 05:14Z.</li>
+</ul></div>
+</details>
 <details><summary>Update 2026-11-07 ~21:30Z (handoff-doc18; historical, superseded by the box above)</summary>
 <div class="note"><b>Update 2026-11-07 ~21:30Z (handoff-doc18).</b> Sources: <code>$W/todo.md</code> from its 15:02Z line through its 21:17Z line (11-07), the worker results in <code>$HOME/.corbanu-workers/*.result.md</code> written since 15:00Z
 (win-1715, sync-s3a, sync-s1c2, handoff-doc17, win-1648, fu-1637, contrib-1728, fix-1689, contrib-sec6, sec-1685d, win-1720, sync-s3a2, flake-1714, ci-tmp, flake-tmux2, contrib-b, contrib-a, win-dec2, contrib-sec7, sync-s3a3, qa-1107c, win-1560m, dec-1702, contrib-c),

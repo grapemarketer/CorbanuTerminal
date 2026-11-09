@@ -59,7 +59,9 @@ fn fill_large_repo(root: &Path, dirs: usize, files: usize, objects: usize) -> us
 /// the next command reused the lease, which under-counts.
 fn time_commands(label: &str, root: &Path) {
     let runtime = current_thread_runtime();
-    let codex_home = sandbox_home("d285-cost");
+    // `%TEMP%` stays the real one, as in a real session (above), so the home
+    // is a plain one: this measurement leaves its lasting grant there (#1890).
+    let codex_home = TempDir::new().expect("create codex home");
     let mut lines = Vec::new();
     let total = Instant::now();
     for i in 0..COMMANDS {

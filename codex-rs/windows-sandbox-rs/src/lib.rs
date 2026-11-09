@@ -6,6 +6,8 @@
 mod git_config_targets;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod git_watch;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod par_map;
 mod planted_log;
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
@@ -137,6 +139,8 @@ mod setup_error;
 
 #[cfg(target_os = "windows")]
 mod session_temp;
+#[cfg(target_os = "windows")]
+mod session_temp_leftovers;
 
 #[cfg(target_os = "windows")]
 mod spawn_prep;
@@ -203,6 +207,12 @@ pub use cap::workspace_write_cap_sid_for_root;
 pub use cap::workspace_write_root_contains_path;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_write_root_overlaps_path;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::OUTPUT_DRAIN_TIMEOUT;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::PipeReader as OutputPipeReader;
+#[cfg(target_os = "windows")]
+pub use capture_pipes::finish_each as finish_output_readers;
 #[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]

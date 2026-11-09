@@ -193,11 +193,13 @@ pub(super) fn may_load_stat(command: &[String], commands: &[shell::SimpleCommand
         simple.words.iter().any(|word| {
             work::step();
             names_stat_load(word)
-        }) || each_command(&run_words(simple), |_, name| {
-            name == "enable"
-                || (!matches!(name, "[" | "[[")
-                    && name.contains(['$', '`', '*', '?', '[', '{', '(']))
-                || name.contains(shell::UNSEEN_OUTPUT)
+        }) || [false, true].into_iter().any(|zsh| {
+            each_command(&run_words(&simple.words, simple, zsh), |_, name| {
+                name == "enable"
+                    || (!matches!(name, "[" | "[[")
+                        && name.contains(['$', '`', '*', '?', '[', '{', '(']))
+                    || name.contains(shell::UNSEEN_OUTPUT)
+            })
         })
     })
 }
@@ -218,24 +220,40 @@ pub(super) fn names_stat_load(text: &str) -> bool {
 /// The words of `simple` the shell may run as commands: without those a
 /// redirection holds (`>f $a$b` runs `$a$b`) or a zsh `[[ … ]]` test spans
 /// (`if [[ 1 ]] $a$b`, a short `if`).
-fn run_words(simple: &shell::SimpleCommand) -> Vec<String> {
+pub(super) fn run_words(words: &[String], simple: &shell::SimpleCommand, zsh: bool) -> Vec<String> {
     let mut test = false;
-    let mut words = Vec::with_capacity(simple.words.len());
-    for (at, word) in simple.words.iter().enumerate() {
+    let mut mask = Vec::with_capacity(simple.words.len());
+    for (at, syntax) in simple.words.iter().enumerate() {
         work::step();
         let held = simple.writes_to.binary_search(&at).is_ok()
             || simple.redirect_words.binary_search(&at).is_ok()
             || simple.stdin_from.binary_search(&at).is_ok()
-            || simple.here_string.binary_search(&at).is_ok();
-        match word.as_str() {
-            _ if held => {}
-            "[[" if !test => test = true,
-            "]]" if test => test = false,
-            _ if test => {}
-            _ => words.push(word.clone()),
-        }
+            || simple.here_string.binary_search(&at).is_ok()
+            || (zsh
+                && simple
+                    .zsh_writes
+                    .binary_search_by_key(&at, |(at, _)| *at)
+                    .is_ok());
+        let runs = match syntax.as_str() {
+            _ if held => false,
+            "[[" if !test => {
+                test = true;
+                false
+            }
+            "]]" if test => {
+                test = false;
+                false
+            }
+            _ if test => false,
+            _ => true,
+        };
+        mask.push(runs);
     }
     words
+        .iter()
+        .zip(mask)
+        .filter_map(|(word, runs)| runs.then_some(word.clone()))
+        .collect()
 }
 
 /// Whether `text` holds a brace range (`{a..z}`, `{1..3}`), read loosely:

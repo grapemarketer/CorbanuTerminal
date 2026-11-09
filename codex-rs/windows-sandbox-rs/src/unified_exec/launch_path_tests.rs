@@ -540,7 +540,7 @@ async fn run_launch(
     report: &Path,
 ) -> LaunchOutcome {
     let sweep = EscapeSweep::start();
-    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    let mut env_map = with_session_temp(codex_home, std::env::vars().collect());
     for (key, value) in env {
         env_map.insert(key.to_string(), value);
     }
@@ -685,7 +685,7 @@ fn legacy_launch_under_another_session_process_stays_in_session() {
         fs::create_dir_all(&hold_dir).expect("create hold dir");
         // Releases the holding session however this test ends.
         let release = ReleaseHolder(hold_dir.join("hold.release"));
-        let mut env_map: HashMap<String, String> = std::env::vars().collect();
+        let mut env_map = with_session_temp(codex_home.path(), std::env::vars().collect());
         env_map.insert(HOLD_ENV.to_string(), hold_dir.display().to_string());
         let holder = spawn_windows_sandbox_session_legacy(
             &PermissionProfile::workspace_write(),

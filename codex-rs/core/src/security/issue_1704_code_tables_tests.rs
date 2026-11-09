@@ -315,6 +315,53 @@ fn d410_zsh_stat_checks_need_zmodload_on_the_line() {
     }
 }
 
+/// #1845: a table-writer walk must ignore redirection operands and zsh
+/// `[[ … ]]` tests before finding the command the shell runs.
+#[test]
+fn issue1845_table_writer_walk_skips_held_words() {
+    use super::ProtectedActionKind::UnseenCode;
+
+    for shell in ["bash", "zsh"] {
+        let line = |script: &str| kind(&[shell, "-lc", script]);
+        for script in [
+            "2>/dev/null read -A functions",
+            ">f zparseopts -a functions -- f:",
+            "if [[ 1 ]] read -A functions",
+            "if [[ 1 ]] set -A functions",
+            ">f printf -v functions %s x",
+            "if [[ 1 ]] zstyle -a :x y functions",
+            "f=/dev/null; 2>\"$f\" read -A functions",
+            "<a <b read -A functions",
+        ] {
+            assert_eq!(line(script), Some(UnseenCode), "{shell}: {script}");
+        }
+    }
+    // zsh's spaced clobber redirect has a separate held file word.
+    assert_eq!(
+        kind(&["zsh", "-lc", ">! f zparseopts -a functions -- f:"]),
+        Some(UnseenCode)
+    );
+    for script in [
+        ">! enable -f stat stat; stat -A BASH_ALIASES f",
+        ">! enable -f stat stat && stat -A BASH_ALIASES f",
+        ">! enable stat; stat -A BASH_ALIASES f",
+        "t=enable; >! $t -f stat stat; stat -A BASH_ALIASES f",
+    ] {
+        for shell in ["bash", "zsh"] {
+            assert_eq!(
+                kind(&[shell, "-lc", script]),
+                Some(UnseenCode),
+                "{shell}: {script}"
+            );
+        }
+    }
+    // Review 5: filtering held words must remain linear for a long command.
+    work::assert_linear("#1845 held command words", |scale| {
+        let script = format!("{}read -A functions", "2>/dev/null ".repeat(400 * scale));
+        let _ = kind(&["zsh", "-lc", &script]);
+    });
+}
+
 /// #1704: a command writing variables named by its operands (zparseopts,
 /// zstyle, zsh modules, `read`, `set -A`, declarations, `printf -v`) asks
 /// when a word names a table of code run by name (zsh's `functions`, alias

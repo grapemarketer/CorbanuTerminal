@@ -20,7 +20,7 @@ const SETUP_FILES: [(&str, &str); 2] = [
 ];
 
 /// A codex home for an elevated-backend test, or `None` to skip it.
-pub(in crate::unified_exec::tests) fn elevated_home(name: &str) -> Option<TempDir> {
+pub(in crate::unified_exec::tests) fn elevated_home(name: &str) -> Option<SandboxHome> {
     // Bazel gives unit tests no staged sandbox helpers (#691).
     if option_env!("BAZEL_PACKAGE").is_some() {
         return None;
@@ -1029,8 +1029,8 @@ fn sec_win_1780_elevated_read_only_path_spelled_apart_from_cwd_stays_read_only()
 }
 
 /// #1819: an elevated command starts while a legacy command runs. The legacy
-/// session labels its writable roots (here `%TEMP%`, which holds this codex
-/// home) Low; a runner copied below them inherited that label and so started
+/// session labels its writable roots (here its temp folder, which holds this
+/// codex home) Low; a runner copied below them inherited that label and so started
 /// at Low integrity, where it may not open the parent's pipe for writing.
 #[test]
 fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
@@ -1061,9 +1061,14 @@ fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
     ));
     record_setup(codex_home.path());
     let bin_dir = crate::sandbox_bin_dir(codex_home.path());
-    let (home_low, during, bin_low) = runtime.block_on(with_holder(
+    // The legacy command's temp folder holds this codex home, as the real
+    // `%TEMP%` holds every test's (and may hold a user's), without its
+    // grant landing on the real one (#1890).
+    let legacy_temp = codex_home.path().parent().expect("home folder");
+    let (home_low, during, bin_low) = runtime.block_on(with_holder_in(
         holder_root.path(),
         legacy_home.path(),
+        legacy_temp,
         async |_holder_pid| {
             // SAFETY: reads labels only.
             let home_low = unsafe { crate::integrity::effective_label_is_low(codex_home.path()) };
@@ -1122,3 +1127,7 @@ fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// D425 (#1846): the elevated sandbox keeps planted-folder records.
+#[path = "elevated_planted_tests.rs"]
+mod d425;

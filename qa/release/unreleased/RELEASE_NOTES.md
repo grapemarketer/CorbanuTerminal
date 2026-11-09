@@ -448,9 +448,24 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
 - On native Windows CI, in an administrator's and a normal session, Python
   (temp files, venv and pip), cargo, Node and npm, Windows PowerShell and
   PowerShell 7, git and Git Bash, and MSBuild work as before.
-- Not changed: the non-admin sandbox still uses `%TEMP%` itself. Sandboxed
-  commands can still read (not write) other sessions' temp folders, and
-  files they made in `%TEMP%` before the upgrade stay theirs (they own them).
+- **What older versions' sandboxed commands left in `%TEMP%` becomes yours**
+  (#1871). The sandbox's accounts owned those files and folders, and an
+  owner can change their permissions: a command could give its account,
+  the sandbox's group or its workspace entries there that later commands
+  carry, and keep changing them after the upgrade (shown on native Windows
+  CI). In the same upgrade step, before the old grant is removed, the
+  session, as you (no UAC prompt), makes you their owner and removes every
+  allow entry other than yours, SYSTEM's, Administrators' and OWNER
+  RIGHTS' (deny entries stay; a "no DACL" becomes one inherited from the
+  folder). Nothing is deleted. One whose permissions stop you from doing
+  that is renamed in place (`….corbanu-sandbox-leftover-…`), so programs
+  that look for it by name make a new one of yours. The counts are logged
+  in the Corbanu home's `.sandbox` log. A typical session leaves several
+  hundred (Node's `node-compile-cache`, `MSBuildTemp`, temp files tools
+  kept); on CI all were taken in under a second.
+- Not changed: the non-admin sandbox still uses `%TEMP%` itself, and
+  sandboxed commands can still read (not write) other sessions' temp
+  folders.
 
 ## Windows non-admin sandbox warning
 
@@ -712,6 +727,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   to writable folders by their real (link-resolved) path too. When one
   profile marks the same folder read-only under one spelling and writable
   under another, read-only wins.
+- **A `\\localhost` network working folder gets a clear error** (#1863).
+  `command/exec` refused a working folder given as a `\\localhost\...`
+  network (UNC) path with an unclear "not valid on this host" error (debug
+  builds crashed). It still refuses it, in both sandboxes, now saying to use
+  the folder's local path instead. Other network paths are unchanged: the
+  command starts sandboxed as before.
 - **A writable folder inside a read-only one is refused through links too**
   (#1801, D331). D331's refusal compared folders by spelling, so a
   writable folder that lay inside a read-only one only through a junction
@@ -764,12 +785,41 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   project to look at it doesn't ask; later changes to it are. Nothing is
   refused: agents can still commit and run `git config` there. Going back
   to an older build drops these records the next time it saves its own.
+- **Non-admin sandbox: `.codex`/`.agents` below a folder whose name isn't
+  valid Unicode count as planted** (#1877). The folder holding a folder with
+  such a name is flagged after every command, so what lies below it isn't
+  loaded until you confirm it; before, nested folders below it weren't
+  recorded at all. (When that is the workspace itself, its own
+  `.codex`/`.agents` count too until the folder is renamed or removed.) Such a
+  folder now gets one "isn't valid Unicode" note, not one per entry, so many
+  such names no longer push earlier warnings out of the post-command notice.
+- **Non-admin sandbox: the repository checks cost about half as much**
+  (#1877). The checks for planted `.codex`/`.agents` folders and nested
+  repositories that run at each command's start and end now use several
+  threads. On a 38,000-file tree with 100 repositories (native Windows CI,
+  4 CPUs) each side went from about 80-90 ms to about 40 ms. They find
+  exactly the same things, in the same order.
 - **Non-admin sandbox: hooks folders a git config names are watched** (D422,
   #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
   included config file, or a script a program key names, when it lies in a
   writable folder, is recorded by content; a new or changed file there is
   reported like a changed repository. Nothing is refused: Husky still
   installs inside the sandbox.
+- **Default (elevated) sandbox: possibly planted folders are reported too**
+  (D425, #1846). The `.codex`, `.agents` and `.git` folders, repositories
+  and hooks folders the non-admin sandbox watches are now watched in the
+  default sandbox as well: when a command ends, what it created or changed
+  there gets the same warning right after the command, at startup and in the
+  TUI prompt. Nothing is refused. Processes a command leaves running aren't
+  waited for.
+- **Default (elevated) sandbox: a change inside an existing nested `.codex`
+  or `.agents` folder is reported too** (#1896). The non-admin sandbox
+  keeps such a folder (below the top of a writable folder) unchanged; the
+  default sandbox doesn't protect it, so it now records what is inside each
+  one when a command starts and reports the folder, like a planted one,
+  when its contents differ after the command. Nothing is refused. A folder
+  too large to compare (over 20,000 entries or 64 MiB) is reported after
+  every command.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only
@@ -779,6 +829,12 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   command can't either, as in the non-admin sandbox. The same holds for a
   `.codex` or `.agents` folder made this way. A deeper one, such as
   `sub\.git` for `sub\.git\hooks`, still has only `hooks` protected.
+- **Default (elevated) sandbox: starting a command no longer holds up
+  other work** (#1896). Its preparation, which includes walking the
+  writable folders for the planted-folder records (about 0.06–0.08 s on a
+  38,000-file repository, 0.5–0.7 s on a `repo` client with 100 projects) and
+  the credential watch's first scan, ran on the thread that drives other
+  tasks; it now runs on its own. What is flagged is unchanged.
 - **Default (elevated) sandbox setup no longer fails now and then where
   Windows requires complex passwords** (#1776). Setup gives the sandbox's
   user accounts a fresh random password, and about one setup in 4,500 drew
@@ -835,6 +891,15 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   change them. This is not new in this release. A change awaiting security
   sign-off (#1800) stops the memory read, and a follow-up stops the console
   read; until then, avoid running commands in several projects at once.
+- **Default (elevated) sandbox: a command that leaves a process running
+  returns when it exits** (#1830). A process started with the command's
+  output handles (PowerShell's `Start-Process -RedirectStandardOutput`, for
+  example) kept the command "running" until that process exited too, with no
+  time limit. Now one-shot commands and unified exec sessions in the default
+  sandbox finish at most about 2 seconds after the command exits, and the
+  process it started keeps running; output that process writes later is not
+  shown. The non-admin sandbox's one-shot commands behave this way since
+  #1826, and its unified exec sessions now do too (#1861).
 - **A default (elevated) sandbox command now starts while a non-admin
   sandbox command is running** (#1819). Before, when the non-admin command's
   writable folders held the Corbanu home (for example `%TEMP%`, or a project
@@ -860,3 +925,34 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   inherited with exact case, so an inherited `Term` next to Corbanu's `TERM`
   reached the command twice and either value could count. Corbanu's value
   now replaces every inherited spelling, as in the sandboxes since #1805.
+
+## Windows sandbox: capability SIDs are recorded under a lock (#1871)
+
+- **Two Corbanu processes on one Corbanu home no longer lose each other's
+  sandbox capability SIDs** when they record them at the same time. Each
+  update of the home's `cap_sid` file now holds a lock (`cap_sid.lock`) from
+  reading the file to replacing it, and the sandbox audit no longer rewrites
+  the file. Before, the later write could drop a SID the other process had
+  just recorded and granted, and two first uses could each make a different
+  set.
+- An update waits at most 5 seconds for the lock, then goes ahead unlocked,
+  as all updates did before. So a program that holds the lock (anything that
+  can read the Corbanu home) can delay updates by 5 seconds and bring back
+  the old race, but cannot stop them.
+
+## Windows sandbox tests no longer pile up entries on `%TEMP%` (#1890)
+
+- **Running the `codex-windows-sandbox` and `codex-core` Windows tests no
+  longer adds lasting permission entries to your `%TEMP%`.** Each test that
+  ran a non-admin sandbox command left one there for good (about 25 per run
+  of the `codex-windows-sandbox` tests), and every file later made in
+  `%TEMP%` inherited all of them. The tests now give those commands a temp
+  folder of their own, and a `codex-windows-sandbox` test fails if one still
+  adds an entry to the real `%TEMP%` or `%TMP%`.
+- Not changed: the non-admin sandbox itself keeps one lasting entry on
+  `%TEMP%` per Corbanu home (measured: one after many sessions in several
+  projects). On a machine that ran the tests before, `icacls "%TEMP%"` lists
+  the old entries as bare `S-1-5-21-…` SIDs with `(OI)(CI)(M)`;
+  `icacls "%TEMP%" /remove:g *S-1-5-21-…` (with the `*`) removes one. Remove
+  only such bare-SID entries. If one was your Corbanu home's, the sandbox adds
+  it back the next time it runs.
