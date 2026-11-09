@@ -1278,8 +1278,8 @@ pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
     use std::os::windows::fs::OpenOptionsExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use std::os::windows::io::FromRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::FileAttributeTagInfo;
     use windows_sys::Win32::Storage::FileSystem::ReOpenFile;
-    const FILE_ATTRIBUTE_TAG_INFO: i32 = 9;
     const NAME_SURROGATE: u32 = 0x2000_0000;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -1301,7 +1301,7 @@ pub(crate) fn open_unfollowed(path: &Path) -> Option<(std::fs::File, u32)> {
     if unsafe {
         GetFileInformationByHandleEx(
             handle,
-            FILE_ATTRIBUTE_TAG_INFO,
+            FileAttributeTagInfo,
             tag.as_mut_ptr().cast(),
             std::mem::size_of_val(&tag) as u32,
         )

@@ -927,12 +927,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   now replaces every inherited spelling, as in the sandboxes since #1805.
 - **The planted-folder watch reads only the file it checked** (#1909, both
   sandboxes). When the watch records a file's content (inside a nested
-  `.codex` or `.agents` folder, or in a repository's git folder), it now
-  opens the file without following links. Before, a process a command left
-  running could swap the file for a symbolic link in the moment between the
-  check and the read, and Corbanu would read through it, for example from a
-  network share. Such a swapped file is now recorded as unreadable, so the
-  change is flagged.
+  `.codex` or `.agents` folder, in a repository's git folder, or a file a
+  git config names), it now opens the file it checked itself, so a link
+  swapped in after the check is not followed. Before, a process a command
+  left running could swap the file for a symbolic link in that moment, and
+  Corbanu would read through it, for example from a network share. Such a
+  swapped file is now recorded as unreadable, so the change is flagged. A
+  link that is already in a git folder is still read through, as git
+  reads it.
 
 ## Windows sandbox: capability SIDs are recorded under a lock (#1871)
 
