@@ -15,6 +15,7 @@ use tracing::debug;
 use crate::oauth::StoredOAuthTokenStatus;
 use crate::oauth::oauth_token_status;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
+use crate::startup_error::auth_error_with_reason;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -233,7 +234,7 @@ async fn discover_streamable_http_oauth_with_manager(
             scopes_supported: normalize_scopes(resolution.metadata.scopes_supported),
         })),
         Err(AuthError::NoAuthorizationSupport) => Ok(None),
-        Err(err) => Err(err.into()),
+        Err(err) => Err(auth_error_with_reason(err)),
     }
 }
 
@@ -356,6 +357,12 @@ mod tests {
             discovery_request_failure(&error)
                 .is_some_and(|reason| reason.contains("expected discovery request failure")),
             "OAuth discovery must preserve the executor transport failure: {error:#}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("expected discovery request failure"),
+            "the displayed error must name the discovery failure reason: {error}"
         );
     }
 

@@ -5,6 +5,21 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 
+/// Converts an rmcp OAuth error into `anyhow::Error` without losing its reason.
+///
+/// rmcp >= 3.9 keeps the cause of a failed discovery request in
+/// `AuthError::DiscoveryRequestFailed`'s `source()`, which `Display` (used for
+/// startup and login errors) omits. The `AuthError` stays downcastable.
+pub(crate) fn auth_error_with_reason(error: AuthError) -> Error {
+    match &error {
+        AuthError::DiscoveryRequestFailed { source, .. } => {
+            let message = format!("{error}: {source}");
+            Error::new(error).context(message)
+        }
+        _ => Error::new(error),
+    }
+}
+
 /// Returns whether an RMCP client error indicates that authentication is required.
 ///
 /// This does not distinguish first-time login from reauthentication.
