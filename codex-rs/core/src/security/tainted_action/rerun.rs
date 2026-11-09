@@ -974,7 +974,7 @@ pub(super) fn git_remote_unseen(
         Some(sub) => (sub.to_ascii_lowercase(), 0),
         None => {
             let mut value_next = false;
-            let Some(at) = args.iter().enumerate().position(|(at, word)| {
+            let Some(at) = args.iter().position(|word| {
                 work::step();
                 if std::mem::take(&mut value_next) {
                     return false;
@@ -1007,11 +1007,11 @@ pub(super) fn git_remote_unseen(
     let unseen_at = |at: usize, word: &str| !mark(at).seen && unseen(word);
     let before = match sub.as_str() {
         "remote" | "submodule" => {
-            let verb = rest.iter().enumerate().find(|(at, word)| {
+            let verb = rest.iter().find(|word| {
                 work::step();
                 !word.starts_with('-')
             });
-            match (sub.as_str(), verb.map(|(_, verb)| verb.as_str())) {
+            match (sub.as_str(), verb.map(String::as_str)) {
                 (_, None) => return cut,
                 // A verb the line does not show may be `add`.
                 (_, Some(verb)) if git_word_unseen(verb) => return true,
