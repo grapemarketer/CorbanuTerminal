@@ -531,7 +531,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "#295 probe failed in a normal session" }
             $sandbox = Get-TestExe @('-p', 'codex-windows-sandbox', '--lib')
             # The D324 tests skip here: no elevated setup is recorded yet.
-            Assert-Tests $sandbox 'sec_win_' 61
+            Assert-Tests $sandbox 'sec_win_' 64
             # The #1770 tests run on their own below.
             & $medium -Program $sandbox -Arguments @('sec_win_', '--skip', 'sec_win_1770_', '--nocapture', '--test-threads=1')
             if ($LASTEXITCODE -ne 0) { throw "P1 hardening regressions failed in a normal session" }
@@ -612,8 +612,9 @@ jobs:
               if (-not ($out -match 'test result: ok\. 1 passed')) { throw "$t did not run in a normal session" }
             }
             # D425 (#1846): from a normal session too, an elevated session and
-            # capture record what their command planted.
-            foreach ($t in @('sec_win_1846_elevated_session_records_what_its_command_plants', 'sec_win_1846_elevated_capture_records_what_its_command_plants')) {
+            # capture record what their command planted (#1896 item 3: and
+            # what it changed inside a nested .codex/.agents folder).
+            foreach ($t in @('sec_win_1846_elevated_session_records_what_its_command_plants', 'sec_win_1846_elevated_capture_records_what_its_command_plants', 'sec_win_1896_elevated_session_flags_changes_inside_nested_metadata', 'sec_win_1896_elevated_capture_flags_changes_inside_nested_metadata')) {
               $t = "unified_exec::tests::command_identity::elevated::d425::$t"
               Assert-Tests $sandbox $t 1
               & $sandbox --exact 'unified_exec::tests::command_identity::elevated::sec_win_1648_elevated_command_keeps_write_access_to_its_own_processes' --nocapture --test-threads=1 | Out-Null

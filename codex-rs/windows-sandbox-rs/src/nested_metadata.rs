@@ -9,6 +9,10 @@
 //! that isn't in that list, unchanged, counts as planted ([`appeared`]), and
 //! so does every folder the walk couldn't list. While it runs,
 //! [`appeared_in_session`] tells Core the same about a single folder.
+//!
+//! #1896 item 3 (D425): an elevated session doesn't protect them, so it
+//! also records what is inside each ([`with_contents`]); one whose contents
+//! differ when the session ends counts as planted too.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,6 +31,23 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 pub(crate) struct NestedMetadata {
     pub(crate) path: PathBuf,
     pub(crate) identity: Option<FileIdentity>,
+    /// #1896 item 3: what was inside it ([`contents`]), for an elevated
+    /// session (`None` otherwise: a legacy session keeps it unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) contents: Option<crate::git_watch::Prints>,
+}
+
+impl NestedMetadata {
+    /// Whether `path`, the file `identity` now, is still this entry: the
+    /// same file, with the same contents when they were recorded.
+    fn unchanged(&self, path: &Path, identity: Option<FileIdentity>) -> bool {
+        same_path(&self.path, path)
+            && self.identity == identity
+            && self
+                .contents
+                .as_ref()
+                .is_none_or(|before| *before == contents(path))
+    }
 }
 
 /// Volume serial number and 128-bit file ID.
@@ -243,7 +264,11 @@ fn list(dir: PathBuf, top: bool, found: &mut Found, budget: &mut usize, stack: &
                 let identity = (exact && !is_link(metadata.as_ref()))
                     .then(|| identity(&entry.path()))
                     .flatten();
-                found.entries.push(NestedMetadata { path, identity });
+                found.entries.push(NestedMetadata {
+                    path,
+                    identity,
+                    contents: None,
+                });
                 if exact {
                     continue;
                 }
@@ -331,7 +356,7 @@ pub(crate) fn appeared(before: &[NestedMetadata], now: Vec<NestedMetadata>) -> V
             entry.identity.is_none()
                 || !before
                     .iter()
-                    .any(|old| same_path(&old.path, &entry.path) && old.identity == entry.identity)
+                    .any(|old| old.unchanged(&entry.path, entry.identity))
         })
         .map(|entry| entry.path)
         .collect()
@@ -355,10 +380,77 @@ pub(crate) fn appeared_in_session(
         return false;
     }
     let now = identity(folder);
-    now.is_none()
-        || !before
-            .iter()
-            .any(|old| same_path(&old.path, folder) && old.identity == now)
+    now.is_none() || !before.iter().any(|old| old.unchanged(folder, now))
+}
+
+/// Entries [`contents`] looks at in one folder, all levels together; past
+/// that it differs every time.
+const MAX_CONTENT_ENTRIES: usize = 20_000;
+/// Bytes of file content [`contents`] reads in one folder; past that it
+/// differs every time.
+const MAX_CONTENT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// #1896 item 3 (D425): `entries` (from [`find`]) with what is inside each
+/// identified one ([`contents`]), several at a time.
+pub(crate) fn with_contents(entries: Vec<NestedMetadata>) -> Vec<NestedMetadata> {
+    crate::par_map::par_map(&entries, |entry| NestedMetadata {
+        contents: entry.identity.map(|_| contents(&entry.path)),
+        ..entry.clone()
+    })
+}
+
+/// What is inside the `.codex`/`.agents` folder `folder`: each entry at any
+/// depth by its path from `folder`, a file by its content
+/// ([`crate::git_watch::file_print`], which marks hard links), a link as
+/// one (not followed), a folder as `dir`. A folder that can't be listed, a
+/// name that isn't valid Unicode, or more than [`MAX_CONTENT_ENTRIES`]
+/// entries or [`MAX_CONTENT_BYTES`] of files make it differ every time.
+pub(crate) fn contents(folder: &Path) -> crate::git_watch::Prints {
+    let mut prints = crate::git_watch::Prints::new();
+    let (mut seen, mut bytes) = (0_usize, 0_u64);
+    let mut stack = vec![(folder.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            prints.insert(prefix, crate::git_watch::truncated());
+            continue;
+        };
+        for entry in entries {
+            seen += 1;
+            if seen > MAX_CONTENT_ENTRIES {
+                prints.insert(String::new(), crate::git_watch::truncated());
+                return prints;
+            }
+            let Ok(entry) = entry else {
+                prints.insert(prefix.clone(), crate::git_watch::truncated());
+                break;
+            };
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                prints.insert(prefix.clone(), crate::git_watch::truncated());
+                continue;
+            };
+            let path = entry.path();
+            let child = format!("{prefix}{name}");
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    prints.insert(child.clone(), "dir".to_string());
+                    stack.push((path, format!("{child}\\")));
+                }
+                Ok(metadata) => {
+                    bytes = bytes.saturating_add(metadata.len());
+                    let print = if bytes > MAX_CONTENT_BYTES {
+                        crate::git_watch::truncated()
+                    } else {
+                        crate::git_watch::file_print(&path)
+                    };
+                    prints.insert(child, print);
+                }
+                Err(_) => {
+                    prints.insert(child, crate::git_watch::truncated());
+                }
+            }
+        }
+    }
+    prints
 }
 
 /// D332 (#1682): the top-level `.git` of each of `roots` (canonical) that
@@ -379,7 +471,11 @@ pub(crate) fn top_level_git(roots: &[PathBuf]) -> Vec<NestedMetadata> {
                 Ok(metadata) if !metadata.file_type().is_symlink() => identity(&path),
                 _ => None,
             };
-            Some(NestedMetadata { path, identity })
+            Some(NestedMetadata {
+                path,
+                identity,
+                contents: None,
+            })
         })
         .collect()
 }
