@@ -778,12 +778,25 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `.codex`/`.agents` count too until the folder is renamed or removed.) Such a
   folder now gets one "isn't valid Unicode" note, not one per entry, so many
   such names no longer push earlier warnings out of the post-command notice.
+- **Non-admin sandbox: the repository checks cost about half as much**
+  (#1877). The checks for planted `.codex`/`.agents` folders and nested
+  repositories that run at each command's start and end now use several
+  threads. On a 38,000-file tree with 100 repositories (native Windows CI,
+  4 CPUs) each side went from about 80-90 ms to about 40 ms. They find
+  exactly the same things, in the same order.
 - **Non-admin sandbox: hooks folders a git config names are watched** (D422,
   #1775). A `core.hooksPath` folder in the project (Husky, `.githooks`), an
   included config file, or a script a program key names, when it lies in a
   writable folder, is recorded by content; a new or changed file there is
   reported like a changed repository. Nothing is refused: Husky still
   installs inside the sandbox.
+- **Default (elevated) sandbox: possibly planted folders are reported too**
+  (D425, #1846). The `.codex`, `.agents` and `.git` folders, repositories
+  and hooks folders the non-admin sandbox watches are now watched in the
+  default sandbox as well: when a command ends, what it created or changed
+  there gets the same warning right after the command, at startup and in the
+  TUI prompt. Nothing is refused. Processes a command leaves running aren't
+  waited for.
 - **Default (elevated) sandbox: a `.git` made for a read-only `.git\hooks`
   is protected from the first command** (#1758). At the top of a writable
   folder (other than `%TEMP%`) with no `.git`, a configured read-only

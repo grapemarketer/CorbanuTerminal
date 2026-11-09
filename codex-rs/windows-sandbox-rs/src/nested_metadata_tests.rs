@@ -163,6 +163,69 @@ fn find_reports_folders_holding_names_that_are_not_unicode() {
     );
 }
 
+/// #1877: the walk on several threads finds what one walk finds, in the same
+/// order, in a branching tree deeper than [`SPLIT_DEPTH`] with every kind of
+/// entry, over overlapping and repeated roots.
+#[test]
+fn find_matches_one_walk() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let outside = tempfile::tempdir().expect("outside");
+    let mut path = root.clone();
+    for level in 0..8 {
+        for branch in 0..3 {
+            let folder = path.join(format!("b{branch}"));
+            std::fs::create_dir_all(folder.join("leaf")).expect("folder");
+            if (level + branch) % 2 == 0 {
+                std::fs::create_dir_all(folder.join(".codex")).expect(".codex");
+            }
+            if (level + branch) % 3 == 0 {
+                std::fs::create_dir_all(folder.join(".git")).expect(".git");
+            }
+            if (level + branch) % 4 == 1 {
+                std::fs::create_dir_all(folder.join(".agent\u{17f}")).expect("folded");
+            }
+            if (level + branch) % 5 == 2 {
+                std::fs::create_dir_all(
+                    folder.join(std::ffi::OsString::from_wide(&[0xD800, u16::from(b'x')])),
+                )
+                .expect("odd");
+            }
+            if (level + branch) % 4 == 3 {
+                junction(&folder.join("link"), outside.path());
+            }
+        }
+        path = path.join("b1");
+    }
+    let roots = vec![root.clone(), root.join("b1\\b1"), root];
+
+    let parallel = find(&roots);
+    let mut budget = usize::MAX;
+    let one = find_bounded(&roots, &mut budget);
+    let summary = |found: Found| {
+        (
+            found
+                .entries
+                .into_iter()
+                .map(|entry| (entry.path, entry.identity))
+                .collect::<Vec<_>>(),
+            found.unlistable,
+            found.repos,
+            found.links,
+            found.notes,
+        )
+    };
+    let parallel = summary(parallel);
+    assert!(
+        parallel.0.len() > 10
+            && !parallel.2.is_empty()
+            && !parallel.3.is_empty()
+            && !parallel.4.is_empty()
+    );
+    assert_eq!(parallel, summary(one));
+}
+
 /// D332: a root's top-level `.git` is reported when it exists, a folder or
 /// file with its identity and a junction without one; a missing one isn't.
 /// One counts as appeared in a session unless it is there, as the same

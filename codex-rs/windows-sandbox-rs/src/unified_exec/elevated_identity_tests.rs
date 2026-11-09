@@ -1122,3 +1122,7 @@ fn sec_win_1819_elevated_command_starts_while_a_legacy_command_runs() {
         sandbox_log(codex_home.path())
     );
 }
+
+/// D425 (#1846): the elevated sandbox keeps planted-folder records.
+#[path = "elevated_planted_tests.rs"]
+mod d425;

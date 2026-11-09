@@ -5228,7 +5228,7 @@ impl Config {
         )
         .map_err(std::io::Error::from)?;
         // D424 (#1775): possibly planted `.git` entries in the folders
-        // non-admin sandbox commands may write to, and below `cwd`.
+        // Windows sandbox commands may write to, and below `cwd`.
         for warning in crate::windows_sandbox::planted_git_startup_warnings(
             &effective_file_system_sandbox_policy,
             &workspace_roots,
