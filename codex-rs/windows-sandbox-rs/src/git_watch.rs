@@ -128,7 +128,10 @@ pub(crate) struct FolderPrints(
 impl FolderPrints {
     /// The prints of the git folder `dir` under `prefix`, into `prints`.
     fn insert(&self, dir: &Path, prefix: &str, roots: &[PathBuf], prints: &mut Prints) {
-        let key = dunce::canonicalize(dir).unwrap_or_else(|_| normalize(dir));
+        // By spelling, `.` and `..` resolved as Windows resolves them (no
+        // look at the disk): two entries that name a folder alike share its
+        // look; spelled apart, it is looked at twice, as before.
+        let key = normalize(dir);
         let cell = std::sync::Arc::clone(
             self.0
                 .lock()
