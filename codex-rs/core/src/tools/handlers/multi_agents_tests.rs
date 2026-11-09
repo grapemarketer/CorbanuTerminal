@@ -6302,10 +6302,115 @@ async fn d435_interrupting_a_pending_agent_stops_its_first_turn_without_waking_i
     assert_eq!(result.previous_status, AgentStatus::PendingInit);
     assert_eq!(
         result.process_effect,
-        "pending: interrupt sent, which stops its first turn if one is starting; no new turn was started"
+        "pending: interrupt sent to stop its first turn; a first turn still held back (by the agent limit, the kill switch or its account) is not cancelled; no new turn was started"
     );
     assert_eq!(interrupts(), interrupts_before + 1, "the interrupt is sent");
     assert_eq!(notices(), notices_before, "no notice wakes it");
+}
+
+/// D435 keeps D404 for an idle agent that reads `PendingInit` only because
+/// `send_message` reloaded it without a turn: nothing reaches it.
+#[tokio::test]
+async fn d435_a_reloaded_idle_agent_reading_pending_only_reports_its_status() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    set_turn_config(&mut turn, config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({"message": "boot worker", "task_name": "worker"})),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    settle_agent(&manager, agent_id).await;
+    let unloaded = manager
+        .remove_thread(&agent_id)
+        .await
+        .expect("worker thread should be loaded before removal");
+    unloaded
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed worker should accept shutdown");
+    unloaded.wait_until_terminated().await;
+    SendMessageHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_message",
+            function_payload(json!({"target": "worker", "message": "for later"})),
+        ))
+        .await
+        .expect("send_message should reload the worker");
+    assert_eq!(
+        manager.agent_control().get_status(agent_id).await,
+        AgentStatus::PendingInit,
+        "reloaded without a turn"
+    );
+    let reaches_agent = || {
+        manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(thread_id, op)| {
+                *thread_id == agent_id
+                    && matches!(op, Op::Interrupt | Op::InterAgentCommunication { .. })
+            })
+            .count()
+    };
+    let before = reaches_agent();
+
+    let output = InterruptAgentHandler
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "interrupt_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("interrupt_agent should report the status");
+    let (content, _) = expect_text_output(output);
+    let result: InterruptAgentResult =
+        serde_json::from_str(&content).expect("result should be json");
+    assert_eq!(result.previous_status, AgentStatus::PendingInit);
+    assert_eq!(
+        result.process_effect,
+        "not running: nothing was interrupted and the agent was not started"
+    );
+    assert_eq!(reaches_agent(), before, "nothing reaches a reloaded idle agent");
 }
 
 /// D435, end to end: an agent interrupted right after its spawn, while its

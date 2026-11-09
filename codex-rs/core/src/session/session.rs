@@ -34,6 +34,9 @@ pub(crate) struct Session {
     pub(super) tx_sub: Sender<Submission>,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
+    /// Set when `spawn_agent` created this session and queued its first turn
+    /// (D435). A session reloaded later is a new one, so this stays false.
+    pub(crate) spawned_with_first_turn: std::sync::atomic::AtomicBool,
     pub(super) state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
@@ -1380,6 +1383,7 @@ impl Session {
                 tx_sub,
                 tx_event: tx_event.clone(),
                 agent_status,
+                spawned_with_first_turn: Default::default(),
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),

@@ -462,6 +462,21 @@ impl AgentControl {
         result
     }
 
+    /// Whether `agent_id`'s resident session is the one `spawn_agent` created
+    /// with a first turn queued (D435). With `PendingInit`, that turn has not
+    /// started yet; a session reloaded later reads `PendingInit` with no turn.
+    pub(crate) async fn spawned_with_first_turn(&self, agent_id: ThreadId) -> bool {
+        let Ok(state) = self.upgrade() else {
+            return false;
+        };
+        state.get_thread(agent_id).await.is_ok_and(|thread| {
+            thread
+                .session
+                .spawned_with_first_turn
+                .load(std::sync::atomic::Ordering::Acquire)
+        })
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;

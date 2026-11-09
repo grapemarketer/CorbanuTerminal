@@ -12,9 +12,9 @@ pub(crate) struct Handler;
 const NOT_RUNNING_EFFECT: &str =
     "not running: nothing was interrupted and the agent was not started";
 
-/// What an interrupt does to a pending agent, whose first turn may be about
-/// to start (D435).
-const PENDING_EFFECT: &str = "pending: interrupt sent, which stops its first turn if one is starting; no new turn was started";
+/// What an interrupt does to a just-spawned agent whose first turn has not
+/// started yet (D435).
+const PENDING_EFFECT: &str = "pending: interrupt sent to stop its first turn; a first turn still held back (by the agent limit, the kill switch or its account) is not cancelled; no new turn was started";
 
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
@@ -131,10 +131,16 @@ async fn handle_interrupt_agent(
     // D404 (#1796): an agent without a running turn is neither interrupted
     // nor woken (the audit message below would start a turn): the call only
     // reports its status, at every security level.
-    // D435: a pending agent (just spawned, its first turn not yet started)
-    // still gets the interrupt, which stops that first turn, but not the
-    // message, which would start another.
-    let pending = status == AgentStatus::PendingInit;
+    // D435: a just-spawned agent whose first turn hasn't started still gets
+    // the interrupt, which stops that turn, but not the message, which would
+    // start another. A session reloaded without a turn also reads
+    // `PendingInit`; it is idle, so D404 applies.
+    let pending = status == AgentStatus::PendingInit
+        && session
+            .services
+            .agent_control
+            .spawned_with_first_turn(agent_id)
+            .await;
     if !pending && status != AgentStatus::Running {
         return Ok(not_running);
     }

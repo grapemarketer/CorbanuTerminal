@@ -162,11 +162,13 @@ them into `qa/release/<version>/RELEASE_NOTES.md` and empties this file.
   agent only reports its status; before, the interrupt notice started a new
   turn there, with the caller's reason as its message.
 - **Interrupting a just-started agent stops its first turn again** (D435).
-  While an agent is still pending (its first turn not yet begun),
+  For an agent `spawn_agent` just started, whose first turn hasn't begun,
   `interrupt_agent` sends the interrupt, which stops that first turn, but not
   the notice that would start another. Since D404 the interrupt was not sent
   at all, so the first turn ran, and the reply wrongly said the agent "was not
-  started".
+  started". A first turn held back by the agent limit, the kill switch or a
+  signed-out account is not cancelled and runs later; the reply says so. An
+  idle agent reloaded without a turn still only gets its status reported.
 - **Known limit** (D389): a follow-up or `send_input` to an agent that is
   running when checked goes ahead; if that turn ends just before the message
   arrives, the message starts a new turn without asking. Likewise, at any
