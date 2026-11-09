@@ -756,13 +756,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   default (elevated) sandbox weren't affected.
 - **Non-admin sandbox: `command/exec` refuses a working folder on a network
   with a clear message** (D446). A mapped network drive or a UNC path
-  (`\\server\share\...`) is refused with "... is a network folder (a UNC
-  path or a mapped network drive)", for `command/exec` and the exec server,
-  for any sandboxed permission profile. The non-admin sandbox's commands can't
-  write through a network path at all, so such a command would otherwise
-  run as if the folder were read-only. Use a folder on a local drive.
-  `\\localhost` paths were already refused (#1863). The agent's own
-  commands and the default (elevated) sandbox are unchanged.
+  (`\\server\share\...`), as the command's or the sandbox's working folder,
+  is refused with "... is a network folder (a UNC path or a mapped network
+  drive)", for any sandboxed permission profile, read-only included. In
+  #1866's measurement the non-admin sandbox's commands couldn't write
+  through a network path, so such a command ran as if the folder were
+  read-only. Use a folder on a local drive. `\\localhost` paths were
+  already refused (#1863). The agent's own commands and file tools, the
+  exec server and the default (elevated) sandbox are unchanged.
 - **Non-admin sandbox: a writable folder inside a protected `.git`, `.codex`
   or `.agents` folder is refused for older workspace-write profiles too**
   (#1810, D331). A profile in the older workspace-write format, for example

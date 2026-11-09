@@ -614,44 +614,18 @@ fn sec_win_d398_non_admin_resolver_compares_cwd_by_real_path() {
 }
 
 /// D446: a working folder on a network (here a UNC path, judged by its
-/// spelling, so nothing is looked up) is refused for the non-admin backend
-/// with a clear message, whatever the profile; the elevated backend and
-/// local folders are not affected by this check.
+/// spelling, so nothing is looked up) is refused with a clear message; a
+/// local folder isn't. `command/exec` calls this for the non-admin backend
+/// only (the resolvers, which other launches share, don't).
 #[cfg(windows)]
 #[test]
-fn d446_network_working_folder_refused_for_the_non_admin_backend() {
-    let unc = AbsolutePathBuf::from_absolute_path(r"\\fileserver.invalid\share\Workspace Folder")
-        .expect("absolute UNC path");
-    let refusal = refuse_network_working_folder(unc.as_path()).expect_err("refused");
+fn d446_network_working_folder_refused() {
+    let unc = Path::new(r"\\fileserver.invalid\share\Workspace Folder");
+    let refusal = refuse_network_working_folder(unc).expect_err("refused");
     assert!(
         refusal.starts_with(r"`\\fileserver.invalid\share\Workspace Folder` is a network folder"),
         "{refusal}"
     );
-    for profile in [
-        PermissionProfile::read_only(),
-        PermissionProfile::workspace_write(),
-    ] {
-        assert_eq!(
-            resolve_windows_restricted_token_filesystem_overrides(
-                SandboxType::WindowsRestrictedToken,
-                &profile,
-                &unc,
-                WindowsSandboxLevel::RestrictedToken,
-            )
-            .err(),
-            Some(refusal.clone())
-        );
-        assert_eq!(
-            resolve_windows_restricted_token_filesystem_overrides(
-                SandboxType::WindowsRestrictedToken,
-                &profile,
-                &unc,
-                WindowsSandboxLevel::Elevated,
-            ),
-            Ok(None)
-        );
-    }
-
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     assert_eq!(refuse_network_working_folder(temp_dir.path()), Ok(()));
 }

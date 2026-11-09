@@ -189,7 +189,6 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
     {
         return Ok(None);
     }
-    refuse_network_working_folder(sandbox_policy_cwd.as_path())?;
     // D331: the backend refuses these too, with an unclear error, including
     // the profiles the early return below lets through.
     refuse_unenforceable_windows_read_restrictions(sandbox, permission_profile)?;
@@ -492,11 +491,12 @@ fn real_windows_override_path(path: &Path) -> std::result::Result<PathBuf, Strin
     }
 }
 
-/// D446: refuses a working folder on a network (a UNC path, or a mapped
-/// drive, whose real path is one) for the unelevated restricted-token
-/// backend. Its commands can't write there at all, so they would run as if
-/// the folder were read-only (#1866 measured a mapped drive); refuse with a
-/// clear message instead. `\\localhost` paths are refused earlier (#1863).
+/// D446: refuses a working folder on a network (a UNC path, or a path whose
+/// real path is one, such as a mapped drive) for `command/exec` under the
+/// unelevated restricted-token backend. Its commands couldn't write there in
+/// #1866's measurement, so they would run as if the folder were read-only;
+/// refuse with a clear message instead. `\\localhost` paths are refused
+/// earlier (#1863).
 pub fn refuse_network_working_folder(cwd: &Path) -> std::result::Result<(), String> {
     use codex_windows_sandbox::local_drive::is_network_path;
     let network = is_network_path(cwd)
