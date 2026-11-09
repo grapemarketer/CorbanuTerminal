@@ -25,7 +25,6 @@ use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -65,15 +64,19 @@ impl Drop for EnvGuard {
 fn unelevated_tool_launch(
     permissions: &PermissionProfile,
     cwd: &AbsolutePathBuf,
+    temp: &Path,
 ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
-    unelevated_tool_launch_script(permissions, cwd, "type secret.env & type public.txt")
+    unelevated_tool_launch_script(permissions, cwd, temp, "type secret.env & type public.txt")
 }
 
 /// Prepares `cmd /C <script>` through the tool path, under the unelevated
-/// sandbox.
+/// sandbox, with `temp` as its `TEMP` and `TMP`: the sandbox grants its temp
+/// folder to this test's new capability SID for good, so the real one would
+/// gain an entry on every run (#1890).
 fn unelevated_tool_launch_script(
     permissions: &PermissionProfile,
     cwd: &AbsolutePathBuf,
+    temp: &Path,
     script: &str,
 ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
     let cwd_uri = PathUri::from_abs_path(cwd);
@@ -100,7 +103,9 @@ fn unelevated_tool_launch_script(
             program: "cmd.exe".into(),
             args: vec!["/D".to_string(), "/C".to_string(), script.to_string()],
             cwd: cwd_uri.clone(),
-            env: HashMap::new(),
+            env: ["TEMP", "TMP"]
+                .map(|key| (key.to_string(), temp.display().to_string()))
+                .into(),
             managed_network: None,
             additional_permissions: None,
         },
@@ -119,6 +124,7 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
     let codex_home_dir = tempfile::tempdir().expect("codex home");
     let workspace_dir = tempfile::tempdir().expect("workspace");
     let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    let session_temp = tempfile::tempdir().expect("session temp");
     let cwd = AbsolutePathBuf::from_absolute_path(
         dunce::canonicalize(workspace_dir.path()).expect("canonical workspace"),
     )
@@ -131,7 +137,7 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
     // Control: the unelevated sandbox runs commands here, and without a deny
     // entry it reads both files.
     let control = crate::sandboxing::execute_env(
-        unelevated_tool_launch(&base, &cwd).expect("control launch"),
+        unelevated_tool_launch(&base, &cwd, session_temp.path()).expect("control launch"),
         /*stdout_stream*/ None,
     )
     .await
@@ -178,7 +184,7 @@ async fn sec_win_300_unelevated_tool_launch_refuses_deny_read_profiles() {
             &file_system,
             NetworkSandboxPolicy::Restricted,
         );
-        let outcome = match unelevated_tool_launch(&denying, &cwd) {
+        let outcome = match unelevated_tool_launch(&denying, &cwd, session_temp.path()) {
             Err(refused) => refused.to_string(),
             Ok(request) => {
                 match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
@@ -212,6 +218,7 @@ async fn sec_win_d331_unelevated_tool_launch_refuses_writable_inside_read_only()
     let codex_home_dir = tempfile::tempdir().expect("codex home");
     let workspace_dir = tempfile::tempdir().expect("workspace");
     let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    let session_temp = tempfile::tempdir().expect("session temp");
     let cwd = AbsolutePathBuf::from_absolute_path(
         dunce::canonicalize(workspace_dir.path()).expect("canonical workspace"),
     )
@@ -234,7 +241,12 @@ async fn sec_win_d331_unelevated_tool_launch_refuses_writable_inside_read_only()
     let nested =
         PermissionProfile::from_runtime_permissions(&file_system, NetworkSandboxPolicy::Restricted);
 
-    let outcome = match unelevated_tool_launch_script(&nested, &cwd, "echo ran> ran.txt") {
+    let outcome = match unelevated_tool_launch_script(
+        &nested,
+        &cwd,
+        session_temp.path(),
+        "echo ran> ran.txt",
+    ) {
         Err(refused) => refused.to_string(),
         Ok(request) => {
             match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
@@ -292,6 +304,7 @@ async fn sec_win_1506_planted_project_config_is_not_loaded() {
     )
     .expect("user config");
     let _codex_home = EnvGuard::set("CODEX_HOME", &home);
+    let session_temp = tempfile::tempdir().expect("session temp");
     let cwd = AbsolutePathBuf::from_absolute_path(&project).expect("absolute project");
     let base = PermissionProfile::workspace_write()
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
@@ -300,6 +313,7 @@ async fn sec_win_1506_planted_project_config_is_not_loaded() {
         unelevated_tool_launch_script(
             &base,
             &cwd,
+            session_temp.path(),
             // A TOML literal string: cmd doesn't understand the `\"` the
             // argument quoting would give a double quote.
             "mkdir .codex && (echo model = 'planted')> .codex\\config.toml && mkdir .agents\\skills",
@@ -467,6 +481,7 @@ impl Drop for SubstGuard {
 async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
     let codex_home_dir = tempfile::tempdir().expect("codex home");
     let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    let session_temp = tempfile::tempdir().expect("session temp");
 
     let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
         Path::new("<read-only>"),
@@ -570,15 +585,16 @@ async fn sec_win_d331_1801_writable_inside_read_only_through_a_link() {
         // Unquoted: `cmd /C` gets the script as one escaped argument, and the
         // fixture paths have no spaces.
         let script = format!("echo y> {}", writable.join("y.txt").as_path().display());
-        let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
-            Err(refused) => refused.to_string(),
-            Ok(request) => {
-                match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
-                    Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
-                    Err(err) => format!("failed at spawn: {err}"),
+        let outcome =
+            match unelevated_tool_launch_script(&profile, &cwd, session_temp.path(), &script) {
+                Err(refused) => refused.to_string(),
+                Ok(request) => {
+                    match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                        Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                        Err(err) => format!("failed at spawn: {err}"),
+                    }
                 }
-            }
-        };
+            };
         let written = lands_in.join("y.txt").exists();
         eprintln!("sec-win-1801 {label}: written={written} {outcome}");
         // The folders it names are spelled as the resolver has them (a
@@ -621,6 +637,7 @@ async fn sec_win_d331_1810_legacy_format_profile_with_writable_inside_protected_
 
     let codex_home_dir = tempfile::tempdir().expect("codex home");
     let _codex_home = EnvGuard::set("CODEX_HOME", codex_home_dir.path());
+    let session_temp = tempfile::tempdir().expect("session temp");
 
     let refusal_start = codex_sandboxing::writable_inside_read_only_refusal(
         Path::new("<read-only>"),
@@ -702,15 +719,16 @@ async fn sec_win_d331_1810_legacy_format_profile_with_writable_inside_protected_
         // Unquoted: `cmd /C` gets the script as one escaped argument, and the
         // fixture paths have no spaces.
         let script = format!("echo y> {}", writable.join("y.txt").as_path().display());
-        let outcome = match unelevated_tool_launch_script(&profile, &cwd, &script) {
-            Err(refused) => refused.to_string(),
-            Ok(request) => {
-                match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
-                    Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
-                    Err(err) => format!("failed at spawn: {err}"),
+        let outcome =
+            match unelevated_tool_launch_script(&profile, &cwd, session_temp.path(), &script) {
+                Err(refused) => refused.to_string(),
+                Ok(request) => {
+                    match crate::sandboxing::execute_env(request, /*stdout_stream*/ None).await {
+                        Ok(output) => format!("ran: {}{}", output.stdout.text, output.stderr.text),
+                        Err(err) => format!("failed at spawn: {err}"),
+                    }
                 }
-            }
-        };
+            };
         let written = lands_in.join("y.txt").exists();
         eprintln!(
             "sec-win-1810 {label}: legacy format={legacy_format} written={written} {outcome}"
