@@ -15,3 +15,54 @@
 
 # Keep ownership changes reviewed by the same team.
 /.github/CODEOWNERS @openai/codex-core-agent-team
+
+# BEGIN Corbanu security owners (D318). Main requires a code-owner approval for
+# these paths; @corbanu-security posts it only after an independent read-only
+# security review approved the exact head. Later lines win, so keep this block last.
+# Ownership itself.
+/.github/CODEOWNERS @corbanu-security
+# OS sandbox enforcement (Seatbelt .sbpl profiles, Landlock, bubblewrap, Windows sandbox).
+/codex-rs/sandboxing/ @corbanu-security
+/codex-rs/linux-sandbox/ @corbanu-security
+/codex-rs/bwrap/ @corbanu-security
+/codex-rs/linux-pidfd-spawn/ @corbanu-security
+/codex-rs/windows-sandbox-rs/ @corbanu-security
+/codex-rs/process-hardening/ @corbanu-security
+/codex-rs/cli/src/debug_sandbox/ @corbanu-security
+/codex-rs/core/src/sandboxing/ @corbanu-security
+/codex-rs/core/src/spawn.rs @corbanu-security
+/codex-rs/core/src/exec.rs @corbanu-security
+# Exec policy and approval decisions.
+/codex-rs/execpolicy/ @corbanu-security
+/codex-rs/execpolicy-legacy/ @corbanu-security
+/codex-rs/shell-escalation/ @corbanu-security
+/codex-rs/core/src/exec_policy* @corbanu-security
+/codex-rs/core/src/tools/sandboxing* @corbanu-security
+/codex-rs/core/src/tools/orchestrator* @corbanu-security
+/codex-rs/core/src/tools/network_approval* @corbanu-security
+/codex-rs/core/src/safety* @corbanu-security
+/codex-rs/core/src/guardian/ @corbanu-security
+# Network proxy policy, MITM and credential injection.
+/codex-rs/network-proxy/ @corbanu-security
+# Security levels, policy, audit and untrusted-content boundaries.
+/codex-rs/core/src/security/ @corbanu-security
+/codex-rs/security-level/ @corbanu-security
+/codex-rs/security-policy/ @corbanu-security
+/codex-rs/security-audit/ @corbanu-security
+/codex-rs/protected-state/ @corbanu-security
+/codex-rs/content-security/ @corbanu-security
+/codex-rs/browser-isolation/ @corbanu-security
+# Credentials, vault and key custody.
+/codex-rs/vault/ @corbanu-security
+/codex-rs/secrets/ @corbanu-security
+/codex-rs/keyring-store/ @corbanu-security
+/codex-rs/secret-broker/ @corbanu-security
+/codex-rs/secret-broker-service/ @corbanu-security
+/codex-rs/secret-broker-fixture/ @corbanu-security
+/codex-rs/wallet/ @corbanu-security
+/codex-rs/wallet-daemon/ @corbanu-security
+# Dependency and advisory policy.
+/codex-rs/deny.toml @corbanu-security
+/codex-rs/.cargo/audit.toml @corbanu-security
+/.github/workflows/cargo-deny.yml @corbanu-security
+# END Corbanu security owners
