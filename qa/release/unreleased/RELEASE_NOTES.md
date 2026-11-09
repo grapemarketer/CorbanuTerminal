@@ -682,11 +682,14 @@ count as one unknown file, the cautious reading (#1587, #1132, thanks to
   `GIT_ALLOW_PROTOCOL` list. It outranks every git config file, so an
   `ext::` remote stored in `.git/config` or `.gitmodules` can't run its
   command even where the repository's own config allows `ext`. It is an
-  extra layer under the command checks: it doesn't stop `git remote-ext` or
-  `--upload-pack`, which run a program without the `ext` transport (the
-  checks from #1897 ask for those), nor `git -c protocol.ext.allow=...` on
-  the line. A command session started before the untrusted content keeps
-  its environment.
+  extra layer under the command checks, and needs git 2.31 or later. It
+  doesn't stop `git remote-ext` or `--upload-pack`, which run a program
+  without the `ext` transport (the checks from #1897 ask for those), nor
+  config git reads after it: `git -c protocol.ext.allow=...` or
+  `--config-env` on the line, or `GIT_CONFIG_PARAMETERS`. A
+  `GIT_ALLOW_PROTOCOL` list that held only `ext` is left empty, which
+  allows no git transport. A command session started before the untrusted
+  content keeps its environment.
 
 ## Bare git repositories a command plants
 

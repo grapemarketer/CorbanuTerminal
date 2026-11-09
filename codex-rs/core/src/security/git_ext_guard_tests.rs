@@ -79,9 +79,42 @@ fn d447_leaves_an_unreadable_count_and_drops_ext_from_allowed_protocols() {
     assert_eq!(overrides, env(&[("GIT_ALLOW_PROTOCOL", "https:ssh")]));
 }
 
+#[test]
+fn d447_reads_the_count_as_git_does() {
+    for (count, read) in [
+        ("", Some(0)),
+        ("2", Some(2)),
+        (" 2", Some(2)),
+        ("+2", Some(2)),
+        ("\t+2", Some(2)),
+        (" ", None),
+        ("+", None),
+        ("++2", None),
+        ("2 ", None),
+        ("-1", None),
+        ("x", None),
+    ] {
+        assert_eq!(git_count(count), read, "{count:?}");
+    }
+    let mut command_env = env(&[("GIT_CONFIG_COUNT", "")]);
+    apply(&mut command_env, &mut HashMap::new());
+    assert_eq!(
+        command_env.get("GIT_CONFIG_KEY_0").map(String::as_str),
+        Some("protocol.ext.allow")
+    );
+    let mut command_env = env(&[("GIT_CONFIG_COUNT", &usize::MAX.to_string())]);
+    apply(&mut command_env, &mut HashMap::new());
+    assert_eq!(command_env.len(), 1);
+}
+
+/// git with only `env` of the git variables a runner might set.
 fn git(dir: &Path, env: &HashMap<String, String>, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .current_dir(dir)
+        .env_remove("GIT_ALLOW_PROTOCOL")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_GLOBAL")
         .envs(env)
         .args(args)
         .output()
@@ -149,7 +182,92 @@ fn d447_stored_ext_remote_does_not_run() {
 
     // Without it the same fetch runs the command (the repository allows it).
     let _ = fetch(&HashMap::new());
-    assert!(marker.exists(), "the ext:: command never ran without the guard");
+    assert!(
+        marker.exists(),
+        "the ext:: command never ran without the guard"
+    );
+}
+
+/// Real git: `ext` allowed by `GIT_ALLOW_PROTOCOL` runs a stored `ext::`
+/// remote; with the guard (which drops it from the list) it doesn't.
+#[cfg(unix)]
+#[test]
+fn d447_ext_allowed_by_the_environment_list_does_not_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("ran");
+    let none = HashMap::new();
+    assert!(git(dir.path(), &none, &["init", "-q"]).status.success());
+    let remote = format!("ext::sh -c touch% {}", marker.display());
+    assert!(
+        git(dir.path(), &none, &["remote", "add", "origin", &remote])
+            .status
+            .success()
+    );
+    let allowed = env(&[("GIT_ALLOW_PROTOCOL", "ext:https")]);
+
+    let mut guarded = allowed.clone();
+    apply(&mut guarded, &mut HashMap::new());
+    let refused = git(dir.path(), &guarded, &["fetch", "-q", "origin"]);
+    assert!(!refused.status.success());
+    assert!(!marker.exists(), "the ext:: command ran with the guard");
+
+    let _ = git(dir.path(), &allowed, &["fetch", "-q", "origin"]);
+    assert!(
+        marker.exists(),
+        "the ext:: command never ran without the guard"
+    );
+}
+
+/// Real git: a `.gitmodules` `ext::` URL, with `ext` allowed by the user's
+/// global config, runs its command on `git submodule update --init` without
+/// the guard; with it, the submodule's clone (a child git) refuses it.
+#[cfg(unix)]
+#[test]
+fn d447_gitmodules_ext_url_does_not_run() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("ran");
+    let global = dir.path().join("global.gitconfig");
+    std::fs::write(&global, "[protocol \"ext\"]\n\tallow = always\n").expect("global config");
+    let base = env(&[("GIT_CONFIG_GLOBAL", &global.display().to_string())]);
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).expect("repo dir");
+    assert!(git(&repo, &base, &["init", "-q"]).status.success());
+    std::fs::write(
+        repo.join(".gitmodules"),
+        format!(
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = ext::sh -c touch% {}\n",
+            marker.display()
+        ),
+    )
+    .expect(".gitmodules");
+    // Any commit id will do: the clone runs the command first.
+    let gitlink = "160000,4b825dc642cb6eb9a060e54bf8d69288fbee4904,sub";
+    assert!(
+        git(
+            &repo,
+            &base,
+            &["update-index", "--add", "--cacheinfo", gitlink]
+        )
+        .status
+        .success()
+    );
+
+    let mut guarded = base.clone();
+    apply(&mut guarded, &mut HashMap::new());
+    let refused = git(&repo, &guarded, &["submodule", "update", "--init"]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("transport 'ext' not allowed"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!marker.exists(), "the ext:: command ran with the guard");
+
+    let _ = git(&repo, &base, &["submodule", "update", "--init"]);
+    assert!(
+        marker.exists(),
+        "the ext:: command never ran without the guard"
+    );
 }
 
 /// Through the shell tools (`shell_command` and the unified `exec_command`):
