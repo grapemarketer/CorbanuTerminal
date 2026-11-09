@@ -633,12 +633,17 @@ green and none pending. Never force-push. Never <code>rm -f</code> (use <code>rm
 <li>Don't merge a worker's PR while the worker is still running (it may still be fixing review items). Coordinator merges
 are OK when the worker has finished, or for docs-only PRs whose author is idle.</li>
 <li><b>Code-owner approval (D318, 11-09)</b>: <code>main</code> requires a review from the code owner for paths owned by
-<code>@corbanu-security</code> in <code>.github/CODEOWNERS</code> (sandboxes, exec policy and approvals, network proxy, security levels,
-credentials, dependency policy, CODEOWNERS itself); 0 approvals are required elsewhere; admins are not enforced. After the independent
+<code>@corbanu-security</code> in <code>.github/CODEOWNERS</code> (sandboxes, exec policy and approvals, filesystem permission policy and profiles, network proxy,
+security levels, credentials, dependency policy, CODEOWNERS itself); 0 approvals are required elsewhere; admins are not enforced. After the independent
 read-only Opus 5.5 High review returns <code>VERDICT: APPROVE</code> on the exact head, the worker (never the reviewer model) posts
 <code>gh pr review N --approve</code> as corbanu-security with
 <code>GH_TOKEN="$(corbanu vault auth-helper corbanu_security_pat 2&gt;/dev/null || cat ~/.corbanu-secrets/corbanu-security-github.pat)"</code>
-in front of the command, citing the verdict and head SHA. Never approve an unreviewed head; every new push needs a new review and approval.
+in front of the command, citing the verdict and head SHA, only after re-checking that <code>headRefOid</code> still equals that SHA
+(and confirming the review shows as posted by <code>corbanu-security</code>). Never approve an unreviewed head; every new push needs a new
+review and approval. <code>main</code> does <b>not</b> dismiss stale approvals (<code>dismiss_stale_reviews=false</code>), so GitHub won't
+block a merge after a later push: right before <code>gh pr merge N --merge --match-head-commit &lt;sha&gt;</code>, confirm that the latest
+<code>APPROVED</code> review by <code>corbanu-security</code> has <code>commit_id</code> equal to <code>&lt;sha&gt;</code>
+(<code>gh api repos/CorbanuCore/CorbanuTerminal/pulls/N/reviews</code>); if not, re-review and re-approve first.
 <code>gh pr merge</code> refuses a BLOCKED PR; <code>--admin</code> is Travis's only. Full text: SECURITY APPROVAL RULE in <code>wave2-common.md</code>.</li>
 <li><b>Security sign-off</b>: any change that alters Permissive behaviour (beyond owner-decided items) or the sandbox
 boundary in a new way must stop at an open PR titled “— needs security sign-off” for Travis.</li>
